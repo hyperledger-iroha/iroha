@@ -362,6 +362,7 @@ pub fn validation_fee_current_policy_proof_request_v1(
         })
 }
 /// Locally verify one validation-fee proof page under immutable deployment bindings.
+/// Account projections use the caller's required network prefix for this operation.
 #[napi(js_name = "validationFeeVerifyCurrentPolicyProofV1")]
 #[allow(clippy::too_many_arguments)]
 pub fn validation_fee_verify_current_policy_proof_v1(
@@ -370,7 +371,10 @@ pub fn validation_fee_verify_current_policy_proof_v1(
     policy_chain_genesis_hash: Uint8Array,
     trusted_checkpoint_height: JsU64,
     trusted_checkpoint_context_id: Uint8Array,
+    network_prefix: f64,
 ) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     const MAX_PROOF_BYTES: usize = iroha::client::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
     if proof_norito.is_empty() || proof_norito.len() > MAX_PROOF_BYTES {
         return Err(napi::Error::new(
@@ -465,11 +469,15 @@ pub fn validation_fee_hijiri_quote_request_v1(
     Ok(Buffer::from(archive))
 }
 /// Verify one native-Norito Hijiri quote against the exact request archive.
+/// Account projections use the caller's required network prefix for this operation.
 #[napi(js_name = "validationFeeVerifyHijiriQuoteResponseV1")]
 pub fn validation_fee_verify_hijiri_quote_response_v1(
     response_norito: Uint8Array,
     request_norito: Uint8Array,
+    network_prefix: f64,
 ) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     const MAX_REQUEST_BYTES: usize =
         iroha::client::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1;
     const MAX_RESPONSE_BYTES: usize =
@@ -990,11 +998,13 @@ pub fn account_address_render(
 fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
     iroha_js_codec::parse_account_id(input, label).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn i105_discriminant_hint(input: &str) -> Option<u16> {
     AccountAddress::i105_discriminant(input).ok()
 }
-fn scoped_chain_discriminant_for_literal(input: &str) -> Option<ChainDiscriminantGuard> {
-    i105_discriminant_hint(input).map(ChainDiscriminantGuard::enter)
+fn scoped_chain_discriminant_for_literal(input: &str) -> napi::Result<ChainDiscriminantGuard> {
+    let prefix = AccountAddress::i105_discriminant(input).map_err(account_address_err)?;
+    Ok(ChainDiscriminantGuard::enter(prefix))
 }
 /// Build a canonical public `AssetId` literal from definition/account parts.
 #[napi]
@@ -1007,6 +1017,7 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
                 format!("invalid asset definition id: {err}"),
             )
         })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&account_id)?;
     let account = parse_account_id(&account_id, "account id")?;
     Ok(AssetId::new(definition, account).canonical_literal())
 }
@@ -1373,23 +1384,35 @@ pub fn sm2_verify(
 /// Encode an instruction JSON payload to canonical Norito bytes.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for `#[napi]` bindings
-pub fn norito_encode_instruction(json_payload: String) -> napi::Result<Buffer> {
-    iroha_js_codec::encode_instruction_frame(&json_payload)
+pub fn norito_encode_instruction(
+    json_payload: String,
+    network_prefix: f64,
+) -> napi::Result<Buffer> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    iroha_js_codec::encode_instruction_frame(&json_payload, prefix)
         .map(Buffer::from)
         .map_err(codec_to_napi)
 }
 /// Encode strict instruction JSON as a canonical compact transaction archive.
 #[napi]
-pub fn norito_encode_instruction_box_archive(json_payload: String) -> napi::Result<Buffer> {
-    iroha_js_codec::encode_instruction_archive(&json_payload)
+pub fn norito_encode_instruction_box_archive(
+    json_payload: String,
+    network_prefix: f64,
+) -> napi::Result<Buffer> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    iroha_js_codec::encode_instruction_archive(&json_payload, prefix)
         .map(Buffer::from)
         .map_err(codec_to_napi)
 }
 
 /// Decode one exact canonical compact transaction instruction archive into JSON.
 #[napi]
-pub fn norito_decode_instruction_box_archive(bytes: Uint8Array) -> napi::Result<String> {
-    iroha_js_codec::decode_instruction_archive(bytes.as_ref()).map_err(codec_to_napi)
+pub fn norito_decode_instruction_box_archive(
+    bytes: Uint8Array,
+    network_prefix: f64,
+) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    iroha_js_codec::decode_instruction_archive(bytes.as_ref(), prefix).map_err(codec_to_napi)
 }
 fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> Vec<u8> {
     let opcode = u8::try_from(syscall).expect("subscription syscall opcode fits in u8");
@@ -1415,7 +1438,12 @@ fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> V
 /// reviewed account, subscription, trigger, and charge time before signing.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
-pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Result<String> {
+pub fn inspect_subscription_trigger_action(
+    encoded_action: String,
+    network_prefix: f64,
+) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     use iroha_data_model::{
         events::EventFilterBox,
         subscription::{SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef},
@@ -1572,8 +1600,9 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
 /// Decode canonical Norito bytes for an instruction back into JSON form.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned typed arrays for `#[napi]` bindings
-pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
-    iroha_js_codec::decode_instruction_frame(bytes.as_ref()).map_err(codec_to_napi)
+pub fn norito_decode_instruction(bytes: Uint8Array, network_prefix: f64) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    iroha_js_codec::decode_instruction_frame(bytes.as_ref(), prefix).map_err(codec_to_napi)
 }
 /// Compute the canonical native fingerprint for one validation-fee policy proposal.
 #[napi]
@@ -1583,6 +1612,7 @@ pub fn validation_fee_policy_proposal_fingerprint_v1(
     policy_json: String,
     payout_lifecycle_proposal_id: Option<Uint8Array>,
 ) -> napi::Result<Buffer> {
+    let _chain_guard = scoped_chain_discriminant_for_literal(&proposal_operator)?;
     let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let policy_value: json::Value = json::from_json(&policy_json).map_err(norito_to_napi)?;
     let policy = validation_fee_policy_from_json_value(policy_value)?;
@@ -1605,6 +1635,7 @@ pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
     proposal_operator: String,
     payout_binding_json: String,
 ) -> napi::Result<Buffer> {
+    let _chain_guard = scoped_chain_discriminant_for_literal(&proposal_operator)?;
     let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let payout_binding_value: json::Value =
         json::from_json(&payout_binding_json).map_err(norito_to_napi)?;
@@ -1687,9 +1718,15 @@ pub fn verify_lane_relay_envelope(envelope: Uint8Array) -> napi::Result<()> {
     parsed.verify().map_err(norito_to_napi)
 }
 /// Decode relay envelope bytes into a JSON string for inspection.
+/// Domainless account archives render under the caller's required network prefix.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
-pub fn decode_lane_relay_envelope(envelope: Uint8Array) -> napi::Result<String> {
+pub fn decode_lane_relay_envelope(
+    envelope: Uint8Array,
+    network_prefix: f64,
+) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     let slice = envelope.to_vec();
     let mut view = slice.as_slice();
     let parsed = LaneRelayEnvelope::decode_all(&mut view).or_else(|err| {
@@ -1699,16 +1736,25 @@ pub fn decode_lane_relay_envelope(envelope: Uint8Array) -> napi::Result<String> 
     json::to_json_pretty(&parsed).map_err(norito_to_napi)
 }
 /// Verify a relay envelope provided as a JSON string.
+/// Account literals must match the caller's required network prefix.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API strings are owned at the boundary
-pub fn verify_lane_relay_envelope_json(envelope_json: String) -> napi::Result<()> {
+pub fn verify_lane_relay_envelope_json(
+    envelope_json: String,
+    network_prefix: f64,
+) -> napi::Result<()> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     let parsed: LaneRelayEnvelope = json::from_json(&envelope_json).map_err(norito_to_napi)?;
     parsed.verify().map_err(norito_to_napi)
 }
 /// Compute the settlement hash for a JSON `LaneBlockCommitment`.
+/// Account literals must match the caller's required network prefix.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API strings are owned at the boundary
-pub fn lane_settlement_hash(settlement_json: String) -> napi::Result<String> {
+pub fn lane_settlement_hash(settlement_json: String, network_prefix: f64) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     let commitment: LaneBlockCommitment =
         json::from_json(&settlement_json).map_err(norito_to_napi)?;
     let hash = compute_settlement_hash(&commitment).map_err(norito_to_napi)?;
@@ -6621,7 +6667,12 @@ pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer
 /// Compute the canonical identity of an authorized instruction batch. Torii
 /// uses this hash as both the multisig `instructions_hash` and `proposal_id`.
 #[napi]
-pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Buffer> {
+pub fn hash_instruction_batch(
+    instructions_json: Vec<String>,
+    network_prefix: f64,
+) -> napi::Result<Buffer> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     let instructions = parse_instruction_payloads(instructions_json)?;
     let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
@@ -6629,17 +6680,26 @@ pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Bu
 /// Decode an exact canonical `VersionedSignedTransaction` V1 wire into JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
-pub fn decode_signed_transaction_json(bytes: Uint8Array) -> napi::Result<String> {
+pub fn decode_signed_transaction_json(
+    bytes: Uint8Array,
+    network_prefix: f64,
+) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     json::to_json(&tx).map_err(norito_to_napi)
 }
 /// Encode one JSON contract-call payload with the exact Kotodama entrypoint
 /// schema into the canonical signed `EntrypointArgumentRecordV1` bytes.
+/// Account literals must match the caller's required network prefix.
 #[napi]
 pub fn encode_contract_argument_record_json(
     schema_json: String,
     payload_json: String,
+    network_prefix: f64,
 ) -> napi::Result<Buffer> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    let _chain_guard = ChainDiscriminantGuard::enter(prefix);
     let schema_value = json::parse_value(&schema_json).map_err(norito_to_napi)?;
     let schema: iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1 =
         json::from_value(schema_value).map_err(norito_to_napi)?;
@@ -6932,8 +6992,8 @@ pub struct JsExternalTransactionSignature {
     pub signature: Buffer,
     /// Raw Ed25519 public-key bytes expected to control the authority account.
     pub public_key: Buffer,
-    /// Optional authority assertion used to detect caller-side transaction mixups.
-    pub authority: Option<String>,
+    /// Required canonical authority selecting the account network and binding the payload.
+    pub authority: String,
 }
 /// Input note material for confidential transfer/unshield proof construction.
 #[napi(object)]
@@ -7364,6 +7424,8 @@ fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
 pub fn finalize_signed_transaction(
     input: JsExternalTransactionSignature,
 ) -> napi::Result<JsSignedTransaction> {
+    let _chain_guard = scoped_chain_discriminant_for_literal(&input.authority)?;
+    let expected_authority = parse_account_id(&input.authority, "asserted authority account id")?;
     let expected_network_id = parse_transaction_network_id_bytes(input.network_id.as_ref())?;
     if input.payload_bytes.is_empty()
         || input.payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES
@@ -7418,15 +7480,11 @@ pub fn finalize_signed_transaction(
             "publicKey does not control the transaction authority",
         ));
     }
-    if let Some(authority) = input.authority {
-        let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
-        let expected = parse_account_id(&authority, "asserted authority account id")?;
-        if tx.authority() != &expected {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                "asserted authority does not match payloadBytes",
-            ));
-        }
+    if tx.authority() != &expected_authority {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "asserted authority does not match payloadBytes",
+        ));
     }
     tx.verify_signature().map_err(norito_to_napi)?;
     let signed_transaction = encode_canonical_signed_transaction_v1(&tx)?;
@@ -7451,6 +7509,7 @@ pub fn build_register_domain_transaction(
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
     let domain_id = DomainId::parse_fully_qualified(&domain_id).map_err(|err| {
         napi::Error::new(
@@ -7597,7 +7656,7 @@ pub fn build_transaction_payload(
     nonce: Option<u32>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
     build_transaction_payload_from_instructions_json(
         network_id,
@@ -7624,7 +7683,7 @@ pub fn build_executable_batch_transaction_payload(
     nonce: Option<u32>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
     build_transaction_payload_from_batch_json(
         network_id,
@@ -7640,8 +7699,29 @@ pub fn build_executable_batch_transaction_payload(
 fn same_fee_payer_selection(draft: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
     draft.has_same_payer_and_gas_bound(quoted)
 }
+fn scoped_chain_discriminant_for_transaction_payload(
+    payload_json: &str,
+) -> napi::Result<ChainDiscriminantGuard> {
+    let payload: json::Value = json::from_json(payload_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transaction payload JSON: {err}"),
+        )
+    })?;
+    let authority = payload
+        .get("authority")
+        .and_then(json::Value::as_str)
+        .ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                "transaction payload must contain a canonical authority account id",
+            )
+        })?;
+    scoped_chain_discriminant_for_literal(authority)
+}
 /// Replace only an unsigned payload's fee limits with the quote result and sign it.
 /// The payload must bind the caller's exact expected `NetworkId` and cannot use the genesis domain.
+/// Its required authority selects the network prefix for all account literals.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sign_quoted_transaction_payload(
@@ -7651,6 +7731,7 @@ pub fn sign_quoted_transaction_payload(
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let _chain_guard = scoped_chain_discriminant_for_transaction_payload(&payload_json)?;
     let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
         napi::Error::new(
@@ -7683,6 +7764,7 @@ pub fn sign_quoted_transaction_payload(
 }
 /// Replace only an unsigned proved-IVM payload's fee limits, reattach its proof, and sign it.
 /// The payload must bind the caller's exact expected `NetworkId` and cannot use the genesis domain.
+/// Its required authority selects the network prefix for all account literals.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sign_quoted_ivm_proved_transaction_payload(
@@ -7693,6 +7775,7 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
+    let _chain_guard = scoped_chain_discriminant_for_transaction_payload(&payload_json)?;
     let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
         napi::Error::new(
@@ -7757,7 +7840,7 @@ pub fn build_transaction(
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
     build_transaction_from_instructions_json(
         network_id,
@@ -7788,7 +7871,7 @@ pub fn build_executable_batch_transaction(
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
     let entries = parse_executable_batch_payloads(entries_json)?;
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
@@ -7826,7 +7909,7 @@ pub fn build_ivm_proved_transaction_payload(
     nonce: Option<u32>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
     let proved: IvmProved = json::from_json(&proved_json).map_err(|err| {
         napi::Error::new(
@@ -7882,7 +7965,7 @@ pub fn build_ivm_proved_transaction(
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "authority account id")?;
     let proved: IvmProved = json::from_json(&proved_json).map_err(|err| {
         napi::Error::new(
@@ -7929,7 +8012,7 @@ pub fn build_time_trigger_action(
     } else {
         None
     };
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
@@ -7967,7 +8050,7 @@ pub fn build_precommit_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
-    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority)?;
     let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
@@ -8052,6 +8135,7 @@ mod tests {
         let error = validation_fee_verify_hijiri_quote_response_v1(
             Uint8Array::from(vec![0_u8]),
             Uint8Array::from(archive.to_vec()),
+            f64::from(iroha_data_model::account::address::chain_discriminant()),
         )
         .expect_err("malformed response must fail closed");
         assert!(error.reason.contains("not a Hijiri quote response"));
@@ -8934,7 +9018,7 @@ mod tests {
             .expect("encoded billing action")
             .to_owned();
         let billing_summary: json::Value = json::from_json(
-            &inspect_subscription_trigger_action(encoded_billing)
+            &inspect_subscription_trigger_action(encoded_billing, 369.0)
                 .expect("inspect billing subscription trigger"),
         )
         .expect("billing summary JSON");
@@ -8947,6 +9031,10 @@ mod tests {
         assert_eq!(
             billing_summary["subscription_id"].as_str(),
             Some(subscription_id_literal.as_str())
+        );
+        assert_eq!(
+            billing_summary["authority"].as_str(),
+            Some(authority.to_i105_for_discriminant(369).unwrap().as_str())
         );
         let usage_trigger_id: TriggerId = "sub_usage_demo".parse().expect("usage trigger id");
         let usage_action = Action::new(
@@ -8969,7 +9057,7 @@ mod tests {
             .expect("encoded usage action")
             .to_owned();
         let usage_summary: json::Value = json::from_json(
-            &inspect_subscription_trigger_action(encoded_usage)
+            &inspect_subscription_trigger_action(encoded_usage, 369.0)
                 .expect("inspect usage subscription trigger"),
         )
         .expect("usage summary JSON");
@@ -10587,7 +10675,11 @@ seiyaku Privacy {
                 .decode(row.get("wire_base64").unwrap().as_str().unwrap())
                 .unwrap();
             let instruction = value_to_instruction(value.clone()).unwrap();
-            let native = norito_encode_instruction(json::to_json(&value).unwrap()).unwrap();
+            let native = norito_encode_instruction(
+                json::to_json(&value).unwrap(),
+                f64::from(iroha_data_model::account::address::chain_discriminant()),
+            )
+            .unwrap();
             assert_eq!(
                 native.as_ref(),
                 encoded.as_slice(),
@@ -12745,12 +12837,13 @@ seiyaku Privacy {
     }
     #[test]
     fn quoted_payload_signer_changes_only_fee_limits_and_rejects_payer_substitution() {
+        let _outer = ChainDiscriminantGuard::enter(42);
         let keypair =
             KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519).expect("authority key");
         let authority = AccountId::new(keypair.public_key().clone());
         let authority_i105 = AccountAddress::from_account_id(&authority)
             .expect("authority address")
-            .to_i105_for_discriminant(0x02F1)
+            .to_i105_for_discriminant(369)
             .expect("authority I105");
         let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
             DomainId::try_new("quote-flow", "universal").expect("domain id"),
@@ -12772,8 +12865,10 @@ seiyaku Privacy {
             Some(7),
         )
         .expect("unsigned transaction draft");
-        let mut expected: TransactionPayload =
-            json::from_json(&draft.payload_json).expect("decode exact draft JSON");
+        let mut expected: TransactionPayload = {
+            let _selected = ChainDiscriminantGuard::enter(369);
+            json::from_json(&draft.payload_json).expect("decode exact draft JSON")
+        };
         let fee_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "universal").expect("fee domain"),
             "xor".parse().expect("asset name"),
@@ -12796,6 +12891,7 @@ seiyaku Privacy {
             Some("ed25519".to_owned()),
         )
         .expect("sign quoted payload");
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
         let signed = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
             .expect("decode signed transaction");
         expected.fee_payment = quoted_intent;
@@ -12849,16 +12945,21 @@ seiyaku Privacy {
         let error = sign_quoted_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json,
-            json::to_json(&substituted).expect("substituted intent JSON"),
+            {
+                let _selected = ChainDiscriminantGuard::enter(369);
+                json::to_json(&substituted).expect("substituted intent JSON")
+            },
             Uint8Array::from(secret),
             Some("ed25519".to_owned()),
         )
         .err()
         .expect("quote must not substitute the selected payer");
         assert!(error.reason.contains("changed the selected payer"));
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
     }
     #[test]
     fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
+        let _outer = ChainDiscriminantGuard::enter(42);
         let authority_key =
             KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("authority key");
         let destination_key =
@@ -12867,16 +12968,19 @@ seiyaku Privacy {
         let destination = AccountId::new(destination_key.public_key().clone());
         let authority_i105 = AccountAddress::from_account_id(&authority)
             .expect("authority address")
-            .to_i105_for_discriminant(0x02F1)
+            .to_i105_for_discriminant(369)
             .expect("authority I105");
         let destination_i105 = AccountAddress::from_account_id(&destination)
             .expect("destination address")
-            .to_i105_for_discriminant(0x02F1)
+            .to_i105_for_discriminant(369)
             .expect("destination I105");
         let definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
             .parse()
             .expect("asset definition address");
-        let source = AssetId::new(definition, authority.clone()).canonical_literal();
+        let source = {
+            let _selected = ChainDiscriminantGuard::enter(369);
+            AssetId::new(definition, authority.clone()).canonical_literal()
+        };
         let network_id = test_network_id(b"browser-native-parity");
         let built = build_transfer_asset_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
@@ -12917,9 +13021,10 @@ seiyaku Privacy {
             payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
             signature: Buffer::from(signature.payload().to_vec()),
             public_key: Buffer::from(public_key_bytes.to_vec()),
-            authority: Some(authority_i105),
+            authority: authority_i105,
         })
         .expect("finalize externally signed transaction");
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
         let transaction =
             decode_canonical_signed_transaction_v1(finalized.signed_transaction.as_ref())
                 .expect("finalized versioned transaction must decode");
@@ -13058,8 +13163,14 @@ seiyaku Privacy {
             payload_hash_hex: Some(hex::encode(built.payload_hash.as_ref())),
             signature: Buffer::from(signature.payload().to_vec()),
             public_key: Buffer::from(public_key_bytes.to_vec()),
-            authority: Some(authority_i105.clone()),
+            authority: authority_i105.clone(),
         };
+        let mut missing_authority = valid_input();
+        missing_authority.authority.clear();
+        assert!(finalize_signed_transaction(missing_authority).is_err());
+        let mut different_authority = valid_input();
+        different_authority.authority = other.to_i105_for_discriminant(0x02F1).unwrap();
+        assert!(finalize_signed_transaction(different_authority).is_err());
         let mut mismatched_hash = valid_input();
         mismatched_hash.payload_hash_hex = Some("00".repeat(Hash::LENGTH));
         assert!(finalize_signed_transaction(mismatched_hash).is_err());
@@ -13105,7 +13216,7 @@ seiyaku Privacy {
             payload_hash_hex: Some(hex::encode(genesis_payload_hash)),
             signature: Buffer::from(genesis_signature.payload().to_vec()),
             public_key: Buffer::from(public_key_bytes.to_vec()),
-            authority: Some(authority_i105.clone()),
+            authority: authority_i105.clone(),
         });
         let error = result.err().expect("genesis domain must fail");
         assert!(error.reason.contains("genesis-domain"));
@@ -13485,7 +13596,7 @@ seiyaku Privacy {
         .sign(keypair.private_key());
         let bytes = encode_canonical_signed_transaction_v1(&transaction)
             .expect("encode canonical signed transaction V1");
-        let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
+        let decoded = decode_signed_transaction_json(Uint8Array::from(bytes), 369.0)
             .expect("decode signed transaction JSON");
         let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
         let expected_code_hash_literal =
@@ -13631,6 +13742,7 @@ seiyaku Privacy {
     }
     #[test]
     fn build_ivm_proved_transaction_roundtrip() {
+        let _outer = ChainDiscriminantGuard::enter(42);
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let network_id = test_network_id(b"ivm-proved-roundtrip");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -13653,7 +13765,7 @@ seiyaku Privacy {
         let (_, secret_bytes) = keypair.private_key().to_bytes();
         let draft = build_ivm_proved_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
-            account_json_literal(&authority),
+            authority.to_i105_for_discriminant(369).unwrap(),
             proved_json.clone(),
             attachment_json.clone(),
             authority_fee_payment_json_with_gas(1_000),
@@ -13663,8 +13775,10 @@ seiyaku Privacy {
             Some(42),
         )
         .expect("unsigned transaction built");
-        let draft_payload: TransactionPayload =
-            json::from_json(&draft.payload_json).expect("decode unsigned payload");
+        let draft_payload: TransactionPayload = {
+            let _selected = ChainDiscriminantGuard::enter(369);
+            json::from_json(&draft.payload_json).expect("decode unsigned payload")
+        };
         assert_eq!(draft.payload_bytes.as_ref(), draft_payload.encode());
         assert_eq!(
             draft.payload_hash.as_ref(),
@@ -13720,6 +13834,7 @@ seiyaku Privacy {
             None,
         )
         .expect("quoted transaction signed");
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
         let quoted_tx =
             decode_canonical_signed_transaction_v1(quoted_result.signed_transaction.as_ref())
                 .expect("decode");
@@ -13768,6 +13883,7 @@ seiyaku Privacy {
     }
     #[test]
     fn parse_account_id_accepts_taira_i105_literals() {
+        let _chain_guard = ChainDiscriminantGuard::enter(369);
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let authority_i105 = AccountAddress::from_account_id(&authority)
@@ -13817,6 +13933,7 @@ seiyaku Privacy {
     }
     #[test]
     fn parse_account_id_accepts_numeric_custom_i105_literals() {
+        let _chain_guard = ChainDiscriminantGuard::enter(42);
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let authority_i105 = AccountAddress::from_account_id(&authority)
@@ -13833,6 +13950,7 @@ seiyaku Privacy {
     }
     #[test]
     fn parse_account_id_rejects_noncanonical_and_tampered_numeric_custom_i105_literals() {
+        let _chain_guard = ChainDiscriminantGuard::enter(42);
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let authority_i105 = AccountAddress::from_account_id(&authority)
@@ -13892,15 +14010,21 @@ seiyaku Privacy {
     }
     #[test]
     fn instruction_batch_hash_binds_every_authorized_instruction() {
-        let first = hash_instruction_batch(vec![
+        let first = hash_instruction_batch(
+            vec![
             "{\"Mint\":{\"TriggerRepetitions\":{\"object\":1,\"destination\":\"demo::trigger\"}}}"
                 .to_owned(),
-        ])
+        ],
+            369.0,
+        )
         .expect("hash first instruction batch");
-        let second = hash_instruction_batch(vec![
+        let second = hash_instruction_batch(
+            vec![
             "{\"Mint\":{\"TriggerRepetitions\":{\"object\":2,\"destination\":\"demo::trigger\"}}}"
                 .to_owned(),
-        ])
+        ],
+            369.0,
+        )
         .expect("hash second instruction batch");
         assert_eq!(first.len(), 32);
         assert_eq!(second.len(), 32);
@@ -14174,7 +14298,9 @@ seiyaku Privacy {
                 })
             })
         });
-        value_to_instruction(defaults).expect("current optional account defaults");
+        let error = value_to_instruction(defaults).expect_err("native account requires metadata");
+        assert_eq!(error.status, napi::Status::GenericFailure);
+        assert!(error.reason.contains("metadata"));
         let mut unknown_account_json = account_json.clone();
         unknown_account_json
             .as_object_mut()

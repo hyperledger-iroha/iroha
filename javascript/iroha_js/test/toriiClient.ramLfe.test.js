@@ -23,7 +23,7 @@ function jsonResponse(status, body) {
 }
 
 const ACCOUNT_ID = demoAccountId();
-const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xa5)));
+const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xa5)), 753);
 const APPLICATION_AUTH = Object.freeze({ accountId: ACCOUNT_ID, privateKey: Buffer.alloc(32, 0x5a) });
 const PROGRAM_ID = "identifier_lookup_retail";
 const OPAQUE_HASH = "11".repeat(32);

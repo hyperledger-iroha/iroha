@@ -9,8 +9,9 @@ import { createNativeRuntime } from "../src/nativeRuntime.js";
 
 const { noritoEncodeInstruction } = _createNoritoInstructionApi(
   createNativeRuntime({
-    noritoEncodeInstruction() {
-      throw new Error("unsupported instruction");
+    noritoEncodeInstruction(json, prefix) {
+      assert.equal(prefix, 753);
+      return Buffer.from(json);
     },
   }),
 );
@@ -76,13 +77,10 @@ test("internal DomainId label normalization retains explicit-domain policy", () 
   }
 });
 
-test("pure-JS DomainId encoding canonicalizes labels without AccountAddress", () => {
+test("instruction JSON preserves domain operands for validation by the selected owner", () => {
   const encode = (domainId) =>
-    Buffer.from(noritoEncodeInstruction(registerDomain(domainId)));
-
-  assert.deepEqual(
-    encode("BÜCHER.SORA"),
-    encode("xn--bcher-kva.sora"),
-  );
-  assert.throws(() => encode("bad@name.sora"), TypeError);
+    Buffer.from(noritoEncodeInstruction(registerDomain(domainId), 753));
+  for (const domainId of ["BÜCHER.SORA", "xn--bcher-kva.sora", "bad@name.sora"]) {
+    assert.deepEqual(JSON.parse(encode(domainId).toString()), registerDomain(domainId));
+  }
 });

@@ -4133,7 +4133,7 @@ export interface ResolvedToriiClientConfig {
 export type ToriiHealthStatus = { status: string } & Record<string, unknown>;
 /** Immutable NetworkId context required by APIs that return local-signing drafts. */
 export class LocalSigningContext {
-  constructor(networkId: NetworkId, chainDiscriminant?: number);
+  constructor(networkId: NetworkId, chainDiscriminant: number);
   readonly networkId: NetworkId; readonly chainDiscriminant: number;
 }
 
@@ -7582,6 +7582,7 @@ export interface RequiredIvmOverlayTransfer {
 }
 
 export interface IvmProvedContractCallInputBase {
+  networkPrefix: number;
   authority: string;
   entrypoint?: string | null;
   payload?: JsonValue;
@@ -10550,6 +10551,8 @@ export interface InstructionBuilders {
 
 export interface ToriiBrowserClientOptions {
   fetchImpl?: typeof fetch;
+  /** Caller-selected I105 prefix, required for instruction/signed transaction operations. */
+  networkPrefix?: number;
   /** Explicit local-development opt-in for credential headers over HTTP. */
   allowInsecure?: boolean;
   /** Exact genesis-derived network identity required by canonical-auth methods. */
@@ -12517,7 +12520,11 @@ export function encodeCancelAssetLockV1(
 export function decodeCancelAssetLockV1(
   bytes: CancelAssetLockV1Archive,
 ): CancelAssetLockV1;
-export function noritoEncodeInstruction(instruction: object | string): Buffer;
+/** Encode using the caller-selected I105 deployment prefix (u16). */
+export function noritoEncodeInstruction(
+  instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
+  networkPrefix: number,
+): Buffer;
 export function noritoDecodeBlockProofs(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
 ): ToriiBlockProofs;
@@ -12537,10 +12544,12 @@ export function verifyBlockProofs(
 /** Encode a canonical compact `InstructionBox` archive for a transaction. */
 export function noritoEncodeInstructionBoxArchive(
   instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
+  networkPrefix: number,
 ): Buffer;
 /** Decode one exact canonical compact `InstructionBox` transaction archive. */
 export function noritoDecodeInstructionBoxArchive(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  networkPrefix: number,
 ): unknown;
 /** Encode the exact current Rust manifest-provenance signing frame. */
 export function noritoEncodeContractManifestSignaturePayload(
@@ -12744,6 +12753,7 @@ export interface MultisigProposeNoritoRequest {
 }
 export function noritoEncodeMultisigProposeRequest(
   request: MultisigProposeNoritoRequest,
+  networkPrefix: number,
 ): Buffer;
 export function noritoEncodeMultisigContractCallProposeRequest(
   request: MultisigContractCallProposeRequest,
@@ -12753,6 +12763,7 @@ export function noritoEncodeMultisigContractCallApproveRequest(
 ): Buffer;
 export function noritoDecodeInstruction(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  networkPrefix: number,
   options?: { parseJson?: boolean },
 ): JsonValue;
 export interface SubscriptionTriggerActionSummary {
@@ -12766,6 +12777,7 @@ export interface SubscriptionTriggerActionSummary {
 }
 export function inspectSubscriptionTriggerAction(
   encodedAction: string,
+  networkPrefix: number,
 ): SubscriptionTriggerActionSummary;
 
 /**
@@ -12800,14 +12812,16 @@ export function laneRelayEnvelopeSample(): LaneRelaySample;
 export function verifyLaneRelayEnvelope(
   envelope: ArrayBufferView | ArrayBuffer | Buffer | string,
 ): void;
-export function verifyLaneRelayEnvelopeJson(envelope: object | string): void;
+export function verifyLaneRelayEnvelopeJson(envelope: object | string, networkPrefix: number): void;
 export function verifyLaneRelayEnvelopes(
   envelopes: Array<object | string>,
+  networkPrefix: number,
 ): void;
 export function decodeLaneRelayEnvelope(
   envelope: ArrayBufferView | ArrayBuffer | Buffer | string,
+  networkPrefix: number,
 ): JsonValue;
-export function laneSettlementHash(settlement: object | string): string;
+export function laneSettlementHash(settlement: object | string, networkPrefix: number): string;
 
 export interface AxtTouchManifest {
   read: ReadonlyArray<string>;
@@ -12905,15 +12919,18 @@ export function hashSignedTransactionPayload(
 
 export function decodeSignedTransaction(
   signedTransaction: VersionedSignedTransactionV1,
+  networkPrefix: number,
 ): Record<string, unknown>;
 
 export function encodeContractArgumentRecord(
   argumentSchema: Record<string, unknown>,
   payload: Record<string, unknown>,
+  networkPrefix: number,
 ): Buffer;
 
 export function hashInstructionBatch(
   instructions: Array<object | string>,
+  networkPrefix: number,
   options?: { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
@@ -13042,6 +13059,7 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   proofNorito: Buffer | ArrayBuffer | ArrayBufferView,
   binding: ValidationFeeLedgerBindingV1,
   checkpoint: ValidationFeeCheckpointV1,
+  networkPrefix: number,
 ): ValidationFeeVerifiedPolicyProjectionV1;
 
 export const VALIDATION_FEE_HIJIRI_QUOTE_PATH: "/v1/validation-fee/hijiri/quote";
@@ -13058,6 +13076,7 @@ export function encodeValidationFeeHijiriQuoteRequestV1(
 export function verifyValidationFeeHijiriQuoteResponseV1(
   responseNorito: Buffer | ArrayBuffer | ArrayBufferView,
   requestNorito: Buffer | ArrayBuffer | ArrayBufferView,
+  networkPrefix: number,
 ): ValidationFeeHijiriQuoteProjectionV1;
 
 /** Generic proof-bound submission helper. */
@@ -13711,13 +13730,10 @@ export function buildExecuteTriggerInstruction(options: {
   args?: JsonValue;
 }): ExecuteTriggerInstructionPayload;
 export function buildExecuteTriggerNorito(
-  trigger: string,
+  trigger: string | { trigger: string; args?: JsonValue },
+  networkPrefix: number,
   args?: JsonValue,
 ): Buffer;
-export function buildExecuteTriggerNorito(options: {
-  trigger: string;
-  args?: JsonValue;
-}): Buffer;
 
 export function buildMultisigTriggerArgs(
   preset: "lifecycle",
@@ -13750,6 +13766,7 @@ export function buildMultisigExecuteTriggerInstruction(
 ): ExecuteTriggerInstructionPayload;
 export function buildMultisigExecuteTriggerNorito(
   options: MultisigExecuteTriggerOptions,
+  networkPrefix: number,
 ): Buffer;
 
 /**
@@ -13783,6 +13800,7 @@ export function buildProposeMultisigExecuteTriggerInstruction(
 ): object;
 export function buildProposeMultisigExecuteTriggerNorito(
   options: ProposeMultisigExecuteTriggerOptions,
+  networkPrefix: number,
 ): Buffer;
 
 export function buildMultisigProposeRequest(

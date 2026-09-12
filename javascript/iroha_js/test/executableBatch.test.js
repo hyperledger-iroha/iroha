@@ -138,7 +138,7 @@ test("browser executable batch preserves mixed order, tag, and copied bytes", ()
     Buffer.from([0x4b, 0x4f, 0x54, 0x4f]),
   );
 
-  const hashHex = browserTransactionPayloadHashHex(payload);
+  const hashHex = browserTransactionPayloadHashHex(payload, 753);
   const signable = validateBrowserExecutableBatchSignable({
     networkId: NETWORK_ID,
     payloadBytes: payload,
@@ -335,7 +335,7 @@ test("external executable batch validation rejects a noncanonical address", () =
       validateBrowserExecutableBatchSignable({
         networkId: NETWORK_ID,
         payloadBytes: tampered,
-        payloadHashHex: browserTransactionPayloadHashHex(tampered),
+        payloadHashHex: browserTransactionPayloadHashHex(tampered, 753),
         authority: AUTHORITY,
         signingPublicKey: PUBLIC_KEY,
         signatureAlgorithm: "ed25519",

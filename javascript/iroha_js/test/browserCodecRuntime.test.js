@@ -36,7 +36,7 @@ test("browser initialization is single-flight and publishes only a complete immu
   assert.ok(Object.isFrozen(binding));
   assert.equal(Object.keys(binding).length, 6);
   module.noritoEncodeInstruction = () => Uint8Array.of(99);
-  assert.deepEqual(binding.noritoEncodeInstruction("{}"), Uint8Array.of(1, 2));
+  assert.deepEqual(binding.noritoEncodeInstruction("{}", 369), Uint8Array.of(1, 2));
   await runtime.initialize();
   assert.equal(calls, 1);
 });
@@ -55,7 +55,7 @@ test("bundled ES module getters resolve once into immutable codec functions", as
   await runtime.initialize();
   assert.equal(reads, 6);
   exports.noritoEncodeInstruction = () => Uint8Array.of(99);
-  assert.deepEqual(runtime.binding().noritoEncodeInstruction("{}"), Uint8Array.of(1, 2));
+  assert.deepEqual(runtime.binding().noritoEncodeInstruction("{}", 369), Uint8Array.of(1, 2));
   assert.equal(reads, 6);
 });
 
@@ -100,7 +100,7 @@ test("Wasm byte results are independent of reused linear memory", async () => {
     ...moduleFixture(), noritoEncodeInstruction: () => memory.subarray(1),
   }));
   await runtime.initialize();
-  const result = runtime.binding().noritoEncodeInstruction("{}");
+  const result = runtime.binding().noritoEncodeInstruction("{}", 369);
   memory.fill(0);
   assert.deepEqual(result, Uint8Array.of(5, 6));
 });
@@ -145,13 +145,13 @@ test("Wasm string and byte entrypoints reject coercion before invoking generated
   const binding = runtime.binding();
   for (const input of [null, 1, {}, new String("fixture")]) {
     assert.throws(() => binding.accountAddressParseEncoded(input), { code: "InvalidArg" });
-    assert.throws(() => binding.noritoEncodeInstruction(input), { code: "InvalidArg" });
-    assert.throws(() => binding.noritoEncodeInstructionBoxArchive(input), { code: "InvalidArg" });
+    assert.throws(() => binding.noritoEncodeInstruction(input, 369), { code: "InvalidArg" });
+    assert.throws(() => binding.noritoEncodeInstructionBoxArchive(input, 369), { code: "InvalidArg" });
   }
   for (const input of [null, "bytes", [], new ArrayBuffer(2), new Uint16Array(2)]) {
     assert.throws(() => binding.accountAddressRender(input, 369), { code: "InvalidArg" });
-    assert.throws(() => binding.noritoDecodeInstruction(input), { code: "InvalidArg" });
-    assert.throws(() => binding.noritoDecodeInstructionBoxArchive(input), { code: "InvalidArg" });
+    assert.throws(() => binding.noritoDecodeInstruction(input, 369), { code: "InvalidArg" });
+    assert.throws(() => binding.noritoDecodeInstructionBoxArchive(input, 369), { code: "InvalidArg" });
   }
 });
 
@@ -190,4 +190,26 @@ test("codec transport enforces its bound even when content length lies", async (
     /transport bound/,
   );
   assert.equal(cancelled, true);
+});
+
+
+test("all instruction Wasm operations require an explicit prefix on every call", async () => {
+  const module = moduleFixture();
+  const calls = [];
+  for (const name of ["noritoEncodeInstruction", "noritoDecodeInstruction", "noritoEncodeInstructionBoxArchive", "noritoDecodeInstructionBoxArchive"]) {
+    const original = module[name];
+    module[name] = (input, prefix) => { calls.push([name, prefix]); return original(input, prefix); };
+  }
+  const runtime = createBrowserCodecRuntime(() => module);
+  await runtime.initialize();
+  const binding = runtime.binding();
+  for (const name of ["noritoEncodeInstruction", "noritoDecodeInstruction", "noritoEncodeInstructionBoxArchive", "noritoDecodeInstructionBoxArchive"]) {
+    const input = name.includes("Encode") ? "{}" : Uint8Array.of(1);
+    for (const prefix of [undefined, null, -1, 0.5, 65536, NaN, Infinity, 369n, "369", true]) {
+      assert.throws(() => binding[name](input, prefix), { code: "InvalidArg" });
+    }
+    assert.equal(calls.length, 0);
+    for (const prefix of [0, 369, 753, 65535, 369]) binding[name](input, prefix);
+    assert.deepEqual(calls.splice(0), [0, 369, 753, 65535, 369].map((prefix) => [name, prefix]));
+  }
 });

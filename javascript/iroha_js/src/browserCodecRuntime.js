@@ -63,7 +63,7 @@ function bytesArgument(value) {
 
 function prefixArgument(value) {
   if (!Number.isInteger(value) || value < 0 || value > 65535) {
-    throw argumentError("Account network prefix must be an integer in 0..65535");
+    throw argumentError("Network prefix must be an integer in 0..65535");
   }
   return value;
 }
@@ -104,17 +104,17 @@ function bindingFromModule(module) {
       }
       return value;
     },
-    noritoEncodeInstruction(json) {
-      return bytesResult(methods.noritoEncodeInstruction(stringArgument(json)));
+    noritoEncodeInstruction(json, networkPrefix) {
+      return bytesResult(methods.noritoEncodeInstruction(stringArgument(json), prefixArgument(networkPrefix)));
     },
-    noritoDecodeInstruction(bytes) {
-      return stringResult(methods.noritoDecodeInstruction(bytesArgument(bytes)));
+    noritoDecodeInstruction(bytes, networkPrefix) {
+      return stringResult(methods.noritoDecodeInstruction(bytesArgument(bytes), prefixArgument(networkPrefix)));
     },
-    noritoEncodeInstructionBoxArchive(json) {
-      return bytesResult(methods.noritoEncodeInstructionBoxArchive(stringArgument(json)));
+    noritoEncodeInstructionBoxArchive(json, networkPrefix) {
+      return bytesResult(methods.noritoEncodeInstructionBoxArchive(stringArgument(json), prefixArgument(networkPrefix)));
     },
-    noritoDecodeInstructionBoxArchive(bytes) {
-      return stringResult(methods.noritoDecodeInstructionBoxArchive(bytesArgument(bytes)));
+    noritoDecodeInstructionBoxArchive(bytes, networkPrefix) {
+      return stringResult(methods.noritoDecodeInstructionBoxArchive(bytesArgument(bytes), prefixArgument(networkPrefix)));
     },
   });
 }

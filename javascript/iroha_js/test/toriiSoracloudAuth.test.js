@@ -18,7 +18,7 @@ const PUBLIC_KEY =
 const HASH =
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 const SIGNING_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
-const SIGNING_CONTEXT = new LocalSigningContext(SIGNING_NETWORK_ID);
+const SIGNING_CONTEXT = new LocalSigningContext(SIGNING_NETWORK_ID, 753);
 const OPTIONS = Object.freeze({
   canonicalAuth: {
     accountId: ACCOUNT_ID,

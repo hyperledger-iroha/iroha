@@ -13,8 +13,8 @@ const test = makeNativeTest(baseTest);
 
 test("verifyLaneRelayEnvelopes accepts canonical relay envelopes", () => {
   const sample = laneRelayEnvelopeSample();
-  const decoded = decodeLaneRelayEnvelope(sample.valid);
-  verifyLaneRelayEnvelopes([decoded]);
+  const decoded = decodeLaneRelayEnvelope(sample.valid, 753);
+  verifyLaneRelayEnvelopes([decoded], 753);
 });
 
 test("lane relay fixture is deterministic and its tampered archive is rejected", () => {
@@ -28,16 +28,16 @@ test("lane relay fixture is deterministic and its tampered archive is rejected",
 
 test("verifyLaneRelayEnvelopes accepts JSON strings", () => {
   const sample = laneRelayEnvelopeSample();
-  const decoded = decodeLaneRelayEnvelope(sample.valid);
+  const decoded = decodeLaneRelayEnvelope(sample.valid, 753);
   const payload = JSON.stringify(decoded);
-  verifyLaneRelayEnvelopes([payload]);
+  verifyLaneRelayEnvelopes([payload], 753);
 });
 
 test("verifyLaneRelayEnvelopes rejects duplicates", () => {
   const sample = laneRelayEnvelopeSample();
-  const decoded = decodeLaneRelayEnvelope(sample.valid);
+  const decoded = decodeLaneRelayEnvelope(sample.valid, 753);
   assert.throws(
-    () => verifyLaneRelayEnvelopes([decoded, decoded]),
+    () => verifyLaneRelayEnvelopes([decoded, decoded], 753),
     /duplicate relay envelope/,
   );
 });

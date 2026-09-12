@@ -30,9 +30,9 @@ test('Join requires explicit resources, rejects the obsolete native layout and s
   const signed = { ...join, resources: [clause] };
   const payload = value => buildBrowserInstructionTransactionPayload({ networkId: NetworkId.parse(fixture.network_id), authority: account(1),
     instructions: [buildJoinGameSessionV1(value)], feePayment: { payer: 'authority', chargeLimits: [{ kind: 'nexus', assetDefinitionId: join.expected_asset_definition, maxAmount: '0.25' }] }, creationTimeMs: 1, ttlMs: 120000 });
-  const digest = browserTransactionPayloadHashHex(payload(signed));
+  const digest = browserTransactionPayloadHashHex(payload(signed), 753);
   for (const changed of [{ ...clause, expected_metadata_hash: hash(9) }, { ...clause, role_id: hash(11) }, { ...clause, nft_id: 'other$equipment.universal' }]) {
-    assert.notEqual(browserTransactionPayloadHashHex(payload({ ...signed, resources: [changed] })), digest);
+    assert.notEqual(browserTransactionPayloadHashHex(payload({ ...signed, resources: [changed] }), 753), digest);
   }
   assert.throws(() => buildJoinGameSessionV1({ ...signed, resources: [{ ...clause, policy: { kind: 'return_to_winner_at_terminal', value: null } }] }));
 });

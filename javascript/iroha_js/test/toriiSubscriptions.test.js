@@ -17,7 +17,7 @@ const SAMPLE_ACCOUNT_ID = AccountAddress.fromAccount({ publicKey: Buffer.from(
 }).toI105();
 const OTHER_ACCOUNT_ID = "mallory@universal";
 const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
-  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)), 753,
 );
 const CANONICAL_AUTH = Object.freeze({
   accountId: SAMPLE_ACCOUNT_ID,

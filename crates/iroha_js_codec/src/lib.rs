@@ -20,6 +20,7 @@ use iroha_data_model::account::AccountId;
 use iroha_data_model::account::NewAccount;
 use iroha_data_model::account::address::AccountAddress;
 use iroha_data_model::account::address::AccountAddressError;
+use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
 use iroha_data_model::asset::AssetDefinitionAlias;
 use iroha_data_model::asset::AssetTransferAvailability;
 use iroha_data_model::asset::AssetTransferControlWindow;
@@ -97,10 +98,13 @@ use iroha_data_model::isi::settlement::SettleFxCorridor;
 use iroha_data_model::isi::settlement::SettlementInstructionBox;
 use iroha_data_model::isi::smart_contract_code::ActivateContractInstance;
 use iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload;
+use iroha_data_model::isi::smart_contract_code::CommitContractDeployment;
 use iroha_data_model::isi::smart_contract_code::DeactivateContractInstance;
+use iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload;
 use iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes;
 use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
 use iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes;
+use iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk;
 use iroha_data_model::isi::social::CancelTwitterEscrow;
 use iroha_data_model::isi::social::ClaimTwitterFollowReward;
 use iroha_data_model::isi::social::SendToTwitter;
@@ -219,13 +223,25 @@ pub fn account_address_render(
     })
 }
 
-/// Parse an instruction account operand using the native encoded-account contract.
+/// Admit a JavaScript numeric network prefix without truncation or integer wrapping.
+pub fn checked_network_prefix(prefix: f64) -> CodecResult<u16> {
+    if !prefix.is_finite() || prefix.fract() != 0.0 || !(0.0..=65535.0).contains(&prefix) {
+        return Err(CodecError::new(
+            CodecErrorKind::InvalidArgument,
+            "network prefix must be an integer between 0 and 65535",
+        ));
+    }
+    Ok(prefix as u16)
+}
+
+/// Parse an instruction account operand under the caller's selected network scope.
+///
+/// Typed native callers must enter `ChainDiscriminantGuard` before calling this helper.
 pub fn parse_account_id(input: &str, label: &str) -> CodecResult<AccountId> {
-    let raw = input.trim();
-    let parsed = match AccountAddress::parse_encoded(raw, None) {
+    let parsed = match AccountAddress::parse_encoded(input, Some(chain_discriminant())) {
         Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
         Err(AccountAddressError::UnsupportedAddressFormat) => {
-            AccountId::parse_encoded(raw).map_err(|err| err.to_string())
+            AccountId::parse_encoded(input).map_err(|err| err.to_string())
         }
         Err(err) => Err(err.to_string()),
     };
@@ -238,14 +254,20 @@ pub fn parse_account_id(input: &str, label: &str) -> CodecResult<AccountId> {
 }
 
 /// Encode the strict JavaScript instruction JSON contract into a public Norito frame.
-pub fn encode_instruction_frame(json_payload: &str) -> CodecResult<Vec<u8>> {
+///
+/// `network_prefix` selects account admission and rendering for this operation only.
+pub fn encode_instruction_frame(json_payload: &str, network_prefix: u16) -> CodecResult<Vec<u8>> {
+    let _network = ChainDiscriminantGuard::enter(network_prefix);
     let instruction = instruction_from_json(json_payload)?;
     let encoded = norito::encode_canonical(&instruction).map_err(codec_error)?;
     Ok(encoded)
 }
 
 /// Decode an exact public instruction frame into the strict JavaScript JSON contract.
-pub fn decode_instruction_frame(bytes: &[u8]) -> CodecResult<String> {
+///
+/// Domainless account identities are rendered with the required `network_prefix`.
+pub fn decode_instruction_frame(bytes: &[u8], network_prefix: u16) -> CodecResult<String> {
+    let _network = ChainDiscriminantGuard::enter(network_prefix);
     let decode = catch_unwind(AssertUnwindSafe(|| {
         let slice = bytes;
         let instruction = decode_instruction_aligned(slice).map_err(codec_error)?;
@@ -1204,8 +1226,204 @@ pub fn validate_governance_instruction_selectors(value: &json::Value) -> CodecRe
     Ok(())
 }
 
+// One explicit bidirectional catalog owns the browser families with native JSON
+// derives. Do not fall back to InstructionBox JSON: that owner emits base64,
+// which loses the structured intent inspected by browser signing consumers.
+macro_rules! typed_browser_instruction_catalog {
+    ($apply:ident) => {
+        $apply! {
+            OpenGameSessionV1 => iroha_data_model::isi::game::OpenGameSessionV1,
+            JoinGameSessionV1 => iroha_data_model::isi::game::JoinGameSessionV1,
+            StartGameSessionV1 => iroha_data_model::isi::game::StartGameSessionV1,
+            CommitGameCheckpointV1 => iroha_data_model::isi::game::CommitGameCheckpointV1,
+            ChallengeGameSessionV1 => iroha_data_model::isi::game::ChallengeGameSessionV1,
+            CommitGameInputsV1 => iroha_data_model::isi::game::CommitGameInputsV1,
+            RevealGameInputsV1 => iroha_data_model::isi::game::RevealGameInputsV1,
+            AdvanceGameDeadlineV1 => iroha_data_model::isi::game::AdvanceGameDeadlineV1,
+            SettleGameSessionV1 => iroha_data_model::isi::game::SettleGameSessionV1,
+            ExpireGameSessionV1 => iroha_data_model::isi::game::ExpireGameSessionV1,
+            ClaimGamePayoutV1 => iroha_data_model::isi::game::ClaimGamePayoutV1,
+            StakeGameItemV1 => iroha_data_model::isi::game::StakeGameItemV1,
+            RegisterExecutionProofProfileV1 => iroha_data_model::isi::game::RegisterExecutionProofProfileV1,
+            VerifyExecutionProofV1 => iroha_data_model::isi::game::VerifyExecutionProofV1,
+            OfferNftV1 => iroha_data_model::isi::nft_market::OfferNftV1,
+            BuyNftV1 => iroha_data_model::isi::nft_market::BuyNftV1,
+            CancelNftOfferV1 => iroha_data_model::isi::nft_market::CancelNftOfferV1,
+            TopUpKagemushaV1 => iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
+        }
+    };
+}
+
+fn instruction_envelope(name: &str, payload: json::Value) -> json::Value {
+    let mut outer = json::Map::new();
+    outer.insert(name.to_owned(), payload);
+    json::Value::Object(outer)
+}
+
+fn strict_typed_instruction<T>(payload: &json::Value, name: &str) -> CodecResult<T>
+where
+    T: json::JsonDeserialize + json::JsonSerialize,
+{
+    let instruction: T = json::from_value(payload.clone()).map_err(|error| {
+        CodecError::new(CodecErrorKind::InvalidArgument, format!("{name}: {error}"))
+    })?;
+    if json::to_value(&instruction).map_err(codec_error)? != *payload {
+        return Err(CodecError::new(
+            CodecErrorKind::InvalidArgument,
+            format!("{name} must contain exactly its canonical typed JSON fields and values"),
+        ));
+    }
+    Ok(instruction)
+}
+
+macro_rules! define_typed_browser_instruction_json {
+    ($($name:ident => $ty:ty,)*) => {
+        fn typed_browser_instruction_from_json(
+            value: &json::Value,
+        ) -> Option<CodecResult<InstructionBox>> {
+            let json::Value::Object(fields) = value else { return None; };
+            $(if let Some(payload) = fields.get(stringify!($name)) {
+                return Some((|| {
+                    exact_json_object_fields(value, &[stringify!($name)], "instruction envelope")?;
+                    let instruction: $ty = strict_typed_instruction(payload, stringify!($name))?;
+                    Ok(Box::new(instruction).into_instruction_box())
+                })());
+            })*
+            None
+        }
+
+        fn typed_browser_instruction_to_json(
+            instruction: &InstructionBox,
+        ) -> Option<CodecResult<json::Value>> {
+            let instruction_ref: &dyn InstructionTrait = &**instruction;
+            $(if let Some(typed) = instruction_ref.as_any().downcast_ref::<$ty>() {
+                return Some((|| {
+                    let payload = json::to_value(typed).map_err(codec_error)?;
+                    let reconstructed: $ty = strict_typed_instruction(&payload, stringify!($name))?;
+                    if norito::encode_canonical(typed).map_err(codec_error)?
+                        != norito::encode_canonical(&reconstructed).map_err(codec_error)?
+                    {
+                        return Err(CodecError::failure("typed instruction JSON changes canonical Norito bytes"));
+                    }
+                    Ok(instruction_envelope(stringify!($name), payload))
+                })());
+            })*
+            None
+        }
+    };
+}
+typed_browser_instruction_catalog!(define_typed_browser_instruction_json);
+
+fn deployment_instruction_from_json(value: &json::Value) -> Option<CodecResult<InstructionBox>> {
+    let json::Value::Object(outer) = value else {
+        return None;
+    };
+    let name = [
+        "UploadSmartContractCodeChunk",
+        "FinalizeSmartContractCodeUpload",
+        "CancelSmartContractCodeUpload",
+        "RegisterSmartContractCode",
+        "CommitContractDeployment",
+    ]
+    .into_iter()
+    .find(|name| outer.contains_key(*name))?;
+    Some((|| {
+        exact_json_object_fields(value, &[name], "instruction envelope")?;
+        let payload = &outer[name];
+        let expected: &[&str] = match name {
+            "UploadSmartContractCodeChunk" => &[
+                "code_hash",
+                "total_size",
+                "chunk_index",
+                "chunk_count",
+                "chunk",
+            ],
+            "FinalizeSmartContractCodeUpload" => &["code_hash", "total_size", "chunk_count"],
+            "CancelSmartContractCodeUpload" => &["code_hash"],
+            "RegisterSmartContractCode" => &["manifest"],
+            "CommitContractDeployment" => &[
+                "expected_deploy_nonce",
+                "contract_address",
+                "code_hash",
+                "contract_alias",
+                "lease_expiry_ms",
+                "expected_previous_contract_address",
+            ],
+            _ => unreachable!("explicit deployment catalog"),
+        };
+        exact_json_object_fields(payload, expected, name)?;
+        let field = |key: &str| payload.get(key).expect("exact fields checked").clone();
+        if name == "RegisterSmartContractCode" {
+            let manifest = json::from_value(field("manifest")).map_err(codec_error)?;
+            return Ok(Box::new(RegisterSmartContractCode { manifest }).into_instruction_box());
+        }
+        let code_hash = parse_hash_value(field("code_hash"), &format!("{name}.code_hash"))?;
+        let unsigned = |key: &str| {
+            let value = field(key);
+            let parsed = parse_u64_value(value.clone(), &format!("{name}.{key}"))?;
+            if matches!(&value, json::Value::String(literal) if *literal != parsed.to_string()) {
+                return Err(CodecError::new(
+                    CodecErrorKind::InvalidArgument,
+                    format!("{name}.{key} must be a canonical unsigned integer"),
+                ));
+            }
+            Ok(parsed)
+        };
+        let u32_field = |key: &str| {
+            u32::try_from(unsigned(key)?).map_err(|_| {
+                CodecError::new(
+                    CodecErrorKind::InvalidArgument,
+                    format!("{name}.{key} must fit u32"),
+                )
+            })
+        };
+        Ok(match name {
+            "UploadSmartContractCodeChunk" => Box::new(UploadSmartContractCodeChunk {
+                code_hash,
+                total_size: unsigned("total_size")?,
+                chunk_index: u32_field("chunk_index")?,
+                chunk_count: u32_field("chunk_count")?,
+                chunk: parse_base64(field("chunk"), "UploadSmartContractCodeChunk.chunk")?,
+            })
+            .into_instruction_box(),
+            "FinalizeSmartContractCodeUpload" => Box::new(FinalizeSmartContractCodeUpload {
+                code_hash,
+                total_size: unsigned("total_size")?,
+                chunk_count: u32_field("chunk_count")?,
+            })
+            .into_instruction_box(),
+            "CancelSmartContractCodeUpload" => {
+                Box::new(CancelSmartContractCodeUpload { code_hash }).into_instruction_box()
+            }
+            "CommitContractDeployment" => Box::new(CommitContractDeployment {
+                expected_deploy_nonce: unsigned("expected_deploy_nonce")?,
+                contract_address: json::from_value(field("contract_address"))
+                    .map_err(codec_error)?,
+                code_hash,
+                contract_alias: json::from_value(field("contract_alias")).map_err(codec_error)?,
+                lease_expiry_ms: if field("lease_expiry_ms").is_null() {
+                    None
+                } else {
+                    Some(unsigned("lease_expiry_ms")?)
+                },
+                expected_previous_contract_address: json::from_value(field(
+                    "expected_previous_contract_address",
+                ))
+                .map_err(codec_error)?,
+            })
+            .into_instruction_box(),
+            _ => unreachable!("explicit deployment catalog"),
+        })
+    })())
+}
+
 /// Admit a JSON instruction value with the existing explicit variant checks.
 pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
+    if let Some(result) = typed_browser_instruction_from_json(&value)
+        .or_else(|| deployment_instruction_from_json(&value))
+    {
+        return result;
+    }
     validate_governance_instruction_selectors(&value)?;
     // These instructions carry release-critical JSON contracts. The generic
     // `InstructionBox` decoder may accept data-model defaults and unknown
@@ -1215,7 +1433,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
         json::Value::Object(map)
             if map.contains_key("Register")
                 || map.contains_key("Settlement")
-                || map.contains_key("CancelSmartContractCodeUpload")
                 || map.contains_key("CancelAssetLock")
                 || map.contains_key("SetAssetTransferAvailability")
                 || map.contains_key("SetAssetTransferBlacklist")
@@ -1607,39 +1824,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                     ));
                 }
                 return Ok(CancelAssetLock::new(escrow_id, expected_remaining_amount).into());
-            }
-            if let Some(cancel_value) = map.remove("CancelSmartContractCodeUpload") {
-                if !map.is_empty() {
-                    return Err(CodecError::new(
-                        CodecErrorKind::InvalidArgument,
-                        format!(
-                            "CancelSmartContractCodeUpload instruction envelope contains unexpected field(s): {}",
-                            map.keys().cloned().collect::<Vec<_>>().join(", ")
-                        ),
-                    ));
-                }
-                let json::Value::Object(mut fields) = cancel_value else {
-                    return Err(CodecError::new(
-                        CodecErrorKind::InvalidArgument,
-                        "CancelSmartContractCodeUpload must be an object",
-                    ));
-                };
-                let code_hash = parse_hash_value(
-                    required_value(&mut fields, "code_hash", "CancelSmartContractCodeUpload")?,
-                    "CancelSmartContractCodeUpload.code_hash",
-                )?;
-                if !fields.is_empty() {
-                    return Err(CodecError::new(
-                        CodecErrorKind::InvalidArgument,
-                        format!(
-                            "CancelSmartContractCodeUpload contains unexpected field(s): {}",
-                            fields.keys().cloned().collect::<Vec<_>>().join(", ")
-                        ),
-                    ));
-                }
-                return Ok(InstructionBox::from(CancelSmartContractCodeUpload {
-                    code_hash,
-                }));
             }
             if let Some(register_value) = map.remove("Register") {
                 if !map.is_empty() {
@@ -2832,14 +3016,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                 let instruction = SubmitAgendaProposal { proposal };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-            if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractCode") {
-                let manifest_value =
-                    required_value(&mut fields, "manifest", "RegisterSmartContractCode")?;
-                let manifest: ContractManifest =
-                    json::from_value(manifest_value).map_err(codec_error)?;
-                let instruction = RegisterSmartContractCode { manifest };
-                return Ok(Box::new(instruction).into_instruction_box());
-            }
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractBytes")
             {
                 let code_hash_value =
@@ -3282,7 +3458,37 @@ fn exact_json_object_fields(
 
 /// Render a typed instruction through its canonical JavaScript JSON contract.
 pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<json::Value> {
+    let value = instruction_to_json_value_inner(instruction)?;
+    if let Some(reconstructed) = deployment_instruction_from_json(&value) {
+        if norito::encode_canonical(&reconstructed?).map_err(codec_error)?
+            != norito::encode_canonical(instruction).map_err(codec_error)?
+        {
+            return Err(CodecError::failure(
+                "deployment instruction JSON changes canonical Norito bytes",
+            ));
+        }
+    }
+    Ok(value)
+}
+
+fn instruction_to_json_value_inner(instruction: &InstructionBox) -> CodecResult<json::Value> {
+    if let Some(result) = typed_browser_instruction_to_json(instruction) {
+        return result;
+    }
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(limit) = instruction_ref
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::asset_transfer_control::SetAssetHoldingLimit>(
+    ) {
+        return Ok(norito::json!({
+            "name": "SetAssetHoldingLimit",
+            "params": {
+                "account_id": (account_id_to_canonical_i105(&limit.account_id)?),
+                "asset_definition_id": (limit.asset_definition_id.to_string()),
+                "holding_limit": (limit.holding_limit.as_ref().map(|value| value.to_string())),
+            },
+        }));
+    }
     if let Some(availability) = instruction_ref
         .as_any()
         .downcast_ref::<SetAssetTransferAvailability>()
@@ -4198,6 +4404,67 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         return Ok(zk_json_value(
             "FinalizeElection",
             json::to_value(finalize).map_err(codec_error)?,
+        ));
+    }
+    if let Some(parameter) = instruction_ref.as_any().downcast_ref::<SetParameter>() {
+        return Ok(instruction_envelope(
+            "SetParameter",
+            json::to_value(&parameter.0).map_err(codec_error)?,
+        ));
+    }
+    if let Some(upload) = instruction_ref
+        .as_any()
+        .downcast_ref::<UploadSmartContractCodeChunk>()
+    {
+        return Ok(instruction_envelope(
+            "UploadSmartContractCodeChunk",
+            norito::json!({
+                "code_hash": (json::to_value(&upload.code_hash).map_err(codec_error)?),
+                "total_size": (upload.total_size.to_string()),
+                "chunk_index": (upload.chunk_index),
+                "chunk_count": (upload.chunk_count),
+                "chunk": (STANDARD.encode(&upload.chunk)),
+            }),
+        ));
+    }
+    if let Some(finalize) = instruction_ref
+        .as_any()
+        .downcast_ref::<FinalizeSmartContractCodeUpload>()
+    {
+        return Ok(instruction_envelope(
+            "FinalizeSmartContractCodeUpload",
+            norito::json!({
+                "code_hash": (json::to_value(&finalize.code_hash).map_err(codec_error)?),
+                "total_size": (finalize.total_size.to_string()),
+                "chunk_count": (finalize.chunk_count),
+            }),
+        ));
+    }
+    if let Some(cancel) = instruction_ref
+        .as_any()
+        .downcast_ref::<CancelSmartContractCodeUpload>()
+    {
+        return Ok(instruction_envelope(
+            "CancelSmartContractCodeUpload",
+            norito::json!({
+                "code_hash": (json::to_value(&cancel.code_hash).map_err(codec_error)?),
+            }),
+        ));
+    }
+    if let Some(commit) = instruction_ref
+        .as_any()
+        .downcast_ref::<CommitContractDeployment>()
+    {
+        return Ok(instruction_envelope(
+            "CommitContractDeployment",
+            norito::json!({
+                "expected_deploy_nonce": (commit.expected_deploy_nonce.to_string()),
+                "contract_address": (commit.contract_address.to_string()),
+                "code_hash": (json::to_value(&commit.code_hash).map_err(codec_error)?),
+                "contract_alias": (commit.contract_alias.to_string()),
+                "lease_expiry_ms": (commit.lease_expiry_ms.map(|value| value.to_string())),
+                "expected_previous_contract_address": (commit.expected_previous_contract_address.as_ref().map(|value| value.to_string())),
+            }),
         ));
     }
     if let Some(register_code) = instruction_ref

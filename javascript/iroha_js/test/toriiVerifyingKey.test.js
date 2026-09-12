@@ -24,7 +24,7 @@ const VK_SIGNING_NETWORK_ID = NetworkId.parse(
   VK_SIGNING_NETWORK_ID_LITERAL,
 );
 const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
-  VK_SIGNING_NETWORK_ID,
+  VK_SIGNING_NETWORK_ID, 753,
 );
 const SAMPLE_ACCOUNT_SIGNATORY =
   "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
@@ -1036,7 +1036,7 @@ test("verifying key local-signing APIs fail closed without immutable NetworkId c
 });
 
 test("verifying key LocalSigningContext is canonical and immutable", () => {
-  const context = new LocalSigningContext(VK_SIGNING_NETWORK_ID);
+  const context = new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753);
   assert.equal(context.networkId, VK_SIGNING_NETWORK_ID);
   assert.equal(Object.isFrozen(context), true);
   assert.throws(
@@ -1048,7 +1048,7 @@ test("verifying key LocalSigningContext is canonical and immutable", () => {
     TypeError,
   );
   for (const invalid of ["vk-test", VK_SIGNING_NETWORK_ID.toBytes(), {}]) {
-    assert.throws(() => new LocalSigningContext(invalid), /must be a NetworkId/);
+    assert.throws(() => new LocalSigningContext(invalid, 753), /must be a NetworkId/);
   }
   assert.throws(
     () =>
@@ -1505,7 +1505,7 @@ test("source and package clients load the canonical verifying-key decoder lazily
       fetchImpl: async () =>
         createVerifyingKeyDraftResponse({}, { request }),
       localSigningContext: new SigningContext(
-        NetworkIdentity.parse(VK_SIGNING_NETWORK_ID_LITERAL),
+        NetworkIdentity.parse(VK_SIGNING_NETWORK_ID_LITERAL), 753,
       ),
     });
     assert.deepEqual(

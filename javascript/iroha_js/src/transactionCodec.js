@@ -67,7 +67,6 @@ const FIELD_METADATA = "metadata";
 const FIELD_CREATION_TIME_MS = "creationTimeMs";
 const FIELD_FEE_PAYMENT = "feePayment";
 const FIELD_NETWORK_PREFIX = "networkPrefix";
-const FIELD_CHAIN_DISCRIMINANT = "chainDiscriminant";
 const FIELD_INSTRUCTIONS = "instructions";
 const FIELD_INSTRUCTION = TEXT_INSTRUCTION;
 const FIELD_SIGNING_PUBLIC_KEY = "signingPublicKey";
@@ -101,7 +100,6 @@ const INVALID_INTEGER = "invalid_integer";
 const INVALID_ACCOUNT = "invalid_account";
 const SIGNABLE_PAYLOAD_HASH_MISMATCH_MESSAGE = ("signable.payloadHashHex " + TEXT_DOES_NOT_MATCH + "payloadBytes");
 const SIGNABLE_ALGORITHM_MESSAGE = "signable.signatureAlgorithm must be ed25519";
-const NETWORK_SELECTOR_CONFLICT_MESSAGE = "provide only one of networkPrefix or chainDiscriminant";
 const SIGNABLE_NETWORK_ID_CONTEXT = "signable.networkId";
 const SIGNABLE_PUBLIC_KEY_CONTEXT = "signable.signingPublicKey";
 const PROOF_ATTACHMENT_UNSUPPORTED_MESSAGE = (TEXT_TRANSACTION_PAYLOAD_2 + "proof attachments are not supported by the browser codec");
@@ -115,7 +113,6 @@ const PUBLIC_KEY_ARGUMENT_MISMATCH_MESSAGE = (TEXT_SIGNABLE_SIGNING_PUBLIC_KEY +
 const ARGUMENT_CONTROLLER_MISMATCH_MESSAGE = ("signingPublicKey does not control " + TEXT_SIGNABLE_AUTHORITY);
 const SIGNABLE_PUBLIC_KEY_LENGTH_MESSAGE = (TEXT_SIGNABLE_SIGNING_PUBLIC_KEY + TEXT_MUST_BE_EXACTLY_32_BYTES);
 const SIGNABLE_AUTHORITY_PAYLOAD_MISMATCH_MESSAGE = ("signable.authority " + TEXT_DOES_NOT_MATCH + "payloadBytes");
-const UINT16_MAX = 0xffffn;
 const UINT32_MAX = 0xffff_ffffn;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 const MAX_METADATA_JSON_BYTES = 64 * 1024;
@@ -179,7 +176,6 @@ const TRANSFER_INPUT_FIELDS = new Set([
   "nonce",
   FIELD_FEE_PAYMENT,
   FIELD_NETWORK_PREFIX,
-  FIELD_CHAIN_DISCRIMINANT,
 ]);
 const INSTRUCTION_INPUT_FIELDS = new Set([
   FIELD_NETWORK_ID,
@@ -191,7 +187,6 @@ const INSTRUCTION_INPUT_FIELDS = new Set([
   "nonce",
   FIELD_FEE_PAYMENT,
   FIELD_NETWORK_PREFIX,
-  FIELD_CHAIN_DISCRIMINANT,
 ]);
 const EXECUTABLE_BATCH_INPUT_FIELDS = new Set([
   FIELD_NETWORK_ID,
@@ -203,7 +198,6 @@ const EXECUTABLE_BATCH_INPUT_FIELDS = new Set([
   "nonce",
   FIELD_FEE_PAYMENT,
   FIELD_NETWORK_PREFIX,
-  FIELD_CHAIN_DISCRIMINANT,
 ]);
 const BATCH_INSTRUCTION_ENTRY_FIELDS = new Set(["kind", FIELD_INSTRUCTION]);
 const BATCH_CONTRACT_CALL_ENTRY_FIELDS = new Set([
@@ -236,6 +230,7 @@ const LEGACY_FEE_METADATA_KEYS = Object.freeze([
 ]);
 const SIGNABLE_FIELDS = new Set([
   FIELD_NETWORK_ID,
+  FIELD_NETWORK_PREFIX,
   "payloadBytes",
   "payloadHashHex",
   FIELD_AUTHORITY,
@@ -244,6 +239,7 @@ const SIGNABLE_FIELDS = new Set([
 ]);
 const SIGNABLE_CONSTRAINT_FIELDS = new Set([
   FIELD_NETWORK_ID,
+  FIELD_NETWORK_PREFIX,
   FIELD_AUTHORITY,
   FIELD_SIGNING_PUBLIC_KEY,
 ]);
@@ -471,8 +467,10 @@ function exactString(value, context, { maxBytes, allowControls = false } = {}) {
 }
 
 function normalizeNetworkPrefix(value, context) {
-  const normalized = normalizeUnsigned(value, UINT16_MAX, context);
-  return Number(normalized);
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    fail(INVALID_INPUT, `${context} must be an integer in 0..65535`);
+  }
+  return value;
 }
 
 function accountInfo(value, context, expectedDiscriminant) {
@@ -1201,17 +1199,8 @@ function transferInstructionArchive(source, quantity, destination) {
 
 function normalizeTransactionInputAuthority(input) {
   const networkId = exactNetworkId(input.networkId);
-  const requestedDiscriminant =
-    input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
-      ? fail(INVALID_INPUT, NETWORK_SELECTOR_CONFLICT_MESSAGE)
-      : input.networkPrefix ?? input.chainDiscriminant;
-  const authority = accountInfo(
-    input.authority,
-    FIELD_AUTHORITY,
-    requestedDiscriminant === undefined
-      ? undefined
-      : normalizeNetworkPrefix(requestedDiscriminant, FIELD_NETWORK_PREFIX),
-  );
+  const networkPrefix = normalizeNetworkPrefix(input.networkPrefix, FIELD_NETWORK_PREFIX);
+  const authority = accountInfo(input.authority, FIELD_AUTHORITY, networkPrefix);
   return { networkId, authority };
 }
 
@@ -1241,9 +1230,9 @@ function normalizeTransactionInputTail(
   return { feePayment, metadata, creationTimeMs, ttlMs, nonce };
 }
 
-function encodeCanonicalInstructionBox(instruction, context) {
+function encodeCanonicalInstructionBox(instruction, context, networkPrefix) {
   try {
-    return Buffer.from(noritoEncodeInstructionBoxArchive(instruction));
+    return Buffer.from(noritoEncodeInstructionBoxArchive(instruction, networkPrefix));
   } catch (error) {
     fail(
       UNSUPPORTED_INSTRUCTION,
@@ -1317,7 +1306,8 @@ function normalizeTransferInput(input) {
 
 // The ordinary bound remains unchanged. Only one canonical native execution-proof instruction
 // can enter the larger corridor; batches, WASM, attachments and unrelated instructions cannot.
-function assertTransactionPayloadByteBound(payload) {
+function assertTransactionPayloadByteBound(payload, networkPrefix) {
+  normalizeNetworkPrefix(networkPrefix, FIELD_NETWORK_PREFIX);
   if (payload.length === 0 || payload.length > MAX_EXECUTION_PAYLOAD_BYTES) {
     fail(BOUNDS_EXCEEDED, (TEXT_TRANSACTION_PAYLOAD_2 + "exceeds the compiled browser payload limit"));
   }
@@ -1334,7 +1324,7 @@ function assertTransactionPayloadByteBound(payload) {
     const wireId = validateStringArchive(instruction.readField("wireId"), "execution instruction wireId", { maxBytes: 256 });
     if (!LARGE_EXECUTION_WIRE_IDS.has(wireId)) fail(BOUNDS_EXCEEDED, "ordinary transaction payload exceeds one MiB");
     instructions.assertEof(); executable.assertEof();
-    validateCanonicalInstructionBox(archive, (TEXT_EXECUTION_TRANSACTION + TEXT_INSTRUCTION));
+    validateCanonicalInstructionBox(archive, (TEXT_EXECUTION_TRANSACTION + TEXT_INSTRUCTION), networkPrefix);
   } catch (error) {
     if (error instanceof BrowserTransactionCodecError && error.code === BOUNDS_EXCEEDED) throw error;
     fail(BOUNDS_EXCEEDED, ("larger payloads require one" + TEXT_CANONICAL + "native execution-proof instruction"));
@@ -1360,7 +1350,7 @@ function encodeTransactionPayload(normalized, executable, validatePayloadBound) 
     metadataArchive(normalized.metadata),
     Buffer.of(0),
   ]);
-  validatePayloadBound(payload);
+  validatePayloadBound(payload, normalized.authority.discriminant);
   return payload;
 }
 
@@ -1397,7 +1387,7 @@ function normalizeInstructionTransactionInput(input) {
     );
   }
   const instructions = input.instructions.map((instruction, index) =>
-    encodeCanonicalInstructionBox(instruction, `instructions[${index}]`),
+    encodeCanonicalInstructionBox(instruction, `instructions[${index}]`, authority.discriminant),
   );
   const tail = normalizeTransactionInputTail(input, authority);
   return {
@@ -1447,6 +1437,7 @@ function normalizeExecutableBatchTransactionInput(input) {
       const instruction = encodeCanonicalInstructionBox(
         entry.instruction,
         `${TEXT_ENTRIES}${index}].${TEXT_INSTRUCTION}`,
+        authority.discriminant,
       );
       return { kind: FIELD_INSTRUCTION, instruction };
     }
@@ -1965,7 +1956,7 @@ function validateTransferExecutable(payload, context) {
   return sourceOwner;
 }
 
-function validateBrowserInstructionExecutable(payload, context) {
+function validateBrowserInstructionExecutable(payload, context, networkPrefix) {
   const executable = new Reader(payload, context);
   if (executable.readU32("variant") !== 0) {
     fail(UNSUPPORTED_EXECUTABLE, `${context} must use Executable::Instructions`);
@@ -2007,7 +1998,7 @@ function validateBrowserInstructionExecutable(payload, context) {
     frameContainer.assertEof();
     instruction.assertEof();
     try {
-      noritoDecodeInstructionBoxArchive(instructionArchive);
+      noritoDecodeInstructionBoxArchive(instructionArchive, networkPrefix);
     } catch (error) {
       fail(
         MALFORMED_INSTRUCTION,
@@ -2019,9 +2010,9 @@ function validateBrowserInstructionExecutable(payload, context) {
   executable.assertEof();
 }
 
-function validateCanonicalInstructionBox(payload, context) {
+function validateCanonicalInstructionBox(payload, context, networkPrefix) {
   try {
-    noritoDecodeInstructionBoxArchive(payload);
+    noritoDecodeInstructionBoxArchive(payload, networkPrefix);
   } catch (error) {
     fail(
       MALFORMED_INSTRUCTION,
@@ -2093,7 +2084,7 @@ function validateContractInvocationArchive(payload, context) {
   invocation.assertEof();
 }
 
-function validateExecutableBatch(payload, context) {
+function validateExecutableBatch(payload, context, networkPrefix) {
   const executable = new Reader(payload, context);
   if (executable.readU32("variant") !== 4) {
     fail(UNSUPPORTED_EXECUTABLE, `${context} must use Executable::Batch`);
@@ -2122,6 +2113,7 @@ function validateExecutableBatch(payload, context) {
       validateCanonicalInstructionBox(
         value,
         `${context}.entries[${index}].${TEXT_INSTRUCTION}`,
+        networkPrefix,
       );
     } else if (tag === 1) {
       containsContractCall = true;
@@ -2237,12 +2229,15 @@ function validateMetadataArchive(payload, context) {
 function validateTransactionPayload(
   payload,
   authorityLiteral,
-  expectedNetworkId = null,
+  expectedNetworkId,
+  networkPrefix,
 ) {
+  normalizeNetworkPrefix(networkPrefix, FIELD_NETWORK_PREFIX);
   return validateTransactionPayloadEnvelope(
     payload,
     authorityLiteral,
     expectedNetworkId,
+    networkPrefix,
     assertTransferPayloadByteBound,
     (executable, authorityPublicKey) => {
       const sourceOwner = validateTransferExecutable(
@@ -2262,12 +2257,15 @@ function validateTransactionPayload(
 function validateInstructionTransactionPayload(
   payload,
   authorityLiteral,
-  expectedNetworkId = null,
+  expectedNetworkId,
+  networkPrefix,
 ) {
+  normalizeNetworkPrefix(networkPrefix, FIELD_NETWORK_PREFIX);
   return validateTransactionPayloadEnvelope(
     payload,
     authorityLiteral,
     expectedNetworkId,
+    networkPrefix,
     assertTransactionPayloadByteBound,
     (executable) => {
       if (executable.length < 4) {
@@ -2277,11 +2275,13 @@ function validateInstructionTransactionPayload(
         return validateExecutableBatch(
           executable,
           CONTEXT_TRANSACTION_PAYLOAD_EXECUTABLE,
+          networkPrefix,
         );
       }
       validateBrowserInstructionExecutable(
         executable,
         CONTEXT_TRANSACTION_PAYLOAD_EXECUTABLE,
+        networkPrefix,
       );
       return { containsContractCall: false };
     },
@@ -2300,15 +2300,16 @@ function validateTransactionPayloadEnvelope(
   payload,
   authorityLiteral,
   expectedNetworkId,
+  networkPrefix,
   validatePayloadBound,
   validateExecutable,
   validateFeePayment,
 ) {
-  validatePayloadBound(payload);
+  validatePayloadBound(payload, networkPrefix);
   const assertedAuthority =
     authorityLiteral === null
       ? null
-      : accountInfo(authorityLiteral, TEXT_SIGNABLE_AUTHORITY);
+      : accountInfo(authorityLiteral, TEXT_SIGNABLE_AUTHORITY, networkPrefix);
   const reader = new Reader(payload, CONTEXT_TRANSACTION_PAYLOAD);
   const networkId = validateNetworkTransactionDomainArchive(
     reader.readField("domain"),
@@ -2397,13 +2398,15 @@ export function inspectCanonicalTransactionPayloadBindings(
   payloadBytes,
   expectedAuthority,
   expectedAdmissionIntent,
+  networkPrefix,
 ) {
+  normalizeNetworkPrefix(networkPrefix, FIELD_NETWORK_PREFIX);
   return inspectTransactionPayloadBindings(
     payloadBytes,
     expectedAuthority,
     expectedAdmissionIntent,
     MAX_EXECUTION_PAYLOAD_BYTES,
-    assertTransactionPayloadByteBound,
+    (payload) => assertTransactionPayloadByteBound(payload, networkPrefix),
   );
 }
 
@@ -2540,9 +2543,11 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
     constraints?.expectedNetworkId,
     "verifying-key signing context.networkId",
   );
+  const networkPrefix = normalizeNetworkPrefix(constraints?.networkPrefix, FIELD_NETWORK_PREFIX);
   const expectedAuthority = accountInfo(
     constraints?.expectedAuthority,
     "verifying-key request.authority",
+    networkPrefix,
   );
   const operation = constraints?.operation;
   if (operation !== "register" && operation !== "update") {
@@ -2622,7 +2627,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
 
   let instruction;
   try {
-    instruction = noritoDecodeInstructionBoxArchive(instructionArchive);
+    instruction = noritoDecodeInstructionBoxArchive(instructionArchive, networkPrefix);
   } catch (error) {
     fail(
       MALFORMED_INSTRUCTION,
@@ -2740,6 +2745,7 @@ export function buildBrowserTransferPayload(input) {
     payload,
     normalized.authority.literal,
     normalized.networkId,
+    normalized.authority.discriminant,
   );
   return payload;
 }
@@ -2759,6 +2765,7 @@ export function buildBrowserInstructionTransactionPayload(input) {
     payload,
     normalized.authority.literal,
     normalized.networkId,
+    normalized.authority.discriminant,
   );
   return payload;
 }
@@ -2784,6 +2791,7 @@ export function buildBrowserVerifyingKeyTransactionPayload(input, operation) {
   decodeCanonicalVerifyingKeyTransactionPayload(payload, {
     expectedNetworkId: input.networkId,
     expectedAuthority: normalized.authority.literal,
+    networkPrefix: normalized.authority.discriminant,
     operation,
   });
   return payload;
@@ -2803,6 +2811,7 @@ export function buildBrowserExecutableBatchPayload(input) {
     payload,
     normalized.authority.literal,
     normalized.networkId,
+    normalized.authority.discriminant,
   );
   return payload;
 }
@@ -2812,11 +2821,11 @@ export function buildBrowserExecutableBatchPayload(input) {
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @returns {string}
  */
-export function browserTransactionPayloadHashHex(payloadBytes) {
+export function browserTransactionPayloadHashHex(payloadBytes, networkPrefix) {
   const payload = bytes(payloadBytes, "payloadBytes", {
     maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
   });
-  assertTransactionPayloadByteBound(payload);
+  assertTransactionPayloadByteBound(payload, networkPrefix);
   return irohaHash(payload).toString(HEX_ENCODING);
 }
 
@@ -2873,6 +2882,7 @@ function validateBrowserTransactionSignable(
     payload,
     authorityLiteral,
     expectedNetworkId,
+    signable.networkPrefix,
   );
   const payloadHashHex = irohaHash(payload).toString(HEX_ENCODING);
   const assertedPayloadHashHex = exactHashHex(
@@ -2906,10 +2916,15 @@ function validateBrowserTransactionSignable(
       SIGNABLE_NETWORK_ID_CONTEXT,
     );
   }
+  if (constraints.networkPrefix !== undefined &&
+      normalizeNetworkPrefix(constraints.networkPrefix, "signable constraints.networkPrefix") !== signable.networkPrefix) {
+    fail(INVALID_ACCOUNT, "signable networkPrefix does not match the selected network");
+  }
   if (constraints.authority !== undefined && constraints.authority !== null) {
     const expectedAuthority = accountInfo(
       constraints.authority,
       "signable constraints.authority",
+      signable.networkPrefix,
     );
     if (expectedAuthority.literal !== authorityLiteral) {
       fail(
@@ -2936,6 +2951,7 @@ function validateBrowserTransactionSignable(
   }
   return Object.freeze({
     networkId: signable.networkId,
+    networkPrefix: signable.networkPrefix,
     payloadBytes: payload,
     payloadHashHex,
     authority: authorityLiteral,
@@ -3002,6 +3018,7 @@ function finalizeBrowserTransaction(
     payload,
     signable.authority,
     expectedNetworkId,
+    signable.networkPrefix,
   );
   const publicKey = bytes(signingPublicKey, FIELD_SIGNING_PUBLIC_KEY, {
     hex: true,
@@ -3137,22 +3154,22 @@ function signedTransactionPayload(signedTransaction) {
 }
 
 /** @internal Exact Transfer::Asset hash for the transfer-only Nexus contract. */
-export function _browserSignedTransferTransactionHashHex(signedTransaction) {
+export function _browserSignedTransferTransactionHashHex(signedTransaction, networkPrefix) {
   const payload = signedTransactionPayload(signedTransaction);
-  validateTransactionPayload(payload, null);
+  validateTransactionPayload(payload, null, null, networkPrefix);
   return transactionHashFromPayload(payload).toString(HEX_ENCODING);
 }
 
 /** Compute the pipeline hash after validating the complete supported transaction. */
-export function browserSignedTransactionHashHex(signedTransaction) {
+export function browserSignedTransactionHashHex(signedTransaction, networkPrefix) {
   const payload = signedTransactionPayload(signedTransaction);
   let transferError;
   try {
-    validateTransactionPayload(payload, null);
+    validateTransactionPayload(payload, null, null, networkPrefix);
   } catch (error) {
     transferError = error;
     try {
-      validateInstructionTransactionPayload(payload, null);
+      validateInstructionTransactionPayload(payload, null, null, networkPrefix);
     } catch (instructionError) {
       const boundsError = [transferError, instructionError].find(
         (error) =>

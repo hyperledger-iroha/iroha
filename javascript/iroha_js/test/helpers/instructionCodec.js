@@ -5,20 +5,13 @@ import {
 import { createNativeRuntime } from "../../src/nativeRuntime.js";
 import { nativeBinding } from "./native.js";
 
-const PURE_INSTRUCTION_API = _createNoritoInstructionApi(
-  createNativeRuntime({
-    noritoEncodeInstruction() {
-      throw new Error("unsupported instruction");
-    },
-    noritoDecodeInstruction() {
-      throw new Error("unsupported instruction");
-    },
-  }),
+const NATIVE_INSTRUCTION_API = _createNoritoInstructionApi(
+  createNativeRuntime(),
 );
 
-/** Run a callback with an explicit pure-JS instruction codec. */
-export function withPureJsInstructionCodec(body) {
-  return body(PURE_INSTRUCTION_API);
+/** Exercise the JavaScript adapter backed by the canonical native instruction owner. */
+export function withNativeInstructionCodec(body) {
+  return body(NATIVE_INSTRUCTION_API);
 }
 
 /** Convert any supported binary container into an ordinary byte array. */
@@ -26,28 +19,28 @@ export function toByteArray(bytes) {
   return Array.from(Buffer.from(bytes));
 }
 
-/** Assert native/pure-JS instruction byte and decode parity. */
-export function assertNativeAndPureInstructionParity(instruction, context) {
-  const pureEncoded = Buffer.from(
-    withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(instruction)),
+/** Check adapter serialization and projection against direct calls to the same native owner. */
+export function assertNativeInstructionAdapterRoundTrip(instruction, context) {
+  const adapterEncoded = Buffer.from(
+    withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(instruction, 753)),
   );
   const nativeEncoded = Buffer.from(
-    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction), 753),
   );
-  assert.deepEqual(pureEncoded, nativeEncoded, `${context} bytes`);
+  assert.deepEqual(adapterEncoded, nativeEncoded, `${context} bytes`);
   assert.deepEqual(
-    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
+    JSON.parse(nativeBinding.noritoDecodeInstruction(adapterEncoded, 753)),
     instruction,
     `${context} native decode`,
   );
   assert.deepEqual(
-    withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(nativeEncoded)),
+    withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(nativeEncoded, 753)),
     instruction,
-    `${context} pure decode`,
+    `${context} adapter decode`,
   );
-  return pureEncoded;
+  return adapterEncoded;
 }
 
 function crc16(tag, body) {

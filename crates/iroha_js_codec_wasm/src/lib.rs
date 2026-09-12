@@ -3,9 +3,7 @@
 //! This adapter has no signing, transport, filesystem or private-key API. Crypto
 //! admission and instruction reconstruction belong to `iroha_js_codec`.
 
-use iroha_js_codec::{
-    CodecError, CodecErrorKind, CodecResult, ParsedAccountAddress, RenderedAccountAddress,
-};
+use iroha_js_codec::{CodecError, CodecResult, ParsedAccountAddress, RenderedAccountAddress};
 use norito::json::{self, Value};
 use wasm_bindgen::prelude::*;
 
@@ -20,13 +18,7 @@ fn js_error(error: CodecError) -> JsError {
 }
 
 fn checked_prefix(prefix: f64) -> CodecResult<u16> {
-    if !prefix.is_finite() || prefix.fract() != 0.0 || !(0.0..=65535.0).contains(&prefix) {
-        return Err(CodecError::new(
-            CodecErrorKind::InvalidArgument,
-            "network prefix must be an integer between 0 and 65535",
-        ));
-    }
-    Ok(prefix as u16)
+    iroha_js_codec::checked_network_prefix(prefix)
 }
 
 fn parsed_json(parsed: ParsedAccountAddress) -> CodecResult<String> {
@@ -93,32 +85,41 @@ pub fn account_address_render(bytes: &[u8], network_prefix: f64) -> Result<Strin
 }
 
 /// Encode strict instruction JSON as its canonical public Norito frame.
+/// The network prefix is required and must be a finite integer fitting `u16`.
 #[wasm_bindgen(js_name = noritoEncodeInstruction)]
-pub fn encode_instruction_frame(input: &str) -> Result<Vec<u8>, JsError> {
-    iroha_js_codec::encode_instruction_frame(input).map_err(js_error)
+pub fn encode_instruction_frame(input: &str, network_prefix: f64) -> Result<Vec<u8>, JsError> {
+    let prefix = checked_prefix(network_prefix).map_err(js_error)?;
+    iroha_js_codec::encode_instruction_frame(input, prefix).map_err(js_error)
 }
 
 /// Decode one canonical public Norito instruction frame into strict JSON.
+/// The network prefix is required and selects account rendering.
 #[wasm_bindgen(js_name = noritoDecodeInstruction)]
-pub fn decode_instruction_frame(bytes: &[u8]) -> Result<String, JsError> {
-    iroha_js_codec::decode_instruction_frame(bytes).map_err(js_error)
+pub fn decode_instruction_frame(bytes: &[u8], network_prefix: f64) -> Result<String, JsError> {
+    let prefix = checked_prefix(network_prefix).map_err(js_error)?;
+    iroha_js_codec::decode_instruction_frame(bytes, prefix).map_err(js_error)
 }
 
 /// Encode strict instruction JSON as the canonical transaction instruction archive.
+/// The network prefix is required and must be a finite integer fitting `u16`.
 #[wasm_bindgen(js_name = noritoEncodeInstructionBoxArchive)]
-pub fn encode_instruction_archive(input: &str) -> Result<Vec<u8>, JsError> {
-    iroha_js_codec::encode_instruction_archive(input).map_err(js_error)
+pub fn encode_instruction_archive(input: &str, network_prefix: f64) -> Result<Vec<u8>, JsError> {
+    let prefix = checked_prefix(network_prefix).map_err(js_error)?;
+    iroha_js_codec::encode_instruction_archive(input, prefix).map_err(js_error)
 }
 
 /// Decode exactly one canonical transaction instruction archive into strict JSON.
+/// The network prefix is required and selects account rendering.
 #[wasm_bindgen(js_name = noritoDecodeInstructionBoxArchive)]
-pub fn decode_instruction_archive(bytes: &[u8]) -> Result<String, JsError> {
-    iroha_js_codec::decode_instruction_archive(bytes).map_err(js_error)
+pub fn decode_instruction_archive(bytes: &[u8], network_prefix: f64) -> Result<String, JsError> {
+    let prefix = checked_prefix(network_prefix).map_err(js_error)?;
+    iroha_js_codec::decode_instruction_archive(bytes, prefix).map_err(js_error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_js_codec::CodecErrorKind;
 
     #[test]
     fn prefix_admission_rejects_javascript_numeric_coercion() {
@@ -160,6 +161,42 @@ mod tests {
             rendered,
             r#"{"canonicalHex":"0x00ff","i105":"quoted\"value"}"#
         );
+    }
+
+    #[test]
+    fn instruction_bindings_pass_the_required_context_to_the_shared_owner() {
+        // Existing canonical account fixture; render the same domainless controller
+        // for each explicitly requested network before invoking the four exports.
+        let fixture: Value = json::from_json(include_str!(
+            "../../../javascript/iroha_js/test/fixtures/game-v1-codec.json"
+        ))
+        .unwrap();
+        let account = fixture["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"].as_str() == Some("JoinGameSessionV1"))
+            .unwrap()["value"]["player"]
+            .as_str()
+            .unwrap();
+        let parsed = iroha_js_codec::account_address_parse_encoded(account, None).unwrap();
+        for prefix in [369_u16, 42] {
+            let account =
+                iroha_js_codec::account_address_render(&parsed.canonical_bytes, prefix).unwrap();
+            let source =
+                json::to_json(&norito::json!({ "Unregister": { "Account": account.i105 } }))
+                    .unwrap();
+            let frame = encode_instruction_frame(&source, f64::from(prefix)).unwrap();
+            assert_eq!(
+                decode_instruction_frame(&frame, f64::from(prefix)).unwrap(),
+                source
+            );
+            let archive = encode_instruction_archive(&source, f64::from(prefix)).unwrap();
+            assert_eq!(
+                decode_instruction_archive(&archive, f64::from(prefix)).unwrap(),
+                source
+            );
+        }
     }
 
     #[test]

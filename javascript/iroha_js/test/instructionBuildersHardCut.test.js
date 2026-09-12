@@ -16,7 +16,7 @@ import {
   nativeBinding,
   noritoRequiredMethods,
 } from "./helpers/native.js";
-import { withPureJsInstructionCodec } from "./helpers/instructionCodec.js";
+import { withNativeInstructionCodec } from "./helpers/instructionCodec.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const descriptorTest = baseTest;
@@ -123,7 +123,7 @@ function canonicalizeClone(value) {
 
 function encodeAndDecode(instruction) {
   return canonicalizeValue(
-    noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
+    noritoDecodeInstruction(noritoEncodeInstruction(instruction, 753), 753),
   );
 }
 
@@ -266,25 +266,25 @@ descriptorTest("retired confidential builders are absent from runtime and declar
   }
 });
 
-descriptorTest("public and pure-JS codecs reject every retired confidential instruction", () => {
+descriptorTest("public and native-backed instruction adapters reject every retired confidential instruction", () => {
   for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
     const instruction = retiredInstruction(variant);
     assertRetiredInstructionRejected(
-      () => noritoEncodeInstruction(instruction),
+      () => noritoEncodeInstruction(instruction, 753),
       variant,
     );
     assertRetiredInstructionRejected(
-      () => withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-        noritoEncodeInstruction(instruction)),
+      () => withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+        noritoEncodeInstruction(instruction, 753)),
       variant,
     );
   }
 
   assert.throws(
     () =>
-      withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
+      withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
         noritoDecodeInstruction(
-          Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
+          Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"), 753,
         ),
       ),
     /instruction contains non-zero alignment padding or trailing bytes/u,
@@ -296,7 +296,7 @@ test("native codec rejects every retired confidential instruction", () => {
     assert.throws(
       () =>
         nativeBinding.noritoEncodeInstruction(
-          JSON.stringify(retiredInstruction(variant)),
+          JSON.stringify(retiredInstruction(variant)), 753,
         ),
       /unsupported zk instruction variant/u,
       variant,
@@ -305,7 +305,7 @@ test("native codec rejects every retired confidential instruction", () => {
   assert.throws(
     () =>
       nativeBinding.noritoDecodeInstruction(
-        Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
+        Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"), 753,
       ),
     /decode|canonical|trailing|field|length mismatch|not registered|unknown instruction/u,
   );

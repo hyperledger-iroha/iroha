@@ -139,12 +139,12 @@ test("SoraFS issue instructions bind the canonical Rust order fixture", () => {
     MUSUBI_ARCHIVE_ID,
   );
   assert.deepEqual(
-    noritoDecodeInstruction(noritoEncodeInstruction(musubiIssue)),
+    noritoDecodeInstruction(noritoEncodeInstruction(musubiIssue, 753), 753),
     musubiIssue,
   );
 
   assert.deepEqual(
-    noritoDecodeInstruction(noritoEncodeInstruction(issue)),
+    noritoDecodeInstruction(noritoEncodeInstruction(issue, 753), 753),
     issue,
   );
 });
@@ -173,7 +173,7 @@ test("SoraFS completion instructions preserve canonical authority and finalized 
     },
   });
   assert.deepEqual(
-    noritoDecodeInstruction(noritoEncodeInstruction(complete)),
+    noritoDecodeInstruction(noritoEncodeInstruction(complete, 753), 753),
     complete,
   );
 });
@@ -184,7 +184,7 @@ test("SoraFS expiry instructions preserve canonical order identity and epoch", (
     expirationEpoch: 29,
   });
   assert.deepEqual(
-    noritoDecodeInstruction(noritoEncodeInstruction(expire)),
+    noritoDecodeInstruction(noritoEncodeInstruction(expire, 753), 753),
     expire,
   );
 });
@@ -199,7 +199,7 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
           issued_epoch: 20,
           deadline_epoch: 28,
         },
-      }),
+      }, 753),
     /missing field musubi_archive/,
   );
   assert.throws(
@@ -310,7 +310,7 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
           provider_id: PROVIDER_ID,
           completion_epoch: 8,
         },
-      }),
+      }, 753),
     /expected_authority/,
   );
   assert.throws(
@@ -333,7 +333,7 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
           finalized_anchor: { height: 41, block_hash: BLOCK_HASH },
           relayer_id: "confused-deputy",
         },
-      }),
+      }, 753),
     /unknown field relayer_id/,
   );
 });

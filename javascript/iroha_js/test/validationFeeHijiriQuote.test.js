@@ -68,7 +68,10 @@ function projection() {
 async function withNativeBinding(native, body) {
   return body(
     createValidationFeeHijiriQuoteApi(createNativeRuntime(native)),
-    Object.freeze({ [TORII_TEST_NATIVE_BINDING]: native }),
+    Object.freeze({
+      [TORII_TEST_NATIVE_BINDING]: native,
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
+    }),
   );
 }
 
@@ -125,7 +128,7 @@ test("Hijiri quote codec delegates exclusively to the ABI-23 native bridge", asy
     assert.deepEqual(
       api.verifyValidationFeeHijiriQuoteResponseV1(
         RESPONSE_NORITO,
-        REQUEST_NORITO,
+        REQUEST_NORITO, 753,
       ),
       projection(),
     );
@@ -146,7 +149,7 @@ test("Hijiri quote codec delegates exclusively to the ABI-23 native bridge", asy
         () =>
           api.verifyValidationFeeHijiriQuoteResponseV1(
             RESPONSE_NORITO,
-            REQUEST_NORITO,
+            REQUEST_NORITO, 753,
           ),
         /native binding lacks/u,
       );
@@ -166,7 +169,7 @@ test("Hijiri quote codec enforces request, response, and transfer bounds", async
       () =>
         api.verifyValidationFeeHijiriQuoteResponseV1(
           Buffer.alloc(VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES + 1),
-          REQUEST_NORITO,
+          REQUEST_NORITO, 753,
         ),
       /responseNorito/u,
     );
@@ -174,7 +177,7 @@ test("Hijiri quote codec enforces request, response, and transfer bounds", async
       () =>
         api.verifyValidationFeeHijiriQuoteResponseV1(
           RESPONSE_NORITO,
-          Buffer.alloc(VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES + 1),
+          Buffer.alloc(VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES + 1), 753,
         ),
       /requestNorito/u,
     );
@@ -202,7 +205,7 @@ test("Hijiri quote codec enforces request, response, and transfer bounds", async
         () =>
           api.verifyValidationFeeHijiriQuoteResponseV1(
             oversizedResponse,
-            REQUEST_NORITO,
+            REQUEST_NORITO, 753,
           ),
         /responseNorito/u,
       );
@@ -210,7 +213,7 @@ test("Hijiri quote codec enforces request, response, and transfer bounds", async
         () =>
           api.verifyValidationFeeHijiriQuoteResponseV1(
             validResponse,
-            oversizedRequest,
+            oversizedRequest, 753,
           ),
         /requestNorito/u,
       );
@@ -237,7 +240,7 @@ test("Hijiri quote codec closes the native projection shape", async () => {
       assert.deepEqual(
         api.verifyValidationFeeHijiriQuoteResponseV1(
           RESPONSE_NORITO,
-          REQUEST_NORITO,
+          REQUEST_NORITO, 753,
         ),
         validRiskProjection,
       );
@@ -274,7 +277,7 @@ test("Hijiri quote codec closes the native projection shape", async () => {
           () =>
             api.verifyValidationFeeHijiriQuoteResponseV1(
               RESPONSE_NORITO,
-              REQUEST_NORITO,
+              REQUEST_NORITO, 753,
             ),
           pattern,
         );
@@ -452,7 +455,7 @@ test("Torii Hijiri quote signs the exact URL and denies redirects", async () => 
     const client = new ToriiClient("https://example.test/base", {
       ...nativeOptions,
       defaultHeaders: { "Content-Encoding": "gzip" },
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
       fetchImpl: async (url, init) => {
         observed = { url, init };
         return fetchResponse;

@@ -80,11 +80,11 @@ test("canonical Norito manifest codecs roundtrip Unit and nominal error schemas 
   const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
   const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
   const instruction = { RegisterSmartContractCode: { manifest } };
-  const encoded = api.noritoEncodeInstruction(instruction);
-  const decoded = api.noritoDecodeInstruction(encoded);
+  const encoded = api.noritoEncodeInstruction(instruction, 753);
+  const decoded = api.noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.error_types, [error]);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, returnSchema);
-  assert.deepEqual(api.noritoEncodeInstruction(decoded), encoded);
+  assert.deepEqual(api.noritoEncodeInstruction(decoded, 753), encoded);
 });
 
 test("canonical Norito manifest codec preserves nominal state cursor key schemas", async () => {
@@ -95,10 +95,10 @@ test("canonical Norito manifest codec preserves nominal state cursor key schemas
   manifest.entrypoints[0].return_schema = schema;
   const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
   const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
-  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } });
-  const decoded = api.noritoDecodeInstruction(encoded);
+  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = api.noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, schema);
-  assert.deepEqual(api.noritoEncodeInstruction(decoded), encoded);
+  assert.deepEqual(api.noritoEncodeInstruction(decoded, 753), encoded);
 });
 
 
@@ -118,8 +118,8 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
   manifest.entrypoints[0].return_schema = { nodes: [{ kind: "Unit", value: null }] };
   const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
   const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
-  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } });
-  const decoded = api.noritoDecodeInstruction(encoded).RegisterSmartContractCode.manifest;
+  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = api.noritoDecodeInstruction(encoded, 753).RegisterSmartContractCode.manifest;
   assert.deepEqual(decoded.entrypoints[0].return_schema, manifest.entrypoints[0].return_schema);
   buildRegisterSmartContractCodeInstruction({ manifest });
   const fetchManifest = async (value) => new ToriiClient("http://localhost:8080", {
@@ -135,7 +135,7 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
         if (omitted) delete invalid.entrypoints[0][field];
         else invalid.entrypoints[0][field] = null;
       }
-      assert.throws(() => api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest: invalid } }), /return_type.*return_schema/u);
+      assert.throws(() => api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest: invalid } }, 753), /return_type.*return_schema/u);
       assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest: invalid }), /return_type.*return_schema/u);
       await assert.rejects(fetchManifest(invalid), /return_type.*return_schema/u);
     }
@@ -166,11 +166,11 @@ test("exported structs retain locked identity in public and durable schemas", as
   const manifest = { ...base.manifest, ...fixture.manifest };
   const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
   const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
-  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } });
-  const decoded = api.noritoDecodeInstruction(encoded);
+  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = api.noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, fixture.manifest.entrypoints[0].return_schema);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.states, fixture.manifest.states);
-  assert.deepEqual(api.noritoEncodeInstruction(decoded), encoded);
+  assert.deepEqual(api.noritoEncodeInstruction(decoded, 753), encoded);
   manifest.error_types = [];
   assert.throws(() => validateManifestErrorTypeBindingsV1(manifest), /error_types catalog/u);
 });
