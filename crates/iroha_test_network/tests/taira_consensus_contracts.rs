@@ -25,6 +25,11 @@ use tokio::time::{Instant, sleep, timeout_at};
 #[path = "support/multiroute.rs"]
 mod multiroute;
 
+// The unoptimized four-peer fixture also performs signed-snapshot recovery.
+// This is a functional finality gate, not a production latency SLO; use the
+// same finite budget as startup/restart while preserving exact Applied checks.
+const FUNCTIONAL_FINALITY_TIMEOUT: Duration = Duration::from_secs(180);
+
 // This fixture uses a fixed loopback HTTP listener, so a bounded status-line
 // probe needs no additional HTTP client dependency or runtime signing context.
 async fn validator_admission_ready(peer: &NetworkPeer, deadline: Instant) -> bool {
@@ -305,7 +310,7 @@ async fn public_transaction_sequence_reaches_applied(universal_route: bool) -> R
             network.client()
         };
         let mut builder = fixture_client.client().to_builder();
-        builder.transaction_status_timeout = Duration::from_secs(75);
+        builder.transaction_status_timeout = FUNCTIONAL_FINALITY_TIMEOUT;
         // Public QueuePlan certification uses the SDK's routed request budget.
         builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;
         let client = builder.build()?;

@@ -376,6 +376,25 @@ def retire_source_capture(source: Path, entries: bytes, target_dir: Path) -> Non
         os.close(parent)
 
 
+def unchanged_source_directories(previous_entries: bytes, entries: bytes) -> set[Path]:
+    """Find directories whose complete Git-authenticated subtrees are unchanged."""
+    def subtrees(records: bytes) -> dict[Path, str]:
+        digests = {}
+        for row in records.split(b"\0"):
+            if not row:
+                continue
+            metadata, relative = row.split(b"\t", 1)
+            path = Path(os.fsdecode(relative))
+            directories = list(path.parents)
+            if metadata.startswith(b"160000 "):
+                directories.append(path)
+            for directory in directories:
+                digests.setdefault(directory, hashlib.sha256()).update(row + b"\0")
+        return {directory: digest.hexdigest() for directory, digest in digests.items()}
+    previous, current = subtrees(previous_entries), subtrees(entries)
+    return {directory for directory, digest in current.items() if previous.get(directory) == digest}
+
+
 def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes) -> Path:
     """Publish one fixed Git-object capture; never copy the mutable worktree."""
     parent = source.parent
@@ -404,6 +423,8 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     # The lane lock covers refresh, native checks, Linux compilation and capture.
     # No running Cargo process may observe the source-directory replacement.
     pending = create_fresh_directory(parent / ("source.pending-" + uuid.uuid4().hex), mode=0o700)
+    unchanged_directories = (unchanged_source_directories(previous_entries, entries)
+                             if previous_entries is not None else set())
     # Batch mode reads exact committed blobs without archive export filters.
     with subprocess.Popen(["git", "--no-replace-objects", "cat-file", "--batch"], cwd=root,
                           env=child_environment(dict(os.environ), root / "target"),
@@ -457,7 +478,13 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     # exact output binding; inventories never follow it into generated files.
     (pending / "target").symlink_to(target_dir, target_is_directory=True)
     for path, directories, _ in os.walk(pending, topdown=False):
-        freeze(Path(path), directory=True)
+        directory = Path(path)
+        freeze(directory, directory=True)
+        relative = directory.relative_to(pending)
+        if relative in unchanged_directories:
+            info = (source / relative).stat(follow_symlinks=False)
+            require(stat.S_ISDIR(info.st_mode), "unchanged captured directory changed type")
+            os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
     frozen_snapshot(pending, entries, target_dir)
     retained = None
     if os.path.lexists(source):

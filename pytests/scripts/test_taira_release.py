@@ -803,6 +803,49 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertEqual(release.capture_source(self.root, source, self.target, "a" * 40, entries), source)
             release.frozen_snapshot(source, entries, self.target)
 
+    def test_watched_subtrees_preserve_times_and_changed_ancestors_invalidate(self):
+        first = {'vendor/pq/src/lib.rs': ('100644', b'unchanged'),
+                 'vendor/pq/cfiles/c.c': ('100644', b'unchanged C'),
+                 'core/mod.rs': ('100644', b'old')}
+        before = self.source_entries(first)
+        stamp = 1_600_000_000_123_456_789
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, 'a' * 40, before)
+            for relative in ['vendor', 'vendor/pq', 'vendor/pq/src', 'vendor/pq/cfiles', 'core']:
+                os.utime(source / relative, ns=(stamp, stamp))
+            after = self.source_entries({**first, 'core/mod.rs': ('100644', b'new')})
+            with patch.object(release, 'commit_entries', return_value=before):
+                release.capture_source(self.root, source, self.target, 'b' * 40, after)
+            for relative in ['vendor', 'vendor/pq', 'vendor/pq/src', 'vendor/pq/cfiles']:
+                self.assertEqual((source / relative).stat().st_mtime_ns, stamp)
+            self.assertNotEqual((source / 'core').stat().st_mtime_ns, stamp)
+            release.frozen_snapshot(source, after, self.target)
+
+    def test_file_add_remove_mode_symlink_and_gitlink_changes_invalidate_parents(self):
+        initial = {'a/source': ('100644', b'payload'),
+                   'b/link': ('120000', b'../a/source'),
+                   'submodule': ('160000', b'')}
+        before = self.source_entries(initial)
+        identical = release.unchanged_source_directories(before, before)
+        self.assertIn(Path('a'), identical)
+        self.assertIn(Path('b'), identical)
+        self.assertIn(Path('submodule'), identical)
+        variants = [
+            ({**initial, 'a/extra': ('100644', b'new')}, 'a'),
+            ({k:v for k,v in initial.items() if k != 'a/source'}, 'a'),
+            ({**initial, 'a/source': ('100755', b'payload')}, 'a'),
+            ({**initial, 'b/link': ('120000', b'../a/other')}, 'b'),
+        ]
+        for files, parent in variants:
+            with self.subTest(parent=parent, files=list(files)):
+                after = self.source_entries(files)
+                unchanged = release.unchanged_source_directories(before, after)
+                self.assertNotIn(Path(parent), unchanged)
+                self.assertNotIn(Path('.'), unchanged)
+        changed_gitlink = before.replace(b'160000 ' + b'c' * 40, b'160000 ' + b'd' * 40)
+        self.assertNotIn(Path('submodule'), release.unchanged_source_directories(before, changed_gitlink))
+
+
     def test_lane_path_and_unchanged_mtimes_survive_next_commit(self):
         entries = self.source_entries({"same.rs": ("100644", b"same"), "edit.rs": ("100644", b"old")})
         with release.source_lane(self.root, self.target) as (source, _fd):

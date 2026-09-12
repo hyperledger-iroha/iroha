@@ -60,7 +60,10 @@ a preparation selecting the signed commit containing those exact controller file
 Each selected warm Cargo lane has one stable source path. A lane-wide lock covers
 capture refresh, native checks, Linux compilation and artifact capture, including
 an active child if its launcher exits. Source replacement occurs only between
-preparations. Unchanged files retain their timestamps so routine releases can
+preparations. Unchanged files and complete unchanged directory subtrees retain their timestamps.
+Directory watches in native build scripts therefore remain fresh when only
+unrelated source changes. Added, removed, renamed, mode-changed, or edited
+descendants invalidate their ancestors. Routine releases can
 reuse Cargo's cache. Interrupted source publication is recoverable; previous
 source directories and unfinished copies remain retained alongside the current
 capture.
