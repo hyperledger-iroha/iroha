@@ -1,3 +1,142 @@
+#[test]
+fn live_idle_decision_cleanup_reconciles_runner_frontier() {
+    let result = crate::sumeragi::sumeragi_thread_builder("live-idle-decision-cleanup")
+        .spawn(|| {
+            for pacemaker_only in [false, true] {
+                let mut fixture = ready_body_fixture();
+                let mut ordinal = fixture.ordinal;
+                for next in [LifecycleWorkClass::Store, LifecycleWorkClass::Validate] {
+                    let advanced = fixture
+                        .owner
+                        .dispatch_completion_for_test(
+                            &mut fixture.services,
+                            &mut fixture.transport.executor,
+                            0,
+                        )
+                        .expect("advance the real body to its Ready Validate owner");
+                    let ProductionCompletionDispatchV1::BodyStageAdvanced {
+                        parent_ordinal,
+                        child_ordinal,
+                        child,
+                    } = advanced
+                    else {
+                        panic!("the exact certified body owner must advance normally")
+                    };
+                    assert_eq!(parent_ordinal, ordinal);
+                    assert_eq!(child, next);
+                    ordinal = child_ordinal;
+                }
+                let before = fixture
+                    .owner
+                    .active_body_owner_before_decision_cold_for_test(
+                        ordinal,
+                        LifecycleWorkClass::Validate,
+                    );
+                let now = Instant::now();
+                fixture
+                    .transport
+                    .executor
+                    .arm_live_clocks(
+                        ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                        now,
+                    )
+                    .expect("arm the real serialized runtime before Decision");
+                let commit = fixture.transport.quorum_certificate(
+                    wire::GlobalPhase::Commit,
+                    fixture.transport.canonical_commitment,
+                );
+                let decision = (
+                    commit.round,
+                    commit.proposal_round,
+                    commit.subject,
+                    commit.execution_commitment,
+                );
+                let wal_path = fixture
+                    .transport
+                    ._directory
+                    .path()
+                    .join("transport-regression-safety.wal");
+                let wal_before = std::fs::read(&wal_path).expect("pre-Decision safety WAL");
+                // Hold the actual post-persistence/pre-runtime cut. An already
+                // Durable body retains Validate and emits no Decision effect;
+                // no executor state is synthesized or cleared for this fixture.
+                let driver = fixture.transport.executor.runtime.driver_mut_for_test();
+                let authenticated = driver
+                    .authenticate(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::QuorumCertificate(commit),
+                    ))
+                    .expect("authenticate the real three-validator CommitQC");
+                let outcome = driver
+                    .receive_authenticated(authenticated)
+                    .expect("fsync Decision while the exact Validate is still Ready");
+                assert!(outcome.effects().is_empty());
+                let wal_after = std::fs::read(&wal_path).expect("fsynced Decision safety WAL");
+                assert!(wal_after.starts_with(&wal_before));
+                assert!(wal_after.len() > wal_before.len());
+                let executor = &mut fixture.transport.executor;
+                assert_eq!(executor.runtime.decided_body().unwrap(), Some(decision));
+                assert!(executor.protected_decision.is_none());
+                assert!(executor.pending_runner_decision_cleanup.is_none());
+                let step = if pacemaker_only {
+                    executor.step_pacemaker_once(now, &mut fixture.services)
+                } else {
+                    executor.step(now, &mut fixture.services)
+                }
+                .expect("observe the live Decision in an otherwise idle runtime turn");
+                assert_eq!(step, EffectExecutorStep::Idle);
+                assert!(executor.protected_decision.is_none());
+                let pending = executor
+                    .pending_runner_decision_cleanup
+                    .expect("a live zero-effect Decision still requires runner cleanup");
+                assert_eq!(pending.decision, decision);
+                assert!(executor.retained_effect_batch.is_none());
+                assert!(executor.parked_effect_batch.is_none());
+                let directive = executor.local_proposal_directive().unwrap();
+                assert!(matches!(
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    ),
+                    Err(EffectExecutorError::Contract(reason))
+                        if reason == "runner Decision cleanup changed the exact Decision handoff"
+                ));
+                // This is the shared production helper used by ordinary and
+                // pacemaker runner cleanup, not private executor reconciliation.
+                crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+                    executor,
+                    &mut fixture.services,
+                )
+                .expect("reconcile the exact Decision before runner acknowledgement");
+                assert_eq!(executor.protected_decision, Some(decision));
+                assert_eq!(executor.pending_runner_decision_cleanup, Some(pending));
+                let directive = executor.local_proposal_directive().unwrap();
+                executor
+                    .acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    )
+                    .expect("the unchanged exact handoff may now be acknowledged");
+                assert!(executor.pending_runner_decision_cleanup.is_none());
+                assert!(!executor.output_guard.restart_required());
+                fixture
+                    .owner
+                    .assert_active_body_owner_after_decision_cold_for_test(
+                        &before,
+                        LifecycleWorkClass::Validate,
+                    );
+                assert_eq!(
+                    std::fs::read(&wal_path).expect("WAL after process-local cleanup"),
+                    wal_after,
+                );
+            }
+        })
+        .expect("production consensus stack")
+        .join();
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 // Crash after the real Commit WAL append, before any current Decision effect
 // can replace or settle an already durable Prepare body owner.
 fn active_prepare_body_survives_decision_crash_fixture(

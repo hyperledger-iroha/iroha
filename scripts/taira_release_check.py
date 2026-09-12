@@ -690,6 +690,9 @@ CORE_ADMISSION_STARTUP_STAGES += (("nested failure closes admission without bloc
     "sumeragi::v2_worker::tests::service_failure_and_drop_finish_before_outer_operation_drains",
     "sumeragi::v2_worker::tests::abnormal_io_worker_exit_finishes_before_outer_operation_drains",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("live Decision cleanup after an idle runtime turn", (
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::live_idle_decision_cleanup_reconciles_runner_frontier",
+)),)
 CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart recovery", (
     "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
     "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",

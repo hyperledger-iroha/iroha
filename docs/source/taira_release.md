@@ -136,6 +136,8 @@ Core, Torii and daemon startup recovery checks run next; failures are collected
 across those startup groups before stopping, without running CLI or network tests.
 These include bounded regressions for failure reporting and worker teardown under
 a held lifecycle operation, plus retained-output recovery through real actor admission.
+Live Decision cleanup also exercises the shared runner reconciliation after an idle
+runtime turn, before exact acknowledgement can release the Apply fence.
 CLI and the canonical Kagami projection checks then precede the proof, crypto,
 transport, consensus and fixture selections. Every independent failure stops
 before daemon startup. Shipping targets without selected tests provide actual

@@ -2496,6 +2496,9 @@ fn reconcile_executor_locked_body(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
 ) -> Result<LocalProposalDirective, V2RunnerError> {
+    // A live completion can persist Decision before a no-effect runtime turn.
+    // Protect that exact handoff before the runner retires its local owners.
+    executor.reconcile_pending_runner_decision_cleanup(services)?;
     let directive = executor.local_proposal_directive()?;
     if directive.decided_subject().is_none()
         && let Some(lock) = directive.locked_body()
