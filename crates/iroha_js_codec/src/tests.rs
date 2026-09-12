@@ -854,13 +854,13 @@ fn typed_registration_respects_selected_context_and_native_error_categories() {
             )]),
         )]))
     };
-    for (encode, decode) in [
-        (
-            encode_instruction_frame as fn(&str, u16) -> CodecResult<Vec<u8>>,
-            decode_instruction_frame as fn(&[u8], u16) -> CodecResult<String>,
-        ),
+    type Encoder = fn(&str, u16) -> CodecResult<Vec<u8>>;
+    type Decoder = fn(&[u8], u16) -> CodecResult<String>;
+    let codecs: [(Encoder, Decoder); 2] = [
+        (encode_instruction_frame, decode_instruction_frame),
         (encode_instruction_archive, decode_instruction_archive),
-    ] {
+    ];
+    for (encode, decode) in codecs {
         let bytes = encode(&source, 369).unwrap();
         assert_eq!(chain_discriminant(), 42);
         assert_eq!(decode(&bytes, 369).unwrap(), source);
