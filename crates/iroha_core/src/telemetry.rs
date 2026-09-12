@@ -6487,6 +6487,7 @@ impl Actor {
         if !self.enabled {
             return;
         }
+        refresh_sumeragi_mode(&self.metrics);
         let local_removed = {
             let world = self.state.world_view();
             !world.peers().iter().any(|peer| peer == &self.local_peer_id)
@@ -7179,6 +7180,15 @@ pub fn start(
         ),
     ))
 }
+/// Project the frozen reducer-owned mode, never a configuration candidate or
+/// the default of an unrelated metrics registry. No owner means unknown mode.
+fn refresh_sumeragi_mode(metrics: &Metrics) {
+    let mode_tag = crate::sumeragi::status::v2_status()
+        .map(|status| status.height_context.mode.tag())
+        .unwrap_or_default();
+    metrics.set_sumeragi_mode_tag(mode_tag);
+}
+
 #[cfg(all(feature = "telemetry", test))]
 #[allow(clippy::disallowed_types, clippy::float_cmp)]
 mod tests {
@@ -9844,6 +9854,86 @@ mod tests {
         // Set highest QC height
         tel.set_highest_qc_height(64);
         assert_eq!(metrics.sumeragi_highest_qc_height.get(), 64);
+    }
+    #[test]
+    fn public_mode_tracks_frozen_reducer_context_and_clears_without_owner() {
+        use crate::sumeragi::status;
+        use iroha_data_model::block::consensus_v2 as wire;
+        let _guard = status::rbc_status_test_guard();
+        struct ClearStatusOnDrop;
+        impl Drop for ClearStatusOnDrop {
+            fn drop(&mut self) {
+                status::clear_v2_status();
+            }
+        }
+        let _cleanup = ClearStatusOnDrop;
+        status::clear_v2_status();
+        let metrics = Metrics::default();
+        let exported_mode = || {
+            metrics
+                .status_snapshot(&Default::default())
+                .sumeragi
+                .expect("public consensus telemetry")
+                .mode_tag
+        };
+        assert_eq!(exported_mode(), "", "an unstarted reducer has no mode");
+        let mut snapshot = wire::SumeragiV2Status {
+            protocol_version: wire::PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"telemetry node"),
+            build_fingerprint: Hash::new(b"telemetry build"),
+            config_fingerprint: Hash::new(b"telemetry config"),
+            restart_required: false,
+            height_context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"telemetry height context",
+            ))),
+            height: 7,
+            view: 0,
+            phase: wire::SumeragiV2StatusPhase::AwaitingProposal,
+            leader: 0,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: wire::SumeragiV2BodyState::Missing,
+            pending_persistence_id: None,
+            last_committed_height: 6,
+            last_committed_subject: None,
+            height_context: wire::SumeragiV2HeightContextStatus {
+                epoch: 0,
+                epoch_end_height: 100,
+                mode: wire::ConsensusMode::Npos,
+                epoch_seed: [0; 32],
+                validator_count: 4,
+                quorum: wire::DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
+            liveness: Default::default(),
+        };
+        for mode in [wire::ConsensusMode::Npos, wire::ConsensusMode::Permissioned] {
+            snapshot.height_context.mode = mode;
+            status::set_v2_status(snapshot.clone());
+            refresh_sumeragi_mode(&metrics);
+            assert_eq!(exported_mode(), mode.tag());
+        }
+        status::clear_v2_status();
+        refresh_sumeragi_mode(&metrics);
+        assert_eq!(
+            exported_mode(),
+            "",
+            "a cleared owner cannot leave a stale mode"
+        );
+        let mode_cache = Arc::clone(&metrics.sumeragi_mode_tag);
+        assert!(
+            std::thread::spawn(move || {
+                let _lock = mode_cache.write().expect("unpoisoned mode cache");
+                panic!("poison the mode cache");
+            })
+            .join()
+            .is_err()
+        );
+        assert_eq!(exported_mode(), "", "a failed cache must not invent a mode");
     }
     #[cfg(feature = "telemetry")]
     #[test]

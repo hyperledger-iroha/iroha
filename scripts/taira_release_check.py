@@ -679,7 +679,8 @@ CORE_ADMISSION_STARTUP_STAGES += (("autonomous lane gas selection and shared mer
     "state::tests::autonomous_merge_gas_priority_preserves_old_source_and_canonical_order",
     "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
 )),)
-CORE_ADMISSION_STARTUP_STAGES += (("fresh queue pressure and capacity semantics", (
+CORE_ADMISSION_STARTUP_STAGES += (("current reducer mode and fresh queue pressure", (
+    "telemetry::tests::public_mode_tracks_frozen_reducer_context_and_clears_without_owner",
     "telemetry::tests::queue_backpressure_metrics_updated",
     "telemetry::tests::queue_age_pressure_is_not_capacity_backpressure",
     "telemetry::tests::fresh_queue_metrics_replace_stale_pressure_on_an_idle_node",
