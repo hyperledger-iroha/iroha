@@ -4616,9 +4616,10 @@ pub fn record_state_tx_queue_backpressure(
             .metrics
             .sumeragi_tx_queue_max_retained_bytes
             .set(max_retained_bytes);
-        telemetry.metrics.sumeragi_tx_queue_saturated.set(u64::from(
-            saturated_by_count || saturated_by_bytes || saturated_by_age,
-        ));
+        telemetry
+            .metrics
+            .sumeragi_tx_queue_saturated
+            .set(u64::from(saturated_by_count || saturated_by_bytes));
         telemetry
             .metrics
             .sumeragi_tx_queue_saturated_by_count
@@ -5248,9 +5249,9 @@ impl Telemetry {
             self.metrics
                 .sumeragi_tx_queue_max_retained_bytes
                 .set(max_retained_bytes);
-            self.metrics.sumeragi_tx_queue_saturated.set(u64::from(
-                saturated_by_count || saturated_by_bytes || saturated_by_age,
-            ));
+            self.metrics
+                .sumeragi_tx_queue_saturated
+                .set(u64::from(saturated_by_count || saturated_by_bytes));
             self.metrics
                 .sumeragi_tx_queue_saturated_by_count
                 .set(u64::from(saturated_by_count));
@@ -6486,6 +6487,7 @@ impl Actor {
         if !self.enabled {
             return;
         }
+        refresh_sumeragi_mode(&self.metrics);
         let local_removed = {
             let world = self.state.world_view();
             !world.peers().iter().any(|peer| peer == &self.local_peer_id)
@@ -6533,12 +6535,43 @@ impl Actor {
         }
         self.last_online_peers = current_online;
         self.metrics.connected_peers.set(peer_count);
-        let queued = self.queue.queued_len() as u64;
-        let active = self.queue.active_len() as u64;
+        // Queue transitions may have no StateTelemetry handle. Refresh the entire
+        // queue observation here so a drained queue cannot retain an earlier
+        // consensus-pressure sample indefinitely while the node is idle.
+        let pressure = self.queue.pressure_snapshot();
+        let queued = pressure.queued_tx_count as u64;
+        let active = pressure.tracked_tx_count as u64;
         let inflight = active.saturating_sub(queued);
         self.metrics.queue_size.set(active);
         self.metrics.queue_queued.set(queued);
         self.metrics.queue_inflight.set(inflight);
+        self.metrics.sumeragi_tx_queue_depth.set(queued);
+        self.metrics
+            .sumeragi_tx_queue_capacity
+            .set(pressure.capacity.get() as u64);
+        self.metrics
+            .sumeragi_tx_queue_retained_bytes
+            .set(pressure.retained_bytes);
+        self.metrics
+            .sumeragi_tx_queue_max_retained_bytes
+            .set(pressure.max_retained_bytes.get());
+        // Match QueuePressureSnapshot::into_backpressure and the operator
+        // status projection. Age is a latency signal, not capacity exhaustion.
+        self.metrics.sumeragi_tx_queue_saturated.set(u64::from(
+            pressure.saturated_by_count || pressure.saturated_by_bytes,
+        ));
+        self.metrics
+            .sumeragi_tx_queue_saturated_by_count
+            .set(u64::from(pressure.saturated_by_count));
+        self.metrics
+            .sumeragi_tx_queue_saturated_by_bytes
+            .set(u64::from(pressure.saturated_by_bytes));
+        self.metrics
+            .sumeragi_tx_queue_saturated_by_age
+            .set(u64::from(pressure.saturated_by_age));
+        self.metrics
+            .sumeragi_tx_queue_oldest_queued_age_ms
+            .set(pressure.oldest_queued_tx_age_ms);
         // P2P counters (gauges): sample from p2p module
         self.metrics
             .p2p_dropped_posts
@@ -7147,6 +7180,15 @@ pub fn start(
         ),
     ))
 }
+/// Project the frozen reducer-owned mode, never a configuration candidate or
+/// the default of an unrelated metrics registry. No owner means unknown mode.
+fn refresh_sumeragi_mode(metrics: &Metrics) {
+    let mode_tag = crate::sumeragi::status::v2_status()
+        .map(|status| status.height_context.mode.tag())
+        .unwrap_or_default();
+    metrics.set_sumeragi_mode_tag(mode_tag);
+}
+
 #[cfg(all(feature = "telemetry", test))]
 #[allow(clippy::disallowed_types, clippy::float_cmp)]
 mod tests {
@@ -9813,6 +9855,86 @@ mod tests {
         tel.set_highest_qc_height(64);
         assert_eq!(metrics.sumeragi_highest_qc_height.get(), 64);
     }
+    #[test]
+    fn public_mode_tracks_frozen_reducer_context_and_clears_without_owner() {
+        use crate::sumeragi::status;
+        use iroha_data_model::block::consensus_v2 as wire;
+        let _guard = status::rbc_status_test_guard();
+        struct ClearStatusOnDrop;
+        impl Drop for ClearStatusOnDrop {
+            fn drop(&mut self) {
+                status::clear_v2_status();
+            }
+        }
+        let _cleanup = ClearStatusOnDrop;
+        status::clear_v2_status();
+        let metrics = Metrics::default();
+        let exported_mode = || {
+            metrics
+                .status_snapshot(&Default::default())
+                .sumeragi
+                .expect("public consensus telemetry")
+                .mode_tag
+        };
+        assert_eq!(exported_mode(), "", "an unstarted reducer has no mode");
+        let mut snapshot = wire::SumeragiV2Status {
+            protocol_version: wire::PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"telemetry node"),
+            build_fingerprint: Hash::new(b"telemetry build"),
+            config_fingerprint: Hash::new(b"telemetry config"),
+            restart_required: false,
+            height_context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"telemetry height context",
+            ))),
+            height: 7,
+            view: 0,
+            phase: wire::SumeragiV2StatusPhase::AwaitingProposal,
+            leader: 0,
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: wire::SumeragiV2BodyState::Missing,
+            pending_persistence_id: None,
+            last_committed_height: 6,
+            last_committed_subject: None,
+            height_context: wire::SumeragiV2HeightContextStatus {
+                epoch: 0,
+                epoch_end_height: 100,
+                mode: wire::ConsensusMode::Npos,
+                epoch_seed: [0; 32],
+                validator_count: 4,
+                quorum: wire::DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
+            liveness: Default::default(),
+        };
+        for mode in [wire::ConsensusMode::Npos, wire::ConsensusMode::Permissioned] {
+            snapshot.height_context.mode = mode;
+            status::set_v2_status(snapshot.clone());
+            refresh_sumeragi_mode(&metrics);
+            assert_eq!(exported_mode(), mode.tag());
+        }
+        status::clear_v2_status();
+        refresh_sumeragi_mode(&metrics);
+        assert_eq!(
+            exported_mode(),
+            "",
+            "a cleared owner cannot leave a stale mode"
+        );
+        let mode_cache = Arc::clone(&metrics.sumeragi_mode_tag);
+        assert!(
+            std::thread::spawn(move || {
+                let _lock = mode_cache.write().expect("unpoisoned mode cache");
+                panic!("poison the mode cache");
+            })
+            .join()
+            .is_err()
+        );
+        assert_eq!(exported_mode(), "", "a failed cache must not invent a mode");
+    }
     #[cfg(feature = "telemetry")]
     #[test]
     fn queue_backpressure_metrics_updated() {
@@ -9843,6 +9965,72 @@ mod tests {
         assert_eq!(metrics.sumeragi_tx_queue_saturated_by_bytes.get(), 1);
         assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 1);
         assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 7_500);
+    }
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn queue_age_pressure_is_not_capacity_backpressure() {
+        let metrics = Arc::new(Metrics::default());
+        let state_telemetry = StateTelemetry::new(metrics.clone(), true);
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        record_state_tx_queue_backpressure(
+            &state_telemetry,
+            2,
+            20_000,
+            21_888,
+            134_217_728,
+            false,
+            false,
+            true,
+            23_611,
+        );
+        assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 1);
+        assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 23_611);
+
+        metrics.sumeragi_tx_queue_saturated.set(1);
+        telemetry.record_tx_queue_backpressure(
+            2,
+            20_000,
+            21_888,
+            134_217_728,
+            false,
+            false,
+            true,
+            23_611,
+        );
+        assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 1);
+    }
+    #[tokio::test]
+    async fn fresh_queue_metrics_replace_stale_pressure_on_an_idle_node() {
+        let system = SystemUnderTest::new();
+        // Model the last event-driven sample before work was removed without
+        // StateTelemetry. No new block or transaction should be needed to clear it.
+        system
+            .telemetry
+            .record_tx_queue_backpressure(2, 2, 21_888, 21_888, true, true, true, 23_611);
+        assert_eq!(system.telemetry.metrics.sumeragi_tx_queue_depth.get(), 2);
+        assert_eq!(
+            system.telemetry.metrics.sumeragi_tx_queue_saturated.get(),
+            1
+        );
+
+        let metrics = system
+            .telemetry
+            .metrics_fresh_checked()
+            .await
+            .expect("fresh metrics for the idle queue");
+        assert_eq!(metrics.queue_size.get(), 0);
+        assert_eq!(metrics.queue_queued.get(), 0);
+        assert_eq!(metrics.queue_inflight.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 10);
+        assert_eq!(metrics.sumeragi_tx_queue_retained_bytes.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_count.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_bytes.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 0);
     }
     #[cfg(feature = "telemetry")]
     #[test]

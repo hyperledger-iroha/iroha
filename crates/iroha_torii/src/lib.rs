@@ -40284,8 +40284,17 @@ fn validate_account_onboarding_readiness(
                     &nexus.fees.fee_asset_id,
                 )
             {
+                // State initialization seeds SNS policies before a joining node
+                // has replayed the fee asset. The policy is present in this
+                // snapshot, so NotFound means its otherwise-matching configured
+                // asset is not registered yet; configuration conflicts stay blocked.
+                let code = if matches!(&error, iroha_core::sns::SnsError::NotFound(_)) {
+                    "alias.onboarding.payment_asset_missing"
+                } else {
+                    "alias.onboarding.payment_asset_mismatch"
+                };
                 blocked(
-                    "alias.onboarding.payment_asset_mismatch",
+                    code,
                     Some(policy.payment_asset_id.clone()),
                     "nexus.fees.fee_asset_id",
                     &format!(
@@ -40324,6 +40333,19 @@ fn validate_account_onboarding_readiness(
                 Some(permission.clone()),
                 "torii.account_onboarding.additional_permissions",
                 "remove the permission or install an executor data model that declares it",
+            );
+        }
+    }
+    if signer.allowed_permissions.contains("DpnUser") {
+        let admin = Permission::from(iroha_executor_data_model::permission::dpn::DpnAdmin);
+        // Native DPN grants require the exact direct unit token; role-derived or
+        // differently scoped permissions do not authorize this lifecycle.
+        if !world.account_contains_inherent_permission(&signer.authority, &admin) {
+            blocked(
+                "alias.onboarding.dpn_user_grant_authority_missing",
+                Some("DpnUser".to_owned()),
+                "torii.account_onboarding.authority",
+                "use an onboarding authority with direct DpnAdmin permission or remove DpnUser from additional_permissions",
             );
         }
     }
@@ -40486,8 +40508,10 @@ fn validate_account_onboarding_readiness(
                 diagnostic.code.as_str(),
                 "alias.onboarding.authority_missing"
                     | "alias.onboarding.policy_missing"
+                    | "alias.onboarding.payment_asset_missing"
                     | "alias.onboarding.payer_unfunded"
                     | "alias.onboarding.additional_permission_unknown"
+                    | "alias.onboarding.dpn_user_grant_authority_missing"
                     | "alias.onboarding.sponsor_program_missing"
                     | "alias.onboarding.credential_dataspace_unknown"
                     | "alias.onboarding.credential_domain_missing"

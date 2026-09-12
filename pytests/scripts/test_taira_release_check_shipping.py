@@ -128,7 +128,7 @@ class ShippingArtifactTests(unittest.TestCase):
         self.network_calls = 0
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
-        for name in ("CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "TEST_NETWORK_STAGES",
+        for name in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "TEST_NETWORK_STAGES",
                      "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
             stack.enter_context(patch.object(gate, name, ()))
         stack.enter_context(patch.object(gate, "STAGES", (("CLI", (self.names["cli"],)),)))

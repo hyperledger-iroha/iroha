@@ -5272,6 +5272,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_js_codec"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_model_base",
+ "iroha_primitives",
+ "norito",
+]
+
+[[package]]
+name = "iroha_js_codec_wasm"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "iroha_js_codec",
+ "norito",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "iroha_js_host"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5284,6 +5309,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_js_codec",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
@@ -8471,24 +8497,18 @@ dependencies = [
 [[package]]
 name = "pqcrypto-internals"
 version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4a326caf27cbf2ac291ca7fd56300497ba9e76a8cc6a7d95b7a18b57f22b61d"
 dependencies = [
  "cc",
  "dunce",
  "getrandom 0.3.4",
- "libc",
 ]
 
 [[package]]
 name = "pqcrypto-mldsa"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f812cd126a2582599478a434fea75937b4b05d234c64a49e0cea129e130528"
 dependencies = [
  "cc",
  "glob",
- "libc",
  "paste",
  "pqcrypto-internals",
  "pqcrypto-traits",
@@ -8497,12 +8517,9 @@ dependencies = [
 [[package]]
 name = "pqcrypto-mlkem"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb14d207f3749e8a59a026c22ceaa72d70fff931cfbf4c8d9b08f3fc56dc6e60"
 dependencies = [
  "cc",
  "glob",
- "libc",
  "pqcrypto-internals",
  "pqcrypto-traits",
 ]

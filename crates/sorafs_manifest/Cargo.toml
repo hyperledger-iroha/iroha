@@ -52,8 +52,15 @@ soranet_pq = { path = "../soranet_pq", default-features = false }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
 rand = { workspace = true }
 rand_core_06 = { workspace = true }
-halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["circuit-params", "multicore"] }
 poseidon-primitives = "0.2.0"
+
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["circuit-params", "multicore"] }
+
+# Browser codecs retain the same proof algorithms and admission rules while
+# using Halo2's supported serial scheduler; no OS worker threads are available.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", default-features = false, features = ["batch", "circuit-params"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"

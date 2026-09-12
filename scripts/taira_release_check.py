@@ -308,6 +308,10 @@ TORII_STAGES = (("routed onboarding and faucet contracts", (
     "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
 )),)
 
+STAGES += (("exact authenticated transaction lookup", (
+    "tests::transaction_get_uses_exact_authenticated_details_and_preserves_rejection",
+)),)
+
 CRYPTO_STAGES = (("puzzle cancellation and exact solution predicate", (
     "soranet::puzzle::tests::mint_cancellation_stops_before_first_evaluation",
     "soranet::puzzle::tests::mint_cancellation_discards_inflight_solutions_and_stops_search",
@@ -555,6 +559,14 @@ TORII_STARTUP_STAGES += (("contract read authority and delegated ingress", (
     "torii_routed_read_tests::protected_contract_views_ignore_unsigned_public_upstream",
     "app_api::tests::contract_view_dispatch_requires_bound_authenticated_authority",
 )),)
+TORII_STARTUP_STAGES += (("onboarding DPN grant authority", (
+    "tests::onboarding_readiness_dpn_user_requires_exact_direct_admin",
+    "tests::onboarding_readiness_dpn_user_rejects_role_derived_admin",
+    "tests::onboarding_readiness_default_permissions_do_not_require_dpn_admin",
+    "tests::onboarding_readiness_dpn_user_is_pending_while_joining_state_is_empty",
+    "tests::onboarding_readiness_is_pending_while_joining_state_is_empty",
+    "tests::onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is_empty",
+)),)
 TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact route authentication", (
     "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
     "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
@@ -667,6 +679,12 @@ CORE_ADMISSION_STARTUP_STAGES += (("autonomous lane gas selection and shared mer
     "state::tests::autonomous_merge_gas_priority_preserves_old_source_and_canonical_order",
     "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("current reducer mode and fresh queue pressure", (
+    "telemetry::tests::public_mode_tracks_frozen_reducer_context_and_clears_without_owner",
+    "telemetry::tests::queue_backpressure_metrics_updated",
+    "telemetry::tests::queue_age_pressure_is_not_capacity_backpressure",
+    "telemetry::tests::fresh_queue_metrics_replace_stale_pressure_on_an_idle_node",
+)),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
@@ -728,6 +746,13 @@ CONFIG_STAGES = (("production configuration schema", (
     "nexus_routing_and_governance_collection_defaults_match_config_defaults",
 )),)
 
+CONFIG_UNIT_STAGES = (("explicit onboarding permission configuration", (
+    "parameters::user::duration_clamp_tests::account_onboarding_accepts_explicit_dpn_user_permission",
+    "parameters::user::duration_clamp_tests::account_onboarding_defaults_to_no_additional_permissions",
+    "parameters::user::duration_clamp_tests::account_onboarding_rejects_unsupported_and_scoped_additional_permissions",
+    "parameters::user::duration_clamp_tests::account_onboarding_rejects_duplicate_dpn_user_permission",
+)),)
+
 TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "config::tests::base_config_applies_bounded_storage_caps",
     "config::tests::base_config_preserves_caller_storage_budget_and_smaller_component_cap",
@@ -747,6 +772,7 @@ NETWORK_FIXTURE_FREE_BYTES = 8 * 1024**3
 
 HARNESS_TARGETS = {
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
+    "config-unit": ("native configuration unit contracts", "iroha_config", "lib", ["-p", "iroha_config", "--lib"]),
     "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
     "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
     "kagami": ("native Kagami", "kagami", "bin", ["-p", "iroha_kagami", "--bin", "kagami"]),
@@ -851,7 +877,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
     if qualification_scope not in QUALIFICATION_SCOPES:
         raise CheckError("native qualification scope must be basic or full")
     selected = {
-        "config": CONFIG_STAGES, "kagami": KAGAMI_STAGES,
+        "config": CONFIG_STAGES, "config-unit": CONFIG_UNIT_STAGES, "kagami": KAGAMI_STAGES,
         "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
         "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
         "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES,

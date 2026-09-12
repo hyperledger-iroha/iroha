@@ -4944,13 +4944,8 @@ mod transaction {
     impl Run for Get {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config()?;
-            let transaction = client
-                .query(FindTransactions)
-                .execute_all()?
-                .into_iter()
-                .find(|t| t.entrypoint_hash() == &self.hash)
-                .ok_or_else(|| eyre!("Transaction not found"))?;
-            context.print_data(&transaction)
+            let details = client.get_transaction_details(self.hash)?;
+            context.print_data(&details.transaction)
         }
     }
     #[derive(clap::Args, Debug)]

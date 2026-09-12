@@ -1,12 +1,10 @@
-function nativeBindingError(reason) {
-  return new Error(`Native binding required; ${reason}`);
-}
+import { getBrowserCodecBinding } from "./browserCodec.js";
 
 /**
- * Browser builds cannot load the optional `iroha_js_host.node` binding.
+ * Browser builds use the package-owned Rust Wasm codec after explicit initialization.
  */
 export function getNativeBinding() {
-  throw nativeBindingError("iroha_js_host is unavailable in browser builds.");
+  return getBrowserCodecBinding();
 }
 
 /**

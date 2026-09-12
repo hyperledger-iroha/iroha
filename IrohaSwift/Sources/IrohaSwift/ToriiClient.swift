@@ -11642,7 +11642,7 @@ public struct ToriiTriggerEventFilter: Sendable {
     }
 }
 
-fileprivate enum ToriiCanonicalHashLiteral {
+enum ToriiCanonicalHashLiteral {
     private static let tag = "hash"
     private static let prefix = "hash:"
     private static let bodyLength = 64

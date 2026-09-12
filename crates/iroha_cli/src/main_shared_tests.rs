@@ -2759,6 +2759,115 @@ fn canonical_read_context(
         transport,
     )
 }
+#[test]
+fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
+    use iroha::data_model::{
+        query::{
+            CommittedTransaction, CommittedTxFilters, QueryRequest, SignedQuery,
+            dsl::CompoundPredicate,
+        },
+        transaction::{TransactionResult, error::TransactionRejectionReason},
+    };
+    use iroha_version::codec::DecodeVersioned;
+    use norito::codec::Decode;
+
+    let config = fallback_config();
+    let signed = TransactionBuilder::new(
+        config.network_id,
+        config.account.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .try_sign(config.key_pair.private_key())
+    .expect("sign exact transaction fixture");
+    let hash = signed.hash_as_entrypoint();
+    let result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+        ValidationFail::NotPermitted("fixture contract permission denied".to_owned()),
+    )));
+    let transaction = CommittedTransaction {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"exact CLI transaction block")),
+        entrypoint_hash: hash,
+        entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+        entrypoint: TransactionEntrypoint::External(signed),
+        result_hash: result.hash(),
+        result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+        result,
+        merge_inclusion: None,
+    };
+    for mismatched_hash in [false, true] {
+        let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
+            hash: if mismatched_hash {
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                    b"other entrypoint",
+                ))
+                .to_string()
+            } else {
+                hash.to_string()
+            },
+            transaction: transaction.clone(),
+            trigger_completions: Vec::new(),
+        };
+        let capabilities = iroha::http::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(
+                format!(
+                    "{{\"data_model_version\":{}}}",
+                    iroha::data_model::DATA_MODEL_VERSION
+                )
+                .into_bytes(),
+            )
+            .unwrap();
+        let response = iroha::http::Response::builder()
+            .status(200)
+            .header("content-type", "application/x-norito")
+            .body(norito::to_bytes(&details).unwrap())
+            .unwrap();
+        let (mut context, transport) = canonical_read_context(vec![capabilities, response]);
+        let hash_literal = hash.to_string();
+        let outcome = Args::try_parse_from([
+            "iroha",
+            "ledger",
+            "transaction",
+            "get",
+            "--hash",
+            &hash_literal,
+        ])
+        .unwrap()
+        .command
+        .run(&mut context);
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "one capability read and one exact query");
+        assert_eq!(requests[1].method, iroha::http::Method::POST);
+        assert_eq!(requests[1].url.path(), "/v1/pipeline/transactions/details");
+        let query = SignedQuery::decode_all_versioned(&requests[1].body).unwrap();
+        query.verify_signature().unwrap();
+        assert_eq!(query.authority(), &config.account);
+        let QueryRequest::Start(query) = query.request() else {
+            panic!("transaction get must sign an exact transaction-details query");
+        };
+        let (_, predicate, _, _) = query.parts();
+        let predicate =
+            CompoundPredicate::<CommittedTransaction>::decode(&mut std::io::Cursor::new(predicate))
+                .unwrap();
+        assert_eq!(
+            predicate.committed_tx_filters(),
+            Some(CommittedTxFilters {
+                entry_eq: Some(hash),
+                ..CommittedTxFilters::default()
+            })
+        );
+        if mismatched_hash {
+            assert!(outcome.is_err(), "a substituted proof must fail");
+            assert!(context.output.is_none());
+        } else {
+            outcome.expect("rejected transactions still have readable details");
+            assert_eq!(
+                context.output,
+                Some(norito::json::to_json(&transaction).unwrap())
+            );
+        }
+    }
+}
 fn effective_permission_page(names: &[&str]) -> iroha::http::Response<Vec<u8>> {
     let items: Vec<_> = names
         .iter()
