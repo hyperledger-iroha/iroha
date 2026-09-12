@@ -1276,6 +1276,13 @@ function decodeSupportedI105String(encoded, expectedDiscriminant) {
   return _parseCanonicalAccountAddress(encoded, expectedDiscriminant, defaultNativeRuntime);
 }
 
+// The NAPI Buffer may belong to the host realm while the facade runs in a
+// browser/test realm. The intrinsic typed-array brand works across realms and
+// cannot be forged by an object's Symbol.toStringTag or constructor property.
+const typedArrayBrand = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag,
+).get;
+
 /** @internal Rust owns sentinel boundaries, payload decoding and checksums. */
 export function _parseCanonicalAccountAddress(encoded, expectedDiscriminant, runtime) {
   if (typeof encoded !== JS_TYPE_STRING) {
@@ -1285,7 +1292,7 @@ export function _parseCanonicalAccountAddress(encoded, expectedDiscriminant, run
     normalizeI105DiscriminantInput(expectedDiscriminant, "expected i105 chain discriminant");
   const parsed = callNativeAddressWithRuntime(runtime, "accountAddressParseEncoded", encoded, expected);
   if (
-    !(parsed?.canonicalBytes instanceof Uint8Array) ||
+    typedArrayBrand.call(parsed?.canonicalBytes) !== "Uint8Array" ||
     parsed.canonicalBytes.length === 0 ||
     !Number.isInteger(parsed.networkPrefix) || parsed.networkPrefix < 0 ||
     parsed.networkPrefix > I105_DISCRIMINANT_MAX ||

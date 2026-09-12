@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import { _renderCanonicalAccountAddress, AccountAddressError } from "../src/address.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 
@@ -89,5 +90,37 @@ test("canonical owner diagnostics preserve prefix and character details", async 
       assert.deepEqual(error.details, details);
       return true;
     });
+  }
+});
+
+test("canonical owner byte admission accepts real cross-realm Uint8Array and copies its exact window", async () => {
+  const { _parseCanonicalAccountAddress } = await import("../src/address.js");
+  const foreign = runInNewContext("new Uint8Array([99, 2, 0, 1, 32, 88]).subarray(1, 5)");
+  assert.equal(foreign instanceof Uint8Array, false);
+  assert.equal(ArrayBuffer.isView(foreign), true);
+  const runtime = createNativeRuntime({
+    accountAddressParseEncoded() { return { canonicalBytes: foreign, networkPrefix: 369 }; },
+    accountAddressRender(bytes, prefix) {
+      assert.deepEqual(Array.from(bytes), [2, 0, 1, 32]); assert.equal(prefix, 369);
+      return { canonicalHex: "0x02000120", i105: "native-cross-realm" };
+    },
+  });
+  const [prefix, result] = _parseCanonicalAccountAddress("native-cross-realm", 369, runtime);
+  assert.equal(prefix, 369); assert.deepEqual(result, Uint8Array.of(2, 0, 1, 32));
+  result.fill(0); assert.deepEqual(Array.from(foreign), [2, 0, 1, 32]);
+});
+
+test("canonical owner byte admission rejects other views and forged Uint8Array brands", async () => {
+  const { _parseCanonicalAccountAddress } = await import("../src/address.js");
+  const dataView = new DataView(new ArrayBuffer(4));
+  Object.defineProperty(dataView, Symbol.toStringTag, { value: "Uint8Array" });
+  const foreignWrongType = runInNewContext("new Uint16Array([2, 0, 1, 32])");
+  Object.defineProperty(foreignWrongType, Symbol.toStringTag, { value: "Uint8Array" });
+  for (const canonicalBytes of [dataView, foreignWrongType, new Uint8ClampedArray([2, 0, 1, 32]),
+    { 0: 2, length: 1, [Symbol.toStringTag]: "Uint8Array", constructor: Uint8Array }, new Proxy(Uint8Array.of(2), {})]) {
+    assert.throws(() => _parseCanonicalAccountAddress("invalid-native-bytes", 369, createNativeRuntime({
+      accountAddressParseEncoded() { return { canonicalBytes, networkPrefix: 369 }; },
+      accountAddressRender() { assert.fail("wrong byte brands must fail before rendering"); },
+    })), { code: "ERR_UNSUPPORTED_ADDRESS_FORMAT" });
   }
 });
