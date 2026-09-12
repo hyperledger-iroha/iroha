@@ -183,9 +183,10 @@ mod tests {
         for prefix in [369_u16, 42] {
             let account =
                 iroha_js_codec::account_address_render(&parsed.canonical_bytes, prefix).unwrap();
-            let source =
-                json::to_json(&norito::json!({ "Unregister": { "Account": account.i105 } }))
-                    .unwrap();
+            let source = json::to_json(
+                &norito::json!({ "Unregister": norito::json!({ "Account": account.i105 }) }),
+            )
+            .unwrap();
             let frame = encode_instruction_frame(&source, f64::from(prefix)).unwrap();
             assert_eq!(
                 decode_instruction_frame(&frame, f64::from(prefix)).unwrap(),
