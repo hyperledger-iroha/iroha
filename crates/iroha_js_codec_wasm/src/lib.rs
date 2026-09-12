@@ -175,10 +175,10 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|row| row["name"].as_str() == Some("JoinGameSessionV1"))
-            .unwrap()["value"]["player"]
+            .find(|row| row["name"].as_str() == Some("ClaimGamePayoutV1"))
+            .expect("canonical game payout fixture")["value"]["destination"]
             .as_str()
-            .unwrap();
+            .expect("game payout destination is an encoded account");
         let parsed = iroha_js_codec::account_address_parse_encoded(account, None).unwrap();
         for prefix in [369_u16, 42] {
             let account =

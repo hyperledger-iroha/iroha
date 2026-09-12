@@ -606,10 +606,17 @@ fn all_browser_nft_market_instruction_families_preserve_native_fixture_frames() 
             .iter()
             .find(|row| row["name"].as_str() == Some(name))
             .unwrap();
-        let frame = hex::decode(row["framed_hex"].as_str().unwrap()).expect("native NFT frame");
-        let wire_id = format!("iroha.instruction.v1::nft_market::{name}");
-        let instruction = iroha_data_model::isi::decode_instruction_from_pair(&wire_id, &frame)
-            .expect("native NFT instruction");
+        // The NFT catalog stores the compact InstructionBox archive, including
+        // its typed frame, in instruction_hex; encoded_hex is the bare payload.
+        let archive = hex::decode(
+            row["instruction_hex"]
+                .as_str()
+                .expect("native NFT instruction archive"),
+        )
+        .expect("native NFT archive hex");
+        let instruction: InstructionBox =
+            norito::codec::decode_adaptive(&archive).expect("native NFT instruction");
+        assert_eq!(instruction.encode(), archive, "{name} native archive");
         assert_typed_instruction_roundtrip(instruction, object([(name, payload)]));
     }
 }
