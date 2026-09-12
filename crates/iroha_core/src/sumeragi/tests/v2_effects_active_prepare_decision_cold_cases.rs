@@ -4,6 +4,21 @@ fn live_idle_decision_cleanup_reconciles_runner_frontier() {
         .spawn(|| {
             for pacemaker_only in [false, true] {
                 let mut fixture = ready_body_fixture();
+                // The paired body fixture starts with a generic worker shell.
+                // Bind its closed, drained ingress to this actual adapter WAL
+                // before any live transition; later cuts use normal monotone
+                // production reconciliation without replacing its authority.
+                let initial_wal_authority = fixture
+                    .transport
+                    .executor
+                    .runtime
+                    .leader_wire_recovery_authority()
+                    .expect("read the actual initial runtime WAL authority")
+                    .expect("the production runtime has one WAL authority");
+                crate::sumeragi::v2_worker::tests::install_completion_runtime_wal_authority_for_test(
+                    &mut fixture.services,
+                    initial_wal_authority,
+                );
                 let mut ordinal = fixture.ordinal;
                 for next in [LifecycleWorkClass::Store, LifecycleWorkClass::Validate] {
                     let advanced = fixture
@@ -74,6 +89,12 @@ fn live_idle_decision_cleanup_reconciles_runner_frontier() {
                 assert!(wal_after.starts_with(&wal_before));
                 assert!(wal_after.len() > wal_before.len());
                 let executor = &mut fixture.transport.executor;
+                assert!(executor
+                    .runtime
+                    .leader_wire_recovery_authority()
+                    .expect("read the actual post-Decision runtime WAL authority")
+                    .expect("Decision retains its exact WAL authority")
+                    .monotonically_extends(initial_wal_authority));
                 assert_eq!(executor.runtime.decided_body().unwrap(), Some(decision));
                 assert!(executor.protected_decision.is_none());
                 assert!(executor.pending_runner_decision_cleanup.is_none());
