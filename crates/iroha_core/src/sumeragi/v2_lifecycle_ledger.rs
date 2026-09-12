@@ -1367,6 +1367,12 @@ impl LifecycleLedgerRecordV1 {
         self.work_class_code = work_class_code(work_class);
         self
     }
+    /// Change only a fixture's terminal outcome while preserving its sealed replay envelope.
+    #[cfg(test)]
+    pub(super) fn with_terminal_for_test(mut self, terminal: Option<TerminalOutcome>) -> Self {
+        self.terminal = terminal.map(PersistedTerminalV1::from_schema);
+        self
+    }
     /// Compare an ordinary body's execution generation without exposing its
     /// stored replay envelope. Authentication remains owned by the body census.
     pub(super) fn ordinary_body_is_obsolete_for_decision(

@@ -242,10 +242,15 @@ fn obsolete_proposal_decision(
 }
 
 impl super::super::ProductionLifecycleOwnerV1 {
-    /// Persist the exact signed Proposal cut retained by the PendingKura regression.
-    pub(in crate::sumeragi) fn persist_pending_kura_proposal_output_for_test(
+    /// Persist the complete eight-row cut retained by the production incident.
+    pub(in crate::sumeragi) fn persist_pending_kura_incident_outputs_for_test(
         verified: &VerifiedHeightContext,
         proposal: wire::Proposal,
+        durable: &DurableBodyReceipt,
+        prepare_vote: wire::Vote,
+        prepare_qc: wire::QuorumCertificate,
+        commit_vote: wire::Vote,
+        decision: wire::QuorumCertificate,
         root: &Path,
     ) -> LifecycleLedgerV1 {
         verified
@@ -253,13 +258,140 @@ impl super::super::ProductionLifecycleOwnerV1 {
                 wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
             ))
             .expect("authenticate pending Kura Proposal fixture");
-        let ledger = obsolete_proposal_ledger(
-            verified,
-            obsolete_proposal_pair(verified, proposal, 3, 7).into(),
+        let context = super::super::projection::lifecycle_context(verified.context());
+        let tag = EventTag::new(
+            proposal.round.height,
+            proposal.round.view,
+            Generation::INITIAL,
         );
+        let validate = super::super::replay_authority::exact_local_body_record_fixture(
+            context,
+            tag,
+            proposal.manifest.clone(),
+            durable,
+            LifecycleStageKind::ValidateBody,
+        )
+        .expect("derive the exact retained local Validate row");
+        let validate_root = CausalRoot::new(LifecycleDigest::new(
+            *Hash::new(b"pending Kura incident local Validate owner").as_ref(),
+        ));
+        let mut records = vec![
+            LifecycleLedgerRecordV1::new(
+                validate.key,
+                OwnerId::new(validate_root, 542069),
+                542069,
+                validate.work_class,
+                validate.stage,
+                Some(TerminalOutcome::Advanced),
+                validate_root.digest(),
+                validate.payload,
+                validate.authority,
+                DurableContinuation::AdvancedNoSuccessor,
+            )
+            .expect("retain the successful Validate tombstone"),
+        ];
+        records.extend(obsolete_proposal_pair(verified, proposal, 542077, 542080));
+
+        let mut unsigned = prepare_vote.clone();
+        unsigned.signature.clear();
+        let [parent, child] = super::super::replay_authority::exact_prepare_sign_broadcast_fixture(
+            context,
+            unsigned,
+            prepare_vote.clone(),
+        );
+        let prepare_output = direct_output_record(
+            verified,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(prepare_vote),
+            )),
+            542083,
+        );
+        let prepare_owner = OwnerId::new(prepare_output.owner().causal_root(), 542081);
+        records.push(
+            LifecycleLedgerRecordV1::new(
+                parent.key,
+                prepare_owner,
+                542081,
+                parent.work_class,
+                parent.stage,
+                Some(TerminalOutcome::Advanced),
+                prepare_owner.causal_root().digest(),
+                parent.payload,
+                parent.authority,
+                DurableContinuation::successor(
+                    DurableContinuationEdge::SignPrepareToBroadcast,
+                    542083,
+                ),
+            )
+            .expect("retain the exact Prepare Sign predecessor"),
+        );
+        records.push(
+            LifecycleLedgerRecordV1::new(
+                child.key,
+                prepare_owner,
+                542083,
+                child.work_class,
+                child.stage,
+                None,
+                prepare_owner.causal_root().digest(),
+                child.payload,
+                child.authority,
+                DurableContinuation::None,
+            )
+            .expect("retain the live signed Prepare output"),
+        );
+
+        let mut prepare_qc_owner = None;
+        for (ordinal, payload) in [
+            (
+                542123,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_qc),
+            ),
+            (542126, wire::ConsensusMessageV2Payload::Vote(commit_vote)),
+            (
+                542138,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(decision),
+            ),
+        ] {
+            let output = direct_output_record(
+                verified,
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload)),
+                ordinal,
+            );
+            let authenticated = output
+                .authenticate_recovered_lifecycle_output(context, verified, None, None)
+                .expect("authenticate the exact terminal output fixture");
+            let owner = if ordinal == 542126 {
+                prepare_qc_owner.expect("Commit output retains the Prepare QC owner")
+            } else {
+                output.owner()
+            };
+            if ordinal == 542123 {
+                prepare_qc_owner = Some(owner);
+            }
+            records.push(
+                LifecycleLedgerRecordV1::new(
+                    output.key().unwrap(),
+                    owner,
+                    ordinal,
+                    output.work_class().unwrap(),
+                    output.stage().unwrap(),
+                    Some(TerminalOutcome::Advanced),
+                    owner.causal_root().digest(),
+                    output.durable_payload().unwrap(),
+                    authenticated.candidate().replay_authority.clone(),
+                    DurableContinuation::None,
+                )
+                .expect("retain an inert terminal QC or Commit output"),
+            );
+        }
+        let ledger = obsolete_proposal_ledger(verified, records);
+        assert_eq!(ledger.records().len(), 8);
         let (store, _) = LifecycleLedgerStoreV1::open(root, ledger.context())
             .expect("open pending Kura Proposal ledger");
-        store.persist(&ledger).expect("persist live Proposal cut");
+        store
+            .persist(&ledger)
+            .expect("persist the complete incident cut");
         ledger
     }
 
@@ -278,9 +410,24 @@ impl super::super::ProductionLifecycleOwnerV1 {
         assert_eq!(after.context(), before.context());
         assert_eq!(after.high_water(), before.high_water());
         assert_eq!(after.records().len(), before.records().len());
-        assert_eq!(after.records()[0], before.records()[0]);
-        let original = &before.records()[1];
-        let cancelled = &after.records()[1];
+        for (original, retained) in before.records().iter().zip(after.records()) {
+            if original.ordinal() != 542080 {
+                assert_eq!(
+                    retained, original,
+                    "cancellation preserves every other incident row"
+                );
+            }
+        }
+        let original = before
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == 542080)
+            .unwrap();
+        let cancelled = after
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == 542080)
+            .unwrap();
         let expected = |terminal| {
             LifecycleLedgerRecordV1::new(
                 original.key().unwrap(),
@@ -300,7 +447,37 @@ impl super::super::ProductionLifecycleOwnerV1 {
         };
         assert_eq!(*original, expected(None));
         assert_eq!(*cancelled, expected(Some(TerminalOutcome::Cancelled)));
-        assert!(!self.has_recovered_lifecycle_outputs());
+        assert_eq!(self.recovered_lifecycle_output_count(), 1);
+    }
+
+    /// Compare the retained incident history after actual service acceptance.
+    pub(in crate::sumeragi) fn assert_pending_kura_incident_settled_for_test(
+        before: &LifecycleLedgerV1,
+        root: &Path,
+    ) {
+        let (store, _) = LifecycleLedgerStoreV1::open(root, before.context())
+            .expect("reopen the settled incident ledger");
+        let after = store.load().expect("read the settled incident ledger");
+        for original in before.records() {
+            let retained = after
+                .records()
+                .iter()
+                .find(|row| row.ordinal() == original.ordinal())
+                .expect("every incident row survives pending Kura replay");
+            let terminal = match original.ordinal() {
+                542080 => Some(TerminalOutcome::Cancelled),
+                542083 => Some(TerminalOutcome::Advanced),
+                _ => {
+                    assert_eq!(
+                        retained, original,
+                        "terminal history must remain byte-exact"
+                    );
+                    continue;
+                }
+            };
+            let expected = original.clone().with_terminal_for_test(terminal);
+            assert_eq!(*retained, expected);
+        }
     }
 }
 

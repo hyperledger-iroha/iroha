@@ -1040,6 +1040,10 @@ fn exercise_pending_kura_production_lifecycle(
     expected: super::super::v2_recovery::PendingKuraApply,
     safety_wal_path: std::path::PathBuf,
     finalize: bool,
+    retained_incident: Option<(
+        super::super::v2_lifecycle_coordinator::LifecycleLedgerV1,
+        wire::Vote,
+    )>,
 ) {
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context
@@ -1119,6 +1123,11 @@ fn exercise_pending_kura_production_lifecycle(
         .unwrap_or_else(|error| panic!("install exact pending Kura replay: {error}"));
     pending
         .with_runner_setup(&mut setup_runner, |executor, services| {
+            if let Some((_, prepare_vote)) = retained_incident.as_ref() {
+                // Model actor admission only after launch has accepted the
+                // exact signed Prepare into its production output corridor.
+                services.assert_and_drain_pending_kura_prepare_output_for_test(prepare_vote);
+            }
             super::super::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
                 executor, services,
             )
@@ -1251,6 +1260,20 @@ fn exercise_pending_kura_production_lifecycle(
         assert!(services.matches_installed_pending_kura_tip(expected));
         assert!(services.matches_lifecycle_lane_work(lane_work));
     });
+    if let Some((before, _)) = retained_incident {
+        assert_eq!(
+            activated
+                .settle_recovered_lifecycle_output_for_no_clock_recovery(&mut active_runner)
+                .expect("settle the incident output through the actual no-clock corridor"),
+            super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty,
+            "launch already transferred the sole Prepare output into exact service custody",
+        );
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::assert_pending_kura_incident_settled_for_test(
+            &before,
+            &kura.sumeragi_v2_storage_root().join("lifecycle-v1")
+                .join(hex::encode(context.id().0.as_ref())),
+        );
+    }
 
     if !finalize {
         activated
@@ -1554,6 +1577,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let verified =
                 VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
                     .expect("verify pending Kura lifecycle context");
+            let mut retained_prepare = None;
             let (local_validator, retained_proposal, wal_records) = if marker == 0xB7 {
                 // The real crash cut retains a live Proposal output after the
                 // same-view Decision and Kura write, without any installed TC.
@@ -1575,11 +1599,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 )
                 .payload()
                 .to_vec();
-                let ledger = super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::persist_pending_kura_proposal_output_for_test(
-                    &verified,
-                    proposal,
-                    &storage_root.join("lifecycle-v1").join(hex::encode(recovered_context.id().0.as_ref())),
-                );
                 let prepare_vote = wire::Vote {
                     round,
                     proposal_round: round,
@@ -1594,6 +1613,33 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 authenticate_qc(&mut prepare, &keys);
                 let mut commit_vote = prepare_vote.clone();
                 commit_vote.phase = wire::GlobalPhase::Commit;
+                let mut signed_prepare = prepare_vote.clone();
+                signed_prepare.signature = Signature::new(
+                    keys[usize::try_from(proposer).expect("pending Kura Prepare signer")]
+                        .private_key(),
+                    &signed_prepare.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                retained_prepare = Some(signed_prepare.clone());
+                let mut signed_commit = commit_vote.clone();
+                signed_commit.signature = Signature::new(
+                    keys[usize::try_from(proposer).expect("pending Kura Commit signer")]
+                        .private_key(),
+                    &signed_commit.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                let ledger = super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::persist_pending_kura_incident_outputs_for_test(
+                    &verified,
+                    proposal,
+                    &durable,
+                    signed_prepare,
+                    prepare.clone(),
+                    signed_commit,
+                    decision.clone(),
+                    &storage_root.join("lifecycle-v1").join(hex::encode(recovered_context.id().0.as_ref())),
+                );
                 (
                     proposer,
                     Some(ledger),
@@ -1703,8 +1749,8 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     recovered_body_store,
                 )
                 .unwrap_or_else(|error| panic!("open pending Kura lifecycle owner: {error}"));
-            if let Some(before) = retained_proposal {
-                assert!(owner.has_recovered_lifecycle_outputs());
+            if let Some(before) = retained_proposal.as_ref() {
+                assert_eq!(owner.recovered_lifecycle_output_count(), 2);
                 let output_calls = std::cell::Cell::new(0);
                 assert_eq!(
                     owner
@@ -1718,7 +1764,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed,
                 );
                 assert_eq!(output_calls.get(), 0);
-                owner.assert_pending_kura_proposal_cancelled_for_test(&before);
+                owner.assert_pending_kura_proposal_cancelled_for_test(before);
             }
             exercise_pending_kura_production_lifecycle(
                 owner,
@@ -1731,6 +1777,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 expected,
                 wal_path,
                 finalize,
+                retained_proposal.zip(retained_prepare),
             );
             continue;
         }

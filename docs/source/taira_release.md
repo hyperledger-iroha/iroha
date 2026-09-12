@@ -132,7 +132,9 @@ Configuration library and integration tests, CLI, SDK, Torii, crypto, P2P, Core,
 including all four shipping entry points, then share one Cargo invocation,
 resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when an independent-test checkpoint can be reused.
-CLI and the canonical Kagami projection checks precede the proof, crypto,
+Core, Torii and daemon startup recovery checks run next; failures are collected
+across those startup groups before stopping, without running CLI or network tests.
+CLI and the canonical Kagami projection checks then precede the proof, crypto,
 transport, consensus and fixture selections. Every independent failure stops
 before daemon startup. Shipping targets without selected tests provide actual
 compilation evidence, with no invented test passes. The native production build

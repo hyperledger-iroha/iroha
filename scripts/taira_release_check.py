@@ -1933,8 +1933,8 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # Build early library/HTTP, network and CLI test harnesses in one Cargo graph.
     # A separate CLI test build after the production node build changes the
     # package/dev-dependency feature union and recompiles shared dependencies.
-    # Run CLI contracts first so deployment argv defects surface before the
-    # expensive consensus regressions, without changing the combined Cargo graph.
+    # Run startup recovery first, then CLI contracts, so mandatory restart
+    # failures surface before unrelated groups without changing the Cargo graph.
     # Run every independent immutable test copy before starting
     # the shipping binary graph or four-peer fixture. Aggregate test failures;
     # missing tests, artifact custody failures and other infrastructure errors
@@ -1978,18 +1978,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # it available to a later attempt whose artifacts happen to match.
                 update_independent_checks(None)
             # Startup fixtures are part of the same canonical census/checkpoint, but
-            # execute before long consensus/proof groups. Retain each immutable copy
+            # execute before CLI and long consensus/proof groups. Retain each immutable copy
             # until its remaining stages finish; no test runs twice or gains a skip flag.
             startup = {"core": CORE_STARTUP_STAGES, "daemon": DAEMON_STARTUP_STAGES, "torii-unit": TORII_STARTUP_STAGES}
             preflight = tuple((name, tuple(stage for stage in stages if stage in startup.get(name, ())))
                               for name, stages in early_stages)
-            if STAGES:
-                if not reuse_independent:
-                    try:
-                        run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds)
-                    except SelectedRegressionFailures as error:
-                        failures.extend(error.failures)
-                harnesses.release("cli")
             if not reuse_independent:
                 startup_failures = []
                 for name, stages in preflight:
@@ -2001,7 +1994,14 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # Collect all startup groups, then avoid expensive unrelated tests
                 # when a restart's mandatory storage or policy boundary already failed.
                 if startup_failures:
-                    raise SelectedRegressionFailures(failures + startup_failures)
+                    raise SelectedRegressionFailures(startup_failures)
+            if STAGES:
+                if not reuse_independent:
+                    try:
+                        run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds)
+                    except SelectedRegressionFailures as error:
+                        failures.extend(error.failures)
+                harnesses.release("cli")
             for name, stages in early_stages:
                 remaining = tuple(stage for stage in stages if stage not in startup.get(name, ()))
                 if not reuse_independent and remaining:
