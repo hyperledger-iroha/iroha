@@ -265,12 +265,11 @@ test("canonical decoding rejects reserved headers and controller class mismatche
       `${label} rejects checksum-valid wrong-class I105`,
     );
 
-    const constructor = new addressModule.AccountAddress(
-      { version: 1, classId: 0, normVersion: 1, extFlag: false },
-      { tag: 0, curve: 1, publicKey: DEFAULT_PUBLIC_KEY },
-    );
     assert.throws(
-      () => constructor.canonicalBytes(),
+      () => new addressModule.AccountAddress(
+        { version: 1, classId: 0, normVersion: 1, extFlag: false },
+        { tag: 0, curve: 1, publicKey: DEFAULT_PUBLIC_KEY },
+      ),
       (error) =>
         error instanceof addressModule.AccountAddressError &&
         error.code === addressModule.AccountAddressErrorCode.INVALID_HEADER_VERSION,
@@ -486,13 +485,13 @@ test("parseEncoded rejects fullwidth-sentinel i105 literals", () => {
     () => AccountAddress.parseEncoded(noncanonical, 753),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
+      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
   );
   assert.throws(
     () => decodeI105AccountAddress(noncanonical, { expectDiscriminant: 753 }),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
+      error.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
   );
 });
 
