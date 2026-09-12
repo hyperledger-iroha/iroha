@@ -68,6 +68,9 @@ REQUIRED_ARTIFACT_KINDS = (
     "auditor_key_custody_report",
     "benchmark_raw",
     "benchmark_report",
+    "benchmark_scope",
+    "benchmark_accounting_record",
+    "benchmark_accounting_report",
     "block_wire_capture",
     "canary_manifest",
     "clippy_report",
@@ -3803,10 +3806,11 @@ def _load_benchmark_raw(
         "run",
         "warmup",
         "stages_ms",
+        "attempt_id",
         *_BENCHMARK_RESOURCE_FIELDS,
     }
     buckets: dict[tuple[str, int], dict[str, Any]] = {}
-    identities: set[tuple[str, int, int, int, bool]] = set()
+    identities: set[str] = set()
     for path in paths:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -3863,7 +3867,9 @@ def _load_benchmark_raw(
                 or not isinstance(warmup, bool)
             ):
                 raise EvidenceError("benchmark raw sample identity is invalid")
-            identity = (profile, participants, seed, run, warmup)
+            identity = row["attempt_id"]
+            if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+                raise EvidenceError("benchmark raw sample lacks registered attempt identity")
             if identity in identities:
                 raise EvidenceError(f"duplicate benchmark raw identity {identity}")
             identities.add(identity)
@@ -3920,8 +3926,79 @@ def _validate_statistical_summary(value: Any, expected_count: int, label: str) -
             raise EvidenceError(f"{label}.{field} is reversed")
 
 
+def _validate_registered_benchmark_accounting(
+    *, root: Path, artifacts: Sequence[Artifact], commit: str, hardware_sha256: str,
+    hardware_profile_sha256: str, configuration_sha256_by_participants: Mapping[int, str],
+) -> tuple[dict[str, Any], tuple[bytes, list[dict[str, Any]], list[bytes]]]:
+    """Authenticate mandatory controlled records and replay the complete registered scope."""
+
+    runner = _load_release_runner_for_evidence_replay()
+    scope_artifacts = [artifact for artifact in artifacts if artifact.kind == "benchmark_scope"]
+    report_artifacts = [artifact for artifact in artifacts if artifact.kind == "benchmark_accounting_report"]
+    if (len(scope_artifacts) != 1 or scope_artifacts[0].path != PurePosixPath("accounting/scope.json")
+            or len(report_artifacts) != 1 or report_artifacts[0].path != PurePosixPath("reports/benchmark-accounting-v1.json")):
+        raise EvidenceError("benchmark accounting requires its unique canonical scope and report")
+    scope_path = root / "accounting" / "scope.json"
+    try:
+        accounting, plans, collected = runner.qualify_benchmark_scope(scope_path)
+        scope_raw, packets, _ = collected
+        expected = {PurePosixPath("accounting/scope.json"): "benchmark_scope"}
+        names = {"request": "request.json", "started": "started.json", "process": "process-outcome.json",
+                 "adapter": "evidence/benchmark-protocol/adapter-outcome.json", "rust_terminal": "evidence/benchmark-protocol/rust-result.json",
+                 "response": "response.json", "response_outcome": "response-outcome.json", "validation": "validation-outcome.json", "sample": "benchmark-sample.json"}
+        for plan, packet in zip(plans, packets):
+            relative_root = PurePosixPath("accounting/campaigns") / packet["campaign_id"]
+            campaign_root = root.joinpath(*relative_root.parts)
+            if (plan["commit"] != commit or plan["hardware"]["sha256"] != hardware_sha256
+                    or plan["hardware"]["profile_sha256"] != hardware_profile_sha256):
+                raise EvidenceError("registered predecessor source or hardware differs from release evidence")
+            configuration_record = plan["configuration_manifest"]
+            configuration = runner.read_bound_json_file(campaign_root / configuration_record["path"],
+                {key: configuration_record[key] for key in ("sha256", "bytes")}, "registered configurations")
+            if {item["participants"]: item["sha256"] for item in configuration["configurations"]} != dict(configuration_sha256_by_participants):
+                raise EvidenceError("registered predecessor configurations differ from release evidence")
+            local = {"registered-scope.json", "frozen-plan.json", "campaign-closure.json"}
+            local.update(record["path"] for record in runner.frozen_plan_input_records(plan, campaign_root))
+            by_id = {job["request_id"]: ordinal for ordinal, job in enumerate(plan["jobs"], 1)}
+            for attempt in packet["attempts"]:
+                prefix = f"attempts/{by_id[attempt['request_id']]:05}-{attempt['request_id']}"
+                local.update(f"{prefix}/{name}" for key, name in names.items() if attempt[key] is not None)
+            for ordinal, job in enumerate(plan["jobs"], 1):
+                if job["kind"] == "benchmark":
+                    continue
+                prefix = f"attempts/{ordinal:05}-{job['request_id']}"
+                for name in ("request.json", "started.json", "process-outcome.json"):
+                    if (campaign_root / prefix / name).exists():
+                        local.add(f"{prefix}/{name}")
+            for name in local:
+                relative = relative_root / name
+                if relative in expected:
+                    raise EvidenceError("controlled accounting record has multiple roles")
+                expected[relative] = "benchmark_accounting_record"
+        observed = {artifact.path: artifact.kind for artifact in artifacts
+                    if artifact.path.parts[0] == "accounting" or artifact.kind in {"benchmark_scope", "benchmark_accounting_record"}}
+        if observed != expected:
+            raise EvidenceError("controlled benchmark accounting inventory is incomplete or contains undeclared roles")
+        by_path = {artifact.path: artifact for artifact in artifacts}
+        for relative in expected:
+            artifact = by_path[relative]
+            raw = runner.retained_accounting_bytes(root.joinpath(*relative.parts))
+            if runner.attempt_accounting.accounting_file_binding(raw) != {"sha256": artifact.sha256, "bytes": artifact.bytes}:
+                raise EvidenceError("controlled accounting bytes differ from their manifest binding")
+        report_path = root.joinpath(*report_artifacts[0].path.parts)
+        report = _read_strict_json_file(report_path, maximum_bytes=_MAX_RELEASE_MANIFEST_BYTES, label="benchmark accounting report")
+        if runner.canonical_bytes(report) != runner.canonical_bytes(accounting):
+            raise EvidenceError("public benchmark counts differ from registered attempt replay")
+        if runner.collect_benchmark_scope(scope_path) != collected:
+            raise EvidenceError("controlled benchmark records changed during verification")
+        return accounting, collected
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise EvidenceError(f"registered benchmark accounting is invalid: {error}") from error
+
+
 def _regenerate_benchmark_report(
-    raw_paths: Sequence[Path], bootstrap_iterations: int
+    raw_paths: Sequence[Path], bootstrap_iterations: int, *, scope_raw: bytes,
+    campaigns: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     reporter_path = Path(__file__).with_name("private_settlement_benchmark_report.py")
     module_name = "_private_settlement_benchmark_report_for_release"
@@ -3933,7 +4010,7 @@ def _regenerate_benchmark_report(
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
-        return module.build_report(module.load_jsonl(raw_paths), bootstrap_iterations)
+        return module.build_report(module.load_jsonl(raw_paths), bootstrap_iterations, scope_raw=scope_raw, campaigns=campaigns)
     except Exception as error:
         raise EvidenceError(f"benchmark raw evidence is invalid: {error}") from error
     finally:
@@ -3951,11 +4028,12 @@ def _validate_benchmark_report(
     hardware_sha256: str,
     hardware_profile_sha256: str,
     configuration_sha256_by_participants: dict[int, str],
+    *, accounting: Mapping[str, Any], scope_raw: bytes, campaigns: Sequence[Mapping[str, Any]],
 ) -> None:
     """Require a passing report whose sample identities match retained raw data."""
 
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
+        report = _read_strict_json_file(path, maximum_bytes=_MAX_RELEASE_MANIFEST_BYTES, label="benchmark report")
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise EvidenceError(f"cannot read benchmark report: {error}") from error
     record = _exact_fields(
@@ -3967,6 +4045,7 @@ def _validate_benchmark_report(
             "environment",
             "requirements",
             "profiles",
+            "accounting",
             "regressions",
             "passed",
         },
@@ -3979,6 +4058,8 @@ def _validate_benchmark_report(
         or record["passed"] is not True
     ):
         raise EvidenceError("benchmark report must be a passing V1 report")
+    if json.dumps(record["accounting"], sort_keys=True, allow_nan=False) != json.dumps(accounting, sort_keys=True, allow_nan=False):
+        raise EvidenceError("benchmark report differs from the mandatory registered accounting artifact")
     if record["regressions"] != []:
         raise EvidenceError("benchmark report contains release regressions")
     environment = _exact_fields(
@@ -4079,7 +4160,7 @@ def _validate_benchmark_report(
                 )
 
     regenerated = _regenerate_benchmark_report(
-        raw_paths, requirements["bootstrap_iterations"]
+        raw_paths, requirements["bootstrap_iterations"], scope_raw=scope_raw, campaigns=campaigns
     )
     for field in (
         "version",
@@ -4088,6 +4169,7 @@ def _validate_benchmark_report(
         "environment",
         "requirements",
         "profiles",
+        "accounting",
     ):
         if record[field] != regenerated[field]:
             raise EvidenceError(
@@ -4398,6 +4480,11 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
     ]
     if len(benchmark_report_paths) != 1:
         raise EvidenceError("evidence bundle must contain exactly one benchmark report")
+    accounting, accounting_inputs = _validate_registered_benchmark_accounting(
+        root=root, artifacts=artifacts, commit=manifest["commit"],
+        hardware_sha256=hardware_artifacts[0].sha256, hardware_profile_sha256=hardware_profile_sha256,
+        configuration_sha256_by_participants=configuration_digests,
+    )
     _validate_benchmark_report(
         benchmark_report_paths[0],
         _load_benchmark_raw(
@@ -4412,6 +4499,7 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
         hardware_artifacts[0].sha256,
         hardware_profile_sha256,
         configuration_digests,
+        accounting=accounting, scope_raw=accounting_inputs[0], campaigns=accounting_inputs[1],
     )
 
     canonical_manifest = json.dumps(

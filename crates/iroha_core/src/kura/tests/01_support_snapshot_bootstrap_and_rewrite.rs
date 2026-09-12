@@ -1832,7 +1832,9 @@ fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
 #[test]
 fn emergency_fast_store_root_lock_does_not_create_a_missing_file() {
     let temp_dir = TempDir::new().expect("create Kura store root");
-    let lock_path = temp_dir.path().join(STORE_ROOT_LOCK_FILE_NAME);
+    let lock_path = std::fs::canonicalize(temp_dir.path())
+        .expect("canonical Kura root")
+        .join(STORE_ROOT_LOCK_FILE_NAME);
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
 
@@ -1855,7 +1857,9 @@ fn store_root_lock_rejects_a_symlink_without_touching_its_target() {
     let victim = temp_dir.path().join("lock-victim");
     let victim_bytes = b"must remain untouched";
     std::fs::write(&victim, victim_bytes).expect("create lock victim");
-    let lock_path = temp_dir.path().join(STORE_ROOT_LOCK_FILE_NAME);
+    let lock_path = std::fs::canonicalize(temp_dir.path())
+        .expect("canonical Kura root")
+        .join(STORE_ROOT_LOCK_FILE_NAME);
     symlink(&victim, &lock_path).expect("plant lockfile symlink");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     assert!(matches!(

@@ -563,12 +563,12 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
     let retained_bytes = retained_record
         .encode_framed()
         .expect("encode retained generation-one authority");
-    let quarantine_path = temp_dir.path().join(format!(
+    let (initialized, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+        .expect("initialize Kura root without a stable process generation");
+    let quarantine_path = initialized.store_root().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}quarantine-{}",
         Hash::new(&retained_bytes),
     ));
-    let (initialized, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
-        .expect("initialize Kura root without a stable process generation");
     publish_temp_recovery_catalog_baseline(&initialized, &catalog);
     drop(initialized);
     fs::write(&quarantine_path, &retained_bytes)

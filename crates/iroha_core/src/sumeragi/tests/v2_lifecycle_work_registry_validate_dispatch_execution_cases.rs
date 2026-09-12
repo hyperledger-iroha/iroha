@@ -1710,6 +1710,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let initial_seal = executor
         .recovered_durable_validate_retry_snapshot_for_test(key)
         .expect("cold open installs one recovered Validate retry seal");
+    // A durable validation marker supplies a commitment, not quorum authority.
     assert_eq!(initial_seal.phase(), None);
     assert_eq!(initial_seal.commitment_ceiling(), Some(commitment));
     assert!(executor.recovered_validate_retry_corridor_is_inert_for_test());
@@ -1830,6 +1831,9 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(queued_after_debt.5, queued_debt.5);
     assert_eq!(queued_after_debt.6, queued_debt.6);
     assert_eq!(queued_after_debt.7, 1);
+    let queued_retry_seal = executor
+        .recovered_durable_validate_retry_snapshot_for_test(key)
+        .expect("the raw periodic retry retains the recovered Validate seal");
     let first_output_settlement =
         executor.settle_pending_lifecycle_output_admissions(&mut owner, &mut services);
     let first_output_summary = match first_output_settlement {
@@ -1950,9 +1954,19 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let queued_seal = executor
         .recovered_durable_validate_retry_snapshot_for_test(key)
         .expect("Queued retry retains the recovered seal");
+    assert_eq!(
+        queued_seal, queued_retry_seal,
+        "output settlement cannot change the authority learned by the raw periodic retry"
+    );
     assert!(queued_seal.same_owner(&initial_seal));
     assert!(queued_seal.effect_tag() >= initial_seal.effect_tag());
-    assert_eq!(queued_seal.phase(), initial_seal.phase());
+    // The authenticated PrepareQC advances only the retry authority frontier;
+    // the already queued Validate retains its sole physical execution owner.
+    assert_eq!(
+        queued_seal.phase(),
+        Some(wire::GlobalPhase::Prepare),
+        "the first periodic PrepareQC must refine the marker-only recovery authority"
+    );
     assert_eq!(queued_seal.commitment_ceiling(), Some(commitment));
     let queued_trace_root = queued_trace_root
         .expect("the exact raw periodic Validate records its authenticated trace root");
@@ -2060,6 +2074,9 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(active_after_debt.5, active_debt.5);
     assert_eq!(active_after_debt.6, active_debt.6);
     assert_eq!(active_after_debt.7, 1);
+    let active_retry_seal = executor
+        .recovered_durable_validate_retry_snapshot_for_test(key)
+        .expect("the active periodic retry retains the recovered Validate seal");
     let duplicate_output_settlement =
         executor.settle_pending_lifecycle_output_admissions(&mut owner, &mut services);
     let duplicate_output_summary = match duplicate_output_settlement {
@@ -2078,7 +2095,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(duplicate_output_summary.already_completed(), 1);
     assert!(
         !duplicate_output_summary.requires_outer_executor_yield(),
-        "an exact terminal duplicate stutters before service I/O and cannot starve ingress"
+        "an exact terminal duplicate does not require another outer executor yield"
     );
     assert_eq!(
         services.consensus_broadcast_count_for_test(&prepare_qc_envelope),
@@ -2124,6 +2141,10 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let active_seal = executor
         .recovered_durable_validate_retry_snapshot_for_test(key)
         .expect("Active retry retains the recovered seal");
+    assert_eq!(
+        active_seal, active_retry_seal,
+        "duplicate output settlement cannot change the active retry authority"
+    );
     assert!(active_seal.same_owner(&initial_seal));
     assert!(active_seal.effect_tag() >= queued_seal.effect_tag());
     assert_eq!(active_seal.phase(), queued_seal.phase());

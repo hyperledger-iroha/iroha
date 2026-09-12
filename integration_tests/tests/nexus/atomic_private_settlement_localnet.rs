@@ -1016,11 +1016,17 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?.into(),
     );
     let mut ticks = 0_u64;
+    let mut last_observed_height = None;
     let tick_limit = PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
         .checked_add(16)
         .expect("privacy activation tick limit fits u64");
     loop {
-        let capability = client.client().get_privacy_capabilities()?;
+        let capability = client.client().get_privacy_capabilities().wrap_err_with(|| {
+            format!(
+                "private-note activation phase=capability confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
+            )
+        })?;
+        last_observed_height = Some(capability.committed_height);
         let row = capability
             .protocols
             .iter()
@@ -1085,8 +1091,16 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
                 ))
                 .and_then(|payload| account.sign_transaction(payload))
         }
-        .wrap_err("build integration-test transaction")?;
-        client.submit_transaction_and_wait(&tick)?;
+        .wrap_err_with(|| {
+            format!(
+                "private-note activation phase=tick_build confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
+            )
+        })?;
+        client.submit_transaction_and_wait(&tick).wrap_err_with(|| {
+            format!(
+                "private-note activation phase=tick_confirmation confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
+            )
+        })?;
         ticks += 1;
     }
 }
@@ -2072,9 +2086,14 @@ fn wait_for_identical_receipt(
         }
         thread::sleep(POLL_INTERVAL);
     }
-    Err(eyre!(
+    Err(benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::PrivateReceipt,
+        FINALITY_TIMEOUT,
+        started.elapsed(),
+    )
+    .wrap_err(format!(
         "all peers did not converge on one atomic receipt: {last}"
-    ))
+    )))
 }
 
 fn run_n3_real_process_smoke() -> Result<()> {

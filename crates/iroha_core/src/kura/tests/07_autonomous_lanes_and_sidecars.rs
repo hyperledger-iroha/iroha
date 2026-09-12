@@ -2865,6 +2865,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let named_cursor_temp = lifecycle_path.with_extension("norito.tmp");
     fs::write(&named_cursor_temp, &canonical_cursor_bytes)
         .expect("stage forbidden named cursor temporary");
+    let store_root = kura.store_root();
     drop(kura);
     assert!(
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
@@ -2921,8 +2922,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after active rollback rejection");
-    let archived_cursor_dir = temp_dir
-        .path()
+    let archived_cursor_dir = store_root
         .join("retired")
         .join("lane_geometry")
         .join("generation-audit-fixture");

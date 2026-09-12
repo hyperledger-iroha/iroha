@@ -327,6 +327,7 @@ struct DecodedAutonomousLaneAttemptRead {
 #[cfg(test)]
 std::thread_local! {
     static AUTONOMOUS_ATTEMPT_FRAME_DECODES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static SIDECAR_DIRECTORY_CANONICALIZATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static AUTONOMOUS_ARTIFACT_VALIDATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
@@ -6707,6 +6708,12 @@ impl Kura {
         store_root: &Path,
         expected_directory: &Path,
     ) -> Result<Option<(PathBuf, SecureMetadata)>> {
+        #[cfg(test)]
+        SIDECAR_DIRECTORY_CANONICALIZATIONS.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
         let before = match secure_file_metadata::from_path(expected_directory) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -8237,46 +8244,160 @@ impl Kura {
                     })
             })
     }
-    fn bound_progress_sidecar_unchanged(&self, bound: &BoundProgressSidecar) -> bool {
-        let Some(sidecar_dir) = bound.namespace.data_path.parent() else {
+    /// Revalidate one exact child through its already authenticated parent handle.
+    ///
+    /// The no-op production observer is a test seam after the no-follow lookup,
+    /// before fresh descriptor metadata detects concurrent file writes.
+    #[cfg(unix)]
+    fn bound_progress_file_unchanged<F>(
+        directory: &BoundProgressDirectory,
+        path: &Path,
+        expected: &StableSidecarMetadata,
+        file: &std::fs::File,
+        after_lookup: F,
+    ) -> bool
+    where
+        F: FnOnce(),
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let Some(name) = path.file_name() else {
             return false;
         };
-        if bound.namespace.index_path.parent() != Some(sidecar_dir) {
-            return false;
-        }
-        let Ok(data_opened) = secure_file_metadata::from_file(&bound.data) else {
-            return false;
-        };
-        let Ok(index_opened) = secure_file_metadata::from_file(&bound.index) else {
-            return false;
-        };
-        if !Self::sidecar_file_metadata_unchanged(&bound.data_metadata.file, &data_opened)
-            || !Self::sidecar_file_metadata_unchanged(&bound.index_metadata.file, &index_opened)
+        if path.parent() != Some(directory.expected_path.as_path())
+            || expected.canonical_path != directory.canonical_path.join(name)
         {
             return false;
         }
-        let Ok(data_after) = Self::regular_sidecar_metadata_for(
-            &self.store_root,
-            &bound.namespace.data_path,
-            sidecar_dir,
-        ) else {
+        let Ok(entry) =
+            rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        else {
             return false;
         };
-        let Ok(index_after) = Self::regular_sidecar_metadata_for(
-            &self.store_root,
-            &bound.namespace.index_path,
-            sidecar_dir,
-        ) else {
-            return false;
-        };
-        if !data_after.as_ref().is_some_and(|after| {
-            Self::stable_sidecar_metadata_unchanged(&bound.data_metadata, after)
-        }) || !index_after.as_ref().is_some_and(|after| {
-            Self::stable_sidecar_metadata_unchanged(&bound.index_metadata, after)
-        }) {
+        if rustix::fs::FileType::from_raw_mode(entry.st_mode) != rustix::fs::FileType::RegularFile
+            || entry.st_nlink as u64 != 1
+        {
             return false;
         }
-        self.bound_progress_namespace_unchanged(&bound.namespace)
+        after_lookup();
+        let Ok(opened) = secure_file_metadata::from_file(file) else {
+            return false;
+        };
+        opened.is_file()
+            && Self::sidecar_file_metadata_unchanged(&expected.file, &opened)
+            && entry.st_dev as u64 == opened.dev()
+            && entry.st_ino as u64 == opened.ino()
+    }
+
+    /// Retain the strong present-pair snapshot checks without repeated full-path resolution.
+    #[cfg(unix)]
+    fn bound_progress_sidecar_unchanged_with_observer<F>(
+        &self,
+        bound: &BoundProgressSidecar,
+        mut after_lookup: F,
+    ) -> bool
+    where
+        F: FnMut(usize),
+    {
+        if !self.bound_progress_namespace_unchanged(&bound.namespace) {
+            return false;
+        }
+        let Some(directory) = bound.namespace.directories.first() else {
+            return false;
+        };
+        let Ok(before) = secure_file_metadata::from_file(&directory.file) else {
+            return false;
+        };
+        // Namespace binding permits sibling publications. This pair snapshot
+        // intentionally retains the stronger directory timestamp contract.
+        let directory_matches = |current: &SecureMetadata| {
+            current.is_dir()
+                && Self::sidecar_directory_metadata_unchanged(
+                    &bound.data_metadata.directory,
+                    current,
+                )
+                && Self::sidecar_directory_metadata_unchanged(
+                    &bound.index_metadata.directory,
+                    current,
+                )
+        };
+        if !directory_matches(&before) {
+            return false;
+        }
+        for (ordinal, (path, expected, file)) in [
+            (
+                &bound.namespace.data_path,
+                &bound.data_metadata,
+                &bound.data,
+            ),
+            (
+                &bound.namespace.index_path,
+                &bound.index_metadata,
+                &bound.index,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !Self::bound_progress_file_unchanged(directory, path, expected, file, || {
+                after_lookup(ordinal);
+            }) {
+                return false;
+            }
+        }
+        let Ok(after) = secure_file_metadata::from_file(&directory.file) else {
+            return false;
+        };
+        directory_matches(&after)
+            && Self::sidecar_directory_metadata_unchanged(&before, &after)
+            && self.bound_progress_namespace_unchanged(&bound.namespace)
+    }
+    fn bound_progress_sidecar_unchanged(&self, bound: &BoundProgressSidecar) -> bool {
+        #[cfg(unix)]
+        {
+            self.bound_progress_sidecar_unchanged_with_observer(bound, |_| {})
+        }
+        #[cfg(not(unix))]
+        {
+            let Some(sidecar_dir) = bound.namespace.data_path.parent() else {
+                return false;
+            };
+            if bound.namespace.index_path.parent() != Some(sidecar_dir) {
+                return false;
+            }
+            let Ok(data_opened) = secure_file_metadata::from_file(&bound.data) else {
+                return false;
+            };
+            let Ok(index_opened) = secure_file_metadata::from_file(&bound.index) else {
+                return false;
+            };
+            if !Self::sidecar_file_metadata_unchanged(&bound.data_metadata.file, &data_opened)
+                || !Self::sidecar_file_metadata_unchanged(&bound.index_metadata.file, &index_opened)
+            {
+                return false;
+            }
+            let Ok(data_after) = Self::regular_sidecar_metadata_for(
+                &self.store_root,
+                &bound.namespace.data_path,
+                sidecar_dir,
+            ) else {
+                return false;
+            };
+            let Ok(index_after) = Self::regular_sidecar_metadata_for(
+                &self.store_root,
+                &bound.namespace.index_path,
+                sidecar_dir,
+            ) else {
+                return false;
+            };
+            if !data_after.as_ref().is_some_and(|after| {
+                Self::stable_sidecar_metadata_unchanged(&bound.data_metadata, after)
+            }) || !index_after.as_ref().is_some_and(|after| {
+                Self::stable_sidecar_metadata_unchanged(&bound.index_metadata, after)
+            }) {
+                return false;
+            }
+            self.bound_progress_namespace_unchanged(&bound.namespace)
+        }
     }
     fn sync_bound_progress_namespace(
         &self,
