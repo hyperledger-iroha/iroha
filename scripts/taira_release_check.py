@@ -685,6 +685,11 @@ CORE_ADMISSION_STARTUP_STAGES += (("current reducer mode and fresh queue pressur
     "telemetry::tests::queue_age_pressure_is_not_capacity_backpressure",
     "telemetry::tests::fresh_queue_metrics_replace_stale_pressure_on_an_idle_node",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("nested failure closes admission without blocking its owner", (
+    "sumeragi::v2_effects::tests::executor_fatal_callbacks_close_before_outer_operation_releases",
+    "sumeragi::v2_worker::tests::service_failure_and_drop_finish_before_outer_operation_drains",
+    "sumeragi::v2_worker::tests::abnormal_io_worker_exit_finishes_before_outer_operation_drains",
+)),)
 CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart recovery", (
     "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
     "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",

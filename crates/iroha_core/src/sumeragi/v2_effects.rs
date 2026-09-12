@@ -15443,7 +15443,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // The retained relay may terminate the process as soon as the guard
         // closes, so preserve the precise reason before publishing that edge.
         iroha_logger::error!(%reason, "Sumeragi v2 effect transport failed closed");
-        self.output_guard.activate_restart_required();
+        // A caller may still own the launch or runtime operation's permit.
+        // Close admission now; that outer permit's release completes the drain.
+        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| reason.to_string())
@@ -15468,7 +15470,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // concurrently and may exit before `services.fail_closed` can report
         // the originating executor error.
         iroha_logger::error!(%error, "Sumeragi v2 effect executor failed closed");
-        self.output_guard.activate_restart_required();
+        // Service failure may unwind through an outer admitted operation.
+        // Waiting for its permit here would prevent that unwind from returning.
+        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| error.to_string())

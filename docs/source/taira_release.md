@@ -134,6 +134,8 @@ resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when an independent-test checkpoint can be reused.
 Core, Torii and daemon startup recovery checks run next; failures are collected
 across those startup groups before stopping, without running CLI or network tests.
+These include bounded regressions for failure reporting and worker teardown under
+a held lifecycle operation, plus retained-output recovery through real actor admission.
 CLI and the canonical Kagami projection checks then precede the proof, crypto,
 transport, consensus and fixture selections. Every independent failure stops
 before daemon startup. Shipping targets without selected tests provide actual

@@ -3907,9 +3907,9 @@ impl ProductionV2Services {
             .filter(|message| *message == expected)
             .count()
     }
-    /// Accept the incident fixture's sole retained Prepare fanout through real corridor drainage.
+    /// Verify the incident's sole Prepare crossed the real network actor admission boundary.
     #[cfg(test)]
-    pub(in crate::sumeragi) fn assert_and_drain_pending_kura_prepare_output_for_test(
+    pub(in crate::sumeragi) fn assert_pending_kura_prepare_actor_admission_for_test(
         &self,
         expected: &wire::Vote,
     ) {
@@ -3920,46 +3920,17 @@ impl ProductionV2Services {
             self.consensus_broadcasts.as_slice(),
             std::slice::from_ref(&message),
         );
-        let peers = self.remote_voters();
-        assert_eq!(peers.len(), 3);
-        let mut pending = self
+        assert_eq!(self.remote_voters().len(), 3);
+        let pending = self
             .lock_pending_exact_output()
             .expect("lock actual pending Prepare output");
-        assert_eq!(pending.fanouts.len(), 1);
-        let fanout = pending
-            .fanouts
-            .front()
-            .expect("one retained Prepare fanout");
-        assert_eq!(fanout.messages.len(), 1);
-        assert_eq!(fanout.semantic_peers(), peers);
-        assert!(matches!(
-            &fanout.rollover_claim,
-            ExactOutputRolloverClaim::GlobalV2(_)
-        ));
+        assert!(!pending.is_pending());
         assert_eq!(
             pending
                 .scheduler_snapshot(false)
                 .remaining_message_occurrences,
-            3,
+            0,
         );
-        let mut accepted = BTreeSet::new();
-        let outcome = pending
-            .drive_with_budget(4, |post, _ticket, route| {
-                assert!(matches!(route, ExactTargetRoute::Topology));
-                let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
-                    panic!("Prepare output changed envelope");
-                };
-                let BlockMessage::V2(actual) = envelope.as_message() else {
-                    panic!("Prepare output changed message kind");
-                };
-                assert_eq!(actual, &message);
-                assert!(accepted.insert(post.peer_id));
-                Ok(())
-            })
-            .expect("accept actual retained Prepare posts");
-        assert_eq!(outcome, ExactOutputDriveOutcome::Drained);
-        assert_eq!(accepted, peers.into_iter().collect::<BTreeSet<_>>());
-        assert!(!pending.is_pending());
     }
     /// Count all retained exact fanouts and those carrying one exact PrepareQC.
     #[cfg(test)]

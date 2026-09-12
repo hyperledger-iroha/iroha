@@ -1087,6 +1087,23 @@ fn exercise_pending_kura_production_lifecycle(
     );
     let (exact_output_handoff_owner, transport_owner) =
         super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+    let remote_peers = context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .filter(|peer| peer != &local_peer)
+        .collect::<std::collections::BTreeSet<_>>();
+    let (network, mut actor_admissions) = if retained_incident.is_some() {
+        assert_eq!(remote_peers.len(), 3);
+        let (network, actor_admissions) = crate::IrohaNetwork::actor_admission_for_tests(
+            local_peer.clone(),
+            remote_peers.iter().cloned().collect(),
+            std::num::NonZeroUsize::new(3).expect("one exact Prepare slot per remote voter"),
+        );
+        (network, Some(actor_admissions))
+    } else {
+        (crate::IrohaNetwork::closed_for_tests(), None)
+    };
     let launch_inputs =
         super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
             launched_at,
@@ -1096,7 +1113,7 @@ fn exercise_pending_kura_production_lifecycle(
             local_peer.clone(),
             Some(local_validator),
             local_signer.clone(),
-            crate::IrohaNetwork::closed_for_tests(),
+            network,
             Arc::clone(&state),
             Arc::clone(&kura),
             None,
@@ -1124,9 +1141,7 @@ fn exercise_pending_kura_production_lifecycle(
     pending
         .with_runner_setup(&mut setup_runner, |executor, services| {
             if let Some((_, prepare_vote)) = retained_incident.as_ref() {
-                // Model actor admission only after launch has accepted the
-                // exact signed Prepare into its production output corridor.
-                services.assert_and_drain_pending_kura_prepare_output_for_test(prepare_vote);
+                services.assert_pending_kura_prepare_actor_admission_for_test(prepare_vote);
             }
             super::super::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
                 executor, services,
@@ -1140,6 +1155,34 @@ fn exercise_pending_kura_production_lifecycle(
             >(())
         })
         .expect("mirror production pending Kura pre-activation reconciliation");
+    if let Some((_, prepare_vote)) = retained_incident.as_ref() {
+        let expected_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(prepare_vote.clone()),
+        );
+        let actor = actor_admissions
+            .as_mut()
+            .expect("incident launch retains its live actor receiver owner");
+        let mut accepted = std::collections::BTreeSet::new();
+        assert_eq!(
+            actor.drain_posts(|post| {
+                let crate::NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+                    panic!("incident actor admission changed the Prepare envelope");
+                };
+                let BlockMessage::V2(actual) = envelope.as_message() else {
+                    panic!("incident actor admission changed the consensus message kind");
+                };
+                assert_eq!(actual, &expected_message);
+                assert!(accepted.insert(post.peer_id.clone()));
+            }),
+            3,
+            "launch must admit the exact signed Prepare once per remote voter",
+        );
+        assert_eq!(accepted, remote_peers);
+        assert_eq!(
+            actor.drain_posts(|_| panic!("unexpected extra actor post")),
+            0
+        );
+    }
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
     assert!(crate::sumeragi::status::v2_status().is_none());

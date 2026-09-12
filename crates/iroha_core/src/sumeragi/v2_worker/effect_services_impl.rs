@@ -820,7 +820,9 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
     fn fail_closed(&mut self, reason: &str) {
-        self.output_guard.activate_restart_required();
+        // The executor may be failing inside an admitted launch/runtime call.
+        // Its outer operation owns the final permit release.
+        self.output_guard.close_admission_for_restart();
         self.fatal_reason = Some(reason.to_owned());
         iroha_logger::error!(reason, "Sumeragi v2 effect services failed closed");
     }

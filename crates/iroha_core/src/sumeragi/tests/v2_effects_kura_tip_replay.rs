@@ -592,6 +592,104 @@ fn service_runtime_body_store_and_status_failures_close_executor() {
         "failure injection was not consumed"
     );
 }
+#[cfg(feature = "bls")]
+#[test]
+fn executor_fatal_callbacks_close_before_outer_operation_releases() {
+    for recovered_broadcast in [true, false] {
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let (start_tx, start_rx) = std::sync::mpsc::sync_channel(1);
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let mut fixture = ProductionTransportFixture::new();
+            let mut vote = wire::Vote {
+                round: fixture.round,
+                proposal_round: fixture.round,
+                phase: wire::GlobalPhase::Prepare,
+                subject: fixture.subject,
+                execution_commitment: fixture.canonical_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            vote.signature = Signature::new(
+                fixture.validator_keys[0].private_key(),
+                &vote.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(vote),
+            ));
+            let guard = Arc::clone(&fixture.executor.output_guard);
+            ready_tx
+                .send(Arc::clone(&guard))
+                .expect("publish exact guard");
+            start_rx
+                .recv()
+                .expect("outer operation has acquired its permit");
+            let mut services = FakeServices::default();
+            if recovered_broadcast {
+                services.fail_on = Some("broadcast");
+                assert!(matches!(
+                    fixture.executor.execute_recovered_lifecycle_output_service(
+                        &effect,
+                        &mut services,
+                    ),
+                    Err(EffectExecutorError::Service(reason)) if reason == "broadcast failed"
+                ));
+                assert_eq!(services.operation_calls.get("broadcast"), Some(&1));
+                assert!(services.broadcasts.is_empty());
+            } else {
+                assert!(matches!(
+                    fixture.executor.fail_closed_transport(
+                        "retained transport owner failed",
+                        &mut services,
+                    ),
+                    EffectTransportError::FailClosed(reason)
+                        if reason == "retained transport owner failed"
+                ));
+            }
+            assert!(guard.restart_required());
+            assert!(guard.acquire().is_none());
+            assert!(fixture.executor.status().fail_closed);
+            assert_eq!(services.closed.len(), 1);
+            let operation_calls = services.operation_calls.clone();
+            assert!(matches!(
+                fixture
+                    .executor
+                    .execute_recovered_lifecycle_output_service(&effect, &mut services,),
+                Err(EffectExecutorError::FailClosed(_))
+            ));
+            assert_eq!(services.operation_calls, operation_calls);
+            assert_eq!(services.closed.len(), 1);
+            done_tx.send(()).expect("fatal callback returned");
+        });
+        let guard = ready_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("construct real serialized executor");
+        let outer = guard
+            .begin_fail_stop_operation()
+            .expect("hold the same outer permit as lifecycle construction");
+        start_tx.send(()).expect("start nested fatal callback");
+        let returned_before_release = done_rx.recv_timeout(Duration::from_secs(2));
+        let closed_before_release = guard.restart_required() && guard.acquire().is_none();
+        // Always release and join before asserting, so a regression in the old
+        // blocking implementation fails without leaving a stranded test thread.
+        drop(outer);
+        worker
+            .join()
+            .expect("join fatal callback after releasing its caller");
+        assert!(
+            returned_before_release.is_ok(),
+            "fatal callback must return while its outer permit is still held; recovered_broadcast={recovered_broadcast}"
+        );
+        assert!(
+            closed_before_release,
+            "fatal callback must immediately reject new work"
+        );
+        assert!(guard.restart_required());
+        assert!(guard.acquire().is_none());
+    }
+}
 #[test]
 fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     let fixture = Fixture::new();
