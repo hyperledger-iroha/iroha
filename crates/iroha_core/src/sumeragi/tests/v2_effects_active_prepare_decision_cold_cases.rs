@@ -813,7 +813,21 @@ fn assert_recovered_body_publication_timer(
     next_timer: &mut Instant,
 ) {
     assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
-    let ownership = executor.body_ownership_projection();
+    let ownership = |executor: &V2EffectExecutor<SerializedV2Runtime>| {
+        (
+            executor.next_work_id,
+            executor.pending_fetches.clone(),
+            executor.pending_stores.clone(),
+            executor.body_pipeline_owners.clone(),
+            executor.durable_bodies.clone(),
+            executor
+                .pending_durable_validate_admissions
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+    };
+    let before = ownership(executor);
     *next_timer += executor.runtime.retransmit_interval();
     assert!(matches!(
         executor
@@ -829,7 +843,7 @@ fn assert_recovered_body_publication_timer(
     executor
         .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
         .expect("retain the exact published Decision handoff");
-    assert_eq!(executor.body_ownership_projection(), ownership);
+    assert_eq!(ownership(executor), before);
     assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
     assert!(!executor.output_guard.restart_required());
 }

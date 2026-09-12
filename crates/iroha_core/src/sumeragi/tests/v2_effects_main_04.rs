@@ -1644,6 +1644,7 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         certificate.subject,
         certificate.execution_commitment,
     ));
+    let previous_tag = executor.runtime.round_tag.replace(tag(0));
     for incoming_tag in [tag(1), tag(0)] {
         let result = executor.begin_fetch(
             incoming_tag,
@@ -1670,6 +1671,7 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         );
     }
     executor.runtime.decided_body = None;
+    executor.runtime.round_tag = previous_tag;
     let collision_id = EffectWorkId::for_test(73);
     executor.pending_fetches.insert(
         collision_id,

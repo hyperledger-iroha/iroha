@@ -12445,7 +12445,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         certificate,
                     )
                 })
-                && tag == self.current_tag()
+                && self.runtime.authoritative_tag() == Some(tag)
                 && self
                     .runtime
                     .decided_body()
