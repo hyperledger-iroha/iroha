@@ -241,6 +241,54 @@ fn obsolete_proposal_decision(
     decision
 }
 
+fn pending_kura_incident_output_record(
+    verified: &VerifiedHeightContext,
+    effect: AdapterEffect,
+    owner_ordinal: u128,
+    ordinal: u128,
+) -> LifecycleLedgerRecordV1 {
+    let context = super::super::projection::lifecycle_context(verified.context());
+    let tag = EventTag::new(verified.context().height, 0, Generation::INITIAL);
+    // A lifecycle ordinal does not enter fresh_for_test's causal root. Name
+    // each incident owner explicitly; outputs of one owner share that name.
+    let mut semantic_identity = b"pending Kura incident output owner".to_vec();
+    semantic_identity.extend_from_slice(&owner_ordinal.to_le_bytes());
+    let ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&effect),
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                owner_ordinal,
+                &semantic_identity,
+            ),
+        ],
+    )
+    .expect("bind the incident's independently named output owner")
+    .pop()
+    .expect("one incident output owner");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("bind the exact incident output");
+    let prepared = super::super::work_registry::PreparedLifecycleAdmissionV1::direct_signed(
+        context, verified, effect, pending,
+    )
+    .unwrap_or_else(|_| panic!("prepare the authenticated incident output"));
+    let candidate = prepared.candidate().clone();
+    LifecycleLedgerRecordV1::new(
+        candidate.key,
+        OwnerId::new(candidate.causal_root, owner_ordinal),
+        ordinal,
+        candidate.work_class,
+        candidate.stage,
+        None,
+        candidate.reconstruction_source,
+        candidate.payload,
+        candidate.replay_authority,
+        DurableContinuation::None,
+    )
+    .expect("construct the exact incident output row")
+}
+
 impl super::super::ProductionLifecycleOwnerV1 {
     /// Persist the complete eight-row cut retained by the production incident.
     pub(in crate::sumeragi) fn persist_pending_kura_incident_outputs_for_test(
@@ -299,14 +347,15 @@ impl super::super::ProductionLifecycleOwnerV1 {
             unsigned,
             prepare_vote.clone(),
         );
-        let prepare_output = direct_output_record(
+        let prepare_output = pending_kura_incident_output_record(
             verified,
             AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::Vote(prepare_vote),
             )),
+            542081,
             542083,
         );
-        let prepare_owner = OwnerId::new(prepare_output.owner().causal_root(), 542081);
+        let prepare_owner = prepare_output.owner();
         records.push(
             LifecycleLedgerRecordV1::new(
                 parent.key,
@@ -341,50 +390,60 @@ impl super::super::ProductionLifecycleOwnerV1 {
             .expect("retain the live signed Prepare output"),
         );
 
-        let mut prepare_qc_owner = None;
-        for (ordinal, payload) in [
+        for (ordinal, owner_ordinal, payload) in [
             (
+                542123,
                 542123,
                 wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_qc),
             ),
-            (542126, wire::ConsensusMessageV2Payload::Vote(commit_vote)),
             (
+                542126,
+                542123,
+                wire::ConsensusMessageV2Payload::Vote(commit_vote),
+            ),
+            (
+                542138,
                 542138,
                 wire::ConsensusMessageV2Payload::QuorumCertificate(decision),
             ),
         ] {
-            let output = direct_output_record(
+            let output = pending_kura_incident_output_record(
                 verified,
                 AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload)),
+                owner_ordinal,
                 ordinal,
             );
             let authenticated = output
                 .authenticate_recovered_lifecycle_output(context, verified, None, None)
                 .expect("authenticate the exact terminal output fixture");
-            let owner = if ordinal == 542126 {
-                prepare_qc_owner.expect("Commit output retains the Prepare QC owner")
-            } else {
-                output.owner()
-            };
-            if ordinal == 542123 {
-                prepare_qc_owner = Some(owner);
-            }
-            records.push(
-                LifecycleLedgerRecordV1::new(
-                    output.key().unwrap(),
-                    owner,
-                    ordinal,
-                    output.work_class().unwrap(),
-                    output.stage().unwrap(),
-                    Some(TerminalOutcome::Advanced),
-                    owner.causal_root().digest(),
-                    output.durable_payload().unwrap(),
-                    authenticated.candidate().replay_authority.clone(),
-                    DurableContinuation::None,
-                )
-                .expect("retain an inert terminal QC or Commit output"),
-            );
+            assert_eq!(authenticated.owner(), output.owner());
+            records.push(output.with_terminal_for_test(Some(TerminalOutcome::Advanced)));
         }
+        assert_eq!(
+            records
+                .iter()
+                .map(|row| (row.ordinal(), row.owner().first_admission_ordinal()))
+                .collect::<Vec<_>>(),
+            vec![
+                (542069, 542069),
+                (542077, 542077),
+                (542080, 542077),
+                (542081, 542081),
+                (542083, 542081),
+                (542123, 542123),
+                (542126, 542123),
+                (542138, 542138),
+            ],
+        );
+        assert_eq!(
+            records
+                .iter()
+                .map(|row| row.owner().causal_root())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            5,
+            "the five distinct incident owners must have distinct causal roots",
+        );
         let ledger = obsolete_proposal_ledger(verified, records);
         assert_eq!(ledger.records().len(), 8);
         let (store, _) = LifecycleLedgerStoreV1::open(root, ledger.context())

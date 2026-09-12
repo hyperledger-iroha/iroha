@@ -2523,31 +2523,64 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
+            let batch_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
             let mut batch_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            let producer_claim = super::super::v2_runner::drain_lifecycle_v2_ingress(
-                &mut activated,
-                &mut batch_runner,
-                &leader_wire_ingress,
-                &mut lane_work,
-                kura.as_ref(),
-                &local_signer,
-                &mut block_sync_server,
-                &mut block_sync,
-                &mut block_sync_request,
-                &mut npos_beacon,
-                1,
-                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
-                None,
-            )
-            .expect("drain one exact lifecycle-owned ordinary batch");
-            assert!(!producer_claim.requires_yield());
-            settle_terminal_fixture_runner_handoff(
-                &mut activated,
-                &mut batch_runner,
-                &mut lane_work,
-                output_guard.as_ref(),
-            );
+            let mut producer_claim =
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial();
+            let batch_deadline = Instant::now() + Duration::from_secs(5);
+            for turn in 0..64 {
+                let disposition = super::super::v2_runner::drain_lifecycle_v2_ingress(
+                    &mut activated,
+                    &mut batch_runner,
+                    &leader_wire_ingress,
+                    &mut lane_work,
+                    kura.as_ref(),
+                    &local_signer,
+                    &mut block_sync_server,
+                    &mut block_sync,
+                    &mut block_sync_request,
+                    &mut npos_beacon,
+                    1,
+                    producer_claim,
+                    None,
+                )
+                .expect("drain one exact lifecycle-owned ordinary batch");
+                producer_claim = disposition.producer_claim();
+                settle_terminal_fixture_runner_handoff(
+                    &mut activated,
+                    &mut batch_runner,
+                    &mut lane_work,
+                    output_guard.as_ref(),
+                );
+                assert!(!output_guard.restart_required(), "{disposition:?}");
+                let retained_ordinals = leader_wire_ingress
+                    .state
+                    .lock()
+                    .lanes
+                    .values()
+                    .flat_map(|lane| lane.entries.iter().map(|entry| entry.admission_ordinal))
+                    .collect::<Vec<_>>();
+                if retained_ordinals.is_empty() {
+                    assert!(!disposition.requires_yield(), "{disposition:?}");
+                    break;
+                }
+                assert_eq!(retained_ordinals, vec![batch_ordinal], "{disposition:?}");
+                // A settled Completion or Runtime output can stop before
+                // Ingress without requiring a yield before Producer planning.
+                // Preserve that typed stop and its claim for the next real turn.
+                assert!(
+                    disposition.advance_executor_yield().is_some()
+                        || disposition.terminal_settlement_stops_runtime(),
+                    "batch ordinal {batch_ordinal} survived without a pre-Ingress stop: {disposition:?}",
+                );
+                assert!(
+                    turn < 63 && Instant::now() < batch_deadline,
+                    "batch ordinal {batch_ordinal} did not drain after {} turns: {disposition:?}",
+                    turn + 1,
+                );
+                std::thread::yield_now();
+            }
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
             let (rejected_serve, admitted_serve) =
