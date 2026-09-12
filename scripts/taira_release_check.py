@@ -685,6 +685,21 @@ CORE_ADMISSION_STARTUP_STAGES += (("current reducer mode and fresh queue pressur
     "telemetry::tests::queue_age_pressure_is_not_capacity_backpressure",
     "telemetry::tests::fresh_queue_metrics_replace_stale_pressure_on_an_idle_node",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart recovery", (
+    "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
+    "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",
+    "sumeragi::v2_runtime::tests::authenticated_proposal_store_retains_root_after_fetch_or_queued_completion_upgrade",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_cancels_only_exact_proposal_child_below_installed_view",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_current_and_future_proposal_cancellation",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_proposal_without_authenticated_installed_timeout",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_foreign_installed_timeout_frontier",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_unlinked_proposal_despite_another_exact_sign_parent",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_tampered_proposal_even_with_exact_parent_and_later_timeout",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_forged_timeout_cancellation_frontier",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_preserves_row_and_skips_output_service",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_waits_for_older_ready_output",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_failure_retains_ready_owner_without_output",
+)),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",

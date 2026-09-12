@@ -1142,17 +1142,31 @@ impl LifecycleLedgerRecordV1 {
     }
 
     /// Re-authenticate one exact live output row for cold registry recovery.
-    /// Signed Broadcasts with durable Sign predecessors remain WAL-owned.
+    /// Active signed Broadcasts with durable Sign predecessors remain WAL-owned.
     /// Reports require their unique linked or inert terminal Validate source.
     pub(super) fn authenticate_recovered_lifecycle_output(
         &self,
         context: LifecycleContext,
         verified: &VerifiedHeightContext,
         invalid_parent: Option<&Self>,
+        obsolete_proposal: Option<(&Self, crate::sumeragi::v2::LeaderWireRecoveryAuthority)>,
     ) -> Option<super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1> {
         let invalid_parent_parts = match invalid_parent {
             None => None,
             Some(parent) => Some(self.invalid_body_validate_origin(context, parent)?),
+        };
+        let obsolete_proposal_parts = match obsolete_proposal {
+            None => None,
+            Some((parent, frontier)) => {
+                if !self.has_exact_proposal_sign_predecessor(context, parent) {
+                    return None;
+                }
+                Some((
+                    &parent.replay_authority,
+                    parent.durable_payload()?,
+                    frontier,
+                ))
+            }
         };
         super::replay_authority::authenticate_durable_lifecycle_output(
             verified,
@@ -1168,7 +1182,47 @@ impl LifecycleLedgerRecordV1 {
             self.continuation()?,
             &self.replay_authority,
             invalid_parent_parts,
+            obsolete_proposal_parts,
         )
+    }
+    /// Compare the complete immutable SignProposal-to-Broadcast lineage before cancellation.
+    pub(super) fn has_exact_proposal_sign_predecessor(
+        &self,
+        context: LifecycleContext,
+        parent: &Self,
+    ) -> bool {
+        let (Some(parent_key), Some(parent_stage)) = (parent.key(), parent.stage()) else {
+            return false;
+        };
+        parent.owner() == self.owner()
+            && parent.ordinal() < self.ordinal()
+            && parent.work_class() == Some(LifecycleWorkClass::SignProposal)
+            && parent_stage.kind() == LifecycleStageKind::SignProposal
+            && parent.terminal() == Some(Some(TerminalOutcome::Advanced))
+            && parent
+                .continuation()
+                .and_then(DurableContinuation::successor_parts)
+                == Some((
+                    DurableContinuationEdge::SignProposalToBroadcast,
+                    self.ordinal(),
+                ))
+            && parent.durable_payload() == Some(DurablePayloadReference::None)
+            && self.durable_payload() == Some(DurablePayloadReference::None)
+            && parent.reconstruction_source() == self.reconstruction_source()
+            && parent.replay_authority.structurally_matches_record(
+                context,
+                parent_key,
+                LifecycleWorkClass::SignProposal,
+                parent_stage,
+                DurablePayloadReference::None,
+            )
+            && signed_broadcast_continuation_is_exact(
+                DurableContinuationEdge::SignProposalToBroadcast,
+                &parent.replay_authority,
+                DurablePayloadReference::None,
+                &self.replay_authority,
+                DurablePayloadReference::None,
+            ) == Some(true)
     }
     /// Authenticate this row's source before opening its exact body-store frame.
     fn authenticate_durable_certified_fetch_origin<F>(

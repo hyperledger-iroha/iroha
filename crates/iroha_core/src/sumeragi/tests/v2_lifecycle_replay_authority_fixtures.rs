@@ -1331,6 +1331,41 @@ fn signed_broadcast_effects(fixture: &Fixture) -> Vec<AdapterEffect> {
     .map(|payload| AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload)))
     .collect()
 }
+
+/// Build the canonical replay pair for one exact unsigned/signed Proposal edge.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_proposal_sign_broadcast_fixture(
+    context: LifecycleContext,
+    unsigned: wire::Proposal,
+    signed: wire::Proposal,
+) -> [ReplayCase; 2] {
+    assert!(unsigned.signature.is_empty());
+    assert!(!signed.signature.is_empty());
+    let mut expected = unsigned.clone();
+    expected.signature.clone_from(&signed.signature);
+    assert_eq!(expected, signed);
+    let locator = RecoveredWalFrameIdentity::for_test(92, 93, [0xDA; 32]).persisted_locator();
+    let tag = ReplayEventTagV1::new(unsigned.round.height, unsigned.round.view, 0);
+    let parent = replay_case(
+        context,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role: ReplayWalRoleV1::PROPOSAL_INTENT,
+            tag,
+            action: WalReplayActionV1::SignProposal(unsigned),
+        }),
+        LifecycleStageKind::SignProposal,
+        DurablePayloadReference::None,
+    );
+    let child = replay_case(
+        context,
+        LifecycleReplaySourceV1::ConsensusBroadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(signed),
+        )),
+        LifecycleStageKind::BroadcastProposal,
+        DurablePayloadReference::None,
+    );
+    [parent, child]
+}
 fn subject(marker: u8) -> wire::BlockSubject {
     wire::BlockSubject {
         parent_block_hash: None,

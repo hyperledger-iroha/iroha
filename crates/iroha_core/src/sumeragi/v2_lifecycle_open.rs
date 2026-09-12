@@ -3573,9 +3573,12 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         _ => {}
     }
     let lifecycle_outputs = match body_pipeline.as_ref() {
-        Some(pipeline) => {
-            PreparedLifecycleOutputRecoveryV1::assemble(ledger, pipeline.verified(), recovered_wal)?
-        }
+        Some(pipeline) => PreparedLifecycleOutputRecoveryV1::assemble_with_frontier(
+            ledger,
+            pipeline.verified(),
+            recovered_wal,
+            pipeline.output_frontier(),
+        )?,
         None => PreparedLifecycleOutputRecoveryV1 {
             entries: BTreeMap::new(),
         },

@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 557
+EXPECTED_REGRESSION_COUNT = 570
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 374)
+        self.assertEqual(gate.selected_regression_count(), 387)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -81,6 +81,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
             "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
             "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
+            "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
+            "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",
+            "sumeragi::v2_runtime::tests::authenticated_proposal_store_retains_root_after_fetch_or_queued_completion_upgrade",
+            "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_waits_for_older_ready_output",
+            "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_failure_retains_ready_owner_without_output",
             "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
             "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
             "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",

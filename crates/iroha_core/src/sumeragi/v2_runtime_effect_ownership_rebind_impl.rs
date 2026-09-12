@@ -638,6 +638,41 @@ impl PendingRuntimeEffectBinding {
         .then_some(predecessor_binding)
     }
 
+    /// Project an authenticated Proposal Fetch into its exact Store after
+    /// the physical acquisition has gained Prepare or Commit authority.
+    ///
+    /// The original Proposal still authenticates the body and causal root.
+    /// A hybrid Fetch or its retained BodyAvailable completion may carry a
+    /// stronger, already-bound candidate statement. Reconstruct the complete
+    /// Store binding under the original root and require equality with that
+    /// opaque successor; matching body coordinates alone grant no authority.
+    pub(in crate::sumeragi) fn project_proposal_fetch_store_successor_with_authority_refinement(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+        successor_pending: &Self,
+    ) -> Option<Self> {
+        let ordinary = self.project_proposal_fetch_store_successor(predecessor, successor)?;
+        if !successor_pending.validate_exact(successor) {
+            return None;
+        }
+        let predecessor_statement = ordinary.candidate_statement?;
+        let successor_statement = successor_pending.candidate_statement?;
+        if !matches!(
+            predecessor_statement.fetch_authority_relation_to(successor_statement)?,
+            RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Upgrade
+        ) {
+            return None;
+        }
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&successor_statement))
+                .ok()??;
+        let projected =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
+        (projected.validate_exact(successor) && &projected == successor_pending)
+            .then_some(projected)
+    }
+
     /// Project an ordinary Proposal Store into the exact Commit-refined
     /// `ValidateBody` owner retained after a durable Decision.
     ///

@@ -3957,3 +3957,4 @@ fn wrong_or_post_cut_prepare_qc_gets_no_grace_before_the_due_timeout() {
         .expect("take the ordinary TimeoutIntent signer ownership");
     assert!(!runtime.fail_closed);
 }
+include!("v2_runtime_proposal_fetch_store_refinement.rs");

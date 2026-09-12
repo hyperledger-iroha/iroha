@@ -3186,7 +3186,8 @@ impl RemoteProposalFetchReplayEvidenceV1 {
             .exactly_matches_fetch(rebound_effect)
             .then_some(rebound)
     }
-    /// Preflight the only accepted Fetch-to-Store causal projection.
+    /// Preflight the exact Fetch-to-Store root, including a monotonic
+    /// authority upgrade admitted while acquisition or completion was pending.
     pub(in crate::sumeragi) fn exactly_projects_store(
         &self,
         store_effect: &AdapterEffect,
@@ -3198,7 +3199,11 @@ impl RemoteProposalFetchReplayEvidenceV1 {
         self.exactly_matches_fetch(&fetch_effect)
             && self
                 .fetch_pending
-                .project_proposal_fetch_store_successor(&fetch_effect, store_effect)
+                .project_proposal_fetch_store_successor_with_authority_refinement(
+                    &fetch_effect,
+                    store_effect,
+                    store_pending,
+                )
                 .as_ref()
                 == Some(store_pending)
     }
@@ -3216,7 +3221,11 @@ impl RemoteProposalFetchReplayEvidenceV1 {
             .expect("an exact remote Proposal source has one Fetch effect");
         let projected = self
             .fetch_pending
-            .project_proposal_fetch_store_successor(&fetch_effect, store_effect)
+            .project_proposal_fetch_store_successor_with_authority_refinement(
+                &fetch_effect,
+                store_effect,
+                store_pending,
+            )
             .expect("an exact remote Proposal Fetch has one Store successor");
         debug_assert_eq!(&projected, store_pending);
         Ok(RemoteProposalStoreReplayEvidenceV1 {
@@ -4543,6 +4552,7 @@ pub(super) struct PreparedDurableCertifiedBodyPipelineStartupV1 {
     live_ordinals: std::collections::BTreeSet<u128>,
     entries: Vec<PreparedDurableCertifiedBodyPipelineStartupEntryV1>,
     replay_steps: Vec<CertifiedBodyPipelineColdReplayStepV1>,
+    output_frontier: Option<crate::sumeragi::v2::LeaderWireRecoveryAuthority>,
 }
 pub(super) enum PreparedDurableCertifiedBodyPipelineWorkV1 {
     Fetch(CertifiedFetchCompletion),
@@ -4855,6 +4865,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1 {
             live_ordinals: self.live_ordinals,
             entries,
             replay_steps,
+            output_frontier: None,
         })
     }
     #[cfg(test)]
@@ -5007,6 +5018,12 @@ impl PreparedDurableCertifiedBodyPipelineWorkV1 {
     }
 }
 impl PreparedDurableCertifiedBodyPipelineStartupV1 {
+    /// Borrow only the installed WAL frontier retained after exact adapter replay.
+    pub(super) const fn output_frontier(
+        &self,
+    ) -> Option<crate::sumeragi::v2::LeaderWireRecoveryAuthority> {
+        self.output_frontier
+    }
     /// Borrow the frozen height which authenticated this complete startup census.
     pub(super) const fn verified(&self) -> &VerifiedHeightContext {
         &self.verified
@@ -5019,10 +5036,11 @@ impl PreparedDurableCertifiedBodyPipelineStartupV1 {
 
     /// Advance the cold reducer through the complete canonical replay prefix.
     pub(super) fn replay_adapter_startup(
-        self,
+        mut self,
         startup: ProductionLifecycleAdapterStartupV1,
     ) -> Result<(Self, ProductionLifecycleAdapterStartupV1), &'static str> {
         let startup = startup.replay_certified_body_pipeline(&self.replay_steps)?;
+        self.output_frontier = startup.recovered_lifecycle_output_frontier(&self.verified)?;
         Ok((self, startup))
     }
     /// Verify the complete phase against one still-empty concrete registry.
@@ -5597,7 +5615,7 @@ pub(super) use tests::{
     exact_body_record_fixture, exact_decision_body_record_fixture,
     exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
     exact_pending_certified_fetch_candidate_fixture, exact_prepare_sign_broadcast_fixture,
-    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
-    exact_replay_authority_for_payload_fixture, exact_timeout_sign_broadcast_fixture,
-    foreign_certified_serve_family_authority_fixture,
+    exact_proposal_sign_broadcast_fixture, exact_record_fixture,
+    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
+    exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
 };
