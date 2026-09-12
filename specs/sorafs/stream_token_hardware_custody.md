@@ -45,6 +45,47 @@ independent deployment input bound to that complete digest; neither client may
 bootstrap it from its own response. Registry slot 11 carries the one capability
 and its two separately injected transports.
 
+## Native custody authority
+
+`MutateSorafsStreamTokenCustody` owns the provider's governed public signer binding,
+independent attester trust, enrollment sequence and predecessor, active signed
+enrollment digest, and terminal signer/attester revocation flags. Its dedicated
+provider-scoped `CanManageSorafsStreamTokenCustody` permission governs configuration,
+enrollment and revocation. Expected revision and digest bind each atomic mutation;
+immutable history retains the executing height, deterministic ordinal and authority.
+This history excludes token bodies, signatures, reservations and the operation
+journal. Those remain with their existing durable owners.
+
+Enrollment verifies the complete canonical hardware attestation against the
+previous committed control snapshot and that block's actual identity and time.
+A policy change in the current block cannot be presented as already committed
+under its predecessor's block hash. Genuine policy changes clear the active head
+and require enrollment; the enrollment sequence and predecessor never reset.
+Revocation cannot be cleared by relabelling a retired key or changing policy within
+the same key generation. Same-key renewal uses a new attested enrollment.
+
+Each provider has a total limit of 8,194 control-history records. Ordinary changes
+may consume the first 8,192; the last two records are reserved for monotonic
+revocation. Earlier revocations count against the same total. History is not pruned
+to admit more changes. This bound limits lifetime control changes and must be
+considered during deployment planning.
+
+Core's `read_stream_token_custody_control_at_v1` reads the exact provider control
+snapshot at a requested committed height from one `StateReadOnly` view. It checks
+the canonical binding, chain and genesis-derived network, bounded history/index
+coherence, and derives the custody anchor from native state and the same view's
+block identity. Torii requires this anchor to match the signed observer claim and
+compares the complete active head, both revocation flags, and independently pinned
+attester trust. The independent approved anchor remains a required deployment input.
+Neither observer signatures nor a nonzero state digest substitute for this native
+association.
+
+Historical control records remain readable when a provider is removed from the
+current registry. They do not confer current serving authority. Torii separately
+requires the pinned provider to remain registered in the same State view used for
+each capture and validation; native mutations and exact retries also require
+current provider registration and permission.
+
 ## One-body issuance and recovery
 
 The Manifest owner authenticates independent hardware attestation and signed,
@@ -64,10 +105,12 @@ body, original custody and authenticated-operator quota across the operation.
    audit record, provenance and response. Fresh `AfterCommit` and then separate
    `BeforeRelease` observations authenticate the original custody and exact durable
    completion. Startup or pre-sign evidence cannot replace either observation.
-5. Before publication, Torii checks approved, current, historical signing and
-   completion block identities against its own Core State and Kura's verified
-   finality artifacts. Larger heights alone prove no ancestry. It resamples time
-   after finality reads and rejects expiry, rollback, revocation or custody drift.
+5. Before publication, Torii checks approved, current and historical signing custody
+   anchors against the native control reader and Kura's verified finality artifacts
+   using one immutable Core State view. Completion keeps its separate finalized
+   operation-block identity; it is not interpreted as custody control state. Larger
+   heights alone prove no ancestry. Torii resamples time after finality reads and
+   rejects expiry, rollback, revocation or custody drift.
 
 The hardware client and broker return only bounded untrusted receipt bytes.
 `SignerStreamTokenServiceV1` owns durable production and read-only recovery over
@@ -106,8 +149,8 @@ and the node's known finalized history. It neither proves globally latest custod
 state nor cancels packets from a previously admitted stream. Same-key custody
 renewal does not revoke existing token signatures. Governed revocation must be
 terminal for the revoked key generation; reactivation with the same key/version
-would otherwise revive earlier tokens. The native control reader and authoritative
-terminal-generation transition enforcement remain independent integration work.
+would otherwise revive earlier tokens. Native control transitions enforce terminal
+generation revocation, and every current observation must agree with that state.
 
 ## Cutover and qualification
 
@@ -123,7 +166,7 @@ approval evidence, never credentials or key material.
 
 TODO: complete coherent native caller/broker/producer validation and qualify the
 real device provider, attester, genuinely current finalized-state observer and
-authoritative durable operation source. A genuine native Core custody-control
-reader remains required before replacing the independent approved full anchor.
-The present source contracts and signed simulations do not complete those
-qualification outcomes.
+authoritative durable operation source. Validate the native custody transitions and
+Torii reader together against durable certified history and four voting validators
+with mandatory signed RS16 DA/RBC. The present source contracts and signed
+simulations do not complete those qualification outcomes.

@@ -1079,6 +1079,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_apply/error_recovery.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/reducer.rs': (
+        'reducer/body_validation_completion.rs',
         'reducer/prepare_certificate_handling.rs',
         'tests/reducer_timeout_and_projection.rs',
         'tests/v2_core_reducer_primitive_projection.rs',
@@ -1102,6 +1103,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/empty_replay_resume_test.rs',
         'tests/delayed_prepare_qc_cache_bounds.rs',
         'tests/v2_core_terminal_transactionality.rs',
+        'tests/four_reducer_network.rs',
+        'tests/terminal_result_replay.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
         'v2_effects_recovered_fetch_and_pipeline_types.rs',
@@ -1116,6 +1119,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_effects_main_03.rs',
         'tests/v2_effects_main_04.rs',
         'tests/v2_effects_main_05.rs',
+        'tests/v2_effects_protected_body_reseed.rs',
         'tests/v2_effects_03_locked_body_and_sidecar.rs',
         'tests/v2_effects_certified_body_fence_supersession.rs',
     ),
@@ -1165,9 +1169,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_adapter_05_direct_lifecycle.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs': (
+        'v2_adapter_05_direct_lifecycle_sign_publication_cases.rs',
         'v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs': (
+        'v2_adapter_04_wal_recovery_signature_fifo_cases.rs',
         'v2_adapter_04_wal_recovery_decision_classifier_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs': (
@@ -1192,6 +1198,14 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_effects_01_view_churn_and_runtime_steps.rs',
         'v2_effects_highest_prepare_retention.rs',
         'v2_effects_02_admission_handoffs.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_effects_certified_body_fence_supersession.rs': (
+        'v2_effects_resolved_validate_owner_cases.rs',
+        'v2_effects_terminal_sign_cold_owner_cases.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs': (
+        'v2_lifecycle_body_pipeline_transition_static_tests.rs',
+        'v2_lifecycle_body_pipeline_transition_tests.rs',
     ),
 }
 def _read_reviewed_rust_source_fixture(

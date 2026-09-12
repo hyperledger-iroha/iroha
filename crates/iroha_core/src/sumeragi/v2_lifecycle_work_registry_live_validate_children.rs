@@ -826,6 +826,17 @@ impl PreparedLiveValidateApplyRegistryWork {
         ),
     > {
         if !self.validates_publication(address.owner, address.ordinal, address.slot, digest) {
+            // TODO: remove this failure-only trace after the released Apply lineage regression closes.
+            #[cfg(test)]
+            eprintln!(
+                "released Apply pre-fsync join failed: stage=prepared-publication terminal_root={:?} terminal_ordinal={} candidate_root={:?} apply_owner={:?} apply_ordinal={} digest={:?}",
+                terminal.causal_root(),
+                terminal.ordinal(),
+                self.admission.candidate.causal_root,
+                address.owner,
+                address.ordinal,
+                digest,
+            );
             return Err((self, terminal));
         }
         let Self {
@@ -856,6 +867,27 @@ impl PreparedLiveValidateApplyRegistryWork {
         if publication_is_exact {
             Ok(work)
         } else {
+            // TODO: remove this failure-only trace after the released Apply lineage regression closes.
+            #[cfg(test)]
+            if let ConcreteLifecycleWorkKind::DurableLiveWalApply(carrier) = &work.kind {
+                if let DurableLiveWalApplyValidationSourceV1::Released(terminal) =
+                    &carrier.validation_source
+                {
+                    eprintln!(
+                        "released Apply pre-fsync join failed: stage=carrier terminal_root={:?} terminal_ordinal={} current_pending_root={:?} candidate_root={:?} apply_owner={:?} apply_ordinal={} body_binding={} terminal_proof={} ready_row={} ledger={}",
+                        terminal.causal_root(),
+                        terminal.ordinal(),
+                        carrier.admission.bound.pending.causal_lifecycle_key(),
+                        carrier.candidate.causal_root,
+                        address.owner,
+                        address.ordinal,
+                        carrier.exact_body_binding(),
+                        carrier.released_terminal_proof_is_exact(terminal),
+                        carrier.matches_current_ready_record(address, digest, staged_coordinator),
+                        carrier.validates_in_ledger(staged_ledger),
+                    );
+                }
+            }
             let ConcreteLifecycleWork {
                 kind: ConcreteLifecycleWorkKind::DurableLiveWalApply(carrier),
                 ..

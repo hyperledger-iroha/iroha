@@ -99,8 +99,16 @@ fn live_validate_retry_fixture() -> (ReadyBodyFixture, u128) {
     (fixture, ordinal)
 }
 
+#[derive(Clone, Copy)]
+enum BodyOwnerReopenValidationForTest {
+    NoMarkers,
+    Validated,
+    Rejected,
+}
+
 fn reopen_body_owner_fixture(
     fixture: ReadyBodyFixture,
+    validation: BodyOwnerReopenValidationForTest,
 ) -> (
     ReadyBodyFixture,
     Arc<crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
@@ -135,7 +143,55 @@ fn reopen_body_owner_fixture(
     drop(services);
     drop(owner);
     drop(transport.executor);
-    let mut owner = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+    let revalidated_body_store = match validation {
+        BodyOwnerReopenValidationForTest::NoMarkers => None,
+        BodyOwnerReopenValidationForTest::Validated
+        | BodyOwnerReopenValidationForTest::Rejected => {
+            let mut body_store = crate::sumeragi::v2_body_store::V2BodyStore::open_with_policy(
+                directory.path().join("body"),
+                transport.context.clone(),
+                crate::sumeragi::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+            )
+            .expect("open the exact cold terminal body store");
+            assert!(matches!(
+                body_store.ensure_recovered_markers_revalidated(),
+                Err(crate::sumeragi::v2_body_store::V2BodyStoreError::UnrevalidatedValidationMarkers),
+            ), "a checksummed terminal marker must remain quarantined before semantic replay");
+            let mut callbacks = 0;
+            body_store
+                .revalidate_recovered_markers(|block| {
+                    callbacks += 1;
+                    assert_eq!(block.hash(), transport.subject.block_hash);
+                    assert_eq!(
+                        block.encode_wire().expect("canonical replayed body wire"),
+                        transport.body,
+                        "semantic replay must receive the original complete signed fixture body"
+                    );
+                    match validation {
+                        BodyOwnerReopenValidationForTest::Validated => {
+                            Ok(transport.canonical_commitment)
+                        }
+                        BodyOwnerReopenValidationForTest::Rejected => {
+                            Err("deterministic terminal Validate regression rejection".to_owned())
+                        }
+                        BodyOwnerReopenValidationForTest::NoMarkers => {
+                            unreachable!("the empty-marker fixture never enters semantic replay")
+                        }
+                    }
+                })
+                .expect("reproduce the original physical validation outcome before owner recovery");
+            assert_eq!(
+                callbacks, 1,
+                "one deterministic replay of the exact terminal body per cold open"
+            );
+            Some(
+                body_store
+                    .into_revalidated_startup()
+                    .expect("seal only the semantically revalidated cold store"),
+            )
+        }
+    };
+    let mut owner = SumeragiV2Adapter::reopen_body_owner_for_test(
         &wal_path,
         directory.path(),
         verified,
@@ -147,6 +203,7 @@ fn reopen_body_owner_fixture(
             config: Hash::new(b"production transport config"),
         },
         [0x63; 32],
+        revalidated_body_store,
     );
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
     services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
@@ -183,7 +240,8 @@ fn reopen_validate_retry_fixture(
     let expected = fixture
         .owner
         .body_recovery_snapshot_for_test(fixture.ordinal, validate_ordinal);
-    let (fixture, gate) = reopen_body_owner_fixture(fixture);
+    let (fixture, gate) =
+        reopen_body_owner_fixture(fixture, BodyOwnerReopenValidationForTest::NoMarkers);
     fixture
         .owner
         .assert_body_recovery_snapshot_for_test(&expected);
@@ -375,7 +433,8 @@ fn resolved_validate_owner_retries_commit_fixture(
         &ledger_root,
     );
     if origin == ValidateRetryOriginForTest::ColdTerminal {
-        let (reopened, gate) = reopen_body_owner_fixture(fixture);
+        let (reopened, gate) =
+            reopen_body_owner_fixture(fixture, BodyOwnerReopenValidationForTest::Validated);
         fixture = reopened;
         _leader_wire_gate = Some(gate);
         terminal = fixture
@@ -431,11 +490,56 @@ fn resolved_validate_owner_retries_commit_fixture(
                 .is_empty()
         );
         let prior = fixture.transport.executor.current_tag();
-        install_timeout(
-            &mut fixture,
-            false,
-            &mut current_services,
-            now + Duration::from_millis(1),
+        let timeout = signed_timeout_certificate(&fixture, false);
+        let expected_view = timeout
+            .round
+            .view
+            .checked_add(1)
+            .expect("the fixture has a successor view");
+        fixture
+            .transport
+            .executor
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout.clone()),
+            ))
+            .expect("enqueue the current-view timeout after older owned ingress");
+        // This cut no longer races physical retirement. Service the actual FIFO
+        // through ordinary executor turns instead of assuming the TC is next.
+        for turn in 0..24_u64 {
+            fixture
+                .transport
+                .executor
+                .step(now + Duration::from_millis(1 + turn), &mut current_services)
+                .expect("service older ownership before the unprotected timeout");
+            let installed = fixture
+                .transport
+                .executor
+                .runtime
+                .driver_mut_for_test()
+                .status()
+                .expect("observe the actual durable timeout")
+                .last_timeout_certificate;
+            if installed.as_ref() == Some(&timeout)
+                && fixture.transport.executor.current_tag().view() == expected_view
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            fixture
+                .transport
+                .executor
+                .runtime
+                .driver_mut_for_test()
+                .status()
+                .expect("observe the installed unprotected timeout")
+                .last_timeout_certificate,
+            Some(timeout),
+            "older FIFO control must not substitute another timeout or same-view generation upgrade",
+        );
+        assert_eq!(
+            fixture.transport.executor.current_tag().view(),
+            expected_view
         );
         assert!(
             fixture
@@ -475,12 +579,16 @@ fn resolved_validate_owner_retries_commit_fixture(
             executor
                 .step(now + Duration::from_millis(turn), &mut current_services)
                 .expect("reconstruct the current historical Prepare body");
-            executor
+            let output_summary = executor
                 .settle_pending_lifecycle_output_admissions(
                     &mut fixture.owner,
                     &mut current_services,
                 )
                 .expect("publish exact current Prepare/TC output");
+            // Fresh terminal publication ends this fixture turn; duplicates do not.
+            if output_summary.requires_outer_executor_yield() {
+                continue;
+            }
             executor
                 .settle_pending_durable_validate_admissions(
                     &mut fixture.owner,
@@ -568,9 +676,13 @@ fn resolved_validate_owner_retries_commit_fixture(
         executor
             .acknowledge_runner_decision_cleanup(executor.current_tag(), Some(key.1))
             .expect("acknowledge the empty process-local Decision handoff");
-        executor
+        let output_summary = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle unrelated exact TC/QC output ownership first");
+        // Fresh terminal publication ends this fixture turn; duplicates do not.
+        if output_summary.requires_outer_executor_yield() {
+            continue;
+        }
         executor
             .settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle real registry admission before the cached result publication");
@@ -616,7 +728,30 @@ fn resolved_validate_owner_retries_commit_fixture(
     );
     let expected_typed_applies = usize::from(!prepare_first);
     let applies = fixture.owner.apply_ordinals_for_retry_test();
-    assert_eq!(applies.len(), expected_typed_applies);
+    assert_eq!(
+        applies.len(),
+        expected_typed_applies,
+        "terminal Apply did not settle: published={}, prepare_first={prepare_first}, busy={busy}, tag={:?}, body={:?}, replay={}, deferred_apply={}, status={:?}",
+        origin == ValidateRetryOriginForTest::Published,
+        fixture.transport.executor.current_tag(),
+        fixture
+            .transport
+            .executor
+            .runtime
+            .driver()
+            .body_state_for_test(key.0, key.1),
+        fixture
+            .transport
+            .executor
+            .pending_resolved_validate_replay
+            .is_some(),
+        fixture
+            .transport
+            .executor
+            .pending_released_lifecycle_validate_apply
+            .is_some(),
+        fixture.transport.executor.status(),
+    );
     if prepare_first {
         // The repaired body is already Validated. The real reducer emits a
         // direct ordinary Apply with its current Decision owner, so no new
@@ -854,7 +989,8 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
         &ledger_root,
     );
     if origin == ValidateRetryOriginForTest::ColdTerminal {
-        let (reopened, gate) = reopen_body_owner_fixture(fixture);
+        let (reopened, gate) =
+            reopen_body_owner_fixture(fixture, BodyOwnerReopenValidationForTest::Rejected);
         fixture = reopened;
         _leader_wire_gate = Some(gate);
         terminal = fixture
@@ -908,9 +1044,13 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
         executor
             .step(now + Duration::from_millis(turn), &mut current_services)
             .expect("retry the exact protected body after its rejected terminal cut");
-        executor
+        let output_summary = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle current Prepare/TC output ownership");
+        // Fresh terminal publication ends this fixture turn; duplicates do not.
+        if output_summary.requires_outer_executor_yield() {
+            continue;
+        }
         executor
             .settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle the actual registry handoff");
@@ -985,7 +1125,8 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
             .owner
             .invalid_body_report_snapshot_for_retry_test(reports[0], &ledger_root);
         drop(_leader_wire_gate.take());
-        let (reopened, gate) = reopen_body_owner_fixture(fixture);
+        let (reopened, gate) =
+            reopen_body_owner_fixture(fixture, BodyOwnerReopenValidationForTest::Rejected);
         fixture = reopened;
         _leader_wire_gate = Some(gate);
         fixture

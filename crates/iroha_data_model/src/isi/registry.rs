@@ -384,9 +384,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "f4bca9c05bb1b892095b482645a17fcd2ed1a66fabb2b8b8b5bbf94f0c9d17c1";
+            "7dfb5ba44d3b09b3dea02b96a2650461ad2a9610151ff08e3c3a7e68f6232a24";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "7c4f0146543058a218725b0e12173aa3f137e9544c8697f81712c90013b985e8";
+            "5f3a4523d2445fc7d54d2182a0c7a1130b5f76220100fac082fa7222166a038c";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1493,3 +1493,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "registry/stream_token_custody_tests.rs"]
+mod stream_token_custody_tests;

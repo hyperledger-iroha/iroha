@@ -149,6 +149,7 @@ mod certified_body_fence_supersession {
         services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
         let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
             &mut services,
+            leader,
             Arc::clone(&transport.executor.output_guard),
             1,
         );
@@ -515,7 +516,7 @@ mod certified_body_fence_supersession {
         drop(services);
         drop(owner);
         drop(transport.executor);
-        let mut recovered = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+        let mut recovered = SumeragiV2Adapter::reopen_body_owner_for_test(
             &wal_path,
             directory.path(),
             verified,
@@ -528,6 +529,7 @@ mod certified_body_fence_supersession {
                 config: Hash::new(b"production transport config"),
             },
             [0x63; 32],
+            None,
         );
         recovered.assert_body_recovery_snapshot_for_test(&expected);
         assert!(recovered.exact_recovered_body_pipeline_join_for_test());

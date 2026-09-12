@@ -132,7 +132,7 @@ pub(in crate::sumeragi) struct TerminalValidateNoSuccessorClaim {
 impl TerminalValidateNoSuccessorClaim {
     /// Decode only the existing exact terminal-row claim; semantic authority
     /// still requires the same-store revalidated body outcome.
-    pub(in crate::sumeragi) fn from_ledger_record(
+    pub(super) fn from_ledger_record(
         context: LifecycleContext,
         record: &LifecycleLedgerRecordV1,
     ) -> Option<Self> {

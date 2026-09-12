@@ -194,7 +194,6 @@ struct FakeRuntime {
     exact_effect_batch_ownership: Option<(Vec<AdapterEffect>, Vec<RuntimeEffectOwnership>)>,
     retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
-    pending_live_decision_apply: Option<(EventTag, DurableDecision)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_queries: Vec<RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
@@ -334,14 +333,6 @@ impl FakeRuntime {
     }
 }
 impl EffectRuntime for FakeRuntime {
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: EventTag,
-        decision: DurableDecision,
-    ) -> bool {
-        self.pending_live_decision_apply == Some((tag, decision))
-    }
-
     fn lifecycle_live_clocks_are_armed(&self) -> bool {
         self.live_clocks_armed
     }

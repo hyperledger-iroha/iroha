@@ -59,6 +59,8 @@ pub mod sorafs_proof_outcome;
 pub mod sorafs_reputation;
 /// Authoritative `SoraFS` reserve/rent instruction handlers.
 pub mod sorafs_reserve;
+/// Native stream-token custody policy and hardware enrollment transitions.
+pub mod sorafs_stream_token_custody;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -242,6 +244,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt>,

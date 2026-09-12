@@ -94,6 +94,7 @@ fn ordinary_view_one_validate_fixture() -> (ReadyBodyFixture, u128, FakeServices
     services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut services,
+        local,
         Arc::clone(&transport.executor.output_guard),
         1,
     );
@@ -338,8 +339,12 @@ fn same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_ow
                 let executor = &mut fixture.transport.executor;
                 executor.step(now + Duration::from_millis(turn), &mut current_services)
                     .expect("service the actual new-generation Prepare/body FIFO");
-                executor.settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
+                let output_summary = executor.settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
                     .expect("persist exact current control output owners");
+                // Fresh terminal publication ends this fixture turn; duplicates do not.
+                if output_summary.requires_outer_executor_yield() {
+                    continue;
+                }
                 executor.settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
                     .expect("rejoin the current Validate owner to its immutable result");
                 settled += executor.settle_pending_released_validate_apply_publication(
@@ -347,7 +352,15 @@ fn same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_ow
                 ).expect("reuse actual terminal success for current Commit Sign");
                 if settled != 0 { break; }
             }
-            assert_eq!(settled, 1);
+            assert_eq!(
+                settled, 1,
+                "terminal Sign did not settle: tag={:?}, body={:?}, replay={}, deferred_apply={}, status={:?}",
+                fixture.transport.executor.current_tag(),
+                fixture.transport.executor.runtime.driver().body_state_for_test(key.0, key.1),
+                fixture.transport.executor.pending_resolved_validate_replay.is_some(),
+                fixture.transport.executor.pending_released_lifecycle_validate_apply.is_some(),
+                fixture.transport.executor.status(),
+            );
             assert_eq!(fixture.transport.executor.current_tag(), current);
             assert_eq!(fixture.planner_io.lifecycle_validate_io_snapshot(), io_before);
             assert!(current_services.apply_tasks.is_empty());
@@ -356,7 +369,7 @@ fn same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_ow
             let sign = fixture.owner.resolved_commit_sign_snapshot_for_test(
                 &fixture.certificate, &ledger_root,
             );
-            let (mut reopened, _leader_wire_gate) = reopen_body_owner_fixture(fixture);
+            let (mut reopened, _leader_wire_gate) = reopen_body_owner_fixture(fixture, BodyOwnerReopenValidationForTest::Validated);
             reopened.owner.resolved_validate_cold_snapshot_for_test(&terminal, &ledger_root);
             reopened.owner.assert_resolved_commit_sign_cold_for_test(&sign, &ledger_root);
             assert!(reopened.owner.apply_ordinals_for_retry_test().is_empty());

@@ -2044,17 +2044,6 @@ pub(crate) trait EffectRuntime {
         ))
     }
 
-    /// Return whether the exact source-only Decision WAL Apply seal remains
-    /// available for a lifecycle Validate-to-Apply join. Synthetic runtimes
-    /// cannot mint this affine authority and retain the closed default.
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        _tag: EventTag,
-        _decision: DurableDecision,
-    ) -> bool {
-        false
-    }
-
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -2438,16 +2427,6 @@ impl EffectRuntime for SerializedV2Runtime {
             Ok(prepared) => Ok(prepared.commit()),
             Err((marker, error)) => Err((marker, error.to_string())),
         }
-    }
-
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: EventTag,
-        decision: DurableDecision,
-    ) -> bool {
-        SerializedV2Runtime::has_exact_pending_live_decision_apply(
-            self, tag, decision.0, decision.1, decision.2, decision.3,
-        )
     }
 
     fn can_admit_network_message_with_ingress_ownership(

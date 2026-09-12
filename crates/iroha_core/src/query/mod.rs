@@ -12,6 +12,8 @@ pub mod provider_ingest_finalized;
 pub mod reputation_finalized;
 pub mod snapshot;
 pub mod store;
+/// Same-State historical native StreamToken custody control reader.
+pub mod stream_token_custody;
 use crate::state::{WorldReadOnly, WorldStateSnapshot};
 use iroha_data_model::block::consensus::EvidenceRecord;
 use mv::storage::StorageReadOnly;

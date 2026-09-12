@@ -28,7 +28,7 @@ use iroha_data_model::{
     },
     kaigi::{KaigiId, KaigiPrivacyMode, KaigiRecord, KaigiStatus, NewKaigi, kaigi_metadata_key},
     metadata::Metadata,
-    prelude::{AssetId, DomainId, FindDomainById, HasMetadata, Identifiable},
+    prelude::{AssetId, DomainId, FindDomainById, HasMetadata},
     transaction::{FeePaymentIntent, SignedTransaction, error::TransactionRejectionReason},
 };
 use iroha_executor_data_model::permission::governance::CanManageVerifyingKeys;
@@ -704,9 +704,10 @@ async fn lifecycle() -> Result<()> {
         )
         .await?;
         common_commit(&clients).await?;
+        // Hash the canonical Json metadata frame used by the ledger record owner.
         eprintln!(
             "KAIGI_PRIVACY_FOUR_VALIDATOR_V1:{TEST_NAME}:passed canonical_record_hash={}",
-            iroha_crypto::Hash::new(norito::encode_canonical(&terminal)?)
+            iroha_crypto::Hash::new(norito::encode_canonical(&Json::try_new(&terminal)?)?)
         );
         Ok(())
     }

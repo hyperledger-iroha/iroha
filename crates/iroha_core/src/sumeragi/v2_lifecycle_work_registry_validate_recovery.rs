@@ -125,7 +125,7 @@ impl ResolvedLifecycleValidateOutcomeV1 {
     /// Compare the canonical original encoded terminal record. Cold authority
     /// uses the actual checksummed row claim; live authority uses its exact
     /// pre-fsync record and replay metadata snapshot.
-    pub(in crate::sumeragi) fn matches_ledger_record(
+    pub(super) fn matches_ledger_record(
         &self,
         context: super::LifecycleContext,
         record: &super::ledger::LifecycleLedgerRecordV1,

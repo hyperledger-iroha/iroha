@@ -1052,6 +1052,14 @@ pub mod sorafs {
         pub struct CanUpsertSorafsProviderCredit;
     }
     permission! {
+        /// Permission to configure, enroll, or revoke stream-token custody for one provider.
+        #[derive(Copy)]
+        pub struct CanManageSorafsStreamTokenCustody {
+            /// Provider identifier governed by this permission.
+            pub provider_id: ProviderId,
+        }
+    }
+    permission! {
         /// Permission to operate `SoraFS` repair tickets for a provider.
         #[derive(Copy)]
         pub struct CanOperateSorafsRepair {

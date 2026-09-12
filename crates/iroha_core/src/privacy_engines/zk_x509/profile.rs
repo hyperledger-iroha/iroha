@@ -292,6 +292,7 @@ const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 16_447_808;
 /// Unavoidable MAIN base-field payload: 136 queries times current/next
 /// openings times 5,623 columns times eight bytes.  It already exceeds the
 /// complete proof cap before roots, FRI, multiproofs, or DEEP openings.
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 12_235_648;
 /// Exact maximum compact-CA inner proof after padding its 128 active rows to a
 /// log-13 native trace and using the shared log-16 LDE.
