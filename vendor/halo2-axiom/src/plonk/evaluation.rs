@@ -1,5 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 
+/// Bounded authenticated tiles for the ordinary expression evaluator.
+pub(crate) mod stored;
+
 use crate::multicore;
 use crate::plonk::{Any, ProvingKey, lookup, permutation};
 use crate::poly::Basis;

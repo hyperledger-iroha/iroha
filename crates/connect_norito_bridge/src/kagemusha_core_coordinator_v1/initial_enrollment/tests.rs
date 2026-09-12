@@ -13,6 +13,10 @@ use sha2::{Digest as _, Sha256};
 
 mod catalog;
 
+mod hardware_transactions;
+
+mod challenge_phases;
+
 struct Fixture {
     release: Arc<KagemushaAuthenticatedReleaseV1>,
     policy: Arc<KagemushaRetailEnrollmentIssuerPolicyV1>,
@@ -122,6 +126,7 @@ impl Fixture {
             self.release.clone(),
             self.owner.clone(),
             self.native_key,
+            &norito::encode_canonical(&self.qualification).unwrap(),
         )
         .unwrap()
     }
@@ -420,7 +425,8 @@ fn begin_rejects_a_different_runtime_or_non_ed25519_account() {
                 f.policy.clone(),
                 f.release.clone(),
                 owner,
-                f.native_key
+                f.native_key,
+                &norito::encode_canonical(&f.qualification).unwrap(),
             )
             .err(),
             Some(InitialEnrollmentErrorV1::Binding)

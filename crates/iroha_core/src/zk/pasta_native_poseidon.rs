@@ -10,7 +10,7 @@ use halo2_base::{
     AssignedValue, Context,
     gates::{GateChip, GateInstructions},
     halo2_proofs::{
-        circuit::{Layouter, Value},
+        circuit::{Cell, Layouter, Value},
         plonk::{Advice, Column, ConstraintSystem, Error, Expression, Fixed},
         poly::Rotation,
     },
@@ -67,6 +67,58 @@ impl<F: KagemushaPoseidonFieldV1> RawSpec<F> {
 
 fn full_round(round: usize) -> bool {
     round < FULL_ROUNDS / 2 || round >= FULL_ROUNDS / 2 + PARTIAL_ROUNDS
+}
+
+// One block owns two endpoints per possible lane and one working permutation state: exactly
+// 15 Pasta fields (480 initialized bytes). Returned Cell metadata is separate and scales as
+// six Option<Cell> entries per active job when equality copies are required. This clears owned
+// slots on success/error/unwind, not caller copies, field-operation temporaries or kernel memory.
+struct NativePoseidonBlockWitness<F: KagemushaPoseidonFieldV1> {
+    endpoints: [[F; WIDTH]; 2 * MAX_LANES],
+    state: [F; WIDTH],
+}
+
+impl<F: KagemushaPoseidonFieldV1> NativePoseidonBlockWitness<F> {
+    fn zeroed() -> Self {
+        Self {
+            endpoints: [[F::ZERO; WIDTH]; 2 * MAX_LANES],
+            state: [F::ZERO; WIDTH],
+        }
+    }
+}
+
+impl<F: KagemushaPoseidonFieldV1> Drop for NativePoseidonBlockWitness<F> {
+    fn drop(&mut self) {
+        for value in self
+            .endpoints
+            .iter_mut()
+            .flatten()
+            .chain(self.state.iter_mut())
+        {
+            // SAFETY: exclusive initialized slots of the sealed Copy Pasta field implementations.
+            unsafe { std::ptr::write_volatile(value, F::ZERO) };
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        BLOCK_WITNESS_CLEARS.with(|record| {
+            let (count, all_zero) = record.get();
+            record.set((
+                count + 1,
+                all_zero
+                    && self
+                        .endpoints
+                        .iter()
+                        .flatten()
+                        .chain(self.state.iter())
+                        .all(|value| *value == F::ZERO),
+            ));
+        });
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BLOCK_WITNESS_CLEARS: std::cell::Cell<(usize, bool)> = const { std::cell::Cell::new((0, true)) };
 }
 
 /// Native permutation lanes sharing round constants, fixed modes and one equality bus.
@@ -593,41 +645,38 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                         },
                     );
                     let mut code = 0;
-                    let mut bus_slot = false;
                     for lane in 0..self.lane_count {
                         for output in [false, true] {
                             let start = bridge_start(lane, output);
                             if round == start {
                                 code = bridge_code(lane, output);
                             }
-                            bus_slot |= (start..start + WIDTH).contains(&round);
                         }
                     }
                     region.assign_fixed(config.bridge_mode, row, F::from(code));
-                    if !bus_slot {
-                        region.assign_advice_discarding_value(
-                            config.bus,
-                            row,
-                            if self.use_unknown {
-                                Value::unknown()
-                            } else {
-                                Value::known(F::ZERO)
-                            },
-                        );
-                    }
                 }
-                for (lane, columns) in config.lanes.iter().enumerate() {
-                    for block in 0..rows / PERMUTATION_ROWS {
+                // Only Cell identities survive a block. Scalars stay in this fixed-size guard;
+                // no BUS column or trace is duplicated into a reorder buffer.
+                let mut bus_cells: Vec<[Option<Cell>; 2 * WIDTH]> = Vec::new();
+                if physical.is_some() {
+                    bus_cells
+                        .try_reserve_exact(self.jobs.len())
+                        .map_err(|_| Error::Synthesis)?;
+                    bus_cells.resize(self.jobs.len(), [None; 2 * WIDTH]);
+                }
+                for block in 0..rows / PERMUTATION_ROWS {
+                    let mut witness = NativePoseidonBlockWitness::<F>::zeroed();
+                    for (lane, columns) in config.lanes.iter().enumerate() {
                         let job_index = block * self.lane_count + lane;
                         let job = self.jobs.get(job_index);
-                        // The final unused lane still has its complete round trace and BUS
-                        // bridges under the shared fixed schedule, with no external copies.
-                        let mut state =
+                        // The final unused lane still has the complete zero-input permutation.
+                        witness.state =
                             job.map_or([F::ZERO; WIDTH], |job| job.input.map(|cell| *cell.value()));
+                        witness.endpoints[2 * lane] = witness.state;
                         for round in 0..=ROUNDS {
                             let row = block * PERMUTATION_ROWS + round;
                             for i in 0..WIDTH {
-                                let mut value = state[i];
+                                let mut value = witness.state[i];
                                 if mutation
                                     == Some(NativePoseidonMutation::Trace {
                                         job: job_index,
@@ -646,45 +695,80 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                                         Value::known(value)
                                     },
                                 );
-                                if round == 0 || round == ROUNDS {
-                                    let output = round == ROUNDS;
-                                    let mut value = state[i];
-                                    if mutation
-                                        == Some(NativePoseidonMutation::Bus {
-                                            job: job_index,
-                                            output,
-                                            column: i,
-                                        })
-                                    {
-                                        value += F::ONE;
-                                    }
-                                    let bus_row =
-                                        block * PERMUTATION_ROWS + bridge_start(lane, output) + i;
-                                    let assigned = region.assign_advice_discarding_value(
-                                        config.bus,
-                                        bus_row,
-                                        if self.use_unknown {
-                                            Value::unknown()
-                                        } else {
-                                            Value::known(value)
-                                        },
-                                    );
-                                    if let (Some(job), Some(physical)) = (job, &physical) {
-                                        let bridge =
-                                            if output { job.output[i] } else { job.input[i] };
-                                        let virtual_cell = bridge.cell.ok_or(Error::Synthesis)?;
-                                        let target = physical
-                                            .assigned_advices
-                                            .resolve(&virtual_cell)
-                                            .ok_or(Error::Synthesis)?;
-                                        // Only BUS participates in equality. Its fixed bridge gate
-                                        // binds the original Base cell to the local state column.
-                                        region.constrain_equal(assigned, target);
-                                    }
-                                }
                             }
                             if round < ROUNDS {
-                                state = self.spec.transition(state, round);
+                                witness.state = self.spec.transition(witness.state, round);
+                            }
+                        }
+                        // Retain the computed endpoint, never the claimed job.output witness.
+                        // Trace mutations affect assigned cells only, exactly as before.
+                        witness.endpoints[2 * lane + 1] = witness.state;
+                    }
+                    for round in 0..PERMUTATION_ROWS {
+                        let mut endpoint = None;
+                        for lane in 0..self.lane_count {
+                            for output in [false, true] {
+                                let start = bridge_start(lane, output);
+                                if (start..start + WIDTH).contains(&round) {
+                                    endpoint = Some((lane, output, round - start));
+                                }
+                            }
+                        }
+                        let mut value = F::ZERO;
+                        if let Some((lane, output, column)) = endpoint {
+                            let job_index = block * self.lane_count + lane;
+                            value = witness.endpoints[2 * lane + usize::from(output)][column];
+                            if mutation
+                                == Some(NativePoseidonMutation::Bus {
+                                    job: job_index,
+                                    output,
+                                    column,
+                                })
+                            {
+                                value += F::ONE;
+                            }
+                        }
+                        let assigned = region.assign_advice_discarding_value(
+                            config.bus,
+                            block * PERMUTATION_ROWS + round,
+                            if self.use_unknown {
+                                Value::unknown()
+                            } else {
+                                Value::known(value)
+                            },
+                        );
+                        if let Some((lane, output, column)) = endpoint {
+                            let job_index = block * self.lane_count + lane;
+                            if physical.is_some() && job_index < self.jobs.len() {
+                                bus_cells[job_index][usize::from(output) * WIDTH + column] =
+                                    Some(assigned);
+                            }
+                        }
+                    }
+                }
+                if let Some(physical) = &physical {
+                    // Equality order is part of the existing permutation mapping. BUS values
+                    // were assigned by row, but replay copies in the original lane/block/
+                    // input-output/element order using actual returned Cells, including V1 offsets.
+                    for lane in 0..self.lane_count {
+                        for block in 0..rows / PERMUTATION_ROWS {
+                            let job_index = block * self.lane_count + lane;
+                            let Some(job) = self.jobs.get(job_index) else {
+                                continue;
+                            };
+                            for output in [false, true] {
+                                for i in 0..WIDTH {
+                                    let assigned = bus_cells[job_index]
+                                        [usize::from(output) * WIDTH + i]
+                                        .ok_or(Error::Synthesis)?;
+                                    let bridge = if output { job.output[i] } else { job.input[i] };
+                                    let virtual_cell = bridge.cell.ok_or(Error::Synthesis)?;
+                                    let target = physical
+                                        .assigned_advices
+                                        .resolve(&virtual_cell)
+                                        .ok_or(Error::Synthesis)?;
+                                    region.constrain_equal(assigned, target);
+                                }
                             }
                         }
                     }
@@ -704,6 +788,10 @@ fn required_rows(permutations: usize, lanes: usize) -> Result<usize, String> {
         .checked_mul(PERMUTATION_ROWS)
         .ok_or_else(|| "native Poseidon row count overflow".to_owned())
 }
+
+#[cfg(test)]
+#[path = "pasta_native_poseidon_monotone_tests.rs"]
+mod monotone_tests;
 
 #[cfg(test)]
 #[path = "pasta_native_poseidon_transcript_tests.rs"]

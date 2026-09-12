@@ -22,6 +22,8 @@ mod guard_bundle;
 #[cfg(feature = "zk-halo2-ipa")]
 mod guard_verifier;
 #[cfg(feature = "zk-halo2-ipa")]
+mod hardware_transactions;
+#[cfg(feature = "zk-halo2-ipa")]
 mod mint_authority;
 #[cfg(feature = "zk-halo2-ipa")]
 mod mint_authorization;
@@ -151,6 +153,12 @@ pub use guard_bundle::{
 pub use guard_verifier::{
     KagemushaAuthenticatedGuardBundleVerifierV1, KagemushaGuardBundleProofPartsV1,
     KagemushaGuardProofDiagnosticVerifierV1, KagemushaGuardVerificationErrorV1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+pub use hardware_transactions::{
+    KAGEMUSHA_HARDWARE_TRANSACTION_MAX_BYTES_V1, KagemushaHardwareCheckpointTransportV1,
+    KagemushaHardwareTransactionCertificateV1, KagemushaHardwareTransactionSubjectV1,
+    KagemushaHardwareTransactionV1, KagemushaHardwareTransactionVerifierV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use mint_authority::KagemushaMintAuthorityCheckpointV1;

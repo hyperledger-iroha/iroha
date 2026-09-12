@@ -9,7 +9,7 @@ use crate::halo2_proofs::{
     plonk::{Advice, Column},
 };
 use crate::utils::halo2::{
-    constrain_virtual_equals_external, raw_assign_advice, raw_assign_advice_discarding_value,
+    constrain_virtual_equals_external, raw_assign_advice_cell, raw_assign_advice_discarding_value,
 };
 use crate::{AssignedValue, ContextTag};
 
@@ -149,13 +149,13 @@ impl<F: Field + Ord, const ADVICE_COLS: usize> VirtualRegionManager<F>
             }
             for (advice, &column) in advices.iter().zip(config[lookup_col].iter()) {
                 if let Some(copy_manager) = copy_manager.as_mut() {
-                    let bcell = raw_assign_advice(
+                    let bcell = raw_assign_advice_cell(
                         region,
                         column,
                         lookup_offset,
                         Value::known(advice.value),
                     );
-                    constrain_virtual_equals_external(region, *advice, bcell.cell(), copy_manager);
+                    constrain_virtual_equals_external(region, *advice, bcell, copy_manager);
                 } else {
                     raw_assign_advice_discarding_value(
                         region,

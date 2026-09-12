@@ -1,13 +1,13 @@
-//! Release-authenticated diagnostics for complete monetary GuardBundle proofs.
+//! Release-authenticated verification of complete monetary GuardBundle proofs.
 //!
 //! Both current proofs and their complete credential/SHA histories are terminally decided. The
 //! caller supplies Core's exact normalized statement; decoded archive fields never select that
 //! statement or a verifying key. Each parity also authenticates the exact predecessor/successor
 //! credential digests in its 44-cell public column. The complete provider/credential/State/terminal
-//! authority corridor remains unqualified, so these diagnostic checks cannot authorize Bootstrap
-//! or monetary transitions and production construction remains fail-closed.
+//! authority corridor is admitted only by the explicit release-bound native factory. Merely
+//! loading artifacts or running the separate diagnostics cannot authorize monetary operations.
 //! Independent mint reservation/staging, peer staging and recovery anchors also require their own
-//! qualified hardware transaction evidence.
+//! qualified hardware transaction evidence. Physical profile qualification remains a release gate.
 
 use std::sync::Arc;
 
@@ -137,25 +137,85 @@ pub struct KagemushaGuardBundleProofPartsV1<'a> {
     pub ep_history: &'a KagemushaEpAccumulatorV1,
 }
 
-/// Unavailable production monetary Guard verifier awaiting authenticated provider-policy authority.
-///
-/// Release-authenticated proof keys alone do not qualify the complete provider/credential/State/
-/// terminal authority corridor. Construction and every monetary acceptance method reject. No arbitrary
-/// root, caller boolean, or successful diagnostic proof check can create this capability.
-#[derive(Clone, Copy)]
+/// Monetary Guard verifier bound to an explicitly admitted release and its actual paired proofs.
+/// Independent hardware journal transactions additionally require a registered transaction owner.
+#[derive(Clone, Default)]
 pub struct KagemushaAuthenticatedGuardBundleVerifierV1 {
-    _private: (),
+    authority: Option<(
+        KagemushaGuardProofDiagnosticVerifierV1,
+        Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+    )>,
+    transactions: Option<super::KagemushaHardwareTransactionVerifierV1>,
 }
 
 impl KagemushaAuthenticatedGuardBundleVerifierV1 {
-    /// Reject construction until the complete provider authority corridor is qualified.
+    /// Construct only after the verifier admits the independently authenticated monetary release.
     ///
     /// # Errors
-    /// Always returns [`KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable`].
-    pub fn new(_verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>) -> Result<Self> {
-        // TODO: Require a nonserializable qualification capability covering the complete actual
-        // provider/credential/State/terminal chain before introducing an accepting constructor.
-        Err(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)
+    /// Rejects absent authority or incompatible compiled proof geometry.
+    pub fn new(verifier: Arc<KagemushaAuthenticatedRecursiveVerifierV1>) -> Result<Self> {
+        let release = verifier
+            .monetary_release()
+            .map_err(|_| KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
+        Ok(Self {
+            authority: Some((
+                KagemushaGuardProofDiagnosticVerifierV1::new(verifier)?,
+                release,
+            )),
+            transactions: None,
+        })
+    }
+
+    /// Register independent journal evidence under the same already admitted release.
+    /// This consumes the configuration before sharing it with a state machine; it cannot mutate
+    /// another live wallet's authority. Every certificate is still authenticated independently.
+    pub fn with_hardware_transactions(
+        mut self,
+        verifier: super::KagemushaHardwareTransactionVerifierV1,
+    ) -> Result<Self> {
+        let (_, release) = self
+            .authority
+            .as_ref()
+            .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
+        if verifier.release().attestation_digest() != release.attestation_digest()
+            || verifier.release().authority_policy_digest() != release.authority_policy_digest()
+            || self.transactions.is_some()
+        {
+            return Err(KagemushaGuardVerificationErrorV1::Binding);
+        }
+        self.transactions = Some(verifier);
+        Ok(self)
+    }
+
+    fn verify_transaction(
+        &self,
+        transaction: super::KagemushaHardwareTransactionV1,
+        bytes: &[u8],
+    ) -> core::result::Result<(), String> {
+        self.transactions
+            .as_ref()
+            .ok_or_else(|| unavailable("independent journal").to_string())?
+            .verify(&transaction, bytes)
+    }
+
+    fn require_profile(
+        &self,
+        normalized: &KagemushaNormalizedGuardStatementV1,
+    ) -> Result<&KagemushaGuardProofDiagnosticVerifierV1> {
+        let (proofs, release) = self
+            .authority
+            .as_ref()
+            .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
+        let profile = release
+            .enabled_profile(normalized.hardware_profile_id)
+            .ok_or(KagemushaGuardVerificationErrorV1::Binding)?;
+        if profile.policy_epoch != normalized.policy_epoch
+            || profile.suite_id != normalized.successor_suite_id
+            || profile.vk_digest != normalized.successor_vk_digest
+        {
+            return Err(KagemushaGuardVerificationErrorV1::Binding);
+        }
+        Ok(proofs)
     }
 }
 
@@ -396,53 +456,110 @@ impl KagemushaGuardProofDiagnosticVerifierV1 {
 impl KagemushaGuardBundleVerifierV1 for KagemushaAuthenticatedGuardBundleVerifierV1 {
     fn verify_bootstrap(
         &self,
-        _statement: &BootstrapStatementV1,
-        _normalized: &KagemushaNormalizedGuardStatementV1,
-        _guard_bundle: &[u8],
+        statement: &BootstrapStatementV1,
+        normalized: &KagemushaNormalizedGuardStatementV1,
+        guard_bundle: &[u8],
     ) -> core::result::Result<(), String> {
-        Err(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string())
+        (|| {
+            let proofs = self.require_profile(normalized)?;
+            let wire = decode_wire(guard_bundle, proofs.lengths)?;
+            // These slots are public inputs of the verified Guard proofs; the relation binds
+            // their complete credential statements to this caller-derived normalized state.
+            proofs.verify_bootstrap_proof(
+                statement,
+                normalized,
+                wire.credential_digests,
+                guard_bundle,
+            )
+        })()
+        .map_err(|error: KagemushaGuardVerificationErrorV1| error.to_string())
     }
 
     fn verify_transition(
         &self,
-        _statement: &HardwareTransitionStatementV1,
-        _proof_statement: &TransitionProofStatementV1,
-        _normalized: &KagemushaNormalizedGuardStatementV1,
-        _guard_bundle: &[u8],
+        statement: &HardwareTransitionStatementV1,
+        proof_statement: &TransitionProofStatementV1,
+        normalized: &KagemushaNormalizedGuardStatementV1,
+        guard_bundle: &[u8],
     ) -> core::result::Result<(), String> {
-        Err(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string())
+        (|| {
+            let proofs = self.require_profile(normalized)?;
+            let wire = decode_wire(guard_bundle, proofs.lengths)?;
+            proofs.verify_transition_proof(
+                statement,
+                proof_statement,
+                normalized,
+                wire.credential_digests,
+                guard_bundle,
+            )
+        })()
+        .map_err(|error: KagemushaGuardVerificationErrorV1| error.to_string())
     }
 
     fn verify_mint_reservation(
         &self,
-        _statement: &MintReservationStatementV1,
-        _guard_bundle: &[u8],
+        statement: &MintReservationStatementV1,
+        guard_bundle: &[u8],
     ) -> core::result::Result<(), String> {
-        Err(unavailable("mint reservation").to_string())
+        self.verify_transaction(
+            super::KagemushaHardwareTransactionV1::MintReservation(statement.clone()),
+            guard_bundle,
+        )
     }
 
     fn verify_mint_stage(
         &self,
-        _statement: &MintStageStatementV1,
-        _guard_bundle: &[u8],
+        statement: &MintStageStatementV1,
+        guard_bundle: &[u8],
     ) -> core::result::Result<(), String> {
-        Err(unavailable("mint staging").to_string())
+        self.verify_transaction(
+            super::KagemushaHardwareTransactionV1::MintStage(statement.clone()),
+            guard_bundle,
+        )
     }
 
     fn verify_credit_stage(
         &self,
-        _statement: &CreditStageStatementV1,
-        _guard_bundle: &[u8],
+        statement: &CreditStageStatementV1,
+        guard_bundle: &[u8],
     ) -> core::result::Result<(), String> {
-        Err(unavailable("peer credit staging").to_string())
+        self.verify_transaction(
+            super::KagemushaHardwareTransactionV1::CreditStage(statement.clone()),
+            guard_bundle,
+        )
     }
 
     fn verify_durability_anchor(
         &self,
-        _statement: &DurabilityAnchorStatementV1,
-        _guard_bundle: &[u8],
+        statement: &DurabilityAnchorStatementV1,
+        guard_bundle: &[u8],
     ) -> core::result::Result<(), String> {
-        Err(unavailable("recovery anchor").to_string())
+        self.verify_transaction(
+            super::KagemushaHardwareTransactionV1::DurabilityAnchor(statement.clone()),
+            guard_bundle,
+        )
+    }
+
+    fn verify_recovery_checkpoint_cas(
+        &self,
+        statement: &crate::zk::kagemusha_v1_state::KagemushaRecoveryCheckpointStatementV1,
+        guard_bundle: &[u8],
+    ) -> core::result::Result<(), String> {
+        self.verify_transaction(
+            super::KagemushaHardwareTransactionV1::RecoveryCheckpoint(statement.clone()),
+            guard_bundle,
+        )
+    }
+
+    fn verify_current_recovery_checkpoint(
+        &self,
+        statement: &DurabilityAnchorStatementV1,
+        journals: &crate::zk::kagemusha_v1_state::KagemushaRecoveryJournalsV1,
+    ) -> core::result::Result<(), String> {
+        self.transactions
+            .as_ref()
+            .ok_or_else(|| unavailable("fresh recovery checkpoint").to_string())?
+            .verify_current(statement, journals)
     }
 }
 
@@ -1116,7 +1233,7 @@ mod tests {
         let bytes = norito::encode_canonical(&wire).expect("shape-valid frame");
         // The private sentinel exercises the production trait's independent fail-closed check.
         // No authenticated constructor or test authority bypass is introduced.
-        let verifier = KagemushaAuthenticatedGuardBundleVerifierV1 { _private: () };
+        let verifier = KagemushaAuthenticatedGuardBundleVerifierV1::default();
         let expected =
             KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string();
         assert_eq!(

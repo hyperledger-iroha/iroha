@@ -344,12 +344,16 @@ def _validate_build_environment(root: Path, environment: object) -> None:
         raise ValidationError("artifact hermetic runner digest does not match source")
 
 
-def _validate_root_identity(root: Path, payload: dict[str, object], lockfile: Path) -> None:
-    if payload["privacy_production_enabled"] is True and lockfile == root / "Cargo.lock":
+def _validate_root_identity(
+    root: Path, payload: dict[str, object], lockfile: Path, *, local_integration: bool = False,
+) -> None:
+    if local_integration and lockfile != root / "Cargo.lock":
+        raise ValidationError("local integration requires the explicitly selected root Cargo.lock")
+    if not local_integration and payload["privacy_production_enabled"] is True and lockfile == root / "Cargo.lock":
         raise ValidationError("privacy production artifacts require an explicit external canonical graph snapshot")
     _regular_file(root / "Cargo.lock", "root source Cargo.lock")
     _regular_file(lockfile, "selected build Cargo.lock")
-    if payload["privacy_production_enabled"] is True and lockfile.lstat().st_mode & 0o222:
+    if not local_integration and payload["privacy_production_enabled"] is True and lockfile.lstat().st_mode & 0o222:
         raise ValidationError("privacy production selected Cargo lock must be read-only")
     if _sha256(lockfile) != payload["cargo_lock_sha256"]:
         raise ValidationError("artifact Cargo.lock digest does not match selected build lock")
@@ -389,7 +393,7 @@ def _validate_root_identity(root: Path, payload: dict[str, object], lockfile: Pa
         raise ValidationError("authoritative privacy bridge ABI is not exact 23")
 
 
-def _load_manifest(manifest_path: Path, root: Path, lockfile: Path) -> dict[str, object]:
+def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_integration: bool = False) -> dict[str, object]:
     _regular_file(manifest_path, "embedded artifact manifest")
     try:
         payload = json.loads(
@@ -398,12 +402,15 @@ def _load_manifest(manifest_path: Path, root: Path, lockfile: Path) -> dict[str,
         )
     except (OSError, UnicodeError, ValueError, TypeError) as error:
         raise ValidationError(f"artifact manifest is not canonical JSON: {error}") from error
-    if not isinstance(payload, dict) or set(payload) != EXPECTED_MANIFEST_FIELDS:
+    expected_fields = EXPECTED_MANIFEST_FIELDS | ({"artifact_scope"} if local_integration else set())
+    if local_integration and (not isinstance(payload, dict) or payload.get("artifact_scope") != "local-integration"):
+        raise ValidationError("local integration requires its explicit artifact scope marker")
+    if not isinstance(payload, dict) or set(payload) != expected_fields:
         actual = set(payload) if isinstance(payload, dict) else set()
         raise ValidationError(
             "artifact manifest field inventory is not exact "
-            f"(missing={sorted(EXPECTED_MANIFEST_FIELDS - actual)}, "
-            f"unexpected={sorted(actual - EXPECTED_MANIFEST_FIELDS)})"
+            f"(missing={sorted(expected_fields - actual)}, "
+            f"unexpected={sorted(actual - expected_fields)})"
         )
     if (
         not isinstance(payload["version"], str)
@@ -445,7 +452,7 @@ def _load_manifest(manifest_path: Path, root: Path, lockfile: Path) -> dict[str,
         raise ValidationError("artifact slice hash registry is not exact")
     if any(not isinstance(value, str) or SHA256.fullmatch(value) is None for value in hashes.values()):
         raise ValidationError("artifact slice hash is not canonical")
-    _validate_root_identity(root, payload, lockfile)
+    _validate_root_identity(root, payload, lockfile, local_integration=local_integration)
     return payload
 
 
@@ -703,6 +710,7 @@ def validate(
     swift_loader: Path | None = None,
     verify_repository_provenance: bool = False,
     allow_dirty_source: bool = False,
+    local_integration: bool = False,
 ) -> dict[str, object]:
     if allow_dirty_source and not verify_repository_provenance:
         raise ValidationError(
@@ -720,7 +728,13 @@ def validate(
     if manifest_path != xcframework / MANIFEST_NAME:
         raise ValidationError("embedded artifact manifest has a non-canonical location")
     _reject_internal_symlinks(xcframework)
-    payload = _load_manifest(manifest_path, root, lockfile)
+    if local_integration:
+        policy = _load_repository_module(root, "norito_bridge_local_integration.py", "local_apple_validation_policy")
+        try:
+            policy.directory(root, xcframework.parent, "artifact")
+        except (OSError, ValueError, policy.subprocess.CalledProcessError) as error:
+            raise ValidationError(str(error)) from error
+    payload = _load_manifest(manifest_path, root, lockfile, local_integration=local_integration)
 
     expected_top_level = {"Info.plist", MANIFEST_NAME, *EXPECTED_SLICES}
     if payload["privacy_production_enabled"] is True:
@@ -873,6 +887,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--swift-loader", type=Path)
     parser.add_argument("--verify-repository-provenance", action="store_true")
     parser.add_argument("--allow-dirty-source", action="store_true")
+    parser.add_argument("--local-integration", action="store_true")
     return parser
 
 
@@ -889,6 +904,7 @@ def main() -> int:
             swift_loader=arguments.swift_loader,
             verify_repository_provenance=arguments.verify_repository_provenance,
             allow_dirty_source=arguments.allow_dirty_source,
+            local_integration=arguments.local_integration,
         )
     except (OSError, UnicodeError, ValidationError) as error:
         print(f"[-] {error}", file=sys.stderr)

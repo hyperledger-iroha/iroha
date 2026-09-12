@@ -1,4 +1,8 @@
-use std::ops::Neg;
+use std::{
+    ops::Neg,
+    ptr,
+    sync::atomic::{Ordering, compiler_fence},
+};
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::{
     sync::{Mutex, MutexGuard, OnceLock},
@@ -10,11 +14,93 @@ use ff::Field;
 use ff::PrimeField;
 use group::Group;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use rayon::slice::ParallelSliceMut;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use rayon::{ThreadPool, ThreadPoolBuilder};
+
+/// Erase only the initialized, uniquely borrowed bytes owned by this module.
+fn clear_scratch_bytes(bytes: &mut [u8]) {
+    for byte in bytes {
+        // SAFETY: each byte is initialized and exclusively borrowed; zero is a valid u8.
+        unsafe { ptr::write_volatile(byte, 0) };
+    }
+}
+
+/// Own scalar encodings before filling them, including during panic unwinding.
+///
+/// Drop erases initialized byte slices before deallocation. It cannot erase
+/// caller inputs, encoding return temporaries, registers, or arithmetic scratch;
+/// process abort also does not run destructors. No field-object layout is assumed.
+struct ScalarReprs<R: AsMut<[u8]>>(Vec<R>);
+
+impl<R: Default + AsMut<[u8]>> ScalarReprs<R> {
+    fn initialized(len: usize) -> Self {
+        Self(std::iter::repeat_with(R::default).take(len).collect())
+    }
+
+    fn from_fn(len: usize, mut fill: impl FnMut(usize, &mut R)) -> Self {
+        let mut scratch = Self::initialized(len);
+        for (index, slot) in scratch.0.iter_mut().enumerate() {
+            fill(index, slot);
+        }
+        scratch
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn from_fn_parallel(len: usize, fill: impl Fn(usize, &mut R) + Send + Sync) -> Self
+    where
+        R: Send,
+    {
+        let mut scratch = Self::initialized(len);
+        scratch
+            .0
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(index, slot)| fill(index, slot));
+        scratch
+    }
+}
+
+impl<R: AsMut<[u8]>> ScalarReprs<R> {
+    fn clear(&mut self) {
+        for repr in &mut self.0 {
+            clear_scratch_bytes(repr.as_mut());
+        }
+        compiler_fence(Ordering::SeqCst);
+    }
+}
+
+impl<R: AsMut<[u8]>> Drop for ScalarReprs<R> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+/// Own the serial maximum-byte mask, which contains scalar-derived information.
+///
+/// Clearing covers this allocation on return/unwind, not stack or register copies.
+struct ScalarByteMask(Vec<u8>);
+
+impl ScalarByteMask {
+    fn zeroed(len: usize) -> Self {
+        Self(vec![0; len])
+    }
+
+    fn clear(&mut self) {
+        clear_scratch_bytes(&mut self.0);
+        compiler_fence(Ordering::SeqCst);
+    }
+}
+
+impl Drop for ScalarByteMask {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
 
 const BATCH_SIZE: usize = 64;
 // Each large-MSM window owns two `2^(c - 1)` bucket tables. Running every
@@ -462,7 +548,9 @@ impl<C: CurveAffine> Schedule<C> {
 ///
 /// This function will panic if coeffs and bases have a different length.
 pub fn msm_serial<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C], acc: &mut C::Curve) {
-    let coeffs: Vec<_> = coeffs.iter().map(|a| a.to_repr()).collect();
+    let coeffs = ScalarReprs::from_fn(coeffs.len(), |index, repr| {
+        *repr = coeffs[index].to_repr();
+    });
 
     let scalar_bits = C::Scalar::NUM_BITS;
     let c = optimal_window_size(bases.len(), scalar_bits as usize);
@@ -470,14 +558,15 @@ pub fn msm_serial<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C], acc: &mut C
     let field_byte_size = scalar_bits.div_ceil(8u32) as usize;
     // OR all coefficients in order to make a mask to figure out the maximum number of bytes used
     // among all coefficients.
-    let mut acc_or = vec![0; field_byte_size];
-    for coeff in &coeffs {
-        for (acc_limb, limb) in acc_or.iter_mut().zip(coeff.as_ref().iter()) {
+    let mut acc_or = ScalarByteMask::zeroed(field_byte_size);
+    for coeff in &coeffs.0 {
+        for (acc_limb, limb) in acc_or.0.iter_mut().zip(coeff.as_ref().iter()) {
             *acc_limb |= *limb;
         }
     }
     let max_byte_size = field_byte_size
         - acc_or
+            .0
             .iter()
             .rev()
             .position(|v| *v != 0)
@@ -525,7 +614,7 @@ pub fn msm_serial<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C], acc: &mut C
 
         let mut buckets: Vec<Bucket<C>> = vec![Bucket::None; 1 << (c - 1)];
 
-        for (coeff, base) in coeffs.iter().zip(bases.iter()) {
+        for (coeff, base) in coeffs.0.iter().zip(bases.iter()) {
             let coeff = get_booth_index(current_window, c, coeff.as_ref());
             if coeff.is_positive() {
                 buckets[coeff as usize - 1].add_assign(base);
@@ -601,7 +690,9 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     // one scalar/base copy per waiter or deadlock through Rayon work stealing.
     run_large_msm_admitted(|| {
         // coeffs to byte representation
-        let coeffs: Vec<_> = coeffs.par_iter().map(|a| a.to_repr()).collect();
+        let coeffs = ScalarReprs::from_fn_parallel(coeffs.len(), |index, repr| {
+            *repr = coeffs[index].to_repr();
+        });
         // copy bases into `Affine` to skip in on curve check for every access
         let bases_local: Vec<_> = bases.par_iter().map(Affine::from).collect();
 
@@ -624,7 +715,7 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
                     // schedular for affine addition
                     let mut sched = Schedule::new(c);
 
-                    for (base_idx, coeff) in coeffs.iter().enumerate() {
+                    for (base_idx, coeff) in coeffs.0.iter().enumerate() {
                         let buck_idx = get_booth_index(w, c, coeff.as_ref());
 
                         if buck_idx != 0 {
@@ -703,6 +794,178 @@ mod test {
     use group::{Curve, Group};
     use pasta_curves::arithmetic::CurveAffine;
     use rand_core::OsRng;
+
+    #[derive(Default)]
+    struct ObservedRepr {
+        bytes: [u8; 32],
+        observations: Option<std::sync::Arc<std::sync::Mutex<Vec<[u8; 32]>>>>,
+    }
+
+    impl AsMut<[u8]> for ObservedRepr {
+        fn as_mut(&mut self) -> &mut [u8] {
+            &mut self.bytes
+        }
+    }
+
+    impl Drop for ObservedRepr {
+        fn drop(&mut self) {
+            if let Some(observations) = &self.observations {
+                // Observe bytes while the representation is alive, before Vec frees it.
+                observations.lock().unwrap().push(self.bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_repr_scratch_clears_before_element_drop_on_success_and_unwind() {
+        use std::sync::{Arc, Mutex};
+
+        for panic_at in [None, Some(3)] {
+            let observations = Arc::new(Mutex::new(Vec::new()));
+            let outcome = std::panic::catch_unwind(|| {
+                let scratch = super::ScalarReprs::<ObservedRepr>::from_fn(8, |index, repr| {
+                    repr.observations = Some(Arc::clone(&observations));
+                    repr.bytes.fill((index + 1) as u8);
+                    if panic_at == Some(index) {
+                        panic!("injected scalar encoding panic");
+                    }
+                });
+                assert_eq!(scratch.0.len(), 8);
+                assert_eq!(scratch.0[3].bytes, [4; 32]);
+            });
+            assert_eq!(outcome.is_err(), panic_at.is_some());
+            let observations = observations.lock().unwrap();
+            assert_eq!(observations.len(), if panic_at.is_some() { 4 } else { 8 });
+            assert!(observations.iter().all(|bytes| *bytes == [0; 32]));
+        }
+        let mut reprs = super::ScalarReprs::from_fn(8, |index, repr: &mut [u8; 32]| {
+            *repr = [(index + 1) as u8; 32];
+        });
+        let capacity = reprs.0.capacity();
+        reprs.clear();
+        assert_eq!(reprs.0.capacity(), capacity);
+        assert_eq!(reprs.0, vec![[0; 32]; 8]);
+        let empty = super::ScalarReprs::<[u8; 32]>::from_fn(0, |_, _| unreachable!());
+        assert!(empty.0.is_empty());
+    }
+
+    #[test]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn parallel_scalar_repr_scratch_clears_partial_initialization_on_unwind() {
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        for threads in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            for should_panic in [false, true] {
+                let observations = Arc::new(Mutex::new(Vec::new()));
+                let filled = AtomicUsize::new(0);
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    pool.install(|| {
+                        let scratch = super::ScalarReprs::<ObservedRepr>::from_fn_parallel(
+                            32,
+                            |index, repr| {
+                                repr.observations = Some(Arc::clone(&observations));
+                                repr.bytes.fill((index + 1) as u8);
+                                filled.fetch_add(1, Ordering::SeqCst);
+                                if should_panic && index == 3 {
+                                    panic!("injected parallel scalar encoding panic");
+                                }
+                            },
+                        );
+                        assert_eq!(scratch.0.len(), 32);
+                        for (index, repr) in scratch.0.iter().enumerate() {
+                            assert_eq!(repr.bytes, [(index + 1) as u8; 32]);
+                        }
+                    });
+                }));
+                assert_eq!(outcome.is_err(), should_panic);
+                let observations = observations.lock().unwrap();
+                assert_eq!(observations.len(), filled.load(Ordering::SeqCst));
+                assert!(!observations.is_empty());
+                assert!(observations.iter().all(|bytes| *bytes == [0; 32]));
+                if !should_panic {
+                    assert_eq!(observations.len(), 32);
+                } else if threads == 1 {
+                    assert_eq!(observations.len(), 4);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_byte_mask_clear_preserves_shape_and_zeroes_every_byte() {
+        let mut mask = super::ScalarByteMask::zeroed(32);
+        assert_eq!(mask.0, vec![0; 32]);
+        mask.0.fill(0xff);
+        let capacity = mask.0.capacity();
+        mask.clear();
+        assert_eq!(mask.0.capacity(), capacity);
+        assert_eq!(mask.0, vec![0; 32]);
+        super::ScalarByteMask::zeroed(0).clear();
+    }
+
+    #[test]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn scalar_scratch_cleanup_preserves_pasta_msm_across_dispatch_and_threads() {
+        use rand::{SeedableRng, rngs::StdRng};
+
+        fn check<C: CurveAffine>() {
+            let mut rng = StdRng::seed_from_u64(0x4d53_4d5f_5749_5045);
+            for count in [0, 1, 17, 4096] {
+                let bases = (0..count)
+                    .map(|index| {
+                        (C::Curve::generator() * C::Scalar::from((index % 7 + 1) as u64))
+                            .to_affine()
+                    })
+                    .collect::<Vec<_>>();
+                for all_zero in [true, false] {
+                    let scalars = (0..count)
+                        .map(|index| {
+                            if all_zero {
+                                C::Scalar::ZERO
+                            } else {
+                                match index % 4 {
+                                    0 => C::Scalar::ZERO,
+                                    1 => C::Scalar::ONE,
+                                    2 => -C::Scalar::ONE,
+                                    _ => C::Scalar::random(&mut rng),
+                                }
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    // Independent sum of ordinary group scalar multiplications,
+                    // not another invocation of either MSM implementation.
+                    let expected = bases
+                        .iter()
+                        .zip(&scalars)
+                        .fold(C::Curve::identity(), |sum, (base, scalar)| {
+                            sum + *base * scalar
+                        });
+                    let mut serial = C::Curve::identity();
+                    super::msm_serial(&scalars, &bases, &mut serial);
+                    assert_eq!(serial, expected);
+                    for threads in [1, 2, 4] {
+                        let pool = rayon::ThreadPoolBuilder::new()
+                            .num_threads(threads)
+                            .build()
+                            .unwrap();
+                        pool.install(|| {
+                            assert_eq!(super::msm_parallel(&scalars, &bases), expected);
+                            assert_eq!(super::msm_best(&scalars, &bases), expected);
+                        });
+                    }
+                }
+            }
+        }
+        check::<crate::pasta::EpAffine>();
+        check::<crate::pasta::EqAffine>();
+    }
 
     #[test]
     fn threadless_msm_matches_group_law_across_large_window_boundary() {

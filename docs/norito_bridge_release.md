@@ -158,10 +158,15 @@ that workflow for local release verification.
    reauthenticates that final package before compiling both pods. Do not hand-edit
    a release URL or checksum, and do not place generated package outputs in Git.
 
-5. **Regenerate headers if the bridge gained new exports.** The Swift bridge now exposes
-   `connect_norito_set_acceleration_config` so `AccelerationSettings` can toggle Metal /
-   GPU backends. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
-   matches `crates/connect_norito_bridge/include/connect_norito_bridge.h` before zipping.
+5. **Maintain the source header when exports or enum inventories change.** The build
+   copies `crates/connect_norito_bridge/include/connect_norito_bridge.h` into each
+   XCFramework slice; it does not generate its enums from Rust. Run
+   `python3 -m unittest scripts.tests.kagemusha_package_surface_test` to check the
+   exact coordinator method inventory across C, Rust, Swift, Kotlin and the shared
+   fixture. Method 11 is `BeginObservation`; the contract probe still returns ten
+   words. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
+   matches the source header before zipping. Header hashes and exported-symbol
+   inventories alone do not establish enum parity.
 
 6. Run the Swift validation suite before tagging:
 
@@ -232,3 +237,45 @@ and both same-version specs are published in dependency order and a clean public
   generated framework.
 - Release logs and artifact manifests retain the source fingerprint, ABI,
   feature state, required-symbol inventory, and per-slice hashes.
+
+
+## Checkout-local Swift integration
+
+`--local-integration` selects one non-release lane below the current checkout's
+ignored `target/norito-bridge-local/` directory. Create owned canonical mode-0700
+`cargo`, `build`, `artifacts`, and `projections` directories there, and use the first
+three as the explicit Cargo, build, and output roots. Reuse this fixed Cargo lane.
+The builder still performs all five real Apple builds, source/lock/tool seals,
+consumer links, ABI-23 checks and atomic artifact exchange. It does not clean Cargo.
+Select the current root graph explicitly with `--lockfile-path "$PWD/Cargo.lock"`
+for the builder, pin owner and artifact checker. This local-only route retains
+`--locked --offline` and the source/lock identity checks; it never changes the
+root lock or substitutes the release graph. Default privacy release builds still
+require their read-only external canonical graph snapshot. If source inputs are
+dirty, also pass the existing `--allow-dirty-source`; scope and dirty admission
+are independent. Clean local builds retain their local-only scope.
+
+The embedded `artifact_scope: "local-integration"` field is mandatory in this mode.
+Pass `--local-integration` to the pin owner and Apple-only artifact checker too.
+After reviewing any pin projection, select the canonical `artifacts` directory
+with the existing `MOBILE_SDK_APPLE_ARTIFACT_DIR` for ordinary Swift unit tests.
+`MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1` continues to reject this directory.
+No runtime proof capability toggle or alternate native library is introduced.
+Archive output, CI handoff and the frozen release corridor are forbidden in local
+mode. Default validators, archive owners and publication continue to reject the
+local-only manifest field even if its files are copied outside the checkout.
+This is local integration evidence; release builds retain external writable output
+roots and an immutable reviewed source tree.
+
+The builder checks a prospective loader and leaves the maintained fallback pins
+unchanged. Generate a canonical `--output` pin projection into `projections` using
+the exact current loader preimage digest, then apply only its three digest literal
+changes through the guarded source workflow. For an already-dirty tree at the same
+HEAD, this preserves both the normalized source fingerprint and dirty-state truth;
+re-run the canonical pin check and artifact checker before Swift tests. For a clean
+tree, pin integration changes dirty-state truth: use the existing exact mechanical
+pin-child commit procedure, or rebuild and requalify an explicitly dirty local
+artifact. All other input changes require a native rebuild. Ordinary `swift test`
+then links the real binary target, and `NativeBridge` validates the symbols from
+the executable/`RTLD_DEFAULT`; no replacement loader or projected Swift package is
+used. Physical-device qualification remains separate from these host unit tests.

@@ -30,6 +30,12 @@ pub use coordinator_operation_store::{
     KagemushaCoordinatorSenderIntentRecoveryV1,
 };
 mod handoff_verification;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod hardware_transaction_journal;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub use hardware_transaction_journal::{
+    KagemushaHardwareTransactionJournalV1, KagemushaHardwareTransactionTransportV1,
+};
 mod mint_fold_private_inputs;
 mod mint_inbox;
 mod mint_inbox_operations;
@@ -125,7 +131,7 @@ use thiserror::Error;
 
 use self::sparse_merkle::ExactConsumedCreditIndex;
 #[cfg(unix)]
-pub(crate) use self::sparse_merkle::authenticated_history::disk_history_store::{
+pub use self::sparse_merkle::authenticated_history::disk_history_store::{
     KagemushaDiskAuthenticatedHistoryStoreV1, KagemushaHistoryDeviceCredentialsV1,
 };
 pub use self::sparse_merkle::authenticated_history::{

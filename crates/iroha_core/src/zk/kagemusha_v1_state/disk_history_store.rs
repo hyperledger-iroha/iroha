@@ -7,6 +7,7 @@
 //! Committed nodes and terminal tombstones are retained without count, age, or byte eviction.
 
 use super::*;
+use crate::zk::kagemusha_v1_state::KagemushaLaneIdV1;
 #[cfg(test)]
 use crate::zk::kagemusha_v1_state::private_journal::{
     FRAME_HEADER_BYTES, JournalFileVersion, TestPersistenceFailure,
@@ -14,6 +15,7 @@ use crate::zk::kagemusha_v1_state::private_journal::{
 use crate::zk::kagemusha_v1_state::private_journal::{
     PrivateJournal, PrivateJournalError, PrivateJournalFormat,
 };
+use iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -32,21 +34,47 @@ const JOURNAL_FORMAT: PrivateJournalFormat = PrivateJournalFormat {
 /// obtains these bindings from authenticated device/release provisioning, including previous
 /// epochs needed to verify retained history. No signing key or generated default is accepted.
 #[derive(Clone)]
-pub(crate) struct KagemushaHistoryDeviceCredentialsV1 {
+pub struct KagemushaHistoryDeviceCredentialsV1 {
     profile_id: DigestV1,
     epoch_keys: BTreeMap<u128, KagemushaDevicePublicKeyV1>,
 }
 
 impl KagemushaHistoryDeviceCredentialsV1 {
+    /// Authenticate the complete retained epoch key inventory against the independently pinned
+    /// release and exact wallet lane before any host history is opened. Historical credentials
+    /// are checked at their original issuance; recovery does not renew their monetary validity.
+    pub fn authenticate(
+        release: &KagemushaAuthenticatedReleaseV1,
+        lane: &KagemushaLaneIdV1,
+        profile_id: DigestV1,
+        credentials: impl IntoIterator<
+            Item = iroha_data_model::kagemusha::KagemushaHardwareCredentialV1,
+        >,
+    ) -> Result<Self, KagemushaHistoryStoreErrorV1> {
+        lane.validate()
+            .map_err(|_| KagemushaHistoryStoreErrorV1::InvalidCertificate)?;
+        let profile = release
+            .enabled_profile(profile_id)
+            .ok_or(KagemushaHistoryStoreErrorV1::InvalidCertificate)?;
+        let mut keys = Vec::new();
+        for credential in credentials {
+            credential
+                .validate_against_profile(&profile.hardware_profile)
+                .map_err(|_| KagemushaHistoryStoreErrorV1::InvalidCertificate)?;
+            if credential.network_id != lane.network_id
+                || credential.lane_commitment != lane.device_lane_id
+                || credential.suite_id != profile.suite_id
+            {
+                return Err(KagemushaHistoryStoreErrorV1::InvalidCertificate);
+            }
+            keys.push((
+                u128::from(credential.hardware_epoch_generation),
+                credential.device_public_key,
+            ));
+        }
+        Self::new(profile_id, keys)
+    }
     /// Construct one exact profile/epoch credential history, rejecting duplicate epochs.
-    // TODO: Supply pinned credential history from the product coordinator's provisioning owner.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the product coordinator has not wired durable history provisioning"
-        )
-    )]
     pub(crate) fn new(
         profile_id: DigestV1,
         keys: impl IntoIterator<Item = (u128, KagemushaDevicePublicKeyV1)>,
@@ -118,7 +146,7 @@ enum JournalRecordV1 {
 
 /// Descriptor-locked, append-only disk implementation of Core's authenticated-history contract.
 /// The shared private journal owns durable bytes; this layer alone verifies history certificates.
-pub(crate) struct KagemushaDiskAuthenticatedHistoryStoreV1 {
+pub struct KagemushaDiskAuthenticatedHistoryStoreV1 {
     state: KagemushaMemoryAuthenticatedHistoryStoreV1,
     wal: PrivateJournal,
     credentials: KagemushaHistoryDeviceCredentialsV1,
@@ -127,15 +155,7 @@ pub(crate) struct KagemushaDiskAuthenticatedHistoryStoreV1 {
 
 impl KagemushaDiskAuthenticatedHistoryStoreV1 {
     /// Create new private history; existing paths are never reset or reused.
-    // TODO: Wire new durable lanes into the product coordinator's verified bootstrap flow.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the product coordinator has not wired durable lane creation"
-        )
-    )]
-    pub(crate) fn create_new(
+    pub fn create_new(
         path: &Path,
         lane_binding: DigestV1,
         credentials: KagemushaHistoryDeviceCredentialsV1,
@@ -160,7 +180,7 @@ impl KagemushaDiskAuthenticatedHistoryStoreV1 {
 
     /// Recover host history without creating missing files or granting monetary authority.
     /// The owner must restore the full snapshot against the latest hardware anchor afterward.
-    pub(crate) fn open_existing(
+    pub fn open_existing(
         path: &Path,
         lane_binding: DigestV1,
         credentials: KagemushaHistoryDeviceCredentialsV1,

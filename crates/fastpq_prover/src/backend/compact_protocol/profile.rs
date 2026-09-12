@@ -170,7 +170,7 @@ impl Binding {
         leaves: &[Digest],
         siblings: &[Digest],
     ) -> Result<crate::backend::merkle_multiproof::MultiproofWork> {
-        plan.verify_with(root, leaves, siblings, |level, index, left, right| {
+        plan.verify_parallel_with(root, leaves, siblings, |level, index, left, right| {
             self.parent(role, level, index, left, right)
         })
     }
@@ -526,7 +526,7 @@ mod tests {
         let air = relation();
         let geometry = Geometry::new(&air).unwrap();
         let binding = Binding::new(&air, &geometry).unwrap();
-        for (round, count, width) in [(15, 8, 2), (16, 4, 2), (17, 1, 4)] {
+        for (round, count, width) in [(9, 512, 2), (15, 8, 2), (16, 4, 2), (17, 1, 4)] {
             let role = MerkleTreeRoleV1::Fri(round as u32);
             let leaves: Vec<_> = (0..count)
                 .map(|i| {
@@ -549,9 +549,9 @@ mod tests {
                 &indices,
                 MultiproofLimits {
                     max_depth: 19,
-                    max_queried_leaves: 8,
-                    max_siblings: 32,
-                    max_parent_hashes: 32,
+                    max_queried_leaves: 375,
+                    max_siblings: 1_024,
+                    max_parent_hashes: 4_096,
                 },
             )
             .unwrap();
@@ -565,6 +565,16 @@ mod tests {
                 binding
                     .verify_tree(&plan, role, tree.root(), &selected, &siblings)
                     .unwrap(),
+                plan.work()
+            );
+            assert_eq!(
+                plan.verify_with(
+                    tree.root(),
+                    &selected,
+                    &siblings,
+                    |level, index, left, right| { binding.parent(role, level, index, left, right) }
+                )
+                .unwrap(),
                 plan.work()
             );
             assert!(

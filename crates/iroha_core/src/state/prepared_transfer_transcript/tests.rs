@@ -274,7 +274,7 @@ fn incremental_singleton_matches_the_fixed_prepared_occurrence() {
         .prepare_transfer_occurrence(&ALICE_ID, hash, vec![delta()])
         .unwrap();
     tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 3, |tx, append| {
-        append(delta());
+        append(delta())?;
         assert!(tx.pending_transfer_transcripts.is_empty());
         assert!(
             tx.pending_fastpq_source_captures
@@ -315,8 +315,8 @@ fn incremental_empty_discards_initial_capture_error_and_multi_preserves_one_grou
         .prepare_transfer_occurrence(&ALICE_ID, hash, vec![delta(), delta()])
         .unwrap();
     tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 3, |tx, append| {
-        append(delta());
-        append(delta());
+        append(delta())?;
+        append(delta())?;
         assert!(tx.pending_transfer_transcripts.is_empty());
         Ok(())
     })
@@ -344,8 +344,8 @@ fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
     tx.current_lane_id = Some(LaneId::new(999));
     let result: Result<(), Error> =
         tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 3, |tx, append| {
-            append(delta());
-            append(delta());
+            append(delta())?;
+            append(delta())?;
             assert!(tx.pending_transfer_transcripts.is_empty());
             Err(Error::InvariantViolation(
                 "later movement or outcome failed".into(),
@@ -377,4 +377,163 @@ fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
             .fastpq_transcripts
             .is_empty()
     );
+}
+
+#[test]
+fn incremental_preparation_limit_rejects_before_the_next_movement() {
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let state = state();
+    let mut block = state.block(header());
+    let mut tx = block.transaction();
+    let hash = Hash::new(b"incremental preparation bound");
+    tx.tx_call_hash = Some(hash);
+    let mut movements = 0;
+    let result = tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 1, |_, append| {
+        append(delta())?;
+        movements += 1;
+        append(delta())?;
+        movements += 1;
+        Ok(())
+    });
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("declared entry bound")
+    );
+    assert_eq!(movements, 1);
+    assert!(tx.pending_transfer_transcripts.is_empty());
+    assert!(
+        tx.pending_fastpq_source_captures
+            .sources()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn incremental_ignored_preparation_error_cannot_publish_a_partial_occurrence() {
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let state = state();
+    let mut block = state.block(header());
+    let mut tx = block.transaction();
+    let hash = Hash::new(b"ignored incremental preparation error");
+    tx.tx_call_hash = Some(hash);
+    for limit in [0, 1] {
+        let result =
+            tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, limit, |_, append| {
+                let _ = append(delta());
+                assert!(append(delta()).is_err());
+                Ok(())
+            });
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("declared entry bound")
+        );
+        assert!(tx.pending_transfer_transcripts.is_empty());
+        assert!(
+            tx.pending_fastpq_source_captures
+                .sources()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn incremental_preparation_failure_rolls_back_real_transfers_with_the_entry() {
+    use crate::smartcontracts::Execute as _;
+    use iroha_data_model::isi::Transfer;
+
+    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
+    let definition_id = delta().asset_definition;
+    let source = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+    let destination = AssetId::new(definition_id.clone(), BOB_ID.clone());
+    let world = World::with_assets(
+        [Domain::new(domain_id).build(&ALICE_ID)],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(BOB_ID.clone()).build(&BOB_ID),
+        ],
+        [AssetDefinition::numeric(
+            definition_id,
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID)],
+        [
+            Asset::new(source.clone(), Quantity::from(10_u32)),
+            Asset::new(destination.clone(), Quantity::zero()),
+        ],
+        [],
+    );
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut block = state.block(header());
+    let prior_hash = Hash::new(b"prior accepted transfer");
+    {
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(prior_hash);
+        Transfer::asset_quantity(source.clone(), 1_u32, BOB_ID.clone())
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        tx.apply();
+    }
+    let prior_events = block.world.external_event_buf.clone();
+    let prior_transcripts = block.fastpq_transcripts.clone();
+    let prior_captures = block.captured_fastpq_transcript_sources().unwrap().clone();
+    let prior_fragments = block.committed_fragment_count();
+    {
+        let mut tx = block.transaction();
+        let hash = Hash::new(b"entry rejected during preparation");
+        tx.tx_call_hash = Some(hash);
+        let result =
+            tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 1, |tx, append| {
+                let mut accepted = delta();
+                accepted.from_balance_before = Quantity::from(9_u32);
+                accepted.from_balance_after = Quantity::from(6_u32);
+                accepted.to_balance_before = Quantity::from(1_u32);
+                accepted.to_balance_after = Quantity::from(4_u32);
+                append(accepted.clone())?;
+                Transfer::asset_quantity(source.clone(), 3_u32, BOB_ID.clone())
+                    .execute(&ALICE_ID, tx)?;
+                assert_eq!(
+                    tx.world.assets().get(&source).unwrap().0,
+                    Quantity::from(6_u32)
+                );
+                append(accepted)?;
+                Ok(())
+            });
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("declared entry bound")
+        );
+        // The entry owner discards its complete physical transaction, including
+        // real movements made before a later preparation failure.
+        drop(tx);
+    }
+    assert_eq!(
+        block.world.assets().get(&source).unwrap().0,
+        Quantity::from(9_u32)
+    );
+    assert_eq!(
+        block.world.assets().get(&destination).unwrap().0,
+        Quantity::from(1_u32)
+    );
+    assert_eq!(block.world.external_event_buf, prior_events);
+    assert_eq!(block.fastpq_transcripts, prior_transcripts);
+    assert_eq!(
+        block.captured_fastpq_transcript_sources().unwrap(),
+        &prior_captures
+    );
+    assert_eq!(block.committed_fragment_count(), prior_fragments);
 }

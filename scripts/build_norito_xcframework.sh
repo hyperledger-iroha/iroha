@@ -114,6 +114,7 @@ run_python312_clean() {
 #   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --archive-output /absolute/NoritoBridge.xcframework.zip
 #   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled
 #   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled --allow-dirty-source
+#   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled --local-integration --allow-dirty-source
 #   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-handoff-only
 #   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-apple-slice aarch64-apple-ios
 #   scripts/build_norito_xcframework.sh --lockfile-path "$PWD/Cargo.lock" --ci-handoff-only \
@@ -121,8 +122,8 @@ run_python312_clean() {
 #     --ci-apple-slice-sha256 aarch64-apple-ios=<sha256> [...]
 #
 # NORITO_BRIDGE_OUT_DIR and NORITO_BRIDGE_BUILD_DIR are mandatory external
-# cache roots. The first-release owner never creates build or artifact output
-# inside the reviewed repository.
+# cache roots by default. Explicit --local-integration admits only the fixed
+# ignored checkout lane; its output cannot enter release or archive publication.
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -139,6 +140,17 @@ fi
 OUT_DIR="$NORITO_BRIDGE_OUT_DIR"
 BUILD_DIR="$NORITO_BRIDGE_BUILD_DIR"
 PUBLISH_ROOT=""
+# This tool-only mode never enters archive, CI handoff, or release publication.
+LOCAL_INTEGRATION=0
+for argument in "$@"; do
+  if [[ "$argument" == "--local-integration" ]]; then
+    LOCAL_INTEGRATION=1
+  fi
+done
+LOCAL_INTEGRATION_ARGS=()
+if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+  LOCAL_INTEGRATION_ARGS=(--local-integration)
+fi
 
 reject_retired_mode() {
   local retired_name="$1"
@@ -165,6 +177,10 @@ if [[ -z "${CARGO_TARGET_DIR:-}" || -z "${RUSTC:-}" || -z "${RUSTDOC:-}" ]]; the
   echo "[-] NoritoBridge requires explicit CARGO_TARGET_DIR, RUSTC, and RUSTDOC" >&2
   exit 1
 fi
+if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+  CARGO_TARGET_DIR="$(run_python312_clean "$ROOT_DIR/scripts/norito_bridge_local_integration.py" \
+    --root "$ROOT_DIR" --path "$CARGO_TARGET_DIR" --role cargo)" || exit 1
+else
 CARGO_TARGET_DIR="$(run_python312_clean - "$CARGO_TARGET_DIR" "$ROOT_DIR" <<'PY'
 import os
 from pathlib import Path
@@ -196,9 +212,17 @@ if (
 print(candidate)
 PY
 )" || exit 1
+fi
 export CARGO_TARGET_DIR
 
 canonical_writable_directory() {
+  if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+    local role=artifact
+    [[ "$2" != "NORITO_BRIDGE_BUILD_DIR" ]] || role=build
+    run_python312_clean "$ROOT_DIR/scripts/norito_bridge_local_integration.py" \
+      --root "$ROOT_DIR" --path "$1" --role "$role"
+    return
+  fi
   run_python312_clean - "$1" "$2" "$ROOT_DIR" <<'PY'
 import os
 from pathlib import Path
@@ -394,6 +418,7 @@ while [[ $# -gt 0 ]]; do
     --privacy-production-enabled)
       PRIVACY_PRODUCTION_ENABLED=1
       ;;
+    --local-integration) ;;
     --allow-dirty-source)
       ALLOW_DIRTY_SOURCE=1
       ;;
@@ -447,7 +472,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 --lockfile-path <absolute-path> [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--ci-handoff-only] [--ci-apple-slice <target>] [--ci-assemble-apple-slices <absolute-dir> --ci-apple-slice-sha256 <target=digest> ...]" >&2
+      echo "    Usage: $0 --lockfile-path <absolute-path> [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source] [--local-integration] [--ci-handoff-only] [--ci-apple-slice <target>] [--ci-assemble-apple-slices <absolute-dir> --ci-apple-slice-sha256 <target=digest> ...]" >&2
       exit 1
       ;;
   esac
@@ -557,6 +582,14 @@ if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
   done
 fi
 
+if [[ "$LOCAL_INTEGRATION" == "1" ]] && \
+    [[ -n "$ARCHIVE_OUTPUT" || "$CI_HANDOFF_ONLY" == "1" || -n "$CI_APPLE_SLICE" \
+      || -n "$CI_ASSEMBLE_APPLE_SLICES" || "${#CI_APPLE_SLICE_SHA256[@]}" != "0" \
+      || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-0}" == "1" \
+      || -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+  echo "[-] Local integration cannot archive, hand off, or enter a release corridor" >&2
+  exit 1
+fi
 if [[ -n "$ARCHIVE_OUTPUT" ]]; then
   ARCHIVE_OUTPUT="$(run_python312_clean - \
     "$ARCHIVE_OUTPUT" "${SOURCE_DATE_EPOCH:-}" "$ROOT_DIR" <<'PY'
@@ -680,6 +713,9 @@ fi
 MOBILE_CARGO_HOME="$USER_HOME_DIR/.cargo"
 MOBILE_RUSTUP_HOME="$USER_HOME_DIR/.rustup"
 MOBILE_TMPDIR="/tmp"
+if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+  MOBILE_TMPDIR="$BUILD_DIR"
+fi
 for directory in "$USER_HOME_DIR" "$MOBILE_CARGO_HOME" "$MOBILE_RUSTUP_HOME" "$MOBILE_TMPDIR"; do
   [[ "$directory" == /* ]] || {
     echo "[-] NoritoBridge build directories must be absolute: $directory" >&2
@@ -772,7 +808,7 @@ run_isolated_python() {
 }
 
 selected_cargo_lock_sha256() {
-  run_isolated_python - "$SOURCE_SEAL_SCRIPT" "$CARGO_LOCKFILE" "$PRIVACY_PRODUCTION_ENABLED" <<'PY_LOCK'
+  run_isolated_python - "$SOURCE_SEAL_SCRIPT" "$CARGO_LOCKFILE" "$PRIVACY_PRODUCTION_ENABLED" "$LOCAL_INTEGRATION" "$ROOT_DIR" <<'PY_LOCK'
 import importlib.util
 from pathlib import Path
 import sys
@@ -783,10 +819,13 @@ if spec is None or spec.loader is None:
 owner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owner)
 try:
-    identity = owner.lockfile_identity(Path(sys.argv[2]))
+    selected = owner.selected_lockfile_path(Path(sys.argv[5]), Path(sys.argv[2]))
+    identity = owner.lockfile_identity(selected)
 except RuntimeError as error:
     raise SystemExit(str(error)) from error
-if sys.argv[3] == "1" and identity[2] & 0o222:
+if sys.argv[4] == "1" and selected != Path(sys.argv[5]) / "Cargo.lock":
+    raise SystemExit("local integration requires the explicitly selected root Cargo.lock")
+if sys.argv[3] == "1" and sys.argv[4] != "1" and identity[2] & 0o222:
     raise SystemExit("privacy production selected Cargo lock must be read-only")
 print(identity[-1])
 PY_LOCK
@@ -794,7 +833,8 @@ PY_LOCK
 
 CARGO_LOCK_SHA256_START="$(selected_cargo_lock_sha256)"
 source "$CARGO_GRAPH_OWNER"
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock" ]]; then
+if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "$LOCAL_INTEGRATION" != "1" \
+      && "$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock" ]]; then
   echo "[-] Privacy production builds require an explicit external canonical graph snapshot" >&2
   exit 1
 fi
@@ -1855,6 +1895,17 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   }
 }
 EOF
+if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+  run_isolated_python - "$PUBLISH_MANIFEST" <<'PY'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest["artifact_scope"] = "local-integration"
+path.write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+fi
 echo "[+] Wrote staged artifact manifest: $PUBLISH_MANIFEST" >&2
 ln -s "$CANONICAL_MANIFEST_RELATIVE_TARGET" "$PUBLISH_MANIFEST_LINK"
 PUBLISH_PROSPECTIVE_LOADER="$PUBLISH_ROOT/.NoritoBridge.prospective.NativeBridge.swift"
@@ -1862,6 +1913,7 @@ SWIFT_PIN_PREIMAGE_SHA256="$(
   sha256_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
 )"
 SWIFT_PIN_OWNER_ARGUMENTS=(
+  "${LOCAL_INTEGRATION_ARGS[@]+"${LOCAL_INTEGRATION_ARGS[@]}"}"
   --root "$ROOT_DIR"
   --artifact-dir "$PUBLISH_ROOT"
   --lockfile-path "$CARGO_LOCKFILE"
@@ -2078,7 +2130,8 @@ run_isolated_python \
   --manifest "$PUBLISH_MANIFEST" \
   --manifest-link "$PUBLISH_MANIFEST_LINK" \
   --expected-link-target "$CANONICAL_MANIFEST_RELATIVE_TARGET" \
-  --swift-loader "$PUBLISH_PROSPECTIVE_LOADER"
+  --swift-loader "$PUBLISH_PROSPECTIVE_LOADER" \
+  "${LOCAL_INTEGRATION_ARGS[@]+"${LOCAL_INTEGRATION_ARGS[@]}"}"
 
 assert_bridge_source_seal "staged artifact validation"
 
@@ -2092,13 +2145,15 @@ else
       MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
       MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
       MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
-      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only
+      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only \
+        "${LOCAL_INTEGRATION_ARGS[@]+"${LOCAL_INTEGRATION_ARGS[@]}"}"
   else
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
       MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
       MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
       MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
-      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only
+      bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only \
+        "${LOCAL_INTEGRATION_ARGS[@]+"${LOCAL_INTEGRATION_ARGS[@]}"}"
   fi
 
   assert_bridge_source_seal "pre-publication artifact verification"

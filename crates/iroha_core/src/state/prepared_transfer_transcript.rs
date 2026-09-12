@@ -101,7 +101,8 @@ impl StateTransaction<'_, '_> {
     ///
     /// The independent-batch caller keeps its interleaved preparation and balance/control
     /// application order. It appends each exact accepted delta immediately before that
-    /// leg's plan is applied, and propagates every apply error out of the whole callback.
+    /// leg's plan is applied, and propagates every preparation or apply error out of the
+    /// whole callback. A preparation error must not become an independent-leg rejection.
     /// Rejected leg preparation must not append. These ordering and stable execution-context
     /// requirements are caller obligations; the scoped `FnMut` does not enforce them by type.
     ///
@@ -110,7 +111,13 @@ impl StateTransaction<'_, '_> {
     /// digest. The same Vec, values and capture result are staged once after whole-body
     /// success. An empty body never stages a transcript or capture error.
     ///
-    /// No quota is reserved, callback mutations are not rolled back by this helper, and
+    /// The supplied capacity is an inclusive accepted-delta bound derived from the
+    /// instruction's entry count. Storage grows only for accepted deltas; rejected legs
+    /// do not preallocate a full transcript. Exceeding the bound rejects the whole body,
+    /// even if a callback incorrectly ignores its preparation error.
+    ///
+    /// TODO: reserve the exact complete-entry source budget at this fallible preparation
+    /// boundary. Callback mutations still require the caller's transaction rollback;
     /// final accumulator/witness/pending-vector publication can still allocate.
     ///
     /// # Errors
@@ -122,7 +129,10 @@ impl StateTransaction<'_, '_> {
         authority: &AccountId,
         batch_hash: Hash,
         capacity: usize,
-        apply: impl FnOnce(&mut Self, &mut dyn FnMut(TransferDeltaTranscript)) -> Result<T, Error>,
+        apply: impl FnOnce(
+            &mut Self,
+            &mut dyn FnMut(TransferDeltaTranscript) -> Result<(), Error>,
+        ) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let capture = self.fastpq_source_context.capture_transcript(
             self.tx_call_hash,
@@ -131,10 +141,21 @@ impl StateTransaction<'_, '_> {
             self.current_dataspace_id,
             *self.committed_fragments,
         );
-        let mut empty_deltas = Vec::with_capacity(capacity);
+        let mut empty_deltas = Vec::new();
         let mut occurrence: Option<PreparedTransferOccurrence> = None;
+        let mut preparation_failed = false;
+        let bound_error = || {
+            Error::InvariantViolation("transfer transcript exceeds its declared entry bound".into())
+        };
         let applied = {
             let mut append = |delta: TransferDeltaTranscript| {
+                let count = occurrence
+                    .as_ref()
+                    .map_or(0, |entry| entry.transcript.deltas.len());
+                if preparation_failed || count >= capacity {
+                    preparation_failed = true;
+                    return Err(bound_error());
+                }
                 if let Some(occurrence) = &mut occurrence {
                     occurrence.transcript.poseidon_preimage_digest = None;
                     occurrence.transcript.deltas.push(delta);
@@ -153,9 +174,13 @@ impl StateTransaction<'_, '_> {
                         capture,
                     });
                 }
+                Ok(())
             };
             apply(self, &mut append)?
         };
+        if preparation_failed {
+            return Err(bound_error());
+        }
         self.stage_transfer_occurrence(occurrence);
         Ok(applied)
     }

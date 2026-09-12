@@ -6939,7 +6939,7 @@ pub mod isi {
                             }
                             Err(error) => return Err(error),
                         };
-                        prepare_delta(plan.prechecked_delta.clone());
+                        prepare_delta(plan.prechecked_delta.clone())?;
                         let applied = plan.apply(state_transaction)?;
                         #[allow(clippy::float_arithmetic)]
                         #[cfg(feature = "telemetry")]

@@ -69,6 +69,9 @@ pub(crate) mod pasta_native_poseidon;
 pub(crate) mod pasta_sha256;
 /// Base-only SHA-256 compression candidate for resource-qualified internal hash proofs.
 pub(crate) mod pasta_sha256_table8;
+/// Core-owned confidential polynomial storage foundation for the consuming prover.
+#[cfg(feature = "zk-halo2-ipa")]
+pub mod kagemusha_polynomial_store_v1;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
 #[cfg(feature = "zk-preverify")]
