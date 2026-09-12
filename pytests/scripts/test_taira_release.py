@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -80,6 +81,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "source_snapshot", return_value=[]), \
              patch.object(release, "verify_signed_source", return_value="b" * 40), \
              patch.object(release, "commit_entries", return_value=b""), \
+             patch.object(release, "signed_source_size", return_value=0), \
              patch.object(release, "capture_source", return_value=self.source), \
              patch.object(release, "frozen_snapshot", side_effect=(lambda *_: snapshot(self.source)) if snapshot else (lambda *_: [])), \
              patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
@@ -312,6 +314,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "source_snapshot", return_value=[]), \
              patch.object(release, "verify_signed_source", return_value="b" * 40), \
              patch.object(release, "commit_entries", return_value=b""), \
+             patch.object(release, "signed_source_size", return_value=0), \
              patch.object(release, "capture_source", return_value=self.source), \
              patch.object(release, "frozen_snapshot", return_value=[]), \
              patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
@@ -454,7 +457,7 @@ class TairaPrepareTests(unittest.TestCase):
                 release.run_build(self.root, ["fixture"], {}, log)
         self.assertEqual(log.read_bytes(), b"error: fixture compiler failure\n")
 
-    def test_unsigned_dirty_wrong_branch_or_wrong_commit_checkout_is_rejected(self):
+    def test_unsigned_wrong_branch_or_wrong_commit_checkout_is_rejected(self):
         def response(*args):
             if args[1:] == ("rev-parse", "--show-toplevel"):
                 return os.fsencode(self.root)
@@ -462,12 +465,12 @@ class TairaPrepareTests(unittest.TestCase):
                 return b"optimizations"
             if args[1:] == ("rev-parse", "HEAD"):
                 return self.args.expected_commit.encode()
-            if args[1:] == ("rev-parse", "HEAD^{tree}"):
+            if args[1:] == ("rev-parse", self.args.expected_commit + "^{tree}"):
                 return b"b" * 40
             if args[1:] == ("show", "--no-patch", "--format=%GF", self.args.expected_commit):
                 return self.args.expected_signer.encode()
             return b""
-        failures = [("branch", b"other"), ("status", b" M source.rs"),
+        failures = [("branch", b"other"),
                     ("rev-parse", b"c" * 40), ("verify-commit", None), ("show", b"B" * 40)]
         for command, result in failures:
             def failed(*args):
@@ -476,11 +479,14 @@ class TairaPrepareTests(unittest.TestCase):
                         raise release.PrepareError("signature verification failed")
                     return result
                 return response(*args)
-            with self.subTest(command=command), patch.object(release, "git", side_effect=failed):
+            with self.subTest(command=command), patch.object(release, "git", side_effect=failed), \
+                 patch.object(release, "verify_controller_sources"):
                 with self.assertRaises(release.PrepareError):
                     release.verify_checkout(self.root, self.args.expected_commit, self.args.expected_signer)
-        with patch.object(release, "git", side_effect=response):
+        with patch.object(release, "git", side_effect=response), \
+             patch.object(release, "verify_controller_sources") as controller:
             self.assertEqual(release.verify_checkout(self.root, self.args.expected_commit, self.args.expected_signer), "b" * 40)
+            controller.assert_called_once_with(self.root, self.args.expected_commit)
 
     def test_snapshot_supports_empty_tracked_files_without_reading_untracked_inputs(self):
         (self.root / "empty").touch()
@@ -532,6 +538,186 @@ class TairaPrepareTests(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=self.root, check=True, input=payload,
                               capture_output=True,
                               env=release.child_environment(dict(os.environ), self.target)).stdout.strip()
+
+    def controller_fixture(self):
+        self.fixture_git("init", "--quiet", "--initial-branch=optimizations")
+        files = {name: (b"committed controller fixture: " + name.encode() + b"\n")
+                 for name in release.BUILD_SOURCES}
+        files.update({"source.rs": b"committed build input\n", ".gitignore": b"target/\n"})
+        for name, payload in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            path.chmod(0o755 if name.endswith(".sh") else 0o644)
+        self.fixture_git("add", "--", *files)
+        commit = self.commit_controller_fixture("committed preparation fixture")
+        self.args.repo_root = self.root
+        self.args.expected_commit = commit
+        self.out = self.target / "prepared"
+        self.args.output_dir = self.out
+        return commit, files
+
+    def commit_controller_fixture(self, message):
+        tree = self.fixture_git("write-tree")
+        parent = self.fixture_git("for-each-ref", "--format=%(objectname)", "refs/heads/optimizations")
+        payload = b"tree " + tree + b"\n"
+        if parent:
+            payload += b"parent " + parent + b"\n"
+        identity = b"Preparation Fixture <fixture@example.invalid> 1700000000 +0000\n"
+        payload += b"author " + identity + b"committer " + identity + b"\n" + message.encode() + b"\n"
+        commit = self.fixture_git("hash-object", "-t", "commit", "-w", "--stdin", payload=payload).decode()
+        self.fixture_git("update-ref", "refs/heads/optimizations", commit, parent.decode() if parent else "0" * 40)
+        return commit
+
+    @contextlib.contextmanager
+    def fixture_signature(self, commit):
+        actual_git = release.git
+        def verified_git(root, *args):
+            if args == ("verify-commit", commit):
+                return b""
+            if args == ("show", "--no-patch", "--format=%GF", commit):
+                return self.args.expected_signer.encode()
+            return actual_git(root, *args)
+        # The disposable commit is deliberately unsigned. Every source/tree/index
+        # read is real Git; only the independent signature decision is stubbed.
+        with patch.object(release, "git", side_effect=verified_git):
+            yield
+
+    def prepare_controller_fixture(self, commit, *, check=None):
+        def build(_root, _command, _env, log, **_kwargs):
+            self.binaries()
+            log.write_bytes(b"fixture compiler output\n")
+        with self.fixture_signature(commit), \
+             patch.object(release, "__file__", str(self.root / "scripts/taira_release.py")), \
+             patch.object(release, "verify_controller_module_origins"), \
+             patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
+             patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
+             patch.object(release, "captured_gate", return_value=release.gate), \
+             patch.object(release, "local_package_names", return_value=set()), \
+             patch.object(release, "admit_source_fingerprints", return_value=[]), \
+             patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
+             patch.object(release.gate, "run_checks", side_effect=check), \
+             patch.object(release, "run_build", side_effect=build), \
+             patch.object(release, "capacity_preflight", return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            return release.prepare(self.args)
+
+    def test_prepare_captures_signed_objects_and_preserves_unrelated_staged_unstaged_untracked_work(self):
+        commit, files = self.controller_fixture()
+        source = self.root / "source.rs"
+        source.write_bytes(b"unrelated staged edit\n")
+        self.fixture_git("add", "--", source.name)
+        source.write_bytes(b"unrelated unstaged edit after staging\n")
+        untracked = self.root / "untracked-private-wip"
+        untracked.write_bytes(b"unrelated untracked fixture\n")
+        before_status = self.fixture_git("status", "--porcelain=v1", "--untracked-files=all")
+        before_index = (self.root / ".git/index").read_bytes()
+        before = {path: (path.read_bytes(), release.file_identity(path.lstat()))
+                  for path in (source, untracked)}
+        observed = []
+        def check(root, **kwargs):
+            observed.append(root)
+            self.assertEqual(kwargs["source_commit"], commit)
+            self.assertEqual((root / "source.rs").read_bytes(), files["source.rs"])
+            self.assertFalse((root / untracked.name).exists())
+        result = self.prepare_controller_fixture(commit, check=check)
+        self.assertEqual(observed, [Path(result["source_root"])])
+        self.assertEqual(result["commit"], commit)
+        self.assertEqual((self.root / ".git/index").read_bytes(), before_index)
+        self.assertEqual({path: (path.read_bytes(), release.file_identity(path.lstat()))
+                          for path in before}, before)
+        self.assertEqual(self.fixture_git("status", "--porcelain=v1", "--untracked-files=all"), before_status)
+
+    def test_controller_drift_is_rejected_before_capture_even_when_staged_or_hidden(self):
+        commit, files = self.controller_fixture()
+        relative = "scripts/taira_cargo_cache.py"
+        controller = self.root / relative
+        original = files[relative]
+        self.fixture_git("config", "core.filemode", "false")
+        for change in ("unstaged", "staged", "mode", "assume-unchanged", "skip-worktree"):
+            with self.subTest(change=change):
+                controller.write_bytes(original)
+                controller.chmod(0o644)
+                self.fixture_git("add", "--", relative)
+                if change in ("assume-unchanged", "skip-worktree"):
+                    self.fixture_git("update-index", "--" + change, "--", relative)
+                if change == "mode":
+                    controller.chmod(0o755)
+                else:
+                    controller.write_bytes(original + b"uncommitted controller change\n")
+                if change == "staged":
+                    self.fixture_git("add", "--", relative)
+                if change in ("mode", "assume-unchanged", "skip-worktree"):
+                    self.fixture_git("diff-files", "--quiet", "--", relative)
+                with patch.object(release, "capture_source") as capture:
+                    with self.assertRaises(release.PrepareError):
+                        self.prepare_controller_fixture(commit)
+                    capture.assert_not_called()
+                self.assertFalse(self.out.exists())
+                if change in ("assume-unchanged", "skip-worktree"):
+                    self.fixture_git("update-index", "--no-" + change, "--", relative)
+
+    def test_resume_keeps_pinned_commit_after_unrelated_head_advances_but_requires_matching_controller(self):
+        commit, files = self.controller_fixture()
+        prepared = self.prepare_controller_fixture(commit)
+        (self.root / "source.rs").write_bytes(b"later unrelated committed build input\n")
+        self.fixture_git("add", "--", "source.rs")
+        advanced = self.commit_controller_fixture("unrelated later commit")
+        self.assertNotEqual(advanced, commit)
+        resumed = self.prepare_controller_fixture(commit, check=AssertionError("completed preparation reran native checks"))
+        self.assertEqual(resumed, prepared)
+        self.assertEqual((Path(resumed["source_root"]) / "source.rs").read_bytes(), files["source.rs"])
+        with self.fixture_signature(commit), patch.object(release, "verify_controller_module_origins"):
+            self.assertEqual(release.verify_signed_source(self.root, commit, self.args.expected_signer),
+                             self.fixture_git("rev-parse", commit + "^{tree}").decode())
+            with self.assertRaisesRegex(release.PrepareError, "HEAD"):
+                release.verify_checkout(self.root, commit, self.args.expected_signer)
+            relative = "scripts/taira_cargo_cache.py"
+            (self.root / relative).write_bytes(files[relative] + b"later controller change\n")
+            self.fixture_git("add", "--", relative)
+            self.commit_controller_fixture("changed controller in later commit")
+            with self.assertRaises(release.PrepareError):
+                release.verify_signed_source(self.root, commit, self.args.expected_signer)
+
+    def test_controller_module_origins_reject_shadow_package(self):
+        modules = {}
+        for name in ("release_artifact_contract", "taira_release_check", "taira_cargo_cache"):
+            module = types.ModuleType(name)
+            module.__file__ = str(self.root / "scripts" / (name + ".py"))
+            module.__spec__ = importlib.util.spec_from_file_location(name, module.__file__)
+            modules[name] = module
+        entrypoint = types.ModuleType("__main__")
+        entrypoint.__file__ = str(self.root / "scripts/taira_release.py")
+        modules["__main__"] = entrypoint
+        with patch.object(release.sys, "modules", modules):
+            release.verify_controller_module_origins(self.root)
+            for name in tuple(modules):
+                with self.subTest(module=name):
+                    shadow = types.ModuleType(name)
+                    shadow.__file__ = str(self.root / "scripts" / name / "__init__.py")
+                    shadow.__spec__ = importlib.util.spec_from_file_location(name, shadow.__file__)
+                    with patch.dict(modules, {name: shadow}), self.assertRaises(release.PrepareError):
+                        release.verify_controller_module_origins(self.root)
+
+    def test_signed_source_size_uses_committed_objects_and_rejects_mismatched_entries(self):
+        commit, files = self.controller_fixture()
+        (self.root / "empty").touch()
+        (self.root / "source-link").symlink_to("source.rs")
+        self.fixture_git("add", "--", "empty", "source-link")
+        self.fixture_git("update-index", "--add", "--cacheinfo", f"160000,{'c' * 40},iroha-docs")
+        commit = self.commit_controller_fixture("committed sizing fixture")
+        entries = release.commit_entries(self.root, commit)
+        (self.root / "source.rs").write_bytes(b"unrelated WIP size" * 1000)
+        expected_size = sum(map(len, files.values())) + len(b"source.rs")
+        self.assertEqual(release.signed_source_size(self.root, commit, entries), expected_size)
+        for mismatch in (
+            entries.replace(b"\tsource.rs\0", b"\tother.rs\0"),
+            entries.replace(b"100644 ", b"100755 ", 1),
+            entries.replace(entries.split(b" ", 2)[1], b"d" * 40, 1),
+            entries + entries.split(b"\0", 1)[0] + b"\0",
+        ):
+            with self.subTest(entries=mismatch), self.assertRaises(release.PrepareError):
+                release.signed_source_size(self.root, commit, mismatch)
 
     def test_git_reads_original_object_even_when_replacement_ref_exists(self):
         self.fixture_git("init", "--quiet")
