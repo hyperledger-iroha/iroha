@@ -728,6 +728,38 @@ final class ToriiContractAPITests: XCTestCase {
         }
     }
 
+    func testDetachedPreparationRejectsOrdinaryAdmissionBeforeSigning() async throws {
+        let payload = try CanonicalUnsignedTransactionTestSupport.contractPayload(
+            request: detachedRequest(),
+            contractAddress: contractAddress,
+            codeHashHex: codeHash,
+            networkId: TestNetworkIds.canonical,
+            admissionIntent: .ordinary
+        )
+        let signingMessage = IrohaHash.hash(payload)
+        _ = try ToriiCanonicalTransactionDraft.decode(
+            transactionPayloadB64: payload.base64EncodedString(),
+            signingMessageB64: signingMessage.base64EncodedString(),
+            expectedAdmissionIntent: .ordinary,
+            context: "downgrade fixture"
+        )
+        var requests = 0
+        StubURLProtocol.handler = { request in
+            requests += 1
+            var json = self.contractCallResponse(submitted: false)
+            json["transaction_payload_b64"] = payload.base64EncodedString()
+            json["signing_message_b64"] = signingMessage.base64EncodedString()
+            return try self.response(for: request, json: json)
+        }
+        do {
+            _ = try await makeClient().prepareDetachedContractCall(detachedRequest())
+            XCTFail("Ordinary contract draft was accepted")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("admission_intent must be QueuePlanSynced"))
+        }
+        XCTAssertEqual(requests, 1)
+    }
+
     func testDetachedSubmitRejectsInvalidSignatureWithoutNetworkRequest() async throws {
         var calls = 0
         StubURLProtocol.handler = { request in

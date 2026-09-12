@@ -16523,6 +16523,7 @@ class ToriiClient(
             fee_payment=receipt.fee_payment,
             executable_b64=draft_intent.executable_b64,
             metadata_b64=draft_intent.metadata_b64,
+            # Public contract submissions require this signature-bound intent.
             expected_ttl_ms=transaction_ttl_ms or 100_000,
             context="contract call draft",
             expected_admission_intent="queue_plan_synced",

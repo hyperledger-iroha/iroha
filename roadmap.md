@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-11.
+Last updated: 2026-09-12.
 
 This is the outstanding-outcome view for Iroha 3's first release. Component owners
 below are code responsibilities, not invented individual assignments. Local
@@ -95,7 +95,6 @@ See [Norito](norito.md), [schema identity](specs/norito_schema_identity.md),
 | C6 | Full FHE/MKHE and Figure 9 | Crypto, privacy model and proof owners | Replace BFV-shaped scaffolding with full BFV-RNS. Complete atomic 40-limb MKHE source/materialization/packing/cross-field/padding verifier and full-size/eight-party KAT with measured resources. Install governed full-shape Figure 9 keys and independent proof vector; no receipts/readiness from unavailable stages. |
 | C7 | Hardware acceleration qualification | Crypto/proof native backends | Native Metal/CUDA compilation, actual CPU/GPU/KAT/root parity, copy/launch/stream/timeout fault quarantine, side-channel review and implementation-derived RSS/throughput. T256/MKHE remain scalar until these conditions hold; no feature-build substitution for hardware execution. |
 | C8 | Kaigi private-session model | Kaigi model, crypto, Core and SDKs | Qualify final authorization/usage circuits, mandatory host proof and retained original-account lifecycle/rekey/undo state. Exact regenerated keys/schema and shared SDK fixtures; suite-tagged HPKE, bounded usage/accounting, authenticated relay recovery/archive policy and measured signal-index startup. |
-| C9 | Kotodama V1 syntax and usability closure | Compiler, ABI, Core/VM, CLI, SDK and editor owners | Complete the [approved redesign acceptance ledger](specs/kotodama_v1_redesign.md): exact labels, Unit/errors, checked/fallible lists, must-use, bounded live pagination, fused rounding, named patterns, semantic tools, exact rejection assertions and offline first-project workflow. Regenerate only final V1 artifacts and obtain every behavior test, four-validator integration and workspace evidence. Re-establish unavailable temporary evidence on the current source candidate; retain the passing compiler/Core/public-boundary, CLI and actual offline-project selections; finish final artifact checks, then qualify native SDKs, normal-release four-validator execution/restart and workspace commands. Distinguish proven baseline failures from unclassified failures and regressions. |
 
 ## Product services and deployment
 

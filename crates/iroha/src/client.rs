@@ -11961,6 +11961,59 @@ mod evidence_http_tests {
             response.get("submitted").and_then(Value::as_bool),
             Some(submitted)
         );
+        let root_fields = [
+            "ok",
+            "submitted",
+            "dataspace",
+            "contract_address",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "creation_time_ms",
+            "transaction_ttl_ms",
+            "tx_hash_hex",
+            "pipeline_status",
+            "entrypoint_hash_hex",
+            "transaction_payload_b64",
+            "signing_message_b64",
+            "entrypoint",
+            "operation_receipt",
+        ];
+        let root = response.as_object().expect("contract call response object");
+        assert_eq!(root.len(), root_fields.len());
+        for field in root_fields {
+            assert!(
+                root.contains_key(field),
+                "missing contract response field {field}"
+            );
+        }
+        let receipt_fields = [
+            "operation_kind",
+            "status",
+            "transport",
+            "dataspace",
+            "contract_alias",
+            "contract_address",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "tx_hash_hex",
+            "entrypoint",
+            "entrypoint_hash_hex",
+            "gas_limit",
+            "gas_used",
+            "fee_payment",
+            "payload_digest_hex",
+        ];
+        let receipt = response
+            .get("operation_receipt")
+            .and_then(Value::as_object)
+            .expect("contract call receipt object");
+        assert_eq!(receipt.len(), receipt_fields.len());
+        for field in receipt_fields {
+            assert!(
+                receipt.contains_key(field),
+                "missing contract receipt field {field}"
+            );
+        }
         if submitted {
             assert_eq!(
                 expected_signed.admission_intent(),
@@ -11976,6 +12029,19 @@ mod evidence_http_tests {
                 response.get("tx_hash_hex"),
                 Some(&Value::from(hex::encode(expected_signed.hash().as_ref())))
             );
+            assert_eq!(
+                response.get("entrypoint_hash_hex"),
+                Some(&Value::from(hex::encode(
+                    expected_signed.hash_as_entrypoint().as_ref()
+                )))
+            );
+            for field in ["transaction_payload_b64", "signing_message_b64"] {
+                assert_eq!(response.get(field), Some(&Value::Null), "{field}");
+            }
+            assert_eq!(receipt.get("status"), Some(&Value::from("submitted")));
+            for field in ["tx_hash_hex", "entrypoint_hash_hex"] {
+                assert_eq!(receipt.get(field), response.get(field), "{field}");
+            }
         }
     }
 
@@ -11999,6 +12065,7 @@ mod evidence_http_tests {
                 .expect("encode bound-account prepared response"),
         );
         let expected_signed = builder
+            .clone()
             .try_sign(transaction_key.private_key())
             .expect("sign with the bound transaction authority");
         assert_eq!(expected_signed.authority(), &authority);
@@ -12075,6 +12142,9 @@ mod evidence_http_tests {
                 &expected_wire,
                 private_key.is_some(),
             );
+            if private_key.is_none() {
+                assert_eq!(response, prepared_contract_call_response(&intent, &builder));
+            }
         }
     }
 
@@ -12191,37 +12261,43 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_value).expect("response"),
         );
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let result = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
-            let client = client
-                .clone()
-                .with_test_http_transport(mock_transport.clone());
-            client.post_contract_call_json_for_test(
-                &client.account,
-                Some(client.key_pair.private_key()),
-                Some(&address),
-                None,
-                "ping",
-                None,
-                None,
-                Some(123),
-                None,
-                &fee_payment,
-                &intent,
-            )
-        });
-        let error = result.expect_err("Ordinary public draft must fail before signing or dispatch");
-        assert!(
-            format!("{error:#}").contains("must use QueuePlanSynced admission"),
-            "{error:#}"
-        );
-        let requests = snapshots.lock().expect("captured requests");
-        assert_eq!(
-            requests.len(),
-            1,
-            "no transaction submission after rejecting prepare"
-        );
-        assert_eq!(requests[0].url.path(), "/v1/contracts/call");
+        for private_key in [None, Some(client.key_pair.private_key())] {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let result = with_mock_http(
+                respond_with(&snapshots, response.clone()),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    client.post_contract_call_json_for_test(
+                        &client.account,
+                        private_key,
+                        Some(&address),
+                        None,
+                        "ping",
+                        None,
+                        None,
+                        Some(123),
+                        None,
+                        &fee_payment,
+                        &intent,
+                    )
+                },
+            );
+            let error =
+                result.expect_err("Ordinary public draft must fail before signing or dispatch");
+            assert!(
+                format!("{error:#}").contains("must use QueuePlanSynced admission"),
+                "{error:#}"
+            );
+            let requests = snapshots.lock().expect("captured requests");
+            assert_eq!(
+                requests.len(),
+                1,
+                "no transaction submission after rejecting prepare"
+            );
+            assert_eq!(requests[0].url.path(), "/v1/contracts/call");
+        }
     }
 
     #[test]

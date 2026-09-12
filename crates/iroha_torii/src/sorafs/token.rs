@@ -153,12 +153,13 @@ impl StreamTokenIssuer {
         }
         // Validate local defaults before any observer I/O or private operation.
         Self::configured_defaults(&storage.stream_tokens, &pins)?.validate()?;
+        let finality = Arc::new(CoreFinalityV1::new(state, pins.clone()));
         let driver = HardwareDriverV1::new(
             pins,
             client,
             observer,
             approved,
-            Arc::new(CoreFinalityV1::new(state)),
+            finality,
             Arc::new(SystemHardwareClockV1),
         )?;
         Self::from_hardware(&storage.stream_tokens, driver).map(Some)
@@ -584,6 +585,9 @@ fn decode_token_wire(bytes: &[u8]) -> Result<StreamTokenV1, StreamTokenHeaderErr
     )
     .map_err(StreamTokenHeaderError::InvalidPayload)
 }
+#[cfg(test)]
+#[path = "token/hardware_finality_native_custody_tests.rs"]
+mod hardware_finality_native_custody_tests;
 #[cfg(test)]
 #[path = "token/hardware_finality_tests.rs"]
 mod hardware_finality_tests;

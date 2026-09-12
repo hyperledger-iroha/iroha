@@ -899,8 +899,10 @@ let finality = try await torii.waitForDetachedContractCallFinality(
 contract, ABI, entrypoint, argument-record, metadata, gas, sponsor, payload,
 time, and TTL bindings. Unsigned preparation fails closed without the independent
 `ToriiContractCallDraftIntent`; response fields are never accepted as their own
-proof of intent. Submit
-accepts only the public key and detached signature; it fails closed unless the
+proof of intent. The payload must already use `QueuePlanSynced` before signing;
+an `Ordinary` downgrade is rejected even with a matching recomputed payload
+hash. Detached finalization preserves those exact verified payload bytes.
+Submit accepts only the public key and detached signature; it fails closed unless the
 returned receipt and queued pipeline status match the draft exactly.
 `waitForDetachedContractCallFinality` then uses the canonical `scope=global`
 pipeline lookup and returns only an applied, globally scoped, state-resolved

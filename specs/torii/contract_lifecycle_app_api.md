@@ -98,7 +98,8 @@ partial effects.
 | `contract_alias` | `Option<ContractAlias>` | Stable alias target. |
 | `entrypoint` | `String` | Required. Must resolve to a `kotoage` declaration. |
 | `payload` | `Option<IrohaJson>` | Optional Norito JSON payload normalized against the manifest schema. |
-| `creation_time_ms` | `Option<u64>` | Optional fixed timestamp for deterministic detached flows. |
+| `creation_time_ms` | `Option<u64>` | Exact caller timestamp when supplied; otherwise Core network time used by admission. Detached submission preserves the prepared timestamp. |
+| `transaction_ttl_ms` | `Option<u64>` | Optional positive transaction TTL embedded in the signed payload. |
 | `fee_payment` | `FeePaymentIntent` | Required typed payer selection, exact sponsor program/revision when sponsored, charge maxima, and positive gas bound. |
 
 The retired `private_key`, `fee_sponsor`, `gas_asset_id`, and standalone
@@ -107,26 +108,53 @@ used by `POST /v1/fees/quote`, retains the requested payer, exact program
 revision, and gas bound, and replaces only the charge maxima before returning
 the unsigned payload. Detached clients sign that exact quoted payload.
 
+An omitted creation time uses the same Core network clock as transaction
+admission, rather than the server wall clock. An explicit timestamp is never
+replaced or clamped. Core still enforces the configured future-drift bound,
+signature-bound TTL, and NTS health policy when admitting the signed transaction.
+
+Every public contract-call payload binds `QueuePlanSynced` before fee quotation
+and signing. Clients validate that exact admission intent along with the
+executable, metadata, TTL, and fee intent; an otherwise valid `Ordinary` draft is
+rejected. Both local signing followed by `/transaction` and detached submit
+through `/v1/contracts/call` use the same globally certified admission owner
+without rebuilding the signed transaction. Detached submit emits its contract
+receipt only after `Accepted`; rejection and ambiguous-admission responses retain
+the canonical owner's status, headers, and body unchanged.
+
 Direct settlement accepts either the transaction authority or one exact
 sponsor program. Receipt-lane (`lane_relay_burn`) Nexus settlement is
 exact-sponsor-only: authority-paid requests are rejected with
 `relay_capacity_unavailable` because an authority balance is not an
 authenticated receipt source lock.
 
-Response (`ContractCallResponseDto`) always includes `ok`, `submitted`,
-`dataspace`, `contract_address`, `code_hash_hex`, `abi_hash_hex`,
-`creation_time_ms`, and `entrypoint`.
+### Response (`ContractCallResponseDto`)
 
-Submission-mode fields:
+`ContractCallResponseDto` is a closed object with exactly these
+15 required keys: `ok`, `submitted`, `dataspace`, `contract_address`,
+`code_hash_hex`, `abi_hash_hex`, `creation_time_ms`, `transaction_ttl_ms`,
+`tx_hash_hex`, `pipeline_status`, `entrypoint_hash_hex`,
+`transaction_payload_b64`, `signing_message_b64`, `entrypoint`, and
+`operation_receipt`. Nullable values use explicit JSON `null`; keys are never
+omitted. `transaction_ttl_ms` is null when the request supplies no TTL override.
 
-- Detached submit (`public_key_hex` plus `signature_b64`): `submitted = true`
-  and `tx_hash_hex` is populated; unsigned-draft fields are absent.
-- Unsigned-draft mode (no signature material): `submitted = false`, both
-  transaction and entrypoint hashes remain absent, and Torii returns only the
-  canonical Norito `TransactionPayload` bytes in `transaction_payload_b64`
-  together with the exact `HashOf<TransactionPayload>` bytes in
-  `signing_message_b64`. Torii does not fabricate a signed transaction for
-  preparation.
+- Detached submit (`public_key_hex` plus `signature_b64`): `submitted = true`,
+  transaction and entrypoint hashes and the queued `pipeline_status` are
+  populated; `transaction_payload_b64` and `signing_message_b64` are null.
+- Unsigned-draft mode (no signature material): `submitted = false`, and
+  `tx_hash_hex`, `entrypoint_hash_hex`, and `pipeline_status` are null.
+  `transaction_payload_b64` contains the canonical Norito `TransactionPayload`
+  bytes, and `signing_message_b64` contains the exact
+  `HashOf<TransactionPayload>` bytes. Torii does not fabricate a signed
+  transaction for preparation.
+
+`operation_receipt` is also closed. Its required non-null fields are
+`operation_kind`, `status`, `transport`, `dataspace`, and `payload_digest_hex`.
+Its ten required nullable fields are `contract_alias`, `contract_address`,
+`code_hash_hex`, `abi_hash_hex`, `tx_hash_hex`, `entrypoint`,
+`entrypoint_hash_hex`, `gas_limit`, `gas_used`, and `fee_payment`.
+Missing and unknown keys are rejected; explicit null does not waive the
+caller's exact draft-intent and fee-binding checks.
 
 ## `POST /v1/contracts/call/simulate`
 

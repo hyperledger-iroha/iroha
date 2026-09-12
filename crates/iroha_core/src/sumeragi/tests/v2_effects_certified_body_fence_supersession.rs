@@ -619,7 +619,7 @@ mod certified_body_fence_supersession {
         drop(services);
         drop(owner);
         drop(transport.executor);
-        let mut recovered = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+        let mut recovered = SumeragiV2Adapter::reopen_body_owner_for_test(
             &wal_path,
             directory.path(),
             verified,

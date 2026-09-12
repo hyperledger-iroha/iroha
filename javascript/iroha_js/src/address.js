@@ -960,6 +960,37 @@ export class AccountAddress {
     });
   }
 
+  /**
+   * Return a detached snapshot of the admitted, normalized controller.
+   *
+   * Single-key controllers use tag 0, including keys with extended wire lengths.
+   * Multisig controllers use tag 1 and retain canonical member order and weights.
+   * Records and member arrays are frozen; every public-key byte array is a fresh,
+   * writable copy. Changing a snapshot never changes this account's identity.
+   *
+   * @returns {import("../index.js").AccountAddressControllerInfo}
+   */
+  controllerInfo() {
+    const controller = ADDRESS_STATE.get(this).controller;
+    if (controller.tag === CONTROLLER_TAG_SINGLE) {
+      return Object.freeze({
+        tag: controller.tag,
+        curve: controller.curve,
+        publicKey: Uint8Array.from(controller.publicKey),
+      });
+    }
+    return Object.freeze({
+      tag: controller.tag,
+      version: controller.version,
+      threshold: controller.threshold,
+      members: Object.freeze(controller.members.map((member) => Object.freeze({
+        curve: member.curve,
+        weight: member.weight,
+        publicKey: Uint8Array.from(member.publicKey),
+      }))),
+    });
+  }
+
   multisigPolicyInfo() {
     const controller = ADDRESS_STATE.get(this).controller;
     if (controller.tag !== CONTROLLER_TAG_MULTISIG) {

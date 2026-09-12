@@ -336,7 +336,7 @@ fn recover_stale_prepare_decision_crash_fixture(
     drop(owner);
     drop(transport.executor);
     let reopen = || {
-        SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+        SumeragiV2Adapter::reopen_body_owner_for_test(
             &wal_path,
             directory.path(),
             VerifiedHeightContext::genesis(context.clone(), proofs.clone())
@@ -616,7 +616,7 @@ fn assert_active_prepare_linked_apply_cold_reopens(fixture: ReadyBodyFixture, ap
     drop(owner);
     drop(transport.executor);
     let mut revalidated = 0;
-    let mut reopened = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+    let mut reopened = SumeragiV2Adapter::reopen_body_owner_for_test(
         &wal_path,
         directory.path(),
         verified,

@@ -4,7 +4,7 @@ use super::{
     StreamTokenApprovedCustodyAnchorV1, StreamTokenHardwareCallErrorV1,
     StreamTokenHardwareClientV1, StreamTokenHardwarePinsV1, StreamTokenIssuerError,
     StreamTokenStateObserverClientV1,
-    hardware_finality::{FinalityFloorV1, HardwareFinalityV1},
+    hardware_finality::{FinalityFloorV1, HardwareFinalityV1, HistoricalFinalityV1},
 };
 use ed25519_dalek::VerifyingKey;
 use iroha_crypto::zeroize_value_for_confidential_discard;
@@ -147,7 +147,7 @@ impl HardwareDriverV1 {
         custody: &VerifiedSignerCustodyV1,
         observation: &SignerStreamTokenStateObservationBodyV1,
         floor: &QueryFloor,
-        historical: &[FinalityFloorV1],
+        historical: &[HistoricalFinalityV1],
         token_window: Option<(u64, u64)>,
     ) -> Result<u64, StreamTokenIssuerError> {
         self.check_handles()?;
@@ -168,10 +168,20 @@ impl HardwareDriverV1 {
         }
         // Reobserve local finality after evidence authentication and while serializing publication
         // against concurrent successful observations. No runtime client I/O occurs under this lock.
-        self.finality
-            .validate(floor.minimum, candidate, floor.finality, historical)?;
-        self.finality
-            .validate(history.anchor, candidate, floor.finality, historical)?;
+        self.finality.validate(
+            floor.minimum,
+            candidate,
+            floor.finality,
+            historical,
+            observation,
+        )?;
+        self.finality.validate(
+            history.anchor,
+            candidate,
+            floor.finality,
+            historical,
+            observation,
+        )?;
         self.check_handles()?;
         // Time is sampled again after potentially expensive durable finality reads. Every bound
         // below belongs to the same canonical observation already authenticated by the sole full
@@ -238,7 +248,9 @@ impl HardwareDriverV1 {
             verified.custody(),
             &decoded_observation.body,
             &floor,
-            &[historical_block(verified.custody().statement().anchor)],
+            &[HistoricalFinalityV1::Custody(
+                verified.custody().statement().anchor,
+            )],
             token_window,
         )?;
         Ok((verified, validated_at))
@@ -355,12 +367,12 @@ impl HardwareDriverV1 {
             &after_decoded.body,
             &after_floor,
             &[
-                historical_block(after.custody().statement().anchor),
-                historical_block(signing_anchor),
-                FinalityFloorV1 {
+                HistoricalFinalityV1::Custody(after.custody().statement().anchor),
+                HistoricalFinalityV1::Custody(signing_anchor),
+                HistoricalFinalityV1::Block(FinalityFloorV1 {
                     height: after.completion().anchor.height,
                     block_hash: after.completion().anchor.block_hash,
-                },
+                }),
             ],
             Some((pending.token().body.issued_at, expiry)),
         )?;
@@ -412,12 +424,12 @@ impl HardwareDriverV1 {
             &release_decoded.body,
             &release_floor,
             &[
-                historical_block(released.custody().statement().anchor),
-                historical_block(signing_anchor),
-                FinalityFloorV1 {
+                HistoricalFinalityV1::Custody(released.custody().statement().anchor),
+                HistoricalFinalityV1::Custody(signing_anchor),
+                HistoricalFinalityV1::Block(FinalityFloorV1 {
                     height: released.completion().anchor.height,
                     block_hash: released.completion().anchor.block_hash,
-                },
+                }),
             ],
             Some((pending.token().body.issued_at, expiry)),
         )?;
@@ -461,12 +473,5 @@ const fn map_call_error(error: StreamTokenHardwareCallErrorV1) -> StreamTokenIss
         StreamTokenHardwareCallErrorV1::InvalidResponse => {
             StreamTokenIssuerError::RuntimeSignerOutputInvalid
         }
-    }
-}
-
-fn historical_block(anchor: SignerCustodyAnchorV1) -> FinalityFloorV1 {
-    FinalityFloorV1 {
-        height: anchor.height,
-        block_hash: anchor.block_hash,
     }
 }

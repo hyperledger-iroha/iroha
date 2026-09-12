@@ -246,3 +246,6 @@ pub mod prelude {
         },
     };
 }
+
+/// Canonical bounded native StreamToken custody control records.
+pub mod stream_token_custody;

@@ -618,3 +618,75 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
   );
   assert.equal(signCalls, 0);
 });
+
+test("browser deployment rejects valid multisig and non-Ed25519 authorities before callbacks", async () => {
+  const vectors = JSON.parse(
+    readFileSync(new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8"),
+  );
+  const multisigVector = vectors.cases.positive.find(
+    (vector) => vector.case_id === "addr-multisig-council-threshold3",
+  );
+  assert.ok(multisigVector);
+  const multisig = AccountAddress.fromI105(multisigVector.encodings.i105.string);
+  assert.deepEqual(
+    Buffer.from(multisig.canonicalBytes()),
+    Buffer.from(multisigVector.encodings.canonical_hex.replace(/^0x/u, ""), "hex"),
+  );
+  const secp256k1 = AccountAddress.fromAccount({
+    algorithm: "secp256k1",
+    publicKey: Buffer.from(
+      readFileSync(new URL("../../../fixtures/account/secp256k1_public_key.hex", import.meta.url), "utf8").trim(),
+      "hex",
+    ),
+  });
+  for (const [kind, address] of [["multisig", multisig], ["secp256k1", secp256k1]]) {
+    const accountId = address.toI105(753);
+    assert.deepEqual(
+      Buffer.from(AccountAddress.fromI105(accountId).canonicalBytes()),
+      Buffer.from(address.canonicalBytes()),
+      `${kind}: native-admitted canonical account`,
+    );
+    const expected = {
+      name: "TypeError",
+      message: "browser deployment requires a single-key Ed25519 I105 authority",
+    };
+    assert.throws(
+      () => deriveContractAddress({
+        networkId: NETWORK_ID,
+        chainDiscriminant: 753,
+        authority: accountId,
+        deployNonce: 7,
+        dataspaceId: 0,
+      }),
+      expected,
+      kind,
+    );
+    const fixture = deploymentFixture();
+    let callbackCalls = 0;
+    const unexpectedCallback = () => {
+      callbackCalls += 1;
+      assert.fail(`${kind}: unsupported authority must reject before callbacks`);
+    };
+    await assert.rejects(
+      deploySmartContractBrowser({
+        artifactBytes: fixture.artifactBytes,
+        manifest: fixture.manifest,
+        compilerCodeHash: fixture.codeHashHex,
+        compilerAbiHash: ABI_HASH,
+        networkId: NETWORK_ID,
+        chainDiscriminant: 753,
+        authority: accountId,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        contractAlias: "demo::universal",
+        sign: unexpectedCallback,
+        signManifest: unexpectedCallback,
+        submitAndWait: unexpectedCallback,
+        readNodeCapabilities: unexpectedCallback,
+        readDeploymentState: unexpectedCallback,
+      }),
+      expected,
+      kind,
+    );
+    assert.equal(callbackCalls, 0, kind);
+  }
+});

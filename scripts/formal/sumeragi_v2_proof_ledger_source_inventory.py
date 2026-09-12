@@ -107,6 +107,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/autonomous_merge_carrier_content_tests.rs',
         'block/exact_quorum_cardinality_tests.rs',
         'block/autonomous_anchor_network_tests.rs',
+        'block/autonomous_anchor_gas_budget_tests.rs',
         'block/sccp_soracloud_validation_tests.rs',
         'block/canonical_genesis_validation_tests.rs',
         'block/genesis_validation_regression_tests.rs',
@@ -305,6 +306,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'host/core_query_execution_tests.rs',
         'host/core_query_pagination_tests.rs',
         'host/nested_contract_state_and_rollback_tests.rs',
+        'host/contract_state_namespace_tests.rs',
+        'host/stream_token_custody_namespace_tests.rs',
         'host/zk_verification_tests.rs',
         'host/prepared_public_arguments_tests.rs',
         'host/pointer_abi_validation_tests.rs',
@@ -565,6 +568,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_apply/error_recovery.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/reducer.rs': (
+        'reducer/body_validation_completion.rs',
         'reducer/prepare_certificate_handling.rs',
         'tests/reducer_timeout_and_projection.rs',
         'tests/v2_core_reducer_primitive_projection.rs',
@@ -655,9 +659,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_adapter_05_direct_lifecycle.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs': (
+        'v2_adapter_05_direct_lifecycle_sign_publication_cases.rs',
         'v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs': (
+        'v2_adapter_04_wal_recovery_signature_fifo_cases.rs',
         'v2_adapter_04_wal_recovery_decision_classifier_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs': (
@@ -698,5 +704,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_completion_cases.rs': (
         'v2_lifecycle_scheduler_resolved_validate_cases.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs': (
+        'v2_lifecycle_body_pipeline_transition_static_tests.rs',
+        'v2_lifecycle_body_pipeline_transition_tests.rs',
     ),
 }

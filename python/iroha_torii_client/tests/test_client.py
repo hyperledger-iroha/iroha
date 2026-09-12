@@ -3470,6 +3470,41 @@ def test_call_contract_rejects_rehashed_unsigned_payload_substitution(
         )
 
 
+@pytest.mark.parametrize("admission_intent", [0, 2], ids=["ordinary", "unknown"])
+def test_call_contract_rejects_rehashed_non_queue_plan_admission(
+    admission_intent: int,
+) -> None:
+    call_payload = {"value": 1}
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_contract_call_draft(
+                fee_payment=_authority_fee_payment(5000),
+                payload=call_payload,
+                admission_intent=admission_intent,
+            )
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    # The fixture recomputes the signing hash from the substituted payload.
+    # Hash consistency must not substitute for the required admission policy.
+    with pytest.raises(RuntimeError, match="caller-trusted admission_intent"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias="router::universal",
+            entrypoint="ping",
+            payload=call_payload,
+            fee_payment=_authority_fee_payment(5000),
+            draft_intent=_contract_draft_intent(payload=call_payload),
+        )
+    assert len(session.calls) == 1
+
+
 @pytest.mark.parametrize("field", ["contract_address", "code_hash_hex"])
 def test_call_contract_rejects_colluding_response_and_receipt_substitution(
     field: str,

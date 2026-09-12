@@ -605,21 +605,6 @@ mod physical_resource_initialization_tests;
 #[path = "kura/resource_inventory_snapshot_tests.rs"]
 mod resource_inventory_snapshot_tests;
 
-/// Exclusive lease over canonical Kura publication.
-///
-/// Callers may inspect the exact durable tip through this value without
-/// reopening the same non-reentrant publication lock. The lease must never be
-/// held while initiating a Kura mutation.
-pub(crate) struct KuraCanonicalPublicationLease<'a> {
-    kura: &'a Kura,
-    _guard: parking_lot::MutexGuard<'a, ()>,
-}
-impl KuraCanonicalPublicationLease<'_> {
-    /// Read the exact durable height and tip while canonical writers are excluded.
-    pub(crate) fn exact_durable_tip(&self) -> Result<(usize, Option<HashOf<BlockHeader>>)> {
-        self.kura.exact_durable_tip_under_publication_lease()
-    }
-}
 /// The interface of Kura subsystem.
 ///
 /// Merge-ledger persistence requirements are tracked in
@@ -22755,37 +22740,6 @@ impl Kura {
         let count = self.block_store.lock().read_exact_durable_index_count()?;
         usize::try_from(count).map_err(Error::from)
     }
-    /// Read the exact durable height and tip under one canonical publication lease.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when canonical storage is poisoned or the durable
-    /// marker/hash journal cannot be read exactly.
-    pub(crate) fn exact_durable_tip(&self) -> Result<(usize, Option<HashOf<BlockHeader>>)> {
-        self.canonical_publication_lease().exact_durable_tip()
-    }
-    fn exact_durable_tip_under_publication_lease(
-        &self,
-    ) -> Result<(usize, Option<HashOf<BlockHeader>>)> {
-        self.ensure_canonical_storage_not_poisoned()?;
-        let mut store = self.block_store.lock();
-        let count = store.read_exact_durable_index_count()?;
-        let tip = if count == 0 {
-            None
-        } else {
-            Some(
-                store
-                    .read_block_hashes(count.saturating_sub(1), 1)?
-                    .first()
-                    .copied()
-                    .ok_or(Error::HashesFileHeightMismatch)?,
-            )
-        };
-        if store.read_exact_durable_index_count()? != count {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        Ok((usize::try_from(count)?, tip))
-    }
     /// Bind startup replay to one exact durable hash-journal image.
     ///
     /// The returned hashes are read under the same block-store lock as the
@@ -22997,11 +22951,8 @@ impl Kura {
     /// Exclude canonical Kura writers while a validated State result is
     /// consumed. The caller must not invoke a Kura mutation while holding this
     /// lease because canonical mutations acquire the same lock.
-    pub(crate) fn canonical_publication_lease(&self) -> KuraCanonicalPublicationLease<'_> {
-        KuraCanonicalPublicationLease {
-            kura: self,
-            _guard: self.canonical_chain_lock.lock(),
-        }
+    pub(crate) fn canonical_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.canonical_chain_lock.lock()
     }
     /// Return a best-effort durable count for diagnostics and telemetry only.
     ///

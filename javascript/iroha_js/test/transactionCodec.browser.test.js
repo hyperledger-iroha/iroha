@@ -1452,3 +1452,45 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
     "malformed_payload",
   );
 });
+
+test("browser transfer rejects valid multisig and non-Ed25519 authorities", () => {
+  const vectors = JSON.parse(
+    fs.readFileSync(new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8"),
+  );
+  const multisigVector = vectors.cases.positive.find(
+    (vector) => vector.case_id === "addr-multisig-council-threshold3",
+  );
+  assert.ok(multisigVector);
+  const multisig = AccountAddress.fromI105(multisigVector.encodings.i105.string);
+  assert.deepEqual(
+    Buffer.from(multisig.canonicalBytes()),
+    Buffer.from(multisigVector.encodings.canonical_hex.replace(/^0x/u, ""), "hex"),
+  );
+  const secp256k1 = AccountAddress.fromAccount({
+    algorithm: "secp256k1",
+    publicKey: Buffer.from(
+      fs.readFileSync(new URL("../../../fixtures/account/secp256k1_public_key.hex", import.meta.url), "utf8").trim(),
+      "hex",
+    ),
+  });
+  for (const [kind, address] of [["multisig", multisig], ["secp256k1", secp256k1]]) {
+    const accountId = address.toI105(753);
+    assert.deepEqual(
+      Buffer.from(AccountAddress.fromI105(accountId).canonicalBytes()),
+      Buffer.from(address.canonicalBytes()),
+      `${kind}: native-admitted canonical account`,
+    );
+    assert.throws(
+      () => buildBrowserTransferPayload(sampleInput({
+        authority: accountId,
+        sourceAssetHoldingId: `${ASSET_DEFINITION}#${accountId}`,
+      })),
+      (error) => {
+        assert.ok(error instanceof BrowserTransactionCodecError, kind);
+        assert.equal(error.code, "unsupported_authority", kind);
+        assert.equal(error.message, "authority must be a single-key Ed25519 I105 account", kind);
+        return true;
+      },
+    );
+  }
+});
