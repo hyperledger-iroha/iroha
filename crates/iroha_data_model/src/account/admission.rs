@@ -178,7 +178,7 @@ impl AccountAdmissionPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::json;
     #[derive(Encode)]

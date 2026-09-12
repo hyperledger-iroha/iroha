@@ -20,20 +20,21 @@ use crate::{
 use core::str::FromStr;
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 pub use iroha_data_model::account::AccountId;
-pub use iroha_data_model::prelude::{AssetDefinitionId, DomainId, Mintable, NftId, Peer};
+pub use iroha_data_model::prelude::{AssetDefinitionId, Mintable, NftId, Peer};
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetId},
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
     nexus::{
         AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
-        DataSpaceId, LaneId,
     },
     proof::{ProofAttachment, VerifyingKeyId},
     query::QueryRequest,
     smart_contract::ContractAddress,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::state_path::StatePath;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};

@@ -2,10 +2,8 @@
 use super::*;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
     asset::{AssetDefinitionId, AssetId},
     block::BlockHeader,
-    domain::DomainId,
     events::{
         execute_trigger::ExecuteTriggerEventFilter,
         time::{ExecutionTime, Schedule, TimeEventFilter},
@@ -35,6 +33,8 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use std::str::FromStr as _;
@@ -107,7 +107,7 @@ fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress 
         &validation_fee_test_network_id(),
         &account(9),
         42,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("test contract address")
 }
@@ -533,7 +533,8 @@ pub(crate) fn activate_bound_payout_runtime(
     ds_asset_id: AssetDefinitionId,
     trigger_id: &str,
 ) -> BoundPayoutRuntimeFixture {
-    use iroha_data_model::{nexus::DataSpaceId, smart_contract::ContractAddress};
+    use iroha_data_model::smart_contract::ContractAddress;
+    use iroha_model_base::topology::DataSpaceId;
     let contract_address = ContractAddress::derive(
         &state_tx.network_id,
         deployer,
@@ -607,7 +608,8 @@ fn install_active_bound_validation_fee_policy(
     deployer: &AccountId,
     deployer_key: &KeyPair,
 ) -> ValidationFeePolicyV1 {
-    use iroha_data_model::{nexus::DataSpaceId, smart_contract::ContractAddress};
+    use iroha_data_model::smart_contract::ContractAddress;
+    use iroha_model_base::topology::DataSpaceId;
     let deployment_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
     crate::smartcontracts::Execute::execute(

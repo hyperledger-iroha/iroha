@@ -31,9 +31,10 @@ use iroha_data_model::{
     },
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, LaneId,
+        AUTOSCALE_META_MANAGED,
     },
 };
+use iroha_model_base::topology::LaneId;
 pub use proofs::{
     DaPinIntentProofVerificationError, DaProofVerificationError, build_da_commitment_proof,
     build_da_pin_intent_proof, verify_da_commitment_proof, verify_da_pin_intent_proof,
@@ -1621,9 +1622,9 @@ mod proof_policy_tests {
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     fn intent(
         lane: LaneId,
         epoch: u64,
@@ -2310,11 +2311,12 @@ mod tests {
         },
         merge::{LaneDrainIntentV1, LaneDrainStateV1},
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneCatalogError,
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneCatalogError,
             LaneConfig as ModelLaneConfig, LaneStorageProfile,
         },
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::DataSpaceId;
     use norito::to_bytes;
     use std::{collections::BTreeMap, num::NonZeroU32};
     fn test_pin_authorization(
@@ -3211,7 +3213,7 @@ mod tests {
     fn committed_policy_bundle_rejects_duplicate_lanes_globally() {
         let policy = DaProofPolicy {
             lane_id: LaneId::new(7),
-            dataspace_id: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             alias: "lane-seven".to_owned(),
             proof_scheme: DaProofScheme::MerkleSha256,
         };

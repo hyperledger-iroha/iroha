@@ -107,7 +107,7 @@ def checker_source_paths() -> tuple[Path, ...]:
     """Return the canonical checker and its exact lexical component inventory."""
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 41
+    assert len(filenames) == len(set(filenames)) == 42
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 

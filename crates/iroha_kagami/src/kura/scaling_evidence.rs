@@ -38,10 +38,11 @@ use iroha_data_model::{
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLaneAuthorityCatalogV1, MergeLaneBinding,
         MergeLaneExecution, MergeLedgerEntry,
     },
-    nexus::{DataSpaceId, LaneId, LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1},
+    nexus::{LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1},
     query::CommittedTransaction,
     transaction::{Executable, SignedTransaction, signed::TransactionEntrypoint},
 };
+use iroha_model_base::topology::{DataSpaceId, LaneId};
 use iroha_primitives::json::Json;
 
 const MAX_PROOF_BYTES: u64 = 256 * 1024 * 1024;

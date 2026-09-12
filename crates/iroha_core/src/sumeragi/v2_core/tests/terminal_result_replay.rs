@@ -275,3 +275,96 @@ fn historical_lock_cannot_report_an_uncertified_later_proposal_of_the_same_body(
     assert!(reducer.pending_persistence_record().is_none());
     assert!(reducer.awaiting_signature().is_none());
 }
+
+// A TC's authenticated lock survives the volatile pending-Prepare census.
+#[test]
+fn timeout_locked_prepare_rejection_reports_exact_certificate_once() {
+    let context = context();
+    let subject = Subject::repeat(0xA8);
+    let locked_round = Round::new(context.height(), 0);
+    let proposal_round = Round::new(context.height(), 1);
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let timeout = tc_with_high(&context, 0, prepare.clone(), &[1, 2, 3]);
+    let mut reducer = Reducer::new(context.clone(), Some(context.leader(1)), Generation::new(0))
+        .expect("four-validator reducer");
+    let install = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: timeout.clone(),
+            })
+            .expect("the timeout carries the exact Prepare authority"),
+    );
+    acknowledge(&mut reducer, &install);
+    let tag = reducer.current_tag();
+    assert_eq!(reducer.durable_state().locked(), Some(&prepare));
+
+    // The current ordinary re-proposal has no Prepare QC of its own. The old
+    // lock cannot become a report for that different proposal occurrence.
+    let received = reducer
+        .step(Event::ProposalReceived {
+            tag,
+            proposal: proposal(
+                &context,
+                1,
+                subject,
+                ProposalJustification::Timeout(timeout),
+            ),
+        })
+        .expect("the same immutable subject may be proposed in the new view");
+    assert!(received.effects().iter().any(|effect| matches!(effect,
+        Effect::FetchBody { round, subject: actual, .. }
+            if *round == proposal_round && *actual == subject)));
+    for round in [proposal_round, locked_round] {
+        reducer
+            .step(Event::BodyAvailable {
+                tag,
+                round,
+                subject,
+            })
+            .expect("the exact body is available");
+        let stored = reducer
+            .step(Event::BodyStored {
+                tag,
+                round,
+                subject,
+            })
+            .expect("the exact body becomes durable");
+        assert!(matches!(stored.effects(), [Effect::ValidateBody { .. }]));
+        let rejected = reducer
+            .step(Event::ValidationCompleted {
+                tag,
+                round,
+                subject,
+                valid: false,
+            })
+            .expect("deterministic body rejection");
+        if round == locked_round {
+            assert_eq!(
+                rejected.effects(),
+                &[Effect::ReportInvalidCertifiedBody {
+                    subject,
+                    certificate: prepare.clone(),
+                }]
+            );
+        } else {
+            assert!(
+                rejected.effects().is_empty(),
+                "a different proposal has no matching Prepare authority"
+            );
+        }
+        let duplicate = reducer
+            .step(Event::ValidationCompleted {
+                tag,
+                round,
+                subject,
+                valid: false,
+            })
+            .expect("the terminal rejection is retained");
+        assert_eq!(
+            duplicate.disposition(),
+            StepDisposition::Ignored(IgnoreReason::Duplicate)
+        );
+        assert!(duplicate.effects().is_empty());
+    }
+}

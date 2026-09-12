@@ -43,7 +43,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "bd7e1827553dcaed27a5b18a4e29a9d5db948aa3a8ad7ace3427e98ee87d279b",
+        "fa387333267b95678e3cc22b7f512eca76289e38e1dc17b03ec21f80660f6888",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -66,13 +66,13 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     verify_zk_x509_io_segmented_stark_v1(statement, proof).expect("valid proof");
     assert!(
         ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1
-            .windows(b"sha256".len())
-            .any(|window| window == b"sha256")
+            .windows(b"goldilocks-poseidon-x7-six-lane-vector-row-merkle".len())
+            .any(|window| window == b"goldilocks-poseidon-x7-six-lane-vector-row-merkle")
     );
     assert!(
         !ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1
-            .windows(b"poseidon".len())
-            .any(|window| window == b"poseidon")
+            .windows(b"sha256-vector-row-merkle".len())
+            .any(|window| window == b"sha256-vector-row-merkle")
     );
     assert!(proof.len() <= ZK_X509_MAX_PROOF_BYTES_V1 as usize);
     assert_eq!(&proof[..4], &PROOF_MAGIC_V1);
@@ -101,7 +101,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     let digest: [u8; 32] = Sha256::digest(proof).into();
     assert_eq!(
         hex::encode(digest),
-        "edb5e8a1e839059f449a818f53eaac0598f6c634ca2e0767a211ad70c4f08bce",
+        "9fd43043d6a30bc877372943b6a38c17ce072ed44ffa8ea75c8b2d537bd96836",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
@@ -608,7 +608,7 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
             ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1,
         )
         .expect("canonical compact-CA capacity"),
-        (1_171, 511)
+        (34_851, 9_215)
     );
     assert_eq!(
         checked_compact_ca_degree_capacity_v1(
@@ -617,7 +617,7 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
             2,
         )
         .expect("lower-degree compact-CA capacity"),
-        (738, 511)
+        (25_964, 9_215)
     );
     for (trace_log2, lde_log2, constraint_degree) in [
         (
@@ -673,14 +673,14 @@ fn compact_ca_registration_is_single_fixed_capacity_and_fail_closed() {
         .expect("canonical compact-CA registration");
     assert_eq!(layout.parameters_v1(), CA_AGGREGATE_PARAMETERS_V1);
     assert_eq!(layout.common_lde_log2, ZK_X509_CA_FRI_LDE_LOG2_V1);
-    assert_eq!(layout.fri_rounds(), 5);
+    assert_eq!(layout.fri_rounds(), 6);
     assert_eq!(layout.trace_groups.len(), 1);
     assert_eq!(layout.registered_segments.len(), 1);
     let registration = layout
         .registered_segment(SegmentAdapterIdV1::CaAccumulator, 0)
         .expect("compact-CA registration");
     assert_eq!(registration.segment.active_rows, 13);
-    assert_eq!(registration.segment.trace_log2, 7);
+    assert_eq!(registration.segment.trace_log2, 13);
     assert_eq!(registration.segment.lde_log2, ZK_X509_CA_FRI_LDE_LOG2_V1);
     assert_eq!(registration.segment.base_width, 695);
     assert_eq!(registration.segment.aux_width, 128);
@@ -1359,7 +1359,7 @@ fn main_projection_fixed_rows_and_residues_match_direct_common_domain_adapter() 
     );
 }
 #[test]
-fn main_projection_verifier_cache_reuses_caps_and_rejects_the_117th_opening() {
+fn main_projection_verifier_cache_reuses_caps_and_rejects_the_273rd_opening() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let registration = layout
         .registered_segment(SegmentAdapterIdV1::Projection, 0)
@@ -1413,7 +1413,7 @@ fn main_projection_verifier_cache_reuses_caps_and_rejects_the_117th_opening() {
         source
             .constraint_residues_v1(registration, next_stride, next_stride * 2, x, opening,)
             .is_err(),
-        "one new index beyond the exact 116-opening bound must fail before sampling"
+        "one new index beyond the exact 272-opening bound must fail before sampling"
     );
     assert_eq!(
         source.fixed_openings.len(),
@@ -2713,7 +2713,8 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
     );
     assert!(
         maximum_encoded_bytes
-            <= usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize")
+            > usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize"),
+        "the canonical registration remains inspectable while its full proof exceeds the release cap"
     );
     for signature in 0..P256_SIGNATURE_COUNT_V1 {
         let arithmetic = layout
@@ -2759,7 +2760,7 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
     changed.trace_groups[5].column_chunks -= 1;
     mutations.push(changed);
     let mut changed = layout.clone();
-    changed.common_lde_log2 = 22;
+    changed.common_lde_log2 = ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - 1;
     mutations.push(changed);
     for (index, mutation) in mutations.iter().enumerate() {
         assert!(

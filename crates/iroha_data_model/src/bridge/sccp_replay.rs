@@ -402,6 +402,12 @@ impl SccpSparseMerkleWitnessV1 {
     /// This checks the representation independently of a particular replay
     /// key or current shard root. State-dependent path checks remain part of
     /// [`SccpReplayForestV1::occupy`] and the membership verifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NonCanonicalWitness` if reserved bitmap bits are set, the sibling count
+    /// exceeds the limit or disagrees with the bitmap, or an explicitly supplied sibling
+    /// equals its level's default hash.
     pub fn validate(&self) -> Result<(), SccpReplayAccumulatorError> {
         validate_and_expand_siblings(self, &sccp_replay_empty_hashes_v1()).map(|_| ())
     }
@@ -412,6 +418,12 @@ impl SccpSparseMerkleWitnessV1 {
     /// sentinel, so the complete 256-bit key space—including the all-zero key—is
     /// accepted. Successful verification requires the supplied current root,
     /// this witness's expected root, and the reconstructed path root to be exact.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StaleRoot` when the expected root differs from the current root,
+    /// `InvalidPath` when the prior digest or reconstructed root differs, or
+    /// `NonCanonicalWitness` for invalid compressed siblings.
     pub fn verify_against_current_root(
         &self,
         key: [u8; 32],
@@ -456,6 +468,7 @@ impl SccpSparseMerkleWitnessV1 {
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::sccp_replay::SccpReplayForestV1")]
+#[derive(Default)]
 pub struct SccpReplayForestV1 {
     /// Shards whose roots differ from the canonical empty root.
     pub nonempty_shard_roots: BTreeMap<u8, [u8; 32]>,
@@ -463,16 +476,6 @@ pub struct SccpReplayForestV1 {
     pub leaf_count: u64,
     /// Lifetime number of root updates.
     pub update_sequence: u64,
-}
-
-impl Default for SccpReplayForestV1 {
-    fn default() -> Self {
-        Self {
-            nonempty_shard_roots: BTreeMap::new(),
-            leaf_count: 0,
-            update_sequence: 0,
-        }
-    }
 }
 
 /// Authenticated replay transition emitted to rebuild witness indexes.
@@ -577,46 +580,52 @@ fn domain_boundary_is_valid(domain: &SccpReplayDomainV1) -> bool {
         TronDestinationMint, TronSourceBurn,
     };
 
-    match (
-        domain.boundary,
-        domain.source_network,
-        domain.target_network,
-        &domain.actor,
-    ) {
+    matches!(
+        (
+            domain.boundary,
+            domain.source_network,
+            domain.target_network,
+            &domain.actor,
+        ),
         (
             SoraOutboundLock,
             SoraTaira,
             EthereumMainnet | BscMainnet | TronMainnet | TonMainnet,
             Route,
-        )
-        | (
+        ) | (
             SoraInboundRelease,
             EthereumMainnet | BscMainnet | TronMainnet | TonMainnet,
             SoraTaira,
             Route,
-        )
-        | (EvmDestinationMint, SoraTaira, EthereumMainnet | BscMainnet, Evm(_))
-        | (EvmSourceBurn, EthereumMainnet | BscMainnet, SoraTaira, Evm(_))
-        | (TronDestinationMint, SoraTaira, TronMainnet, Tron(_))
-        | (TronSourceBurn, TronMainnet, SoraTaira, Tron(_))
-        | (
-            TonBridgeInboundMint | TonMasterMint | TonWalletMintCredit,
+        ) | (
+            EvmDestinationMint,
             SoraTaira,
-            TonMainnet,
-            Ton(_),
-        )
-        | (
-            TonBridgeOutboundBurn
-            | TonMasterBurn
-            | TonWalletBurnAuthorization
-            | TonWalletBurnLock
-            | TonWalletBurnRefund,
-            TonMainnet,
+            EthereumMainnet | BscMainnet,
+            Evm(_)
+        ) | (
+            EvmSourceBurn,
+            EthereumMainnet | BscMainnet,
             SoraTaira,
-            Ton(_),
-        ) => true,
-        _ => false,
-    }
+            Evm(_)
+        ) | (TronDestinationMint, SoraTaira, TronMainnet, Tron(_))
+            | (TronSourceBurn, TronMainnet, SoraTaira, Tron(_))
+            | (
+                TonBridgeInboundMint | TonMasterMint | TonWalletMintCredit,
+                SoraTaira,
+                TonMainnet,
+                Ton(_),
+            )
+            | (
+                TonBridgeOutboundBurn
+                    | TonMasterBurn
+                    | TonWalletBurnAuthorization
+                    | TonWalletBurnLock
+                    | TonWalletBurnRefund,
+                TonMainnet,
+                SoraTaira,
+                Ton(_),
+            )
+    )
 }
 
 fn operation_principal_is_valid(
@@ -651,6 +660,12 @@ fn operation_principal_is_valid(
 }
 
 /// Hash the canonical replay domain.
+///
+/// # Errors
+///
+/// Returns `InvalidDomain` for a zero route revision or configuration hash, an unsupported
+/// boundary/network/actor combination, or an actor encoding whose length does not fit
+/// `u16`.
 pub fn sccp_replay_domain_hash_v1(
     domain: &SccpReplayDomainV1,
 ) -> Result<[u8; 32], SccpReplayAccumulatorError> {
@@ -736,6 +751,13 @@ pub fn sccp_replay_key_v1(domain_hash: [u8; 32], replay_id: [u8; 32]) -> [u8; 32
 }
 
 /// Hash one canonical occupied-leaf record.
+///
+/// # Errors
+///
+/// Returns `InvalidRecord` if the replay identifier, payload hash, amount or auxiliary hash
+/// is zero, or the resulting digest is zero. Returns `InvalidPrincipal` if the principal
+/// kind does not match the operation or its canonical encoding is empty or exceeds the
+/// `u16` length bound.
 pub fn sccp_replay_record_digest_v1(
     record: &SccpReplayRecordV1,
 ) -> Result<[u8; 32], SccpReplayAccumulatorError> {
@@ -881,6 +903,12 @@ impl SccpReplayForestV1 {
     }
 
     /// Validate the constant-size stored representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidForest` if the stored shard count exceeds the limit, a stored root
+    /// is the canonical empty root, leaf counts disagree with shard occupancy, or the
+    /// update sequence differs from the leaf count.
     pub fn validate(&self) -> Result<(), SccpReplayAccumulatorError> {
         let empty_root = sccp_replay_empty_hashes_v1()[SCCP_REPLAY_SMT_DEPTH_V1];
         if self.nonempty_shard_roots.len() > SCCP_REPLAY_SMT_SHARD_COUNT_V1
@@ -898,6 +926,13 @@ impl SccpReplayForestV1 {
     }
 
     /// Occupy one previously empty replay leaf atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid forest, domain, record or compressed witness; a
+    /// mismatched operation boundary; an occupied prior leaf; a stale expected root or
+    /// invalid path; or exhausted leaf/update counters. All checks complete before the
+    /// forest is modified.
     pub fn occupy(
         &mut self,
         domain: &SccpReplayDomainV1,
@@ -950,6 +985,12 @@ impl SccpReplayForestV1 {
     }
 
     /// Verify exact membership without mutating the forest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid forest, domain, record or compressed witness, a
+    /// mismatched operation boundary, a stale expected root, or a prior digest/path that
+    /// does not prove the exact record at the current shard root.
     pub fn verify_membership(
         &self,
         domain: &SccpReplayDomainV1,
@@ -988,6 +1029,12 @@ impl SccpReplayForestV1 {
     /// shard-root rule is identical to [`Self::occupy`]. The complete 256-bit
     /// key space is valid, including the all-zero key if SHA-256 happens to
     /// derive it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidForest` for an inconsistent stored forest, `StaleRoot` for an
+    /// outdated witness root, `NonCanonicalWitness` for malformed compressed siblings, or
+    /// `InvalidPath` when the prior digest or reconstructed root does not match.
     pub fn verify_key_digest(
         &self,
         key: [u8; 32],
@@ -1000,6 +1047,12 @@ impl SccpReplayForestV1 {
     }
 
     /// Verify exact non-membership without mutating the forest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid forest, domain or compressed witness, a stale
+    /// expected root, a zero replay identifier, a nonzero prior record digest, or a path
+    /// that does not prove an empty leaf at the current shard root.
     pub fn verify_non_membership(
         &self,
         domain: &SccpReplayDomainV1,
@@ -1359,7 +1412,7 @@ mod tests {
         let domain_hash = sccp_replay_domain_hash_v1(&base_domain).expect("valid domain");
         let record_hash = sccp_replay_record_digest_v1(&base_record).expect("valid record");
 
-        let mut other_domain = base_domain.clone();
+        let mut other_domain = base_domain;
         other_domain.route_revision += 1;
         assert_ne!(
             domain_hash,

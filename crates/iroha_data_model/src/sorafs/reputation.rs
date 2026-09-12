@@ -207,7 +207,6 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
         Ok(request)
     }
     /// Reserved custom-parameter identifier accepted by `SetParameter`.
-
     #[must_use]
     pub fn parameter_id() -> CustomParameterId {
         REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_PARAMETER_ID_V1
@@ -215,7 +214,6 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
             .expect("valid finalized-reputation retention parameter identifier")
     }
     /// Convert this request into the caller-signed custom parameter.
-
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(
@@ -232,7 +230,6 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
     /// # Errors
     ///
     /// Returns a JSON error for malformed or semantically invalid matching payloads.
-
     pub fn from_custom_parameter(
         custom: &CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {

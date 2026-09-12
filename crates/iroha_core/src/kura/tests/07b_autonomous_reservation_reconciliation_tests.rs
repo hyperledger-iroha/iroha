@@ -11,11 +11,11 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
         1,
         &signer,
     );
+    let payload = historical_capacity_bound_payload_for_fixture(&payload, &signer);
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, network_id, epoch)
-        .expect("persist two-reservation payload");
+    persist_historical_capacity_payload_fixture(&kura, &payload, &signer);
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
     let retirement_hash = retirement.digest().expect("retirement digest");
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
@@ -116,6 +116,8 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &payload)
+        .expect("restore authenticated secondary lane artifacts");
     reopened
         .finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("exact Released prefix retry is a storage stutter");
@@ -129,6 +131,7 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, first) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+    let first = historical_capacity_bound_payload_for_fixture(&first, &signer);
     let successor = repropose_autonomous_lane_payload_for_kura(
         &first,
         first
@@ -138,14 +141,14 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
             .saturating_add(1),
         &signer,
     );
+    let successor = historical_capacity_bound_payload_for_fixture(&successor, &signer);
     let first_group = autonomous_reservation_reconciliation_group(first.reservation_keys.clone());
     let successor_group =
         autonomous_reservation_reconciliation_group(successor.reservation_keys.clone());
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
-    kura.persist_lane_executable_payload(&first, network_id, epoch)
-        .expect("persist first attempt");
+    persist_historical_capacity_payload_fixture(&kura, &first, &signer);
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&first);
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("retire first attempt");
@@ -154,8 +157,7 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
         .expect("first release barrier");
     kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("finish first release");
-    kura.persist_lane_executable_payload(&successor, network_id, epoch)
-        .expect("persist later latest attempt");
+    persist_historical_capacity_payload_fixture(&kura, &successor, &signer);
     let groups = [first_group, successor_group];
     let expected_epochs = [epoch, epoch];
     let assert_exact_attempts = |kura: &Kura| {
@@ -182,6 +184,8 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &successor)
+        .expect("restore exact secondary-lane lifecycle authority");
     assert_exact_attempts(reopened.as_ref());
 }
 #[test]
@@ -268,6 +272,7 @@ fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_abs
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let artifact_directory = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
+    fs::remove_dir(&artifact_directory).expect("remove empty fixture artifact directory");
     assert!(!artifact_directory.exists());
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),

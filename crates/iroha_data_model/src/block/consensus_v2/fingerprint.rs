@@ -41,7 +41,7 @@ struct NposGenesisFingerprintInput {
 /// Compute the deterministic v2 consensus-parameters fingerprint.
 ///
 /// Only first-release frozen inputs are representable in the encoded
-/// projection: mode, cadence, block bound, signed DA/Nexus context, and NPoS
+/// projection: mode, cadence, block bound, signed DA/Nexus context, and `NPoS`
 /// election parameters. The separately signed, network-independent KAGEMUSHA
 /// mint-finality genesis templates are intentionally excluded from this
 /// secondary fingerprint; they remain authenticated by the genesis metadata

@@ -2,9 +2,7 @@ use super::*;
 use crate::{prelude::StateReadOnly, smartcontracts::Execute};
 use iroha_data_model::{
     account::AccountId,
-    domain::DomainId,
     isi::{Grant, Revoke},
-    nexus::DataSpaceId,
     permission::Permission,
     prelude::{Account, Domain},
     role::{Role, RoleId},
@@ -15,6 +13,8 @@ use iroha_executor_data_model::permission::{
     role::CanManageRoles,
     trigger::{CanExecuteTrigger, CanRegisterTrigger},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;

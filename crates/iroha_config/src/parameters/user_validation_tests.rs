@@ -3,7 +3,7 @@
 mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, ContentAuthMode,
-        DaManifestPolicy, DomainId, Emitter, LaneId, NexusFees, NonZeroU64,
+        DaManifestPolicy, DomainId, Emitter, NexusFees, NonZeroU64,
         RETIRED_LANE_FUNCTIONAL_METADATA_KEYS, SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
         SORA_INROU_MIN_CPU_MILLIS_V1, SORA_INROU_MIN_MEMORY_BYTES_V1,
         SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1, SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
@@ -28,7 +28,7 @@ mod duration_clamp_tests {
             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
         },
     };
-    use iroha_model_base::name::Name;
+    use iroha_model_base::{name::Name, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
     use std::{
         fs,
@@ -1065,7 +1065,7 @@ policy_digest_hex = "{policy_digest_hex}"
         );
 
         let actual = load_root(table);
-        let lane_id = iroha_data_model::nexus::LaneId::new(1);
+        let lane_id = iroha_model_base::topology::LaneId::new(1);
         let lane = actual
             .nexus
             .lane_catalog
@@ -1075,7 +1075,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect("configured sharded lane");
         assert_eq!(
             lane.shard_id,
-            Some(iroha_data_model::nexus::ShardId::new(9)),
+            Some(iroha_model_base::topology::ShardId::new(9)),
             "the typed shard_id field must survive catalog construction"
         );
         assert!(!lane.metadata.contains_key("da_shard_id"));
@@ -1595,6 +1595,94 @@ policy_digest_hex = "{policy_digest_hex}"
             .parse()
             .expect("parse config without onboarding");
         assert!(actual.torii.account_onboarding.is_none());
+    }
+    #[test]
+    fn account_onboarding_accepts_explicit_dpn_user_permission() {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&key_pair);
+        let mut table = table_with_account_onboarding(&key_pair, key_file.path());
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("account_onboarding"))
+            .and_then(Value::as_table_mut)
+            .expect("account onboarding table")
+            .insert(
+                "additional_permissions".into(),
+                Value::Array(vec![Value::String("DpnUser".to_owned())]),
+            );
+        let onboarding = load_user_root(table)
+            .parse()
+            .expect("DpnUser is a supported unscoped onboarding permission")
+            .torii
+            .account_onboarding
+            .expect("account onboarding configured");
+        assert_eq!(
+            onboarding.additional_permissions,
+            vec![Name::from_str("DpnUser").expect("permission name")]
+        );
+    }
+    #[test]
+    fn account_onboarding_defaults_to_no_additional_permissions() {
+        let key_pair = checked_onboarding_authority_ed25519_key_fixture();
+        let key_file = OnboardingKeyFile::new(&key_pair);
+        let mut table = table_with_account_onboarding(&key_pair, key_file.path());
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("account_onboarding"))
+            .and_then(Value::as_table_mut)
+            .expect("account onboarding table")
+            .remove("additional_permissions");
+        let onboarding = load_user_root(table)
+            .parse()
+            .expect("additional permissions remain opt-in")
+            .torii
+            .account_onboarding
+            .expect("account onboarding configured");
+        assert!(onboarding.additional_permissions.is_empty());
+    }
+    #[test]
+    fn account_onboarding_rejects_unsupported_and_scoped_additional_permissions() {
+        for unsupported in [
+            "CanDoThing",
+            "DpnAdmin",
+            "DpnInori",
+            "CanManageAccountAlias",
+            "CanResolveAccountAlias",
+            "CanEnrollFeeSponsorProgram",
+        ] {
+            let mut emitter = Emitter::new();
+            assert!(
+                super::AccountOnboarding::parse_permissions(
+                    vec!["DpnUser".to_owned(), unsupported.to_owned()],
+                    &mut emitter,
+                )
+                .is_none(),
+                "unsupported additional permission `{unsupported}` must fail closed"
+            );
+            let error = emitter
+                .into_result()
+                .expect_err("invalid permission reported");
+            assert!(format!("{error:?}").contains(&format!(
+                "additional_permissions[1] `{unsupported}` is not a supported unscoped default permission"
+            )));
+        }
+    }
+    #[test]
+    fn account_onboarding_rejects_duplicate_dpn_user_permission() {
+        let mut emitter = Emitter::new();
+        assert!(
+            super::AccountOnboarding::parse_permissions(
+                vec!["DpnUser".to_owned(), "DpnUser".to_owned()],
+                &mut emitter,
+            )
+            .is_none()
+        );
+        let error = emitter
+            .into_result()
+            .expect_err("duplicate permission reported");
+        assert!(format!("{error:?}").contains("additional_permissions[1] `DpnUser` is duplicated"));
     }
     #[test]
     fn account_onboarding_parses_structural_credentials_and_native_auto_renew() {

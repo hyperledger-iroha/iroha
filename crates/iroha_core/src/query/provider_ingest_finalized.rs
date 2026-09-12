@@ -7053,12 +7053,12 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
-        metadata::Metadata,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinPolicy,
             ProviderIngestCompletionAuthorityV1, ReplicationOrderCompletionRecord,
         },
     };
+    use iroha_model_base::metadata::Metadata;
     use sorafs_manifest::capacity::{
         CapacityMetadataEntry, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
         ReplicationOrderSlaV1,

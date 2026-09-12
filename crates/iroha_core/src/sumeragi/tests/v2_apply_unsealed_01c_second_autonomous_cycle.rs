@@ -616,9 +616,11 @@ fn terminal_cycle_merge_apply_fixture(
         );
         (!digest.is_empty()).then_some(digest)
     };
-    let leader = context.leader(0);
+    let view = entry.merge_qc.view;
+    assert_eq!(header.view_change_index(), view);
+    let leader = context.leader(view);
     let body = BlockBuilder::new_with_time_source(Vec::new(), time)
-        .chain(0, Some(parent.as_ref()))
+        .chain(view, Some(parent.as_ref()))
         .bind_certified_merge_application_context(header)
         .expect("bind second certified application context")
         .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
@@ -647,7 +649,7 @@ fn terminal_cycle_merge_apply_fixture(
     let round = wire::ConsensusRound {
         context_id: context.id(),
         height,
-        view: 0,
+        view,
     };
     let manifest = crate::sumeragi::v2_chunks::encode_payload(context, round, subject, &wire_bytes)
         .expect("second merge signed RS16 manifest")
@@ -700,7 +702,7 @@ fn terminal_cycle_merge_apply_fixture(
         .expect("persist actual second merge validation receipt");
     let task = ApplyTask::for_test(
         height,
-        EventTag::new(height, 0, Generation::new(height)),
+        EventTag::new(height, view, Generation::new(height)),
         subject,
         certificate,
         validated,

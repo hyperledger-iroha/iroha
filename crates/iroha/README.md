@@ -67,6 +67,12 @@ The operation selects one response representation, enforces the context deadline
 and rejects oversized or ambiguously labelled responses. Transport errors retain
 their I/O category in `TransportErrorKind`; HTTP errors retain their bounded body.
 
+Submission discovers the node's data-model version and signed-transaction schema
+through public `/v1/node/capabilities` metadata before dispatching transaction
+bytes. This probe omits canonical account authentication so a fresh account can
+submit its registration. Configured transport headers, deadlines, response bounds
+and exact version/schema checks still apply.
+
 ## Operator configuration
 
 Bind the operator with `client.operator_client(operator_key_pair)?`, then read

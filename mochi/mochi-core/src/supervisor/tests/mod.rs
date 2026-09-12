@@ -13,9 +13,10 @@ use super::snapshot_restore::{
 use super::*;
 use iroha_crypto::{HashOf, PublicKey};
 use iroha_data_model::{
-    block::BlockHeader, isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1, peer::PeerId,
+    block::BlockHeader, isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_model_base::peer::PeerId;
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::{

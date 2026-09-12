@@ -10,11 +10,12 @@ use crate::{
     NetworkId,
     asset::AssetDefinitionId,
     fastpq::{FastpqTransitionBatch, TransferTranscriptBundle},
-    nexus::{DataSpaceId, FeeDebitSource, LaneId, LaneRelayEnvelope},
-    peer::PeerId,
+    nexus::{FeeDebitSource, LaneRelayEnvelope},
 };
 use core::{fmt, num::NonZeroU64};
 use iroha_crypto::{Algorithm, Hash, HashOf};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
@@ -2529,10 +2530,6 @@ fn validate_native_amx_qc_shape(
     }
     Ok(())
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the ordered Native AMX V2 audit preserves stable first-error precedence across one cross-field protocol record"
-)]
 fn validate_native_amx_leg_shape(
     receipt: &NativeAmxReceipt,
     leg: &NativeAmxLegRecordV2,

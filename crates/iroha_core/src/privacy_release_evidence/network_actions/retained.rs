@@ -1242,7 +1242,9 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{metadata::Metadata, prelude::DomainId, transaction::FeePaymentIntent};
+    use iroha_data_model::transaction::FeePaymentIntent;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use std::time::Duration;
     fn context(key_pair: &KeyPair) -> PrivacyReleaseTransactionContextV1 {

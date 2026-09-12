@@ -22,9 +22,9 @@ use iroha_data_model::{
             StorageTicketId,
         },
     },
-    nexus::LaneId,
     sorafs::pin_registry::StorageClass,
 };
+use iroha_model_base::topology::LaneId;
 use iroha_storage_client::da::{DaProofBenchmark, DaProofConfig, benchmark_da_proof_verification};
 use norito::{
     decode_from_bytes,
@@ -1594,9 +1594,9 @@ mod tests {
             ingest::{DaIngestReceipt, DaStripeLayout},
             types::{BlobClass, BlobDigest, RetentionPolicy, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
+    use iroha_model_base::topology::LaneId;
     use std::path::PathBuf;
     fn sample_receipt(
         ticket: [u8; 32],

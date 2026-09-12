@@ -99,17 +99,11 @@ fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_ext
             entrypoint.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
         })
     }));
-    for validate_live_authority in [true, false] {
-        state
-            .validate_merge_execution_batch(
-                &entry.active_lanes,
-                &batch,
-                &BTreeMap::new(),
-                validate_live_authority,
-                Some(ConsensusMode::Permissioned),
-            )
-            .expect("QueuePlanSynced merge content remains valid");
-    }
+    state.validate_merge_execution_batch(
+        &entry.active_lanes,
+        &batch,
+        MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
+    ).expect("QueuePlanSynced merge content remains valid");
     let ordinary = ordinary_external_entrypoint_for_merge_intent_test(&state, 0x7A);
     let ordinary_hash = Hash::from(ordinary.hash());
     batch.lanes[0].entrypoints[0] = ordinary;
@@ -122,16 +116,19 @@ fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_ext
     assert!(crate::merge::merge_execution_batch_commitments_match(
         &batch
     ));
-    for validate_live_authority in [true, false] {
-        let error = state
-            .validate_merge_execution_batch(
-                &entry.active_lanes,
-                &batch,
-                &BTreeMap::new(),
-                validate_live_authority,
-                Some(ConsensusMode::Permissioned),
-            )
-            .expect_err("follower and historical validation must reject Ordinary content");
-        assert_merge_queue_plan_synced_intent_error(error);
-    }
+    let error = state.validate_merge_execution_batch(
+        &entry.active_lanes,
+        &batch,
+        MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
+    ).expect_err("follower validation must reject Ordinary content");
+    assert_merge_queue_plan_synced_intent_error(error);
+    // Historical authority is minted only after the whole entry's certificate
+    // matches its bytes. Mutating content cannot borrow the original signed QC
+    // to reach historical execution validation.
+    let mut mutated_entry = entry;
+    mutated_entry.execution_batch = Some(batch);
+    assert!(matches!(
+        state.validate_merge_quorum_certificate(&mutated_entry, false, false),
+        Err(MergeLedgerCommitError::MergeQCDigestMismatch { .. })
+    ));
 }

@@ -4,7 +4,7 @@
 //! storage operators cannot replay previously accepted blobs. The replay cache keeps a
 //! bounded, per-lane/per-epoch window of recently seen manifest fingerprints and
 //! exposes deterministic outcomes that higher layers can map to admission errors.
-use iroha_data_model::nexus::LaneId;
+use iroha_model_base::topology::LaneId;
 use parking_lot::Mutex;
 use std::{
     collections::BTreeMap,
@@ -672,7 +672,7 @@ impl Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::LaneId;
+    use iroha_model_base::topology::LaneId;
     use std::{
         collections::BTreeSet,
         num::NonZeroUsize,

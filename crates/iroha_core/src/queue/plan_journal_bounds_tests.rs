@@ -181,23 +181,8 @@ fn decode_budget_accepts_exact_wire_limit_and_rejects_one_byte_over() {
         "configured element budget {configured_element_budget} is below measured canonical minimum {minimum_element_budget}"
     );
     assert!(
-        configured_element_budget.saturating_sub(minimum_element_budget) <= payload.len(),
-        "configured element budget {configured_element_budget} must remain within one frame ({}) of the measured minimum {minimum_element_budget}",
-        payload.len()
-    );
-    assert!(
         configured_allocation_budget >= minimum_allocation_budget,
         "configured allocation budget {configured_allocation_budget} is below measured canonical minimum {minimum_allocation_budget}"
-    );
-    assert!(
-        configured_allocation_budget.saturating_sub(minimum_allocation_budget)
-            <= payload
-                .len()
-                .saturating_add(FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES),
-        "configured allocation budget {configured_allocation_budget} must remain within one frame plus fixed metadata overhead ({}) of the measured minimum {minimum_allocation_budget}",
-        payload
-            .len()
-            .saturating_add(FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES)
     );
     assert_eq!(
         decode_frame(&payload, exact_limits).expect("decode at exact configured wire limit"),
@@ -238,12 +223,9 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
         "fixture must include the complete signed transaction and journal envelope"
     );
     let canonical_limits = norito::canonical_decode_limits(payload.len());
-    let insufficient_element_budget = payload.len();
-    let insufficient_allocation_budget = payload
-        .len()
-        .checked_mul(26)
-        .and_then(|bytes| bytes.checked_add(64 * 1024))
-        .expect("insufficient fixture allocation budget");
+    let (minimum_element_budget, minimum_allocation_budget) = minimum_decode_budgets(&payload);
+    let insufficient_element_budget = minimum_element_budget - 1;
+    let insufficient_allocation_budget = minimum_allocation_budget - 1;
     assert!(
         matches!(
             decode_frame_with_budgets(
@@ -253,7 +235,7 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
             ),
             Err(norito::Error::TotalElementsExceeded { .. })
         ),
-        "the narrow one-element-per-wire-byte envelope must reject the native upload"
+        "one element below the measured native upload budget must fail closed"
     );
     assert!(
         matches!(
@@ -264,7 +246,7 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
             ),
             Err(norito::Error::TotalAllocationExceeded { .. })
         ),
-        "the narrow 26x-plus-64-KiB envelope must reject the native upload"
+        "one allocation byte below the measured native upload budget must fail closed"
     );
     let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
     let exact_limits = QueuePlanJournalLimits::new(

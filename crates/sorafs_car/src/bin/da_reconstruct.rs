@@ -517,9 +517,9 @@ mod tests {
                 StorageTicketId,
             },
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::erasure::rs16;
     use norito::{
         json::{self as norito_json, Map as JsonMap, Value as JsonValue},

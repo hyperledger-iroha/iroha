@@ -22,10 +22,10 @@ use iroha_data_model::{
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::{TransactionEntrypoint, TransactionResult},
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, Value};
 use std::{collections::BTreeSet, error::Error, fs, path::Path};

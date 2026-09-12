@@ -43,10 +43,10 @@ CASE_SHA256 = {
         "1250b5a5efe35d2462d6712c568bc84396ae21d7f9bd4ef1d8b9efd721216320",
     "zk_compute_routes_require_exact_account_authentication":
         "df31661cceec27a27c968294c1cb1c10a7472cbbbea04a3e50d64b0cb87c27fc",
-    "account_bootstrap_capabilities_are_public_without_changing_node_authentication":
-        "a7fed43afb2e44c31e14f55f5c2d6c9e052cbd03a87cbc46b64c209616b34c66",
+    "account_and_node_bootstrap_capabilities_are_public":
+        "82a9ef907443b7bf1f16f56aac2f6a79dfc9e19aa2389df623fb8fb7cad4fb9d",
     "state_backed_runtime_and_governance_routes_require_exact_account_authentication":
-        "cf6f62b98ae1923914f4869080e1405a9d0587c193943f6c9f0270b7b4e659ee",
+        "4683ea55c946a765e94d03a3c7d3bb375b0384099f00b12845ef1e810ab60bc5",
     "moderation_dead_letter_routes_are_account_signed_operator_role_posts":
         "f176bc2aca244a2eacb89c106d920a393e0124f8b438ce6fbb53b7db0d98216c",
 }

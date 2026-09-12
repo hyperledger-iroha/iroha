@@ -9,16 +9,16 @@ use crate::{
 use iroha_data_model::{
     asset::AssetDefinitionId,
     block::BlockHeader,
-    domain::DomainId,
     fastpq::{
         FastpqSourceExecutionKindV1, FastpqSourceRouteV1, TransferDeltaTranscript,
         TransferSmtWitness, TransferTranscript,
     },
     isi::Log,
-    nexus::LaneId,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_logger::Level;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use nonzero_ext::nonzero;

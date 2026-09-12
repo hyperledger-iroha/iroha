@@ -1,6 +1,6 @@
 //! Kotodama DEX demo: compile and run a simple XYK pool on IVM.
 use iroha_crypto::Hash;
-use iroha_data_model::DomainId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{

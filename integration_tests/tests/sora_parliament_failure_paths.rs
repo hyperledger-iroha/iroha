@@ -3,7 +3,7 @@
 use super::*;
 use iroha::data_model::{
     asset::{AssetBalancePolicy, AssetDefinition},
-    domain::{Domain, DomainId},
+    domain::Domain,
     governance::types::{
         BodyElectionAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadPresentV1,
         GovernanceExpectedHeadV1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
@@ -18,6 +18,7 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanProposeRuntimeUpgrade;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::BOB_ID;
 
 const CAPACITY_BOND_AMOUNT: u64 = 37;
@@ -471,7 +472,7 @@ fn certified_terminal_builder(
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanManageAccountAlias {
                 scope: AccountAliasPermissionScope::Dataspace(
-                    iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 ),
             }),
             ALICE_ID.clone(),

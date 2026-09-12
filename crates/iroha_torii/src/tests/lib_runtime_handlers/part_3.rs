@@ -1061,18 +1061,27 @@ fn queue_plan_admission_publication_targets_every_live_successor_except_self() {
 #[cfg(feature = "connect")]
 #[test]
 fn queue_plan_admission_publication_validates_and_persists_idempotently() {
-    let (app, request) =
-        incoming_proxy_submit_fixture(0xb0, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
-    let receipt =
-        exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_001);
-    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]);
+    let signers = (0_u8..4)
+        .map(|offset| checked_torii_test_keypair_from_seed_byte(
+            0xb0_u8.wrapping_add(offset), Algorithm::BlsNormal,
+            "derive publication durability-quorum validator key",
+        ))
+        .collect::<Vec<_>>();
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xb0, ToriiProxyTransactionAdmissionV1::QueuePlanSynced, &signers,
+    );
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .expect("publication fixture expectation must validate")
+        .expect("publication fixture must use strict admission");
+    assert_eq!(expected.durability_threshold, 2);
+    let receipts = signers.iter().take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_001))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
     let publication = QueuePlanAdmissionPublicationV1 {
         schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
         certificate: snapshot.body,
     };
-    let expected = super::queue_plan_synced_acceptance_expectation(&request)
-        .expect("publication fixture expectation must validate")
-        .expect("publication fixture must use strict admission");
     assert_eq!(
         super::validate_queue_plan_admission_publication(&app, &publication)
             .expect("certified publication must validate against local state"),
@@ -1104,11 +1113,63 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
             .contains("schema_version")
     );
 }
-macro_rules! torii_qp_case { ($($tokens:tt)*) => {{ $($tokens)* }}; }
 #[cfg(feature = "connect")]
 #[test]
 fn queue_plan_admission_publication_retains_future_until_catch_up() {
-    torii_qp_case! { let (app, mut request) = incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced); let future_height = u64::try_from(app.state.committed_height()).unwrap() + 1; move_queue_plan_synced_test_binding_to_future(&mut request, future_height, HashOf::from_untyped_unchecked(Hash::new(b"future QueuePlan predecessor"))); let receipt = exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_002); let publication = QueuePlanAdmissionPublicationV1 { schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, certificate: queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]).body }; let carrier_height = u64::try_from(app.state.committed_height()).unwrap() + 1; assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, carrier_height).expect("classifiable future certificate").1, PendingQueuePlanAdmissionDisposition::Future); let hash = Hash::new(&publication.certificate); assert!(matches!(super::ingest_queue_plan_admission_publication(&app, &publication).expect("authenticated future publication must be durable"), QueuePlanAdmissionPublicationIngestOutcome::Durable { certificate_hash, .. } if certificate_hash == hash)); assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect Kura"), Some(publication.certificate)); }
+    let signers = (0_u8..4)
+        .map(|offset| checked_torii_test_keypair_from_seed_byte(
+            0xb1_u8.wrapping_add(offset), Algorithm::BlsNormal,
+            "derive future-publication durability-quorum validator key",
+        ))
+        .collect::<Vec<_>>();
+    let (app, mut request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced, &signers,
+    );
+    let state_height = u64::try_from(app.state.committed_height()).unwrap();
+    let future_height = state_height.checked_add(1).unwrap();
+    let future_header = BlockHeader::new(
+        NonZeroU64::new(future_height).unwrap(), None, None, None, 0, 0,
+    );
+    move_queue_plan_synced_test_binding_to_future(&mut request, future_height, future_header.hash());
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .expect("future publication fixture expectation must validate")
+        .expect("future publication requires strict admission");
+    assert_eq!(expected.durability_threshold, 2);
+    let receipts = signers.iter().take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_002))
+        .collect::<Vec<_>>();
+    let incomplete = QueuePlanAdmissionPublicationV1 {
+        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+        certificate: queue_plan_synced_test_certificate_snapshot(&request, receipts[..1].to_vec()).body,
+    };
+    assert!(super::ingest_queue_plan_admission_publication(&app, &incomplete)
+        .expect_err("one attestation must not authorize a four-validator publication")
+        .contains("exact durability quorum"));
+    assert_eq!(app.kura.pending_queue_plan_admission_certificate(Hash::new(&incomplete.certificate))
+        .expect("inspect rejected incomplete publication"), None);
+    let publication = QueuePlanAdmissionPublicationV1 {
+        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+        certificate: queue_plan_synced_test_certificate_snapshot(&request, receipts).body,
+    };
+    assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, future_height)
+        .expect("classifiable future certificate").1,
+        PendingQueuePlanAdmissionDisposition::Future {
+            authority_height: future_height, proposal_height: future_height + 1,
+            state_height, carrier_height: future_height,
+        });
+    let hash = Hash::new(&publication.certificate);
+    assert!(matches!(super::ingest_queue_plan_admission_publication(&app, &publication)
+        .expect("authenticated future publication must be durable"),
+        QueuePlanAdmissionPublicationIngestOutcome::Durable { certificate_hash, .. } if certificate_hash == hash));
+    assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect Kura"),
+        Some(publication.certificate.clone()));
+    assert_eq!(app.queue.active_len(), 0, "future publication must not acquire transaction ownership");
+    app.state.append_committed_block_header_for_tests(future_header);
+    assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, future_height + 1)
+        .expect("publication is reclassifiable after the canonical frontier arrives").1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent);
+    assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect retained publication"),
+        Some(publication.certificate));
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
@@ -2255,6 +2316,105 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
     assert!(
         rx.await.is_err(),
         "P2P must drop an oversized strict response before handing bytes to the decoder"
+    );
+}
+#[cfg(all(feature = "app_api", feature = "connect"))]
+#[tokio::test]
+async fn torii_delegated_reads_reject_online_only_observers() {
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
+    let observer_key = checked_torii_test_ed25519_keypair(0xb9, "online observer fixture");
+    let observer = PeerId::from(observer_key.public_key().clone());
+    let local = checked_torii_test_peer_id(0xba, "authorized local ingress fixture");
+    let current = checked_torii_test_peer_id(0xbb, "authorized current ingress fixture");
+    let previous = checked_torii_test_peer_id(0xbc, "authorized previous ingress fixture");
+    let (_online_tx, online_rx) = tokio::sync::watch::channel(HashSet::from([Peer::new(
+        "127.0.0.1:18104".parse().expect("observer address"),
+        observer_key.public_key().clone(),
+    )]));
+    {
+        let app = Arc::get_mut(&mut app).expect("unique observer fixture");
+        app.online_peers = OnlinePeersProvider::new(online_rx);
+        app.local_peer_id = Some(local.clone());
+        let mut topology = app.state.commit_topology.block();
+        topology.push(current.clone());
+        topology.commit();
+        let mut topology = app.state.prev_commit_topology.block();
+        topology.push(previous.clone());
+        topology.commit();
+    }
+    assert!(!super::torii_proxy_authenticated_peer_is_trusted(
+        app.as_ref(),
+        &observer
+    ));
+    for trusted in [&local, &current, &previous] {
+        assert!(super::torii_proxy_authenticated_peer_is_trusted(
+            app.as_ref(),
+            trusted
+        ));
+    }
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let scope = ToriiFanoutRouteScopeV1::VisibleAccount {
+        caller_account_id: Some(ALICE_ID.to_string()),
+    };
+    let body =
+        norito::json::to_vec(&norito::json!({"authority": (ALICE_ID.to_string()), "items": []}))
+            .expect("view body");
+    let read = super::torii_read_request(
+        ToriiReadEndpointV1::ContractViewBatchPost,
+        scope.clone(),
+        route,
+        Vec::new(),
+        None,
+        body.clone(),
+    );
+    let fanout = iroha_core::torii_proxy::ToriiReadFanoutProxyRequestV1 {
+        endpoint: ToriiReadEndpointV1::AccountGet,
+        route_scope: scope,
+        merge: iroha_core::torii_proxy::ToriiReadFanoutMergeV1::Account,
+        path_args: vec![ALICE_ID.to_string()],
+        query_string: None,
+        body: Vec::new(),
+        response_format: ToriiProxyResponseFormatV1::Json,
+    };
+    for kind in [
+        ToriiProxyRequestKindV1::Read(read.clone()),
+        ToriiProxyRequestKindV1::ReadFanout(fanout),
+    ] {
+        for sender in [None, Some(observer.clone())] {
+            let request = ToriiProxyRequestV1 {
+                schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+                request_id: Hash::new(b"untrusted-read-observer"),
+                deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+                hop_count: 1,
+                max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
+                visited_peer_ids: vec![observer.clone()],
+                request: kind.clone(),
+            };
+            let response = super::execute_incoming_torii_proxy_request(&app, request, sender).await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("untrusted_proxy_ingress")
+            );
+        }
+    }
+    let request = ToriiProxyRequestV1 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+        request_id: Hash::new(b"authorized-read-ingress"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+        hop_count: 1,
+        max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
+        visited_peer_ids: vec![local.clone()],
+        request: ToriiProxyRequestKindV1::Read(read),
+    };
+    let response = super::execute_incoming_torii_proxy_request(&app, request, Some(local)).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "authorized ingress must reach ordinary empty-batch validation"
     );
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]

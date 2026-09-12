@@ -595,8 +595,8 @@ mod tests {
     fn matrix_seed() -> MatrixSeedV1 {
         matrix_seed_v1([0x31; 32]).expect("seed")
     }
-    const fn genesis_hash() -> [u8; 32] {
-        [0x32; 32]
+    fn genesis_hash() -> [u8; 32] {
+        *context().network_id.as_bytes()
     }
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {

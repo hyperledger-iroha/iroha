@@ -1,7 +1,7 @@
 #![no_main]
 use arbitrary::Arbitrary;
 use iroha_core::da::{LaneEpoch, ReplayCache, ReplayCacheConfig, ReplayFingerprint, ReplayKey};
-use iroha_data_model::nexus::LaneId;
+use iroha_model_base::topology::LaneId;
 use libfuzzer_sys::fuzz_target;
 use std::time::{Duration, Instant};
 #[derive(Debug, Arbitrary)]

@@ -4,12 +4,10 @@
 use super::*;
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    asset::AssetDefinitionId,
-    kagemusha::*,
-    nexus::{AxtAssetIncarnationV1, DataSpaceId},
+    NetworkId, account::AccountId, asset::AssetDefinitionId, kagemusha::*,
+    nexus::AxtAssetIncarnationV1,
 };
+use iroha_model_base::topology::DataSpaceId;
 use p256::ecdsa::{SigningKey, signature::Signer as _};
 use sha2::{Digest as _, Sha256};
 

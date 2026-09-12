@@ -1,5 +1,6 @@
 include!("autonomous_merge_and_queue_plan_test_support.rs");
 include!("autonomous_merge_admission_intent_tests.rs");
+include!("autonomous_merge_gas_budget_tests.rs");
 #[test]
 fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -285,9 +286,7 @@ fn assert_fastpq_batch_rejected(
     match state.validate_merge_execution_batch(
         active_lanes,
         &batch,
-        &std::collections::BTreeMap::new(),
-        true,
-        Some(ConsensusMode::Permissioned),
+        MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
     ) {
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
             assert_eq!(reason, expected_reason)
@@ -335,19 +334,14 @@ fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_con
         );
         commit_staged_autonomous_for_test(historical_block)
             .expect("commit the exact historical sealed carrier");
-        historical_state.validate_merge_execution_batch(
-            &historical_entry.active_lanes,
-            historical_entry.execution_batch.as_ref().expect("historical execution batch"),
-            &std::collections::BTreeMap::new(), false, None,
-        ).expect("historical validation accepts complete committed identities and registry ownership");
+        historical_state.recover_merge_ledger_from_kura()
+            .expect("historical recovery authenticates the complete committed carrier and its registry ownership");
     }
     assert!(matches!(
         state.validate_merge_execution_batch(
             &entry.active_lanes,
             batch,
-            &std::collections::BTreeMap::new(),
-            true,
-            Some(ConsensusMode::Permissioned),
+            MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
             if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
@@ -388,6 +382,19 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_co
     state_block
         .fastpq_transcripts
         .insert(inner_call_hash, vec![transcript]);
+    let before = state_block.fastpq_transcripts.clone();
+    assert!(matches!(
+        state_block.take_merge_lane_fastpq_transcripts(core::slice::from_ref(&sealed_entrypoint)),
+        Err(MergeLedgerCommitError::ExecutionDivergence(reason))
+            if reason.contains("has no applied source capture")
+    ));
+    assert_eq!(state_block.fastpq_transcripts, before);
+    let captured = state_block
+        .fastpq_source_context
+        .as_ref()
+        .expect("frozen source context")
+        .capture_transcript(Some(inner_call_hash), inner_call_hash, None, None, 0);
+    state_block.fastpq_source_captures.record(captured);
     let bundles = state_block
         .take_merge_lane_fastpq_transcripts(core::slice::from_ref(&sealed_entrypoint))
         .expect("sealed reveal maps its inner call evidence to its outer lane identity");
@@ -395,6 +402,12 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_co
     assert_eq!(bundles[0].entry_hash, outer_entrypoint_hash);
     assert_eq!(bundles[0].transcripts[0].batch_hash, inner_call_hash);
     assert!(state_block.fastpq_transcripts.is_empty());
+    assert!(
+        state_block
+            .captured_fastpq_transcript_sources()
+            .expect("healthy remaining captures")
+            .is_empty()
+    );
     state_block
         .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
         .expect("sealed-reveal evidence extraction leaves no unbound side effect");
@@ -3326,7 +3339,12 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
             .classify_pending_queue_plan_admission(&certificate, future_proposal_height)
             .expect("future authenticated certificate is retained, not rejected")
             .1,
-        PendingQueuePlanAdmissionDisposition::Future
+        PendingQueuePlanAdmissionDisposition::Future {
+            authority_height: future_authority_height,
+            proposal_height: future_proposal_height,
+            state_height: parent.header().height().get(),
+            carrier_height: future_proposal_height,
+        }
     );
     state
         .kura

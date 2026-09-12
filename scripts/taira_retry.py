@@ -354,6 +354,8 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
 
 def require_candidate_probe_inventory(inventory):
     """Reject obsolete or ambiguous public drafts before any retirement mutation."""
+    require(inventory.get("qualification_scope") in ("core_testnet", "inrou"),
+            "one explicit qualification scope is required")
     operator_key = inventory.get("operator_public_key")
     # PublicKey Display uses a lowercase multihash prefix and uppercase payload.
     # Native admission performs the cryptographic key/config/custody joins.
@@ -3090,7 +3092,7 @@ def _boot_fragment(unit, sha):
     return _boot_stamp(path.lstat())
 
 
-def _boot_enabled_link(unit):
+def _boot_link(unit):
     parent = Path("/etc/systemd/system/multi-user.target.wants")
     _boot_direct(parent)
     path = parent / unit
@@ -3100,11 +3102,70 @@ def _boot_enabled_link(unit):
         "enabled unit link custody differs",
     )
     target = os.readlink(path)
+    _boot_need(_boot_stamp(path.lstat()) == _boot_stamp(m), "enabled unit link changed")
+    return {
+        "path": str(path),
+        "target": target,
+        "uid": m.st_uid,
+        "metadata": _boot_stamp(m),
+    }
+
+
+def _boot_enabled_link(unit):
+    link = _boot_link(unit)
     _boot_need(
-        target in ("../" + unit, str(Path("/etc/systemd/system") / unit)),
+        link["target"] in ("../" + unit, str(Path("/etc/systemd/system") / unit)),
         "enabled unit link points elsewhere",
     )
-    return {"path": str(path), "target": target, "uid": m.st_uid}
+    return {key: link[key] for key in ("path", "target", "uid")}
+
+
+def _boot_reenable_nginx(prior_link, before, fragment_sha, fragment_metadata):
+    unit = "nginx.service"
+    fragment_path = "/etc/systemd/system/nginx.service"
+    _boot_need(
+        prior_link["path"] == "/etc/systemd/system/multi-user.target.wants/nginx.service"
+        and prior_link["target"] == "/usr/lib/systemd/system/nginx.service"
+        and before["UnitFileState"] == "enabled"
+        and before["FragmentPath"] == fragment_path,
+        "unexpected nginx boot link repair",
+    )
+    _boot_write(
+        "reenable-intent.json",
+        {
+            "unit": unit,
+            "fragment_path": fragment_path,
+            "fragment_sha256": fragment_sha,
+            "prior_link": prior_link,
+            "used_now": False,
+        },
+    )
+    _boot_need(
+        _boot_link(unit) == prior_link
+        and _boot_state(unit) == before
+        and _boot_fragment(unit, fragment_sha) == fragment_metadata,
+        "nginx boot repair identity changed",
+    )
+    done = subprocess.run(
+        ["/usr/bin/systemctl", "reenable", fragment_path],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=45,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+    )
+    _boot_write(
+        "reenable-result.json",
+        {"exit_code": done.returncode, "units": [unit], "used_now": False},
+    )
+    _boot_need(
+        done.returncode == 0, "systemctl reenable failed; preserve private evidence"
+    )
+    _boot_invariants(before, _boot_state(unit))
+    _boot_need(
+        _boot_fragment(unit, fragment_sha) == fragment_metadata,
+        "signed fragment bytes or metadata changed",
+    )
+    _boot_enabled_link(unit)
 
 
 def _boot_process_start_ticks(pid):
@@ -3272,9 +3333,17 @@ def _boot_main(request):
         "validator restarted since actual post-start proof",
     )
     selectors = {row["systemd_unit"]: _boot_selector(row) for row in pre["nodes"]}
+    repairs = {}
     for unit in BOOT_UNITS:
         if before[unit]["UnitFileState"] == "enabled":
-            _boot_enabled_link(unit)
+            link = _boot_link(unit)
+            if (
+                unit == "nginx.service"
+                and link["target"] == "/usr/lib/systemd/system/nginx.service"
+            ):
+                repairs[unit] = link
+            else:
+                _boot_enabled_link(unit)
     BOOT_OUT.mkdir(mode=0o700)
     _boot_write(
         "before.json",
@@ -3288,6 +3357,13 @@ def _boot_main(request):
     disabled = [
         unit for unit in BOOT_UNITS if before[unit]["UnitFileState"] == "disabled"
     ]
+    if repairs:
+        _boot_reenable_nginx(
+            repairs["nginx.service"],
+            before["nginx.service"],
+            hashes["nginx.service"],
+            metadata["nginx.service"],
+        )
     if disabled:
         done = subprocess.run(
             ["/usr/bin/systemctl", "enable", *disabled],
@@ -3330,7 +3406,9 @@ def _boot_main(request):
         "genesis_hash": BOOT_GENESIS,
         "passed": True,
         "enabled_units": list(BOOT_UNITS),
-        "changed_units": disabled,
+        "changed_units": [
+            unit for unit in BOOT_UNITS if unit in disabled or unit in repairs
+        ],
         "signed_fragments_unchanged": True,
         "main_pids_unchanged": True,
         "process_start_ticks_unchanged": True,
@@ -3416,6 +3494,8 @@ def preflight_identity(attempt, inventory):
         report["schema"] == "iroha.taira.public-reset.report.v1"
         and report["command"] == "preflight"
         and report["status"] == "ok"
+        and inventory.get("qualification_scope") in ("core_testnet", "inrou")
+        and report.get("qualification_scope") == inventory["qualification_scope"]
         and report["deployment_id"] == inventory["deployment_id"]
         and report["revision"] == inventory["revision"]["commit"]
         and report["inventory_sha256"] == inventory_sha
@@ -3424,6 +3504,7 @@ def preflight_identity(attempt, inventory):
     )
     return {
         "deployment_id": inventory["deployment_id"],
+        "qualification_scope": inventory["qualification_scope"],
         "authorization_nonce": inventory["authorization_nonce"],
         "inventory_sha256": inventory_sha,
         "authorization_sha256": report["authorization_sha256"],
@@ -3455,6 +3536,7 @@ def completed_attempt(plan, attempt, *, required=False):
     expected = {
         "schema": "iroha.taira.public-reset.journal.v1",
         "deployment_id": inventory["deployment_id"],
+        "qualification_scope": inventory["qualification_scope"],
         "inventory_sha256": frontier["inventory_sha256"],
         "authorization_sha256": frontier["authorization_sha256"],
         "authorization_nonce": inventory["authorization_nonce"],
@@ -4044,6 +4126,13 @@ def validate_execution_capacity(request, capacity, postconditions, resume_id):
                     and resume_id == expected, "deployment must resume its exact retired attempt")
 
 
+def require_public_probe_curl():
+    require(
+        Path("/usr/bin/curl").is_file() and os.access("/usr/bin/curl", os.X_OK),
+        "required public-probe executable /usr/bin/curl is unavailable",
+    )
+
+
 def guest_admit(request):
     """Read-only admission selects retirement or deployment capacity explicitly."""
     intent = execution_intent(request)
@@ -4062,6 +4151,7 @@ def guest_admit(request):
         },
         "guest identity differs from approved runtime",
     )
+    require_public_probe_curl()
     inventory_path = direct(plan["previous_inventory"])
     inventory = decode(public_record(inventory_path, owner=0, private=True))
     require_same_inventory_artifacts(inventory, request["binary"], request["source"])
@@ -4228,6 +4318,7 @@ def guest_run(request):
         },
         "guest identity differs from the approved runtime plan",
     )
+    require_public_probe_curl()
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     capacity = capacity_module(request["capacity_source"])
@@ -4546,6 +4637,7 @@ def guest_locked(request, capacity, root):
         "passed": True,
         "commit": binary["commit"],
         "deployment_id": draft["deployment_id"],
+        "qualification_scope": draft["qualification_scope"],
         "completed": completed,
         "private_attempt": str(attempt),
         "native_apply_passed": True,
@@ -4613,9 +4705,16 @@ def preserve_postcondition_outputs(attempt):
 
 def public_validation(binary, inventory, directory):
     """Run the exact released doctor without loading a client config or credentials."""
+    qualification_scope = inventory.get("qualification_scope")
+    require(
+        qualification_scope in ("core_testnet", "inrou"),
+        "public validation requires the signed qualification scope",
+    )
+    doctor_scope = "basic" if qualification_scope == "core_testnet" else "full"
     cli = str(Path(binary["destination"]) / "iroha")
     run_native(
-        [cli, "taira", "doctor", "--public-root", "https://taira.sora.org", "--json"],
+        [cli, "taira", "doctor", "--scope", doctor_scope,
+         "--public-root", "https://taira.sora.org", "--json"],
         directory,
         phase="public-validation",
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
@@ -4623,6 +4722,7 @@ def public_validation(binary, inventory, directory):
     doctor = decode(public_record(directory / "stdout", owner=0, private=True))
     require(
         doctor.get("command") == "taira_doctor"
+        and doctor.get("scope") == doctor_scope
         and doctor.get("public_root") == "https://taira.sora.org"
         and doctor.get("status") == "ok"
         and doctor.get("failures") == []
@@ -4852,6 +4952,7 @@ def resume_postconditions(request, attempt, terminal_path):
         "commit": binary["commit"],
         "deployment_id": inventory["deployment_id"],
         "completed": completed,
+        "qualification_scope": inventory["qualification_scope"],
         "private_attempt": str(attempt),
         "native_apply_passed": True,
         "seed_continuity_passed": True,

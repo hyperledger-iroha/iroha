@@ -42,7 +42,6 @@ use iroha_crypto::{
 };
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     alias_setup::{
         AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
@@ -58,7 +57,6 @@ use iroha_data_model::{
         set_instruction_registry,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    metadata::Metadata,
     parameter::{
         CustomParameter, SmartContractParameter,
         system::{
@@ -70,6 +68,12 @@ use iroha_data_model::{
     transaction::Executable,
 };
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
     json::Json,
@@ -9910,7 +9914,7 @@ impl NetworkPeer {
         let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
         let default_account_domain =
-            iroha_data_model::domain::DomainId::try_new("default", "universal")
+            iroha_model_base::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
         let network_id = self

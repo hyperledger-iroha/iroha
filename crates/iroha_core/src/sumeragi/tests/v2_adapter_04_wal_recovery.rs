@@ -2864,7 +2864,8 @@ include!("v2_adapter_04_wal_recovery_signature_fifo_cases.rs");
 include!("v2_adapter_04_wal_recovery_decision_classifier_cases.rs");
 
 impl SumeragiV2Adapter {
-    /// Reopen the exact regression WAL with either explicitly empty markers or a semantically sealed store.
+    /// Reopen the exact certified-body regression WAL and semantically replay
+    /// its durable markers with the same deterministic fixture validator.
     pub(in crate::sumeragi) fn reopen_body_owner_for_test(
         wal_path: &std::path::Path,
         storage_root: &std::path::Path,
@@ -2873,7 +2874,9 @@ impl SumeragiV2Adapter {
         local_signer: &KeyPair,
         fingerprints: AdapterFingerprints,
         consensus_key_hash: [u8; 32],
-        revalidated_body_store: Option<super::super::v2_body_store::RevalidatedV2BodyStore>,
+        mut validator: impl FnMut(
+            &iroha_data_model::block::SignedBlock,
+        ) -> Result<wire::ExecutionCommitment, String>,
     ) -> ProductionLifecycleOwnerV1 {
         let startup = Self::open_recovered_startup_with_aggregator(
             wal_path,
@@ -2891,28 +2894,45 @@ impl SumeragiV2Adapter {
             .unwrap_or_else(|(error, _)| {
                 panic!("authenticate the post-cancellation WAL frontier: {error}")
             });
-        let recovered = match revalidated_body_store {
-            Some(body_store) => authenticated
-                .open_production_lifecycle_owner_v1_with_store_for_test(
-                    &lifecycle_owner_config(),
-                    4,
-                    &storage_root.join("ledger"),
-                    &storage_root.join("serve"),
-                    body_store,
-                    local_signer,
-                ),
-            None => authenticated.open_production_lifecycle_owner_v1_from_roots_for_test(
+        let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            storage_root.join("body"),
+            authenticated.adapter.wire_context.clone(),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        )
+        .expect("reopen the same durable fixture body store");
+        let quarantined = match body_store.ensure_recovered_markers_revalidated() {
+            Ok(()) => false,
+            Err(super::super::v2_body_store::V2BodyStoreError::UnrevalidatedValidationMarkers) => {
+                true
+            }
+            Err(error) => panic!("inspect the exact recovered validation quarantine: {error}"),
+        };
+        let mut replayed = 0;
+        body_store
+            .revalidate_recovered_markers(|body| {
+                replayed += 1;
+                validator(body)
+            })
+            .expect("reproduce each recovered fixture validation outcome");
+        assert_eq!(
+            quarantined,
+            replayed != 0,
+            "checksummed terminal markers must remain quarantined until semantic replay",
+        );
+        let body_store = body_store
+            .into_revalidated_startup()
+            .expect("seal the semantically replayed fixture body store");
+        authenticated
+            .open_production_lifecycle_owner_v1_with_store_for_test(
                 &lifecycle_owner_config(),
                 4,
                 &storage_root.join("ledger"),
                 &storage_root.join("serve"),
-                &storage_root.join("body"),
-                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                body_store,
                 local_signer,
-            ),
-        };
-        recovered.unwrap_or_else(|error| {
-            panic!("recover exact cancelled and current body rows: {error}")
-        })
+            )
+            .unwrap_or_else(|error| {
+                panic!("recover exact cancelled and current body rows: {error}")
+            })
     }
 }

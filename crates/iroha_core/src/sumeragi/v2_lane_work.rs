@@ -156,9 +156,10 @@ use iroha_data_model::{
         MERGE_COMMITTEE_SIGNATURE_VERSION_V2, MergeCommitteeSignature, MergeLedgerEntry,
         MergeQuorumCertificate, MergeSignerProof,
     },
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-    peer::PeerId,
+    nexus::LaneRelayEnvelope,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_p2p::network::{
     NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
@@ -4753,6 +4754,22 @@ impl V2LaneWorkAdapter {
                 }
             }
         }
+        let queue = Arc::clone(self.lane_drain_queue.as_ref().ok_or_else(|| {
+            V2LaneWorkError::InvalidContext(
+                "autonomous lane production requires the installed live queue".to_owned(),
+            )
+        })?);
+        // Pending reservation owners above must run even when ordinary FIFO is
+        // empty. New reservations need materialized or replay-owned queue work;
+        // avoid scanning every lane's durable history on an otherwise idle tick.
+        // Use active_len, not queued_len: a missing hash FIFO can still require
+        // resynchronization, and payload-less durable owners consume active capacity.
+        // A concurrent admission is picked up by the bounded next producer tick;
+        // every actual selection still revalidates its complete State/Kura plan.
+        if queue.active_len() == 0 {
+            operation.complete();
+            return Ok(());
+        }
         let mut routes = self
             .state
             .consensus_lane_routes_at_height(self.context.height)
@@ -4793,11 +4810,6 @@ impl V2LaneWorkAdapter {
                     body.intent.lane_incarnation,
                 )
             });
-        let queue = Arc::clone(self.lane_drain_queue.as_ref().ok_or_else(|| {
-            V2LaneWorkError::InvalidContext(
-                "autonomous lane production requires the installed live queue".to_owned(),
-            )
-        })?);
         for (route_index, (lane_id, dataspace_id)) in routes.into_iter().enumerate() {
             if self
                 .autonomous_production_attempted_routes
@@ -4825,6 +4837,21 @@ impl V2LaneWorkAdapter {
             if drain_route == Some((lane_id, dataspace_id, incarnation)) {
                 continue;
             }
+            // These snapshots only defer irrelevant work; they never authorize
+            // selection. New admission and authority changes are retried on the
+            // bounded next tick, with the complete planner still binding State,
+            // Kura, incarnation, predecessor and the lane-height elected author.
+            if !queue.lane_has_pending_work(lane_id, dataspace_id, incarnation) {
+                continue;
+            }
+            if let Ok(committee) = self.state.resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+                self.context.height,
+            ) && !committee.validators().contains(&self.local_peer)
+            {
+                continue;
+            }
+            // Authority errors retain the full planner's existing classification.
             let slot = match plan_autonomous_lane_reservation_slot(
                 self.state.as_ref(),
                 self.kura.as_ref(),
@@ -4865,12 +4892,11 @@ impl V2LaneWorkAdapter {
                 route_index,
                 route_rotation,
             );
-            let gas_limit = Self::autonomous_route_quota(
-                usize::try_from(block_gas_limit).unwrap_or(usize::MAX),
-                route_count,
-                route_index,
-                route_rotation,
-            );
+            // A lane author produces an independent source, not a reserved share of a
+            // particular global block. Dividing gas by the catalog size makes a valid
+            // head transaction permanently unselectable when other lanes are idle.
+            // The merge selector owns the aggregate gas budget across certified sources.
+            let gas_limit = block_gas_limit;
             if transaction_limit == 0
                 || envelope_byte_limit == 0
                 || queue_scan_limit == 0
@@ -4889,7 +4915,7 @@ impl V2LaneWorkAdapter {
                     u64::try_from(envelope_byte_limit).unwrap_or(u64::MAX),
                 )
                 .expect("positive autonomous envelope-byte quota checked above"),
-                max_gas: NonZeroU64::new(u64::try_from(gas_limit).unwrap_or(u64::MAX))
+                max_gas: NonZeroU64::new(gas_limit)
                     .expect("positive autonomous gas quota checked above"),
             };
             let selection_authorization = slot
@@ -12712,16 +12738,16 @@ impl V2LaneWorkAdapter {
     }
     /// Authenticate one local serving decision against the QC-selected carrier.
     ///
-    /// A current-height entry is still speculative and therefore uses the live
-    /// frozen context. Once this adapter has advanced, only Kura's verified
-    /// finality and immutable retained carrier witness may select the
-    /// historical context and compact reference. The requester contributes no
-    /// height or carrier authority. A speculative current-height sidecar is
-    /// restricted to the live global roster. A finalized historical sidecar
-    /// may additionally be served to a validator in an exact governed lane
-    /// committee bound to that historical carrier, because those validators
-    /// must apply the same public global history even when their roster is
-    /// disjoint.
+    /// The live global roster may fetch a speculative current-height entry
+    /// under the frozen context. Every other requester requires Kura's verified
+    /// finality and immutable retained carrier witness, including while this
+    /// adapter is still completing that finalized height. Adapter rollover is
+    /// not finality authority: delaying the exact governed-lane corridor until
+    /// rollover can hold back peers which need the sidecar to apply the carrier.
+    /// The requester contributes no height or carrier authority. The existing
+    /// global-roster recovery corridor is unchanged. Additional governed-lane
+    /// access requires the finalized entry's complete QC-bound lane catalog;
+    /// current mutable lane membership never grants that access.
     fn authenticates_certified_merge_sidecar_service_for_requester(
         &self,
         entry: &MergeLedgerEntry,
@@ -12740,9 +12766,8 @@ impl V2LaneWorkAdapter {
         if carrier_height == 0 || carrier_height > self.context.height {
             return Ok(false);
         }
-        if carrier_height == self.context.height {
-            return Ok(requester_belongs_to(&self.context)
-                && merge_entry_has_exact_carrier_binding(&self.context, entry)
+        if carrier_height == self.context.height && requester_belongs_to(&self.context) {
+            return Ok(merge_entry_has_exact_carrier_binding(&self.context, entry)
                 && authenticate_merge_entry_for_height_context(&self.context, entry).is_ok());
         }
         let Some((header, finality, canonical_reference)) = self.consensus_storage_read(
@@ -12955,11 +12980,12 @@ impl V2LaneWorkAdapter {
         // authenticated relay/hub carrying its reply route. A peer outside the
         // live global roster receives only the bounded recovery corridor when
         // it belongs to either the exact predecessor roster or the exact
-        // historical lane authority retained by the requested entry. Reject every outsider before
-        // the transport can allocate a stream, gate, route attempt, or
-        // materialization slot. The fair materialization scheduler verifies
-        // exact historical global finality before emitting bytes, so lane
-        // validators can never fetch a speculative current-height sidecar.
+        // historical lane authority retained by the requested entry. Reject
+        // every outsider before the transport can allocate a stream, gate,
+        // route attempt, or materialization slot. The fair materialization
+        // scheduler verifies exact global finality before emitting bytes, even
+        // before local rollover, so lane validators cannot fetch a speculative
+        // current-height sidecar.
         let sender_is_current = self.frozen_roster_contains(&sender);
         if !sender_is_current {
             // Perform only bounded structural work before the single exact,
@@ -20554,7 +20580,7 @@ pub(super) mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId, Level, Registrable,
+        Level, Registrable,
         account::{AccountDetails, AccountId, AccountValue},
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, ExternalExecutionContext,
@@ -20567,16 +20593,19 @@ pub(super) mod tests {
             consensus_v2 as wire,
         },
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{InstructionBox, Log},
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig,
-            LaneFastpqProofMaterial, LaneId, LaneStorageProfile, LaneVisibility,
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneFastpqProofMaterial,
+            LaneStorageProfile, LaneVisibility,
         },
-        peer::PeerId,
         transaction::{TransactionBuilder, TransactionEntrypoint, signed::TransactionResultInner},
         trigger::DataTriggerSequence,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly as _;
     use std::{
@@ -20607,6 +20636,18 @@ pub(super) mod tests {
     }
     const STARTUP_FINALITY_DEADLOCK_CHILD_CASE: &str = "IROHA_STARTUP_FINALITY_DEADLOCK_CHILD_CASE";
     const STARTUP_FINALITY_DEADLOCK_TIMEOUT: Duration = Duration::from_secs(30);
+    const STARTUP_FINALITY_PREPARATION_TIMEOUT: Duration = Duration::from_secs(120);
+    const STARTUP_FINALITY_READER_READY_PATH: &str = "IROHA_STARTUP_FINALITY_READER_READY_PATH";
+
+    fn signal_startup_finality_reader_ready() {
+        let ready_path = std::path::PathBuf::from(
+            std::env::var_os(STARTUP_FINALITY_READER_READY_PATH)
+                .expect("startup watchdog supplies a readiness path"),
+        );
+        let temporary = ready_path.with_extension("tmp");
+        std::fs::write(&temporary, b"ready\n").expect("write reader readiness handshake");
+        std::fs::rename(temporary, ready_path).expect("publish reader readiness handshake");
+    }
 
     fn run_startup_finality_deadlock_child(case: &str) {
         let signer = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
@@ -20618,6 +20659,7 @@ pub(super) mod tests {
                 crate::kura::tests::install_minimal_startup_finality_inventory_for_test(
                     fixture.kura.as_ref(),
                 );
+                signal_startup_finality_reader_ready();
                 fixture
                     .kura
                     .refresh_v2_startup_finality_verification()
@@ -20651,6 +20693,7 @@ pub(super) mod tests {
                         fixture.kura.as_ref(),
                         &fixture.payload,
                     );
+                signal_startup_finality_reader_ready();
                 fixture
                     .kura
                     .refresh_v2_startup_finality_verification()
@@ -20680,6 +20723,8 @@ pub(super) mod tests {
     }
 
     fn assert_startup_finality_child_returns(case: &str) {
+        let handshake_directory = tempfile::tempdir().expect("create startup watchdog handshake");
+        let ready_path = handshake_directory.path().join("reader-ready");
         let mut child = std::process::Command::new(
             std::env::current_exe().expect("resolve current iroha_core test executable"),
         )
@@ -20687,21 +20732,44 @@ pub(super) mod tests {
         .arg("--nocapture")
         .arg("--test-threads=1")
         .env(STARTUP_FINALITY_DEADLOCK_CHILD_CASE, case)
+        .env(STARTUP_FINALITY_READER_READY_PATH, &ready_path)
         .spawn()
         .expect("spawn isolated startup deadlock regression");
-        let deadline = Instant::now() + STARTUP_FINALITY_DEADLOCK_TIMEOUT;
+        let preparation_deadline = Instant::now() + STARTUP_FINALITY_PREPARATION_TIMEOUT;
+        let mut reader_deadline = None;
         loop {
+            if reader_deadline.is_none() {
+                match std::fs::read(&ready_path) {
+                    Ok(readiness) => {
+                        assert_eq!(readiness, b"ready\n", "exact child readiness handshake");
+                        reader_deadline = Some(Instant::now() + STARTUP_FINALITY_DEADLOCK_TIMEOUT);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => panic!("read startup readiness handshake: {error}"),
+                }
+            }
             if let Some(status) = child
                 .try_wait()
                 .expect("poll isolated startup deadlock regression")
             {
                 assert!(status.success(), "startup deadlock child exited {status}");
+                assert_eq!(
+                    std::fs::read(&ready_path).expect("child must enter the guarded reader"),
+                    b"ready\n",
+                    "completed child publishes its exact readiness handshake"
+                );
                 return;
             }
+            let deadline = reader_deadline.unwrap_or(preparation_deadline);
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("startup finality {case} reader deadlocked for thirty seconds");
+                if reader_deadline.is_some() {
+                    panic!("startup finality {case} reader deadlocked for thirty seconds");
+                }
+                panic!(
+                    "startup finality {case} fixture preparation exceeded 120 seconds before reader readiness"
+                );
             }
             thread::sleep(Duration::from_millis(10));
         }

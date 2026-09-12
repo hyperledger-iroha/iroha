@@ -1404,7 +1404,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         reason = "complete Governance DAG service projection"
     )]
     pub fn try_from_governance_dag_service_view(
-        chain_id: &iroha_data_model::ChainId,
+        chain_id: &iroha_model_base::chain::ChainId,
         network_id: NetworkId,
         view: &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
@@ -1533,7 +1533,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// Rejects a non-production handle, zero revision or policy digest, or
     /// invalid issuer, policy, or authorization-lifetime bindings.
     pub fn try_from_bootle_lantern_issuance_service(
-        chain_id: &iroha_data_model::ChainId,
+        chain_id: &iroha_model_base::chain::ChainId,
         network_id: NetworkId,
         handle: impl Into<String>,
         revision: u64,
@@ -1570,7 +1570,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// zero-qualified, test-marked, or carries an invalid Ed25519 public key or
     /// request-size bound.
     pub fn try_from_governance_dag_service(
-        chain_id: &iroha_data_model::ChainId,
+        chain_id: &iroha_model_base::chain::ChainId,
         network_id: NetworkId,
         service: &sorafs_node::GovernanceDagServiceRuntimeProviderBindingsV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
@@ -1609,7 +1609,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         )
     }
     fn try_from_governance_dag_service_projection(
-        chain_id: &iroha_data_model::ChainId,
+        chain_id: &iroha_model_base::chain::ChainId,
         network_id: NetworkId,
         service: &GovernanceDagServiceBindingProjectionV1<'_>,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
@@ -3371,7 +3371,7 @@ mod tests {
     }
     #[test]
     fn standalone_bootle_lantern_catalog_is_exactly_one_qualified_slot() {
-        let chain_id = iroha_data_model::ChainId::from("taira");
+        let chain_id = iroha_model_base::chain::ChainId::from("taira");
         let network_id = test_network_id(0x94);
         let exact = standalone_bootle_lantern_bindings();
         let catalog = IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
@@ -3401,7 +3401,7 @@ mod tests {
     }
     #[test]
     fn standalone_bootle_lantern_catalog_rejects_unqualified_or_test_bindings() {
-        let chain_id = iroha_data_model::ChainId::from("taira");
+        let chain_id = iroha_model_base::chain::ChainId::from("taira");
         let network_id = test_network_id(0x94);
         let exact = standalone_bootle_lantern_bindings();
         for (handle, revision, digest) in [

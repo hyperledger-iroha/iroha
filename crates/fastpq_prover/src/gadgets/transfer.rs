@@ -1076,10 +1076,10 @@ mod tests {
     use crate::{OperationKind, StateTransition};
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TransferDeltaTranscript, TransferTranscript},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;

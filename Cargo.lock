@@ -3159,6 +3159,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_zkp_halo2",
@@ -5168,6 +5169,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_model_base",
  "iroha_schema",
  "manyhow",
  "norito",
@@ -5270,6 +5272,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_js_codec"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_model_base",
+ "iroha_primitives",
+ "norito",
+]
+
+[[package]]
+name = "iroha_js_codec_wasm"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "iroha_js_codec",
+ "norito",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "iroha_js_host"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5282,6 +5309,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_js_codec",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
@@ -5351,7 +5379,7 @@ dependencies = [
  "console-subscriber",
  "derive_more",
  "iroha_config",
- "iroha_data_model",
+ "iroha_model_base",
  "norito",
  "thiserror 2.0.18",
  "tokio",
@@ -5375,8 +5403,11 @@ name = "iroha_model_base"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "derive_more",
+ "getset",
+ "hex",
  "icu_normalizer",
  "idna",
+ "iroha_crypto",
  "iroha_data_model_derive",
  "iroha_ffi",
  "iroha_primitives",
@@ -5384,6 +5415,7 @@ dependencies = [
  "mv",
  "norito",
  "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5411,6 +5443,7 @@ dependencies = [
  "iroha",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "iroha_telemetry",
@@ -5439,6 +5472,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_futures",
  "iroha_logger",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_telemetry",
  "norito",
@@ -5506,6 +5540,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "iroha_service_model",
@@ -5542,6 +5577,7 @@ dependencies = [
  "halo2curves",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "norito",
  "sha2",
  "tiny-keccak",
@@ -5643,6 +5679,7 @@ dependencies = [
  "iroha",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "norito",
@@ -5669,6 +5706,7 @@ dependencies = [
  "iroha_config",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "nonzero_ext",
  "norito",
@@ -5757,6 +5795,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -6806,6 +6845,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -6839,6 +6879,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_torii_shared",
  "mochi-core",
  "norito",
@@ -6857,6 +6898,7 @@ dependencies = [
  "hex",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_model_base",
  "iroha_test_samples",
  "iroha_torii_shared",
  "mochi-core",
@@ -8455,24 +8497,18 @@ dependencies = [
 [[package]]
 name = "pqcrypto-internals"
 version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4a326caf27cbf2ac291ca7fd56300497ba9e76a8cc6a7d95b7a18b57f22b61d"
 dependencies = [
  "cc",
  "dunce",
  "getrandom 0.3.4",
- "libc",
 ]
 
 [[package]]
 name = "pqcrypto-mldsa"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f812cd126a2582599478a434fea75937b4b05d234c64a49e0cea129e130528"
 dependencies = [
  "cc",
  "glob",
- "libc",
  "paste",
  "pqcrypto-internals",
  "pqcrypto-traits",
@@ -8481,12 +8517,9 @@ dependencies = [
 [[package]]
 name = "pqcrypto-mlkem"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb14d207f3749e8a59a026c22ceaa72d70fff931cfbf4c8d9b08f3fc56dc6e60"
 dependencies = [
  "cc",
  "glob",
- "libc",
  "pqcrypto-internals",
  "pqcrypto-traits",
 ]

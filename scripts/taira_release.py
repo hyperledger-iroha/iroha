@@ -8,14 +8,17 @@ lane (override with --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR; both must ag
 `prepare` keeps repo target/ by default, ignoring the development-only environment
 selector, and also builds the four Linux release binaries
 from one fixed Git-object source capture with six jobs and captures read-only
-copies. Rerun the same prepare command to
-reuse completed checks/captures or retry an incomplete local build in the same
-warm Cargo lane. Failed attempt directories and logs remain intact.
+copies. Rerun the same prepare command to reuse completed checks/captures or
+retry an incomplete local build in the same warm Cargo lane. After a network
+failure, an exact independent-test checkpoint can avoid rerunning those tests;
+fresh matching Cargo artifact copies and the real four-peer gate are still
+required. Failed attempt directories and logs remain intact.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
-Existing source, outputs and Cargo caches are never overwritten or cleaned.
+Successful source refreshes retire their verified previous materialization only
+after durable publication. Failed captures, outputs and Cargo caches remain intact.
 """
 
 from __future__ import annotations
@@ -257,12 +260,65 @@ def frozen_snapshot(source: Path, entries: bytes, target_dir: Path) -> list[dict
     return rows
 
 
+def retire_source_capture(source: Path, entries: bytes, target_dir: Path) -> None:
+    """Remove only one authenticated, superseded capture under the source-lane lock."""
+    require(re.fullmatch(r"source\.retained-[0-9a-f]{32}", source.name) is not None,
+            "only a superseded source capture may be retired")
+    real_path(source)
+    before = source.lstat()
+    rows = frozen_snapshot(source, entries, target_dir)
+    # Build an exact deletion plan from authenticated entries. Never follow the
+    # target symlink into the warm Cargo lane or recurse through unknown inputs.
+    tree: dict = {"target": None}
+    for row in rows:
+        parts = Path(row["path"]).parts
+        node = tree
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = {} if row["kind"] == "gitlink" else None
+
+    def remove_contents(fd: int, expected: dict) -> None:
+        info = os.fstat(fd)
+        require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o500,
+                "retired source directory custody changed")
+        require(set(os.listdir(fd)) == set(expected), "retired source has unknown inputs")
+        os.fchmod(fd, 0o700)
+        for name, children in expected.items():
+            if children is None:
+                os.unlink(name, dir_fd=fd)
+            else:
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                dir_fd=fd)
+                try:
+                    remove_contents(child, children)
+                finally:
+                    os.close(child)
+                os.rmdir(name, dir_fd=fd)
+        os.fsync(fd)
+
+    parent = os.open(source.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fd = os.open(source.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     dir_fd=parent)
+        try:
+            require(file_identity(os.fstat(fd)) == file_identity(before),
+                    "retired source changed before removal")
+            remove_contents(fd, tree)
+        finally:
+            os.close(fd)
+        os.rmdir(source.name, dir_fd=parent)
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+
+
 def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes) -> Path:
     """Publish one fixed Git-object capture; never copy the mutable worktree."""
     parent = source.parent
     state_path = parent / "source-state.json"
     state = read_record(state_path) if state_path.exists() else None
     require(state is None or set(state) == {"commit"}, "invalid captured source checkpoint")
+    previous_entries = None
     if os.path.lexists(source):
         real_path(source)
         if state == {"commit": commit}:
@@ -273,7 +329,8 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
         except PrepareError:
             require(state is not None, "unexpected unrecorded source capture")
             # Preserve timestamps only from a complete, unchanged previous tree.
-            frozen_snapshot(source, commit_entries(root, state["commit"]), target_dir)
+            previous_entries = commit_entries(root, state["commit"])
+            frozen_snapshot(source, previous_entries, target_dir)
         else:
             # Publication may have completed before its small pointer checkpoint.
             checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
@@ -338,9 +395,12 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     for path, directories, _ in os.walk(pending, topdown=False):
         freeze(Path(path), directory=True)
     frozen_snapshot(pending, entries, target_dir)
+    retained = None
     if os.path.lexists(source):
         real_path(source)
-        os.rename(source, parent / ("source.retained-" + uuid.uuid4().hex))
+        require(previous_entries is not None, "previous source lacks an authenticated binding")
+        retained = parent / ("source.retained-" + uuid.uuid4().hex)
+        os.rename(source, retained)
     os.rename(pending, source)
     checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
     write_record(checkpoint, {"commit": commit})
@@ -350,6 +410,11 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
         os.fsync(fd)
     finally:
         os.close(fd)
+    if retained is not None:
+        # Keep rollback input through every capture/checkpoint publication failure.
+        # Older retained/pending directories belong to interrupted attempts and
+        # are deliberately not discovered or deleted by a successful refresh.
+        retire_source_capture(retained, previous_entries, target_dir)
     return source
 
 
@@ -720,14 +785,16 @@ def cargo_lane(root: Path, target_dir: Path, role: str):
         yield lock_fd
 
 
-def development_check(root: Path, target: Path | None, inherited: dict[str, str]) -> None:
+def development_check(root: Path, target: Path | None, inherited: dict[str, str],
+                      *, native_check_scope: str = "basic") -> None:
     root = real_path(root)
     target_dir = development_target(root, target, inherited)
     with cargo_lane(root, target_dir, "development") as lock_fd:
         env = child_environment(inherited, target_dir)
         env, _ = isolated_cargo_environment(root, root, env)
         print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
-        gate.run_checks(root, environment=native_check_environment(env, inherited), lock_fds=(lock_fd,))
+        gate.run_checks(root, environment=native_check_environment(env, inherited), lock_fds=(lock_fd,),
+                        qualification_scope=native_check_scope)
 
 
 @contextlib.contextmanager
@@ -749,8 +816,37 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             return prepare_in_lane(args, source, lock_fd, mode_lock_fd)
 
 
+def run_native_checks_with_checkpoint(selected_gate, source: Path, native_env: dict[str, str],
+                                      request: dict[str, object], checkpoint: Path,
+                                      revalidate, retire_checkpoint, lock_fds: tuple[int, ...]) -> None:
+    """Resume only an independent pass from this exact preparation request."""
+    completed = None
+    if checkpoint.exists():
+        record = read_record(checkpoint)
+        require(set(record) == {"request", "evidence"} and record["request"] == request
+                and isinstance(record["evidence"], dict),
+                "independent native check checkpoint differs or is incomplete")
+        completed = record["evidence"]
+
+    def update(evidence):
+        if evidence is None:
+            retire_checkpoint(checkpoint)
+            return
+        revalidate()
+        write_record(checkpoint, {"request": request, "evidence": evidence})
+
+    try:
+        selected_gate.run_checks(source, environment=native_env, source_commit=request["commit"],
+                                 lock_fds=lock_fds, completed_independent_checks=completed,
+                                 update_independent_checks=update,
+                                 qualification_scope=request["native_check_scope"])
+    except selected_gate.CheckError as error:
+        raise PrepareError(str(error)) from error
+
+
 def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, mode_lock_fd: int) -> dict[str, object]:
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
+    require(args.native_check_scope in {"basic", "full"}, "unknown native check scope")
     output = real_path(args.output_dir, exists=False)
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
             "prepare must use the maintained script from the selected checkout")
@@ -787,7 +883,12 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     native_env = native_check_environment(env, inherited)
     command = build_command(source, target_dir, env["CARGO"])
     base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
+            "native_check_scope": args.native_check_scope,
             "native_incremental": native_env["CARGO_INCREMENTAL"] == "1",
+            # This is the effective gate environment: child_environment excludes
+            # CARGO_BUILD_TARGET, and both commit variables are normalized above.
+            # Bind path-dependent tests without publishing environment values.
+            "native_environment_sha256": hashlib.sha256(canonical_json_bytes(native_env)).hexdigest(),
             "tree": tree, "target": TARGET, "profile": "release", "jobs": 6,
             "source_unchanged": True, "toolchain_unchanged": True,
             "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
@@ -861,15 +962,16 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
                 print(f"[taira-release] {label} elapsed {timings[label]:.3f}s", flush=True)
 
         checks = output / "checks.json"
+        independent_checks = output / "independent-checks.json"
         packages = local_package_names(source, env)
         if checks.exists():
             require(read_record(checks) == {"request": request, "passed": True}, "native check checkpoint differs")
 
-        def retire_checks():
+        def retire_checkpoint(checkpoint):
             # Remove the resumable success checkpoint before retiring any cache
             # metadata. A crash or a failed rerun must never revive an old pass.
-            if checks.exists():
-                os.rename(checks, attempt / "retired-checks.json")
+            if checkpoint.exists():
+                os.rename(checkpoint, attempt / ("retired-" + checkpoint.name))
                 for directory in (attempt, output):
                     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                     try:
@@ -877,17 +979,19 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
                     finally:
                         os.close(fd)
 
+        def retire_checks():
+            retire_checkpoint(checks)
+            retire_checkpoint(independent_checks)
+
         admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
         if checks.exists():
             print("[taira-release] reused completed native CLI checks", flush=True)
         else:
             selected_gate = captured_gate(source, before)
             def run_native_checks():
-                try:
-                    selected_gate.run_checks(source, environment=native_env, source_commit=args.expected_commit,
-                                             lock_fds=(lock_fd, lane_lock_fd, mode_lock_fd))
-                except selected_gate.CheckError as error:
-                    raise PrepareError(str(error)) from error
+                run_native_checks_with_checkpoint(
+                    selected_gate, source, native_env, request, independent_checks,
+                    revalidate, retire_checkpoint, (lock_fd, lane_lock_fd, mode_lock_fd))
             stage("native CLI checks", run_native_checks)
             revalidate()
             if not checks.exists():
@@ -914,6 +1018,8 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
         command.add_argument("--target-dir", type=Path, help="existing warm Cargo lane (check: sibling routine lane; prepare: repo target/)")
+        command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
+                             help="basic Taira deployment checks (default), or full regression qualification")
         if name == "prepare":
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
@@ -930,7 +1036,8 @@ def main() -> int:
     try:
         require(sys.platform in {"darwin", "linux"}, "Taira preparation requires macOS or Linux")
         if args.command == "check":
-            development_check(args.repo_root, args.target_dir, dict(os.environ))
+            development_check(args.repo_root, args.target_dir, dict(os.environ),
+                              native_check_scope=args.native_check_scope)
         else:
             args.target_dir = args.target_dir or args.repo_root / "target"
             prepared = prepare(args)

@@ -220,10 +220,9 @@ impl SccpTonReplayForestReadbackV1 {
     #[must_use]
     pub fn is_well_formed(self) -> bool {
         self.update_sequence == self.leaf_count
-            && match self.root_hash {
-                None => self.leaf_count == 0,
-                Some(root) => self.leaf_count != 0 && nonzero(&root),
-            }
+            && self.root_hash.map_or(self.leaf_count == 0, |root| {
+                self.leaf_count != 0 && nonzero(&root)
+            })
     }
 }
 
@@ -653,10 +652,7 @@ pub fn observation_is_fresh_at(ton_gen_utime_ms: u64, sora_time_ms: u64) -> bool
 
 fn pending_root_is_well_formed(root: Option<[u8; 32]>, count: u16) -> bool {
     count <= SCCP_TON_PENDING_OPERATION_CAP_V1
-        && match root {
-            None => count == 0,
-            Some(root) => count != 0 && nonzero(&root),
-        }
+        && root.map_or(count == 0, |root| count != 0 && nonzero(&root))
 }
 
 fn guardians_are_canonical(keys: SccpTonMintBreakerGuardianKeysV1) -> bool {

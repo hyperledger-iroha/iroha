@@ -7,12 +7,13 @@ use crate::{
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered,
     common::{Owned, Ref, split_nonempty},
-    metadata::Metadata,
-    prelude::{AccountId, DomainId, RoleId},
+    prelude::{AccountId, RoleId},
 };
 use derive_more::{Constructor, Display};
 use getset::{Getters, MutGetters};
 use iroha_crypto::Hash;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;

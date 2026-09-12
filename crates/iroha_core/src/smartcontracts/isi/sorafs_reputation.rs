@@ -2621,7 +2621,6 @@ mod tests {
         account::Account,
         block::{BlockHeader, builder::BlockBuilder},
         events::data::DataEvent,
-        metadata::Metadata,
         permission::Permissions,
         sorafs::{
             capacity::CapacityDeclarationRecord,
@@ -2636,6 +2635,7 @@ mod tests {
         CanManageSorafsReputationJournalPolicy, CanRecordSorafsReputationJournal,
         CanResolveSorafsCapacityDispute,
     };
+    use iroha_model_base::metadata::Metadata;
     use std::sync::Arc;
     const TEST_NOW_MS: u64 = 1_700_000_000_000;
     fn keypair(seed: u8) -> KeyPair {

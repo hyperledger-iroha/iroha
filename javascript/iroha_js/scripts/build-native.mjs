@@ -49,6 +49,8 @@ const PINNED_RUST_TOOLCHAIN = "1.93.1";
 const CARGO_PATH_ENV = "IROHA_JS_CARGO_PATH";
 const MAX_CARGO_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_CARGO_MANIFEST_BYTES = 4 * 1024 * 1024;
+const MAX_TOOLCHAIN_PROBE_BYTES = 64 * 1024;
+const TOOLCHAIN_PROBE_TIMEOUT_MS = 15_000;
 const REQUIRED_BUILD_ENVIRONMENT = Object.freeze({
   CARGO_BUILD_JOBS: "1",
   CARGO_INCREMENTAL: "0",
@@ -196,7 +198,30 @@ function requiredExecutable(env, key, executableName) {
   return path;
 }
 
-function validatePinnedExecutables(repoRoot, env) {
+function probePinnedExecutable(executable, args, repoRoot, env, runTool) {
+  const result = runTool(executable, args, {
+    cwd: repoRoot,
+    env,
+    encoding: "utf8",
+    maxBuffer: MAX_TOOLCHAIN_PROBE_BYTES,
+    timeout: TOOLCHAIN_PROBE_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (
+    result?.error !== undefined ||
+    result?.status !== 0 ||
+    (result.signal !== undefined && result.signal !== null) ||
+    typeof result.stdout !== "string" ||
+    Buffer.byteLength(result.stdout, "utf8") > MAX_TOOLCHAIN_PROBE_BYTES
+  ) {
+    throw new Error(
+      "Native build could not verify " + basename(executable) + " " + args.join(" ") + ".",
+    );
+  }
+  return result.stdout.trim();
+}
+
+function validatePinnedExecutables(repoRoot, env, runTool) {
   const channel = readPinnedToolchain(repoRoot);
   const cargoPath = requiredExecutable(env, CARGO_PATH_ENV, "cargo");
   const rustcPath = requiredExecutable(env, "RUSTC", "rustc");
@@ -210,16 +235,28 @@ function validatePinnedExecutables(repoRoot, env) {
       "Native build Cargo, rustc, and rustdoc must come from one pinned toolchain.",
     );
   }
-  const toolchainDirectory = basename(dirname(binDirectory));
-  if (
-    toolchainDirectory !== channel &&
-    !toolchainDirectory.startsWith(channel + "-")
-  ) {
+  const rustcVersion = probePinnedExecutable(rustcPath, ["-vV"], repoRoot, env, runTool);
+  const releases = [...rustcVersion.matchAll(/^release: ([^\r\n]+)\r?$/gmu)];
+  if (!rustcVersion.startsWith("rustc " + channel + " ") ||
+      releases.length !== 1 || releases[0][1] !== channel) {
     throw new Error(
-      "Native build executables do not belong to the pinned Rust " +
-        channel +
-        " toolchain.",
+      "Native build rustc must report exactly release " + channel + ".",
     );
+  }
+  for (const [executable, name] of [[cargoPath, "cargo"], [rustdocPath, "rustdoc"]]) {
+    const version = probePinnedExecutable(executable, ["--version"], repoRoot, env, runTool);
+    const parsed = /^(cargo|rustdoc) (\S+)(?: \([^\r\n]*\))?$/u.exec(version);
+    if (parsed?.[1] !== name || parsed[2] !== channel) {
+      throw new Error("Native build " + name + " must report exactly version " + channel + ".");
+    }
+  }
+  const sysrootPath = probePinnedExecutable(rustcPath, ["--print", "sysroot"], repoRoot, env, runTool);
+  if (!isAbsolute(sysrootPath) || resolve(sysrootPath) !== sysrootPath) {
+    throw new Error("Native build rustc sysroot must be an absolute canonical path.");
+  }
+  const sysroot = canonicalDirectory(sysrootPath, "Native build rustc sysroot");
+  if (join(sysroot.canonicalPath, "bin") !== binDirectory) {
+    throw new Error("Native build executables must share the bin directory of rustc's reported sysroot.");
   }
   return Object.freeze({ cargoPath, rustcPath, rustdocPath });
 }
@@ -747,6 +784,7 @@ export function runNativeBuild({
   repoRoot = defaultRepoRoot,
   env = process.env,
   platform = process.platform,
+  runTool = spawnSync,
   runCargo = (
     cargoPath,
     args,
@@ -769,7 +807,7 @@ export function runNativeBuild({
   const cargoProfile = resolveNativeBuildProfile(env);
   const root = canonicalRepoRoot(repoRoot);
   const inputs = canonicalBuildInputs(root, env);
-  const executables = validatePinnedExecutables(root, env);
+  const executables = validatePinnedExecutables(root, env, runTool);
   const target = canonicalTargetRoot(root, env);
   const nativePath = nativeBuildOutputPath({
     repoRoot: root,

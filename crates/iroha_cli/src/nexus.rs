@@ -5,7 +5,7 @@ use crate::{Run, RunContext};
 use eyre::{Result, eyre};
 use iroha::client::BorrowedKeyPairIdentityRequestSignerV1;
 use iroha::data_model::nexus::{
-    AtomicPrivateSettlementV1, LaneId, PrivateSettlementCommitteeAuthorityV1,
+    AtomicPrivateSettlementV1, PrivateSettlementCommitteeAuthorityV1,
     PrivateSettlementPhaseCertificateV1, PrivateSettlementPrepareBarrierV1,
     PrivateSettlementProvisionalLegMaterialV1,
 };
@@ -14,6 +14,7 @@ use iroha_core::private_settlement::{
     SoftwarePrivateSettlementAuditorKeyringCredentialsV1,
 };
 use iroha_crypto::{Hash, KeyPair};
+use iroha_model_base::topology::LaneId;
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditorCapsuleRequestV1,
     PrivateSettlementBundleSubmitRequestV1, PrivateSettlementLegUploadRequestV1,

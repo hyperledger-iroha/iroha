@@ -9,10 +9,11 @@ use crate::state::WorldReadOnly;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAliasDomain},
-    domain::DomainId,
-    nexus::{AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, UniversalAccountId},
+    nexus::{AssetPermissionManifest, DataSpaceCatalog, UniversalAccountId},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::error::ParseError;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};

@@ -2676,7 +2676,7 @@ pub mod extractors {
         #[cfg(feature = "app_api")]
         fn kagemusha_ingress_asset() -> iroha_data_model::asset::AssetDefinitionId {
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("offline", "universal")
+                iroha_model_base::domain::DomainId::try_new("offline", "universal")
                     .expect("fixture domain"),
                 "ingress".parse().expect("fixture asset name"),
             )

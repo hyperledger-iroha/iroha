@@ -422,13 +422,13 @@ mod tests {
             proofs::ExecutionReceiptProof,
         },
         bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
-        peer::PeerId,
         transaction::{
             FeePaymentIntent, TransactionResultInner,
             signed::{TransactionBuilder, TransactionResult},
         },
         trigger::DataTriggerSequence,
     };
+    use iroha_model_base::peer::PeerId;
     use std::num::NonZeroU64;
     const FIXTURE_NETWORK_ID: &str =
         "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7";

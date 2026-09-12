@@ -6,7 +6,10 @@
 //! is a universal-domain control, NOT private-to-universal transition evidence.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -60,8 +63,8 @@ use iroha_data_model::{
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneLifecycleParameterV1,
-        LaneLifecyclePlan, LaneLifecycleStatusV1, LaneVisibility,
+        LaneCatalog, LaneConfig as ModelLaneConfig, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        LaneLifecycleStatusV1, LaneVisibility,
     },
     parameter::{Parameters, system::SumeragiNposParameters},
     prelude::*,
@@ -70,6 +73,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::peer::CanManagePeers;
 use iroha_genesis::GenesisBlock;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary, genesis_factory_with_post_topology,

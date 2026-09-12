@@ -510,7 +510,8 @@ mod output_recovery_tests {
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    use iroha_data_model::block::consensus_v2 as wire;
+    use iroha_model_base::peer::PeerId;
 
     fn verified_fixture() -> (VerifiedHeightContext, Vec<KeyPair>) {
         let mut keys = (0x91_u8..=0x94)
@@ -693,6 +694,7 @@ mod output_recovery_tests {
         Linked,
         Resolved,
         ResolvedSameOwner,
+        ResolvedWrongTerminal,
     }
 
     fn invalid_body_ledger(
@@ -835,15 +837,28 @@ mod output_recovery_tests {
         assert_eq!(validate_candidate.causal_root, report_candidate.causal_root);
         assert!(child_ordinal > parent_ordinal);
         let owner = OwnerId::new(validate_candidate.causal_root, parent_ordinal);
-        if origin == InvalidBodyParentForTest::Resolved {
+        if matches!(
+            origin,
+            InvalidBodyParentForTest::Resolved | InvalidBodyParentForTest::ResolvedWrongTerminal
+        ) {
             // This fixture tests the cold ledger boundary. The real owner test
             // separately publishes this standalone row through the live registry.
             report_candidate.causal_root = CausalRoot::new(LifecycleDigest::new(
-                *Hash::new(b"independent current rejected report").as_ref(),
+                *super::super::replay_authority::resolved_invalid_body_report_causal_key(
+                    owner.causal_root(),
+                    parent_ordinal
+                        + u128::from(origin == InvalidBodyParentForTest::ResolvedWrongTerminal),
+                    &report_candidate.replay_authority,
+                )
+                .expect("fixture carries the exact invalid-body source")
+                .as_ref(),
             ));
             report_candidate.reconstruction_source = report_candidate.causal_root.digest();
         }
-        let report_owner = if origin == InvalidBodyParentForTest::Resolved {
+        let report_owner = if matches!(
+            origin,
+            InvalidBodyParentForTest::Resolved | InvalidBodyParentForTest::ResolvedWrongTerminal
+        ) {
             OwnerId::new(report_candidate.causal_root, child_ordinal)
         } else {
             owner
@@ -1142,6 +1157,7 @@ mod output_recovery_tests {
         for (corrupt, origin) in [
             (true, InvalidBodyParentForTest::Resolved),
             (false, InvalidBodyParentForTest::ResolvedSameOwner),
+            (false, InvalidBodyParentForTest::ResolvedWrongTerminal),
         ] {
             let (ledger, _) =
                 invalid_body_ledger_with_origin(&verified, &keys, 40, 43, corrupt, origin);

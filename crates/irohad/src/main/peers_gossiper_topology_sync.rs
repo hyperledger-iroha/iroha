@@ -3,14 +3,12 @@
 use std::{collections::HashSet, sync::Arc};
 
 use iroha_core::{peers_gossiper::PeersGossiperHandle, state::State};
-use iroha_data_model::{
-    events::{
-        EventBox,
-        pipeline::{BlockStatus, PipelineEventBox},
-    },
-    peer::PeerId,
+use iroha_data_model::events::{
+    EventBox,
+    pipeline::{BlockStatus, PipelineEventBox},
 };
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::UpdateTopology;
 use tokio::sync::broadcast;
 

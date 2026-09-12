@@ -1,7 +1,7 @@
 use super::{
     BlockSignaturePolicy, RecoveredCompleteTipActivationAuthority,
     RecoveredLifecycleStorageMintPermitV1, RecoveredSuccessorActivationAuthority, V2RecoveryError,
-    V2StartupReplayError, authenticate_v2_snapshot_replay_boundary,
+    V2SnapshotStartupPolicy, V2StartupReplayError, authenticate_v2_snapshot_replay_boundary,
     authenticate_v2_snapshot_startup, authenticated_v2_snapshot_startup_mode,
     build_verified_successor, committed_execution_policy_hash, committed_nexus_amx_context_hash,
     plan_v2_startup_replay, recover_active_height_with_plan,
@@ -23,23 +23,26 @@ use crate::{
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    ChainId, Registrable,
+    Registrable,
     account::AccountId,
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
         builder::BlockBuilder, consensus::SumeragiLanePayloadOwnership, consensus_v2 as wire,
     },
     consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-    domain::{Domain, DomainId},
+    domain::Domain,
     kaigi::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-    peer::PeerId,
+    nexus::LaneRelayEnvelope,
     transaction::{TransactionBuilder, signed::TransactionResultInner},
     trigger::DataTriggerSequence,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use std::{
     io::Write,
@@ -818,12 +821,217 @@ fn empty_chain_retry_binds_current_lane_auxiliary_storage() {
     );
 }
 #[test]
+fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_state() {
+    let (genesis_context, keys) = verified_context();
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
+    let mut parent = None;
+    for height in 1..=3 {
+        let block = dummy_block(&keys[0], height, parent);
+        parent = Some(block.as_ref().hash());
+        commit_to_state(&state, &block, genesis_context.context());
+    }
+    // Fees affect both frozen policy commitments but are process-local, not snapshot owner data.
+    state.nexus.write().fees.base_fee = "17".parse().expect("nondefault fee");
+    let nexus = state.nexus_snapshot();
+    let frozen_manifests = state.lane_manifests.read().clone();
+    let frozen_compliance = state.lane_compliance_engine();
+    let record = snapshot_record_for_state(&state, &genesis_context, &keys, 3);
+    state.set_authenticated_snapshot_v2_bootstrap_for_testing(record.clone());
+    let snapshot = norito::json::to_json(&state).expect("serialize canonical owner snapshot");
+    let payload = AuthenticatedSnapshotBootstrapPayload::for_testing(
+        record.clone(),
+        state.committed_block_hashes_snapshot(),
+    );
+    kura.install_authenticated_snapshot_prefix_for_testing(&payload)
+        .expect("retain authenticated imported hash vector");
+    let mut restored = crate::state::deserialize::KuraSeed {
+        kura: Arc::clone(&kura),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json_str(&snapshot)
+    .expect("production snapshot decoder restores owner projection");
+    assert_ne!(restored.nexus_snapshot().fees.base_fee, nexus.fees.base_fee);
+    let state_hash = crate::snapshot::canonical_state_snapshot_hash(&restored);
+    assert_eq!(
+        state_hash,
+        record
+            .context
+            .snapshot_bootstrap
+            .as_ref()
+            .expect("anchor")
+            .snapshot_state_hash
+    );
+    restored
+        .authenticate_snapshot_v2_bootstrap_candidate(
+            crate::snapshot::SnapshotBootstrapLineageAuthority::normally_signed_for_testing(),
+        )
+        .expect(
+            "reader authenticates signed lineage without placeholder runtime policy comparisons",
+        );
+    restored
+        .install_authenticated_snapshot_bootstrap_payload(payload)
+        .expect("retain externally authenticated payload");
+    let decoded_policy = V2SnapshotStartupPolicy::from_configured_runtime(
+        &restored,
+        &nexus,
+        frozen_manifests.as_ref(),
+        frozen_compliance.as_deref(),
+    )
+    .expect("decoded process policy is structurally valid");
+    assert_ne!(
+        decoded_policy.execution_policy_hash, record.context.execution_policy_hash,
+        "snapshot decoding does not install the fixture's configured process policy"
+    );
+    // Mirror daemon startup's pre-authentication process-policy installation. The fixture
+    // constructor changes governance and pipeline defaults; none of these fields belongs to
+    // canonical snapshot state. Copy the complete execution-policy input set, not only the
+    // fields that happen to differ in today's fixture defaults. Nexus and frozen registries
+    // remain explicit candidate inputs, so their placeholder/rejection checks stay meaningful.
+    restored
+        .set_zk(state.zk.clone())
+        .expect("configured ZK policy");
+    restored.set_crypto(state.crypto().as_ref().clone());
+    restored.set_pipeline(state.pipeline.clone());
+    restored.set_oracle(state.oracle.clone());
+    restored.set_fraud_monitoring(state.fraud_monitoring.clone());
+    restored.set_gov(state.gov.clone());
+    restored.content = state.content.clone();
+    restored.set_settlement(state.settlement().clone());
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        state_hash,
+        "runtime policy installation cannot change authenticated canonical state"
+    );
+    let candidate = V2SnapshotStartupPolicy::from_configured_runtime(
+        &restored,
+        &nexus,
+        frozen_manifests.as_ref(),
+        frozen_compliance.as_deref(),
+    )
+    .expect("configured frozen projection");
+    assert_eq!(
+        candidate.execution_policy_hash, record.context.execution_policy_hash,
+        "configured execution-policy commitment matches the signed snapshot"
+    );
+    assert_eq!(
+        candidate.nexus_amx_context_hash, record.context.nexus_amx_context_hash,
+        "configured AMX commitment matches the signed snapshot"
+    );
+    let placeholder = V2SnapshotStartupPolicy::from_state(&restored).expect("placeholder digest");
+    assert_ne!(
+        candidate.execution_policy_hash,
+        placeholder.execution_policy_hash
+    );
+    assert_ne!(
+        candidate.nexus_amx_context_hash,
+        placeholder.nexus_amx_context_hash
+    );
+    let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan snapshot import");
+    let storage_before = storage_tree(&kura.sumeragi_v2_storage_root());
+    authenticate_v2_snapshot_startup(kura.as_ref(), &restored, &plan, &candidate)
+        .expect("explicit configured projection matches signed context")
+        .expect("authenticated snapshot token");
+    assert!(matches!(
+        authenticate_v2_snapshot_startup(kura.as_ref(), &restored, &plan, &placeholder),
+        Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
+    ));
+    let mut wrong_nexus = nexus.clone();
+    wrong_nexus.fees.base_fee = "18".parse().expect("changed fee");
+    let wrong = V2SnapshotStartupPolicy::from_configured_runtime(
+        &restored,
+        &wrong_nexus,
+        frozen_manifests.as_ref(),
+        frozen_compliance.as_deref(),
+    )
+    .expect("different but valid configured projection");
+    assert!(matches!(
+        authenticate_v2_snapshot_startup(kura.as_ref(), &restored, &plan, &wrong),
+        Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
+    ));
+    let changed_manifests = crate::governance::manifest::LaneManifestRegistry::from_statuses(
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                (
+                    lane.id,
+                    crate::governance::manifest::LaneManifestStatus {
+                        lane: lane.id,
+                        alias: lane.alias.clone(),
+                        dataspace: lane.dataspace_id,
+                        visibility: lane.visibility,
+                        storage: lane.storage,
+                        governance: lane.governance.clone(),
+                        manifest_path: None,
+                        governance_rules: None,
+                        privacy_commitments: Vec::new(),
+                    },
+                )
+            })
+            .collect(),
+    );
+    let wrong_execution = V2SnapshotStartupPolicy::from_configured_runtime(
+        &restored,
+        &nexus,
+        &changed_manifests,
+        frozen_compliance.as_deref(),
+    )
+    .expect("independently changed manifest projection");
+    assert_eq!(
+        wrong_execution.nexus_amx_context_hash,
+        candidate.nexus_amx_context_hash
+    );
+    assert_ne!(
+        wrong_execution.execution_policy_hash,
+        candidate.execution_policy_hash
+    );
+    assert!(matches!(
+        authenticate_v2_snapshot_startup(kura.as_ref(), &restored, &plan, &wrong_execution),
+        Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
+    ));
+    let mut wrong_geometry = nexus.clone();
+    let mut lanes = nexus.lane_catalog.lanes().to_vec();
+    lanes[0].alias = "different-effective-owner".to_owned();
+    wrong_geometry.lane_catalog =
+        iroha_data_model::nexus::LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes)
+            .expect("different valid effective catalog");
+    wrong_geometry.lane_config = LaneConfig::from_catalog(&wrong_geometry.lane_catalog);
+    assert!(matches!(
+        V2SnapshotStartupPolicy::from_configured_runtime(
+            &restored,
+            &wrong_geometry,
+            frozen_manifests.as_ref(),
+            frozen_compliance.as_deref(),
+        ),
+        Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
+    ));
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        state_hash
+    );
+    assert_ne!(restored.nexus_snapshot().fees.base_fee, nexus.fees.base_fee);
+    assert_eq!(
+        storage_tree(&kura.sumeragi_v2_storage_root()),
+        storage_before
+    );
+}
+#[test]
 fn all_hash_only_snapshot_recovers_exact_authenticated_successor() {
     let (kura, state, record, keys) = hash_only_snapshot_boundary(3, true);
     let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan snapshot import");
-    let authorization = authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan)
-        .expect("authenticate snapshot startup")
-        .expect("snapshot startup mints an authorization");
+    let authorization = authenticate_v2_snapshot_startup(
+        kura.as_ref(),
+        &state,
+        &plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("authenticate snapshot startup")
+    .expect("snapshot startup mints an authorization");
     assert_eq!(authorization.mode(), record.context.mode);
     model_successful_snapshot_finalization(kura.as_ref(), &record);
     let recovered =
@@ -909,9 +1117,15 @@ fn audited_snapshot_prefix_classifies_retained_legacy_bodies_without_sidecars() 
     assert_eq!(plan.audited_bootstrap_prefix_height(), 3);
     assert_eq!(plan.complete_prefix_height(), 3);
     assert_eq!(plan.pending_tip_height(), None);
-    authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan)
-        .expect("authenticate mixed imported prefix")
-        .expect("snapshot startup requires finalization");
+    authenticate_v2_snapshot_startup(
+        kura.as_ref(),
+        &state,
+        &plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("authenticate mixed imported prefix")
+    .expect("snapshot startup requires finalization");
     model_successful_snapshot_finalization(kura.as_ref(), &record);
     recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
         .expect("retained bodies inside the typed import are historical, not executable");
@@ -937,7 +1151,13 @@ fn all_hash_only_snapshot_without_authenticated_record_fails_closed() {
     let storage_root = kura.sumeragi_v2_storage_root();
     let tree_before = storage_tree(&storage_root);
     assert!(matches!(
-        authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
+        authenticate_v2_snapshot_startup(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(
@@ -1002,7 +1222,13 @@ fn arbitrary_self_signed_first_roster_is_rejected_before_state_or_context_mutati
     let storage_root = kura.sumeragi_v2_storage_root();
     let tree_before = storage_tree(&storage_root);
     assert!(matches!(
-        authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
+        authenticate_v2_snapshot_startup(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(state.committed_height(), before_height);
@@ -1134,9 +1360,15 @@ fn anchor_snapshot_reopens_pending_first_full_block_without_parent_finality() {
         .expect("fixture anchor");
     let all_hash_only_plan =
         plan_v2_startup_replay(kura.as_ref()).expect("plan hash-only snapshot");
-    authenticate_v2_snapshot_startup(kura.as_ref(), &state, &all_hash_only_plan)
-        .expect("authenticate first executable context")
-        .expect("snapshot startup requires finalization");
+    authenticate_v2_snapshot_startup(
+        kura.as_ref(),
+        &state,
+        &all_hash_only_plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("authenticate first executable context")
+    .expect("snapshot startup requires finalization");
     model_successful_snapshot_finalization(kura.as_ref(), &record);
     let block = dummy_block(
         &keys[0],
@@ -1170,9 +1402,15 @@ fn later_snapshot_before_first_full_finality_is_rejected_without_mutation() {
         .expect("fixture anchor");
     let all_hash_only_plan =
         plan_v2_startup_replay(kura.as_ref()).expect("plan hash-only snapshot");
-    authenticate_v2_snapshot_startup(kura.as_ref(), &state, &all_hash_only_plan)
-        .expect("authenticate first executable context")
-        .expect("snapshot startup requires finalization");
+    authenticate_v2_snapshot_startup(
+        kura.as_ref(),
+        &state,
+        &all_hash_only_plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("authenticate first executable context")
+    .expect("snapshot startup requires finalization");
     model_successful_snapshot_finalization(kura.as_ref(), &record);
     let block = dummy_block(
         &keys[0],
@@ -1229,11 +1467,23 @@ fn later_snapshot_requires_retained_original_bootstrap_lineage() {
     complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
     let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
     assert!(matches!(
-        authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan),
+        authenticate_v2_snapshot_replay_boundary(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert!(matches!(
-        authenticated_v2_snapshot_startup_mode(kura.as_ref(), &state, &plan),
+        authenticated_v2_snapshot_startup_mode(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
 }
@@ -1254,7 +1504,13 @@ fn later_signed_lineage_without_immutable_first_context_fails_closed_read_only()
     let storage_root = kura.sumeragi_v2_storage_root();
     let tree_before = storage_tree(&storage_root);
     assert!(matches!(
-        authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
+        authenticate_v2_snapshot_startup(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(storage_tree(&storage_root), tree_before);
@@ -1313,7 +1569,13 @@ fn finalized_later_snapshot_rejects_a_missing_immutable_first_height_context() {
     let storage_root = kura.store_root();
     let storage_before = storage_tree(&storage_root);
     assert!(matches!(
-        authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan),
+        authenticate_v2_snapshot_replay_boundary(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(
@@ -1333,9 +1595,15 @@ fn later_snapshot_rejects_lineage_changed_from_immutable_first_height() {
     let (kura, mut state, record, keys) = hash_only_snapshot_boundary(2, true);
     let initial_plan =
         plan_v2_startup_replay(kura.as_ref()).expect("plan initial hash-only snapshot");
-    authenticate_v2_snapshot_startup(kura.as_ref(), &state, &initial_plan)
-        .expect("authenticate original boundary context")
-        .expect("snapshot startup requires finalization");
+    authenticate_v2_snapshot_startup(
+        kura.as_ref(),
+        &state,
+        &initial_plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("authenticate original boundary context")
+    .expect("snapshot startup requires finalization");
     model_successful_snapshot_finalization(kura.as_ref(), &record);
     complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
     let mut substituted = record.clone();
@@ -1345,7 +1613,13 @@ fn later_snapshot_rejects_lineage_changed_from_immutable_first_height() {
     state.set_authenticated_snapshot_v2_bootstrap_for_testing(substituted);
     let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
     assert!(matches!(
-        authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan),
+        authenticate_v2_snapshot_replay_boundary(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(
@@ -1359,9 +1633,15 @@ fn later_snapshot_uses_historical_lineage_not_current_topology_or_anchor_wsv() {
     let (kura, mut state, record, keys) = hash_only_snapshot_boundary(2, true);
     let initial_plan =
         plan_v2_startup_replay(kura.as_ref()).expect("plan initial hash-only snapshot");
-    authenticate_v2_snapshot_startup(kura.as_ref(), &state, &initial_plan)
-        .expect("authenticate original boundary context")
-        .expect("snapshot startup requires finalization");
+    authenticate_v2_snapshot_startup(
+        kura.as_ref(),
+        &state,
+        &initial_plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("authenticate original boundary context")
+    .expect("snapshot startup requires finalization");
     model_successful_snapshot_finalization(kura.as_ref(), &record);
     complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
     let changed_topology = (91_u8..=94)
@@ -1398,11 +1678,23 @@ fn later_snapshot_uses_historical_lineage_not_current_topology_or_anchor_wsv() {
     );
     state.set_authenticated_snapshot_v2_bootstrap_for_testing(record.clone());
     let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan complete first height");
-    authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &plan)
-        .expect("historical lineage is authenticated by its first full finality");
+    authenticate_v2_snapshot_replay_boundary(
+        kura.as_ref(),
+        &state,
+        &plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("historical lineage is authenticated by its first full finality");
     assert_eq!(
-        authenticated_v2_snapshot_startup_mode(kura.as_ref(), &state, &plan)
-            .expect("derive retained signed mode"),
+        authenticated_v2_snapshot_startup_mode(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        )
+        .expect("derive retained signed mode"),
         Some(record.context.mode)
     );
 }
@@ -1436,7 +1728,13 @@ fn hash_only_snapshot_rejects_an_intermediate_hash_vector_substitution() {
     let storage_root = kura.sumeragi_v2_storage_root();
     let tree_before = storage_tree(&storage_root);
     assert!(matches!(
-        authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
+        authenticate_v2_snapshot_startup(
+            kura.as_ref(),
+            &state,
+            &plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     assert_eq!(
@@ -2291,10 +2589,15 @@ fn deferred_sidecar_recovery_requires_a_fresh_plan_and_snapshot_boundary_authent
         plan_v2_startup_replay(kura.as_ref()).expect("classify pre-finalization crash image");
     assert_eq!(prefinalization_plan.complete_prefix_height(), 2);
     assert_eq!(prefinalization_plan.pending_tip_height(), Some(3));
-    let authorization =
-        authenticate_v2_snapshot_startup(kura.as_ref(), &state, &prefinalization_plan)
-            .expect("authenticate original snapshot boundary")
-            .expect("imported prefix mints a finalization authorization");
+    let authorization = authenticate_v2_snapshot_startup(
+        kura.as_ref(),
+        &state,
+        &prefinalization_plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .expect("authenticate original snapshot boundary")
+    .expect("imported prefix mints a finalization authorization");
     // Model deferred stage recovery publishing a complete, internally valid sidecar tuple
     // after the token was minted. The recovered artifact preserves the snapshot anchor, so
     // replay planning alone accepts it, but substitutes another frozen first-height context.
@@ -2314,7 +2617,13 @@ fn deferred_sidecar_recovery_requires_a_fresh_plan_and_snapshot_boundary_authent
         "deferred recovery changed the executable replay boundary"
     );
     assert!(matches!(
-        authenticate_v2_snapshot_replay_boundary(kura.as_ref(), &state, &recovered_plan),
+        authenticate_v2_snapshot_replay_boundary(
+            kura.as_ref(),
+            &state,
+            &recovered_plan,
+            &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+                .expect("fixture startup policy")
+        ),
         Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
     ));
     drop(authorization);

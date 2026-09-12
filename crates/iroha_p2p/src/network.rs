@@ -26,12 +26,10 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-use iroha_data_model::{
-    NetworkId,
-    prelude::{Peer, PeerId},
-};
+use iroha_data_model::{NetworkId, prelude::Peer};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::SocketAddr;
 use norito::{
     codec::{Decode, Encode},
@@ -1879,8 +1877,9 @@ pub struct NetworkReplyRoute {
     delivery_binding: Arc<ReliableReplyDeliveryBinding>,
     /// Sealed from the immutable delivery tuple when this private capability is minted.
     process_local_identity: Hash,
-    /// Same-source projection shared across this actor's connection tenures.
-    process_local_source_identity: Hash,
+    /// Shared immutable source identity; obtaining or cloning a key neither
+    /// rehashes its peer nor allocates another source owner.
+    source_key: NetworkReplySourceKey,
 }
 /// Test-only authority for minting opaque authenticated reply-route tenures.
 ///
@@ -2115,13 +2114,19 @@ impl NetworkReplyRouteTestFixture {
 /// process-local scheduling key and must not enter wire or consensus state.
 #[derive(Clone)]
 pub struct NetworkReplySourceKey {
+    identity: Arc<NetworkReplySourceIdentity>,
+}
+/// Immutable source tuple owned independently of delivery and connection state.
+/// Different deliveries may allocate equal tuples; pointer equality of this
+/// allocation never defines source equality or ordering.
+struct NetworkReplySourceIdentity {
     owner: Arc<()>,
     authenticated_via: PeerId,
     process_local_identity: Hash,
 }
 impl NetworkReplySourceKey {
     fn owner_address(&self) -> usize {
-        Arc::as_ptr(&self.owner) as usize
+        Arc::as_ptr(&self.identity.owner) as usize
     }
     /// Authenticated transport peer which owns this bounded source lane.
     ///
@@ -2130,7 +2135,7 @@ impl NetworkReplySourceKey {
     /// remains required for process-local scheduling and capability checks.
     #[must_use]
     pub fn authenticated_source_peer(&self) -> &PeerId {
-        &self.authenticated_via
+        &self.identity.authenticated_via
     }
     /// Equality-preserving in-process projection of this authenticated source lane.
     ///
@@ -2142,19 +2147,20 @@ impl NetworkReplySourceKey {
     /// changes owned by the same actor.
     #[must_use]
     pub fn process_local_identity_hash(&self) -> Hash {
-        self.process_local_identity
+        self.identity.process_local_identity
     }
 }
 impl PartialEq for NetworkReplySourceKey {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.owner, &other.owner) && self.authenticated_via == other.authenticated_via
+        Arc::ptr_eq(&self.identity.owner, &other.identity.owner)
+            && self.identity.authenticated_via == other.identity.authenticated_via
     }
 }
 impl Eq for NetworkReplySourceKey {}
 impl core::hash::Hash for NetworkReplySourceKey {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         core::hash::Hash::hash(&self.owner_address(), state);
-        core::hash::Hash::hash(&self.authenticated_via, state);
+        core::hash::Hash::hash(&self.identity.authenticated_via, state);
     }
 }
 impl PartialOrd for NetworkReplySourceKey {
@@ -2166,7 +2172,11 @@ impl Ord for NetworkReplySourceKey {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.owner_address()
             .cmp(&other.owner_address())
-            .then_with(|| self.authenticated_via.cmp(&other.authenticated_via))
+            .then_with(|| {
+                self.identity
+                    .authenticated_via
+                    .cmp(&other.identity.authenticated_via)
+            })
     }
 }
 impl core::fmt::Debug for NetworkReplySourceKey {
@@ -2198,13 +2208,20 @@ impl NetworkReplyRoute {
             semantic_target: semantic_target.clone(),
             delivery_ordinal,
         });
+        let source_key = NetworkReplySourceKey {
+            identity: Arc::new(NetworkReplySourceIdentity {
+                owner: Arc::clone(&tenure.owner),
+                authenticated_via: tenure.delivery_peer.clone(),
+                process_local_identity: process_local_source_identity,
+            }),
+        };
         Self {
             semantic_target,
             tenure,
             delivery_ordinal,
             delivery_binding,
             process_local_identity,
-            process_local_source_identity,
+            source_key,
         }
     }
     fn validate_delivery_binding(&self) -> Result<(), NetworkReplyRouteError> {
@@ -2231,11 +2248,7 @@ impl NetworkReplyRoute {
     /// same key. No connection identifier or tenure ordinal is exposed.
     #[must_use]
     pub fn source_key(&self) -> NetworkReplySourceKey {
-        NetworkReplySourceKey {
-            owner: Arc::clone(&self.tenure.owner),
-            authenticated_via: self.tenure.delivery_peer.clone(),
-            process_local_identity: self.process_local_source_identity,
-        }
+        self.source_key.clone()
     }
     /// Whether this capability was minted for the supplied authenticated delivery peer.
     ///
@@ -8909,7 +8922,8 @@ mod accept_stream_tests {
         LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
-    use iroha_data_model::peer::{Peer, PeerId};
+    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     #[cfg(feature = "quic")]
@@ -9649,7 +9663,7 @@ mod accept_stream_tests {
             Err(e) => panic!("network start: {e:?}"),
         };
         let peer_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = iroha_data_model::peer::PeerId::from(peer_key.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::from(peer_key.public_key().clone());
         let addr = socket_addr!(127.0.0.1:9);
         handle.update_peers_addresses(UpdatePeers(vec![(peer_id.clone(), addr)]));
         let mut topology = HashSet::new();
@@ -17203,6 +17217,59 @@ mod tests {
             format!("{:?}", route_a.source_key()),
             "NetworkReplySourceKey(..)",
             "debug output must not reveal actor or connection internals"
+        );
+    }
+    #[test]
+    fn reply_source_key_shares_identity_without_retaining_delivery_tenure() {
+        use std::hash::{Hash as _, Hasher as _};
+        fn table_hash(key: &NetworkReplySourceKey) -> u64 {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut hash);
+            hash.finish()
+        }
+        assert_eq!(
+            std::mem::size_of::<NetworkReplySourceKey>(),
+            std::mem::size_of::<usize>(),
+            "a frequently cloned fairness key retains one shared source pointer"
+        );
+        let owner = Arc::new(());
+        let delivery_peer = random_peer_id();
+        let semantic_target = random_peer_id();
+        let tenure = test_reply_tenure(&owner, delivery_peer.clone(), 31, 9);
+        let retired_tenure = Arc::downgrade(&tenure);
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 0);
+        let key = route.source_key();
+        assert!(Arc::ptr_eq(&key.identity, &route.source_key().identity));
+        assert!(Arc::ptr_eq(
+            &key.identity,
+            &route.clone().source_key().identity
+        ));
+        let reconnect = NetworkReplyRoute::new(
+            semantic_target,
+            test_reply_tenure(&owner, delivery_peer.clone(), 32, 10),
+            1,
+        );
+        let later_key = reconnect.source_key();
+        assert!(!Arc::ptr_eq(&key.identity, &later_key.identity));
+        assert_eq!(
+            key, later_key,
+            "source equality is independent of backing allocation"
+        );
+        assert_eq!(key.cmp(&later_key), std::cmp::Ordering::Equal);
+        assert_eq!(table_hash(&key), table_hash(&later_key));
+        assert_eq!(
+            key.process_local_identity_hash(),
+            later_key.process_local_identity_hash()
+        );
+        drop(route);
+        assert!(
+            retired_tenure.upgrade().is_none(),
+            "a source key cannot extend a delivery tenure"
+        );
+        assert_eq!(key.authenticated_source_peer(), &delivery_peer);
+        assert_eq!(
+            key, later_key,
+            "retiring the delivery does not mutate its source identity"
         );
     }
     #[test]

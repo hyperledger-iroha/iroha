@@ -72,9 +72,9 @@ mod tests {
     use iroha_data_model::{
         Level,
         isi::{InstructionBox, Log, sorafs::SubmitSorafsModerationCommit},
-        metadata::Metadata,
         transaction::{Executable, FeePaymentIntent, IvmBytecode, SignedTransaction},
     };
+    use iroha_model_base::metadata::Metadata;
     use std::num::NonZeroU64;
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable

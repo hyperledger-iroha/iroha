@@ -761,7 +761,7 @@ fn diagnostic_enrollment_binding(
         account_id: material.recipient.clone(),
         runtime: KagemushaRetailEnrollmentRuntimeV1 {
             fi_id: "diagnostic-fi".parse().expect("fixed diagnostic FI name"),
-            ledger_dataspace_id: iroha_data_model::nexus::DataSpaceId::new(10),
+            ledger_dataspace_id: iroha_model_base::topology::DataSpaceId::new(10),
             authentication_namespace: "diagnostic-auth"
                 .parse()
                 .expect("fixed diagnostic authentication namespace"),

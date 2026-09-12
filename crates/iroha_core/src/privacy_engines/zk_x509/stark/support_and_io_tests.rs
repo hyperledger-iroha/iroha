@@ -29,7 +29,9 @@ fn proof_guard() -> std::sync::MutexGuard<'static, ()> {
     PROOF_TEST_MUTEX
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("zk-X509 STARK proof mutex")
+        // This mutex serializes memory-intensive proofs and protects no mutable
+        // data. A failed proof assertion must not hide later independent failures.
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 fn extension_v1(value: F) -> E {
     E::from_base(value)
@@ -114,7 +116,7 @@ fn mock_main_residue_value_v1(
     opened
         .add(F(u64::from(registration.segment.adapter.wire())))
         .add(F(u64::from(registration.segment.instance)))
-        .add(F(u64::try_from(query_index).expect("log25 query fits u64")))
+        .add(F(u64::try_from(query_index).expect("log22 query fits u64")))
         .add(F(x.0 % 257))
 }
 fn mock_main_fixed_row_v1(registration: RegisteredSegmentLayoutV1, query_index: usize) -> Vec<F> {
@@ -1268,7 +1270,7 @@ fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cach
         verifier
             .constraint_residues_v1(registration, cap_query, cap_next, cap_x, opening,)
             .is_err(),
-        "the 117th distinct fixed opening must reject before sampling"
+        "the 273rd distinct fixed opening must reject before sampling"
     );
     assert_eq!(verifier.fixed_openings, full_cache);
     assert_eq!(

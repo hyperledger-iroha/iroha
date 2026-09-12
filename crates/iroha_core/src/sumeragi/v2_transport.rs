@@ -7,10 +7,8 @@
 use super::v2::{SumeragiV2Adapter, VerifiedHeightContext, verify_historical_quorum_certificate};
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, Signature};
-use iroha_data_model::{
-    block::{consensus_v2 as wire, decode_framed_signed_block},
-    peer::PeerId,
-};
+use iroha_data_model::block::{consensus_v2 as wire, decode_framed_signed_block};
+use iroha_model_base::peer::PeerId;
 #[cfg(test)]
 use std::collections::BTreeSet;
 use std::collections::{BTreeMap, btree_map::Entry};

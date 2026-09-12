@@ -20,12 +20,13 @@ use iroha_data_model::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
-    metadata::Metadata,
-    peer::PeerId,
-    prelude::{AccountId, DomainId},
+    prelude::AccountId,
     sns::{NameControllerV1, NameRecordV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{json::Json, time::TimeSource};
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 use tower::ServiceExt;
@@ -45,7 +46,7 @@ fn seed_relay_primary_alias(
     let alias = AccountAlias::new(
         Name::from_str("relay").expect("relay alias label"),
         Some(AccountAliasDomain::new(domain_id.name().clone())),
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
     let selector = iroha_core::sns::selector_for_account_alias(&alias, &catalog)

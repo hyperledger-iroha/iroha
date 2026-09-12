@@ -685,11 +685,10 @@ mod tests {
     use iroha::{
         config::{self, Config},
         crypto::{Algorithm, KeyPair},
-        data_model::{
-            Metadata,
-            prelude::{AccountId, ChainId},
-        },
+        data_model::prelude::AccountId,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use norito::json::JsonSerialize;
     use std::fmt::Display;
     use url::Url;

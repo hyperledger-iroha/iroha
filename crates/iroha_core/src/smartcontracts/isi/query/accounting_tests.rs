@@ -113,3 +113,61 @@ fn bounded_offset_charges_skipped_rows_and_the_probe_once() {
         Err(Error::GasBudgetExceeded)
     ));
 }
+
+#[test]
+fn ephemeral_postprocessing_preserves_preflight_work_and_budget() {
+    for sorted in [false, true] {
+        let values = domains();
+        let params = QueryParams {
+            pagination: Pagination::new(None, 1),
+            fetch_size: FetchSize::new(NonZeroU64::new(2)),
+            sorting: if sorted {
+                iroha_data_model::query::parameters::Sorting::by_metadata_key(
+                    "rank".parse().unwrap(),
+                )
+            } else {
+                Default::default()
+            },
+        };
+        let limits = QueryLimits::new(2).with_count_mode(QueryCountMode::Bounded);
+        let (_, source_stats) = apply_query_postprocessing_ephemeral_with_budget(
+            values.clone().into_iter(),
+            SelectorTuple::<Domain>::default(),
+            &params,
+            limits,
+            Some(QueryExecutionBudget::from_weighted_limit(u64::MAX, 1, 1)),
+        )
+        .expect("measure source work");
+        let initial = QueryExecutionStats {
+            processed_items: 5,
+            processed_bytes: 13,
+        };
+        let exact_units = initial.processed_items
+            + initial.processed_bytes
+            + source_stats.processed_items
+            + source_stats.processed_bytes;
+        let run = |units| {
+            apply_query_postprocessing_ephemeral_with_budget_from_stats(
+                values.clone().into_iter(),
+                SelectorTuple::<Domain>::default(),
+                &params,
+                limits,
+                Some(QueryExecutionBudget::from_weighted_limit(units, 1, 1)),
+                initial,
+            )
+        };
+        let (_, stats) = run(exact_units).expect("preflight and source work fit exactly");
+        assert_eq!(
+            stats.processed_items,
+            initial.processed_items + source_stats.processed_items
+        );
+        assert_eq!(
+            stats.processed_bytes,
+            initial.processed_bytes + source_stats.processed_bytes
+        );
+        assert!(matches!(
+            run(exact_units - 1),
+            Err(Error::GasBudgetExceeded)
+        ));
+    }
+}

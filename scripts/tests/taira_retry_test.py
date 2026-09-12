@@ -293,6 +293,7 @@ class RetryTests(unittest.TestCase):
     def test_fresh_inventory_changes_only_attempt_and_nonce(self):
         previous = {
             "deployment_id": "retained",
+            "qualification_scope": "core_testnet",
             "operator_public_key": OPERATOR_PUBLIC_KEY,
             "authorization_nonce": "0" * 32,
             "revision": {"commit": "a" * 40},
@@ -321,12 +322,18 @@ class RetryTests(unittest.TestCase):
             )
 
     def test_candidate_probe_inventory_rejects_obsolete_or_ambiguous_drafts(self):
-        valid = {"operator_public_key": OPERATOR_PUBLIC_KEY, "validator_clients": [
+        valid = {"qualification_scope": "core_testnet",
+                 "operator_public_key": OPERATOR_PUBLIC_KEY, "validator_clients": [
             {"slug": f"taira-validator-{index}",
              "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
             for index in range(1, 5)
         ]}
         retry.require_candidate_probe_inventory(valid)
+        for scope in (None, "", "all", "CORE_TESTNET", True, []):
+            value = copy.deepcopy(valid)
+            value["qualification_scope"] = scope
+            with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
+                retry.require_candidate_probe_inventory(value)
         for public_key in (None, "", OPERATOR_PUBLIC_KEY.lower(),
                            OPERATOR_PUBLIC_KEY.upper(), OPERATOR_PUBLIC_KEY + "\n",
                            OPERATOR_PUBLIC_KEY[:-1], "802620" + "A" * 64, 1):
@@ -739,9 +746,11 @@ class RetryTests(unittest.TestCase):
         retry.write_public(
             seed / "seed-authority-receipt.json", {"network_id": "native-network"}
         )
-        for variant in ("valid", "wrong-source", "wrong-network", "mcp-error"):
+        for variant in ("valid", "full", "wrong-scope", "wrong-source", "wrong-network", "mcp-error"):
             output = self.root / variant
             calls = []
+            scope = "full" if variant == "full" else "basic"
+            inventory = {"qualification_scope": "inrou" if variant == "full" else "core_testnet"}
 
             def native(argv, directory, *, phase, env, **kwargs):
                 self.assertEqual(env, {"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
@@ -749,10 +758,12 @@ class RetryTests(unittest.TestCase):
                 directory.mkdir(mode=0o700)
                 calls.append(argv)
                 if argv[0] != "/usr/bin/curl":
+                    self.assertEqual(argv[argv.index("--scope") + 1], scope)
                     retry.write_public(
                         directory / "stdout",
                         {
                             "command": "taira_doctor",
+                            "scope": "full" if variant == "wrong-scope" else scope,
                             "public_root": "https://taira.sora.org",
                             "status": "ok",
                             "failures": [],
@@ -802,14 +813,19 @@ class RetryTests(unittest.TestCase):
                     side_effect=lambda path, **kwargs: Path(path).read_bytes(),
                 ),
             ):
-                if variant == "valid":
-                    result = retry.public_validation(binary, {}, output)
+                if variant in ("valid", "full"):
+                    result = retry.public_validation(binary, inventory, output)
                     self.assertTrue(result["public_mcp_health_passed"])
                     self.assertFalse(result["application_validation_completed"])
                 else:
                     with self.assertRaises(retry.RetryError):
-                        retry.public_validation(binary, {}, output)
-            self.assertEqual(len(calls), 5)
+                        retry.public_validation(binary, inventory, output)
+            self.assertEqual(len(calls), 1 if variant == "wrong-scope" else 5)
+        with mock.patch.object(retry, "run_native") as native:
+            for scope in (None, "", "unknown"):
+                with self.assertRaises(retry.RetryError):
+                    retry.public_validation(binary, {"qualification_scope": scope}, self.root / "invalid")
+            native.assert_not_called()
 
     def test_native_error_tail_is_bounded_and_public_only(self):
         path = self.root / "stderr"
@@ -979,6 +995,7 @@ class WorkflowTests(unittest.TestCase):
         build, self.binary, self.source = artifact_receipts()
         self.inventory = {
             "revision": {"commit": build["commit"], "source_root": "/source"},
+            "qualification_scope": "core_testnet",
             "operator_public_key": OPERATOR_PUBLIC_KEY,
             "deployment_id": "retained",
             "authorization_nonce": "0" * 32,
@@ -1159,6 +1176,7 @@ class WorkflowTests(unittest.TestCase):
                     "schema": "iroha.taira.public-reset.report.v1",
                     "command": "preflight",
                     "status": "ok",
+                    "qualification_scope": inventory["qualification_scope"],
                     "deployment_id": inventory["deployment_id"],
                     "revision": inventory["revision"]["commit"],
                     "inventory_sha256": retry.hashlib.sha256(
@@ -1174,6 +1192,7 @@ class WorkflowTests(unittest.TestCase):
             completed = {
                 "schema": "iroha.taira.public-reset.journal.v1",
                 "deployment_id": inventory["deployment_id"],
+                "qualification_scope": inventory["qualification_scope"],
                 "inventory_sha256": frontier["inventory_sha256"],
                 "authorization_sha256": frontier["authorization_sha256"],
                 "authorization_nonce": inventory["authorization_nonce"],
@@ -1252,6 +1271,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue((attempt / "apply-started.json").exists())
         self.assertEqual(self.calls, ["assemble", "authorize", "preflight", "apply"])
         self.assertEqual(result["completed"], list(retry.PHASES))
+        self.assertEqual(result["qualification_scope"], "core_testnet")
+
+    def test_missing_scope_stops_before_retirement_or_native_calls(self):
+        del self.inventory["qualification_scope"]
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        with self.assertRaisesRegex(retry.RetryError, "qualification scope"):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        retry._retire_retained_state.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_inrou_workflow_preserves_its_explicit_scope(self):
+        self.inventory["qualification_scope"] = "inrou"
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        result = retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(result["qualification_scope"], "inrou")
+        self.assertEqual(self.calls.count("apply"), 1)
+
+    def test_completed_scope_cannot_be_upgraded_during_recovery(self):
+        self.fail_phase = "seed-post"
+        with self.assertRaises(retry.RetryError):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        target = self.root / "journal-v1/completed" / ("9" * 64 + ".json")
+        value = json.loads(target.read_bytes())
+        value["qualification_scope"] = "inrou"
+        target.write_text(json.dumps(value))
+        with self.assertRaisesRegex(retry.RetryError, "exact completed deployment"):
+            retry.previous_attempt(self.plan)
+        self.assertEqual(self.calls.count("apply"), 1)
 
     def test_preapply_failure_resumes_same_identity_and_preserves_evidence(self):
         self.fail_phase = "assemble"
@@ -1356,6 +1403,155 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(retry.RetryError, "cannot be retired"):
             retry.validate_execution_capacity(self.request, vars(capacity), True, "completed")
 
+
+
+class PublicProbePrerequisiteTests(unittest.TestCase):
+    def test_missing_curl_is_rejected(self):
+        with mock.patch.object(retry.Path, "is_file", return_value=False), \
+             mock.patch.object(retry.os, "access") as access:
+            with self.assertRaisesRegex(retry.RetryError, "/usr/bin/curl is unavailable"):
+                retry.require_public_probe_curl()
+        access.assert_not_called()
+
+    def test_nonexecutable_curl_is_rejected(self):
+        with mock.patch.object(retry.Path, "is_file", return_value=True), \
+             mock.patch.object(retry.os, "access", return_value=False) as access:
+            with self.assertRaisesRegex(retry.RetryError, "/usr/bin/curl is unavailable"):
+                retry.require_public_probe_curl()
+        access.assert_called_once_with("/usr/bin/curl", os.X_OK)
+
+    def test_executable_curl_is_accepted(self):
+        with mock.patch.object(retry.Path, "is_file", return_value=True), \
+             mock.patch.object(retry.os, "access", return_value=True) as access:
+            retry.require_public_probe_curl()
+        access.assert_called_once_with("/usr/bin/curl", os.X_OK)
+
+    def test_guest_entrypoints_check_curl_before_work_or_output_creation(self):
+        mac = "aa:bb:cc:dd:ee:ff"
+        request = {"intent": "retirement", "plan": {"expected_mac": mac}}
+        for entry in (retry.guest_admit, retry.guest_run):
+            with self.subTest(entry=entry.__name__), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(retry.os, "geteuid", return_value=0))
+                stack.enter_context(mock.patch.object(retry.sys, "platform", "linux"))
+                stack.enter_context(mock.patch.object(retry.platform, "machine", return_value="aarch64"))
+                stack.enter_context(mock.patch.object(retry.Path, "glob", return_value=[SimpleNamespace(read_text=lambda: mac)]))
+                stack.enter_context(mock.patch.object(retry.Path, "is_file", return_value=False))
+                untouched = [stack.enter_context(mock.patch.object(owner, name)) for owner, name in (
+                    (retry, "direct"), (retry, "capacity_module"),
+                    (retry.Path, "mkdir"), (retry.os, "umask"),
+                )]
+                with self.assertRaisesRegex(retry.RetryError, "/usr/bin/curl is unavailable"):
+                    entry(request)
+                for operation in untouched:
+                    operation.assert_not_called()
+
+    def test_guest_identity_is_checked_before_curl(self):
+        request = {"intent": "retirement", "plan": {"expected_mac": "aa:bb:cc:dd:ee:ff"}}
+        for entry in (retry.guest_admit, retry.guest_run):
+            with self.subTest(entry=entry.__name__), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(retry.os, "geteuid", return_value=0))
+                stack.enter_context(mock.patch.object(retry.sys, "platform", "linux"))
+                stack.enter_context(mock.patch.object(retry.platform, "machine", return_value="aarch64"))
+                stack.enter_context(mock.patch.object(retry.Path, "glob", return_value=[]))
+                guard = stack.enter_context(mock.patch.object(retry, "require_public_probe_curl"))
+                with self.assertRaisesRegex(retry.RetryError, "guest identity differs"):
+                    entry(request)
+                guard.assert_not_called()
+
+
+class BootPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.prior = {
+            "path": "/etc/systemd/system/multi-user.target.wants/nginx.service",
+            "target": "/usr/lib/systemd/system/nginx.service",
+            "uid": 0,
+            "metadata": {"inode": 123},
+        }
+        self.canonical = dict(self.prior, target="../nginx.service")
+        self.before = {
+            "MainPID": "42", "InvocationID": "same-invocation",
+            "ActiveEnterTimestampMonotonic": "1234", "UnitFileState": "enabled",
+            "FragmentPath": "/etc/systemd/system/nginx.service",
+        }
+        self.fragment = {"inode": 456}
+        self.events = []
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.link = self.stack.enter_context(mock.patch.object(
+            retry, "_boot_link", side_effect=[self.prior, self.canonical]
+        ))
+        self.state = self.stack.enter_context(mock.patch.object(
+            retry, "_boot_state", side_effect=[self.before, self.before]
+        ))
+        self.fragment_read = self.stack.enter_context(mock.patch.object(
+            retry, "_boot_fragment", return_value=self.fragment
+        ))
+        self.stack.enter_context(mock.patch.object(
+            retry, "_boot_write", side_effect=lambda name, value: self.events.append((name, value))
+        ))
+        def run(argv, **kwargs):
+            self.events.append(("command", argv))
+            return subprocess.CompletedProcess(argv, 0)
+        self.run = self.stack.enter_context(mock.patch.object(retry.subprocess, "run", side_effect=run))
+
+    def repair(self):
+        retry._boot_reenable_nginx(self.prior, self.before, "a" * 64, self.fragment)
+
+    def test_vendor_nginx_repair_records_intent_then_reenables_exact_fragment(self):
+        self.repair()
+        self.assertEqual([name for name, _ in self.events], [
+            "reenable-intent.json", "command", "reenable-result.json"
+        ])
+        self.assertEqual(self.events[0][1]["prior_link"], self.prior)
+        self.assertEqual(self.events[0][1]["fragment_sha256"], "a" * 64)
+        self.assertIs(self.events[0][1]["used_now"], False)
+        self.assertEqual(self.events[1][1], [
+            "/usr/bin/systemctl", "reenable", "/etc/systemd/system/nginx.service"
+        ])
+        self.assertEqual(self.run.call_args.kwargs["timeout"], 45)
+        self.assertEqual(self.events[2][1], {"exit_code": 0, "units": ["nginx.service"], "used_now": False})
+
+    def test_only_exact_observed_vendor_link_can_be_repaired(self):
+        for target in ("/lib/systemd/system/nginx.service", "/tmp/nginx.service", "../nginx.service"):
+            with self.subTest(target=target):
+                self.prior["target"] = target
+                with self.assertRaisesRegex(RuntimeError, "unexpected nginx boot link repair"):
+                    self.repair()
+        self.assertEqual(self.events, [])
+        self.run.assert_not_called()
+
+    def test_vendor_target_remains_invalid_as_final_link(self):
+        self.link.side_effect = [self.prior, self.prior]
+        with self.assertRaisesRegex(RuntimeError, "enabled unit link points elsewhere"):
+            self.repair()
+        self.assertEqual(self.events[-1][0], "reenable-result.json")
+
+    def test_repair_rejects_identity_change_before_mutation(self):
+        self.link.side_effect = [dict(self.prior, metadata={"inode": 999})]
+        with self.assertRaisesRegex(RuntimeError, "nginx boot repair identity changed"):
+            self.repair()
+        self.run.assert_not_called()
+        self.assertEqual([name for name, _ in self.events], ["reenable-intent.json"])
+
+    def test_repair_rejects_process_or_fragment_change_after_mutation(self):
+        for field in ("MainPID", "InvocationID", "ActiveEnterTimestampMonotonic", "FragmentPath"):
+            with self.subTest(field=field):
+                self.link.side_effect = [self.prior]
+                self.state.side_effect = [self.before, dict(self.before, **{field: "changed"})]
+                with self.assertRaisesRegex(RuntimeError, "live unit process or loaded fragment changed"):
+                    self.repair()
+        self.link.side_effect = [self.prior]
+        self.state.side_effect = [self.before, self.before]
+        self.fragment_read.side_effect = [self.fragment, {"inode": 999}]
+        with self.assertRaisesRegex(RuntimeError, "signed fragment bytes or metadata changed"):
+            self.repair()
+
+    def test_failed_reenable_preserves_intent_and_result(self):
+        self.run.side_effect = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1)
+        with self.assertRaisesRegex(RuntimeError, "systemctl reenable failed; preserve private evidence"):
+            self.repair()
+        self.assertEqual([name for name, _ in self.events], ["reenable-intent.json", "reenable-result.json"])
+        self.assertEqual(self.events[-1][1]["exit_code"], 1)
 
 
 class MainOrderTests(unittest.TestCase):

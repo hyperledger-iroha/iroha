@@ -1,16 +1,17 @@
 //! Roundtrip coverage for streaming capability ticket events.
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
-    metadata::Metadata,
     prelude::{
-        AccountId, DataSpaceId, Decode, DomainEvent, DomainId, Encode, LaneId,
-        StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
-        StreamingSoranetAccessKind, StreamingSoranetRoute, StreamingSoranetStreamTag,
-        StreamingTicketCapabilities, StreamingTicketPolicy, StreamingTicketReady,
-        StreamingTicketRecord, StreamingTicketRevoked,
+        AccountId, Decode, DomainEvent, Encode, StreamingPrivacyRelay, StreamingPrivacyRoute,
+        StreamingRouteBinding, StreamingSoranetAccessKind, StreamingSoranetRoute,
+        StreamingSoranetStreamTag, StreamingTicketCapabilities, StreamingTicketPolicy,
+        StreamingTicketReady, StreamingTicketRecord, StreamingTicketRevoked,
     },
     soranet::ticket::{TicketBodyV1, TicketEnvelopeV1, TicketScopeV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::{
     codec::encode_with_header_flags,
     core::{decode_from_bytes, frame_bare_with_header_flags},

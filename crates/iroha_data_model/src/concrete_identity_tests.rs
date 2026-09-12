@@ -21,14 +21,14 @@ use crate::{
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
     isi::{InstructionBox, Log},
-    metadata::Metadata,
-    peer::PeerId,
     smart_contract::payloads::{ExecutorContext, SmartContractContext, TriggerContext},
     trigger::{
         TriggerId,
         action::{Action, Repeats, TimeTriggerRetryPolicy},
     },
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 
 fn serialized_record<T: NoritoSchema + NoritoSerialize>(value: &T) -> Value {
     let bare = norito::codec::encode_adaptive(value);
@@ -93,7 +93,7 @@ where
 }
 
 /// Check an encoding-only adapter through its declared projection and owned decoder.
-pub(crate) fn projected_record<P, T>(projection: &P, material: &T) -> Value
+pub fn projected_record<P, T>(projection: &P, material: &T) -> Value
 where
     P: NoritoSchema + NoritoSerialize,
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -123,7 +123,7 @@ where
 }
 
 /// Read the unchanged default/HTTP capture; feature flags describe its provenance.
-pub(crate) fn fixture_values(source: &str) -> Value {
+pub fn fixture_values(source: &str) -> Value {
     let fixture: Value = norito::json::from_str(source).expect("parse immutable concrete capture");
     assert_eq!(fixture["governance"], Value::Bool(true));
     assert_eq!(fixture["http"], Value::Bool(true));
@@ -262,8 +262,7 @@ fn stream_block() -> crate::block::SignedBlock {
     block
 }
 
-#[test]
-fn concrete_identity_frames_match_capture() {
+fn concrete_identity_frames() -> Vec<Value> {
     let mut rows = vec![
         family("action-scheduled", scheduled_action(false)),
         family("action-scheduled-retry", scheduled_action(true)),
@@ -337,6 +336,12 @@ fn concrete_identity_frames_match_capture() {
         ));
         rows.push(family("block-message", BlockMessage(stream_block())));
     }
+    rows
+}
+
+#[test]
+fn concrete_identity_frames_match_capture() {
+    let rows = concrete_identity_frames();
     assert_eq!(
         rows.len(),
         9 + usize::from(cfg!(feature = "governance")) + 3 * usize::from(cfg!(feature = "http"))

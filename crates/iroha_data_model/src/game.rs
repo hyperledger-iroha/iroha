@@ -63,7 +63,7 @@ pub enum GamePayoutPolicyV1 {
     EqualWinnersOrRefund,
 }
 game_record! {
- /// Canonical GameManifestV1 with application-independent bounded fields.
+ /// Canonical `GameManifestV1` with application-independent bounded fields.
  #[derive(norito::NoritoSchema)]
  #[norito_schema(name = "iroha_data_model::game::GameManifestV1")]
  pub struct GameManifestV1 {
@@ -94,7 +94,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameOutcomeV1 with application-independent bounded fields.
+ /// Canonical `GameOutcomeV1` with application-independent bounded fields.
  #[derive(norito::NoritoSchema)]
  #[norito_schema(name = "iroha_data_model::game::GameOutcomeV1")]
  pub struct GameOutcomeV1 {
@@ -120,7 +120,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameParticipantV1 with application-independent bounded fields.
+ /// Canonical `GameParticipantV1` with application-independent bounded fields.
  pub struct GameParticipantV1 {
   /// Wallet that authorizes the exact stake and receives any eventual payout.
   pub account:AccountId,
@@ -133,7 +133,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameCheckpointV1 with application-independent bounded fields.
+ /// Canonical `GameCheckpointV1` with application-independent bounded fields.
  #[derive(norito::NoritoSchema)]
  #[norito_schema(name = "iroha_data_model::game::GameCheckpointV1")]
  pub struct GameCheckpointV1 {
@@ -152,7 +152,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameSlotSignatureV1 with application-independent bounded fields.
+ /// Canonical `GameSlotSignatureV1` with application-independent bounded fields.
  pub struct GameSlotSignatureV1 {
   /// Permanent participant slot assigned at admission.
   pub slot:u8,
@@ -161,7 +161,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical SignedGameCheckpointV1 with application-independent bounded fields.
+ /// Canonical `SignedGameCheckpointV1` with application-independent bounded fields.
  #[derive(norito::NoritoSchema)]
  #[norito_schema(name = "iroha_data_model::game::SignedGameCheckpointV1")]
  pub struct SignedGameCheckpointV1 {
@@ -172,7 +172,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameCommitmentSetV1 with application-independent bounded fields.
+ /// Canonical `GameCommitmentSetV1` with application-independent bounded fields.
  pub struct GameCommitmentSetV1 {
   /// Exact immutable session identifier.
   pub session_id:Hash,
@@ -189,7 +189,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameInputCommitmentV1 with application-independent bounded fields.
+ /// Canonical `GameInputCommitmentV1` with application-independent bounded fields.
  pub struct GameInputCommitmentV1 {
   /// Exact immutable session identifier.
   pub session_id:Hash,
@@ -206,7 +206,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameInputRevealV1 with application-independent bounded fields.
+ /// Canonical `GameInputRevealV1` with application-independent bounded fields.
  #[derive(norito::NoritoSchema)]
  #[norito_schema(name = "iroha_data_model::game::GameInputRevealV1")]
  pub struct GameInputRevealV1 {
@@ -225,7 +225,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameForcedBatchV1 with application-independent bounded fields.
+ /// Canonical `GameForcedBatchV1` with application-independent bounded fields.
  pub struct GameForcedBatchV1 {
   /// Consensus-owned generation preventing replay of previous forced input batches.
   pub epoch:u64,
@@ -238,7 +238,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameTranscriptBatchV1 with application-independent bounded fields.
+ /// Canonical `GameTranscriptBatchV1` with application-independent bounded fields.
  pub struct GameTranscriptBatchV1 {
   /// First logical tick controlled by this batch.
   pub start_tick:u32,
@@ -247,7 +247,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameDnfEventV1 with application-independent bounded fields.
+ /// Canonical `GameDnfEventV1` with application-independent bounded fields.
  pub struct GameDnfEventV1 {
   /// Complete logical tick count at this certified checkpoint.
   pub tick:u32,
@@ -256,7 +256,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameTranscriptV1 with application-independent bounded fields.
+ /// Canonical `GameTranscriptV1` with application-independent bounded fields.
  #[derive(norito::NoritoSchema)]
  #[norito_schema(name = "iroha_data_model::game::GameTranscriptV1")]
  pub struct GameTranscriptV1 {
@@ -296,7 +296,7 @@ game_record! {
  }
 }
 game_record! {
- /// Canonical GameSessionRecordV1 with application-independent bounded fields.
+ /// Canonical `GameSessionRecordV1` with application-independent bounded fields.
  #[derive(norito::NoritoSchema)]
  #[norito_schema(name = "iroha_data_model::game::GameSessionRecordV1")]
  pub struct GameSessionRecordV1 {
@@ -530,7 +530,7 @@ game_record! {
         pub participants: Vec<GameAdmissionParticipantV1>,
         /// Wagers in strictly increasing original slot order.
         pub wagers: Vec<GameAdmissionWagerV1>,
-        /// Equipment in strictly increasing (slot, role_id) order.
+        /// Equipment in strictly increasing (slot, `role_id`) order.
         pub resources: Vec<GameAdmissionResourceV1>,
     }
 }
@@ -571,6 +571,13 @@ impl GameAdmissionBodyV1 {
         }
     }
     /// Validate bounded canonical authorization geometry. Adapters impose their own exact roster requirements.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported version or exceeded cardinality/byte bound;
+    /// duplicated accounts or input keys; a non-`Ed25519` input key; an invalid or repeated
+    /// NFT identity; invalid participant slots; non-increasing wager slots or resource
+    /// slot/role pairs; or too many resources for one participant.
     pub fn validate(&self) -> Result<(), String> {
         use std::collections::BTreeSet;
         if self.version != 1

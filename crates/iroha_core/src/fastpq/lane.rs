@@ -744,12 +744,13 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 mod tests {
     use super::*;
     use crate::fastpq::{
-        FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
+        DigestAccelerationTestGuard, FastpqPublicInputsTemplate, authority_digest,
+        batches_from_bundles, transition_batch_to_dto,
     };
-    use iroha_data_model::domain::DomainId;
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
@@ -876,6 +877,7 @@ mod tests {
     async fn lane_processes_transcripts_with_mock_engine() {
         use tokio::time::{Instant, sleep};
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
+        let _digest_guard = DigestAccelerationTestGuard::new();
         let calls = Arc::new(std::sync::Mutex::new(0usize));
         install_test_engine(Arc::new(MockEngine {
             calls: Arc::clone(&calls),
@@ -899,15 +901,7 @@ mod tests {
             metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
         };
-        let (handle, task) = {
-            let _digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
-                .lock()
-                .expect("digest acceleration test lock poisoned");
-            let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
-            let started = start(&cfg).expect("lane starts");
-            crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
-            started
-        };
+        let (handle, task) = start(&cfg).expect("lane starts");
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             if handle.is_ready_for_test() {
@@ -1002,10 +996,7 @@ mod tests {
     #[tokio::test]
     async fn new_lane_generation_starts_with_digest_acceleration_disabled() {
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
-        let digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
-            .lock()
-            .expect("digest acceleration test lock poisoned");
-        let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
+        let _digest_guard = DigestAccelerationTestGuard::new();
         crate::fastpq::set_poseidon_digest_acceleration_enabled(true);
 
         let (_handle, task) =
@@ -1015,14 +1006,13 @@ mod tests {
             "a new lane must stay on the CPU digest path until its one preflight succeeds"
         );
 
-        crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
-        drop(digest_lock);
         task.await.expect("failed worker joins cleanly");
     }
     #[tokio::test]
     async fn failed_backend_initialisation_allows_lane_retry() {
         use tokio::time::{Instant, sleep};
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
+        let _digest_guard = DigestAccelerationTestGuard::new();
         let (_failed_handle, failed_task) =
             start_with_builder(None, None, None, || None).expect("failed lane attempt registers");
         failed_task.await.expect("failed worker joins cleanly");
@@ -1055,6 +1045,7 @@ mod tests {
     async fn external_shutdown_closes_idle_lane_receiver() {
         use tokio::time::{Instant, sleep};
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
+        let _digest_guard = DigestAccelerationTestGuard::new();
         let external_shutdown = ShutdownSignal::new();
         let calls = Arc::new(std::sync::Mutex::new(0usize));
         let (handle, task) =
@@ -1093,6 +1084,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_keeps_generation_until_blocking_initialisation_finishes() {
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
+        let _digest_guard = DigestAccelerationTestGuard::new();
         let external_shutdown = ShutdownSignal::new();
         // Await startup without blocking this test's single Tokio thread.
         // Dropping the release sender also frees the blocking initializer if
@@ -1132,6 +1124,7 @@ mod tests {
     async fn aborted_worker_releases_generation_after_blocking_initialisation_finishes() {
         use tokio::time::{Instant, sleep};
         let _registry_lock = LANE_REGISTRY_TEST_LOCK.lock().await;
+        let _digest_guard = DigestAccelerationTestGuard::new();
         let external_shutdown = ShutdownSignal::new();
         // Await startup without blocking this test's single Tokio thread.
         // Dropping the release sender also frees the blocking initializer if
@@ -1365,10 +1358,7 @@ mod tests {
     #[test]
     #[cfg(feature = "fastpq-gpu")]
     fn prover_poseidon_preflight_failure_disables_explicit_gpu_lane() {
-        let _digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
-            .lock()
-            .expect("digest acceleration test lock poisoned");
-        let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
+        let _digest_guard = DigestAccelerationTestGuard::new();
         crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
         let cfg = Fastpq {
             execution_mode: FastpqExecutionMode::Gpu,
@@ -1414,15 +1404,11 @@ mod tests {
             1,
             "one lane initialisation must run the digest hardware preflight exactly once"
         );
-        crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
     }
     #[test]
     #[cfg(feature = "fastpq-gpu")]
     fn execution_gpu_preflight_failure_disables_lane_with_cpu_poseidon() {
-        let _digest_lock = super::super::DIGEST_ACCELERATION_TEST_LOCK
-            .lock()
-            .expect("digest acceleration test lock poisoned");
-        let previous = crate::fastpq::poseidon_digest_acceleration_enabled();
+        let _digest_guard = DigestAccelerationTestGuard::new();
         let cfg = gpu_execution_cpu_poseidon_config();
         let poseidon_preflight_called = std::cell::Cell::new(false);
 
@@ -1446,7 +1432,6 @@ mod tests {
             !poseidon_preflight_called.get(),
             "CPU Poseidon must not mask or replace the execution backend preflight"
         );
-        crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
     }
     #[test]
     #[cfg(not(feature = "fastpq-gpu"))]

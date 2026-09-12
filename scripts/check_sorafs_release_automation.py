@@ -669,6 +669,7 @@ SORAFS_CLI_REDIRECT_TRIGGER_PATHS = frozenset(
         "crates/iroha_cli/src/commands/sorafs.rs",
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
         "xtask/src/sorafs.rs",
+        "xtask/src/sorafs/**",
     }
 )
 SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS = frozenset(

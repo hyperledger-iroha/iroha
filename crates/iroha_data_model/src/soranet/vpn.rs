@@ -42,7 +42,7 @@ pub const VPN_HELPER_TICKET_LEN: usize = 788;
 /// Exact lowercase-hex length of a helper-authenticated VPN ticket.
 pub const VPN_HELPER_TICKET_HEX_LEN: usize = VPN_HELPER_TICKET_LEN * 2;
 const VPN_HELPER_TICKET_SIGNATURE_LEN: usize = 64;
-/// Exact byte length of the ML-DSA-65 relay identity authenticated by an SRCv2 certificate.
+/// Exact byte length of the ML-DSA-65 relay identity authenticated by an `SRCv2` certificate.
 pub const VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1: usize = 1_952;
 /// Magic prefix for VPN control cells that carry client-signed usage vouchers.
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
@@ -1596,110 +1596,137 @@ impl VpnLeaseRecordV1 {
         signed_receipt: &VpnSignedSessionReceiptV1,
         voucher: &VpnUsageVoucherV1,
     ) -> Result<Quantity, VpnSettlementEvidenceError> {
-        fn invalid(message: impl Into<String>) -> VpnSettlementEvidenceError {
-            VpnSettlementEvidenceError {
-                message: message.into(),
-            }
-        }
-
         signed_receipt.verify().map_err(|error| {
-            invalid(format!(
+            VpnSettlementEvidenceError::invalid(format!(
                 "vpn relay receipt signature verification failed: {error}"
             ))
         })?;
         let receipt = &signed_receipt.receipt;
         if receipt.session_id != self.session_id || voucher.body.session_id != self.session_id {
-            return Err(invalid("vpn settlement session id mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement session id mismatch",
+            ));
         }
         if receipt.quote_id != self.quote_id || voucher.body.quote_id != self.quote_id {
-            return Err(invalid("vpn settlement quote id mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement quote id mismatch",
+            ));
         }
         if receipt.relay_id != self.relay_id || voucher.body.relay_id != self.relay_id {
-            return Err(invalid("vpn settlement relay id mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement relay id mismatch",
+            ));
         }
         if receipt.payment_tx_hash != self.open_tx_hash {
-            return Err(invalid("vpn settlement payment transaction mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement payment transaction mismatch",
+            ));
         }
         if receipt.account_hash != vpn_account_hash_v1(&self.client_account_id) {
-            return Err(invalid("vpn settlement client account mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement client account mismatch",
+            ));
         }
         if voucher.client_public_key != self.metering_public_key {
-            return Err(invalid("vpn voucher public key mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn voucher public key mismatch",
+            ));
         }
         voucher.verify().map_err(|error| {
-            invalid(format!(
+            VpnSettlementEvidenceError::invalid(format!(
                 "vpn voucher signature verification failed: {error}"
             ))
         })?;
         if receipt.client_voucher_hash != voucher.hash() {
-            return Err(invalid("vpn receipt voucher hash mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt voucher hash mismatch",
+            ));
         }
         if receipt.highest_voucher_sequence != voucher.body.sequence {
-            return Err(invalid("vpn receipt voucher sequence mismatch"));
-        }
-        let active_ms = receipt
-            .ended_at_ms
-            .checked_sub(receipt.started_at_ms)
-            .ok_or_else(|| invalid("vpn receipt service interval is inverted"))?;
-        if !voucher
-            .body
-            .authorizes(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
-        {
-            return Err(invalid(
-                "vpn receipt usage exceeds the signed prepaid voucher ceilings",
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt voucher sequence mismatch",
             ));
         }
-        let expected_uptime_secs = u32::try_from(active_ms.div_ceil(1_000))
-            .map_err(|_| invalid("vpn receipt active time exceeds receipt range"))?;
-        if receipt.uptime_secs != expected_uptime_secs {
-            return Err(invalid(
-                "vpn receipt uptime must equal its observed service interval rounded up",
-            ));
-        }
-        if voucher.body.issued_at_ms > receipt.ended_at_ms {
-            return Err(invalid(
-                "vpn receipt ends before the highest prepaid voucher was issued",
-            ));
-        }
+        let active_ms = verify_vpn_receipt_usage(receipt, &voucher.body)?;
         if receipt.exit_class != self.quote_policy.exit_class {
-            return Err(invalid("vpn receipt exit class mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt exit class mismatch",
+            ));
         }
         if receipt.cover_bytes != 0 {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn settlement receipt must not carry unauthenticated cover telemetry",
             ));
         }
         if receipt.meter_hash != vpn_tariff_meter_hash_v1(&self.tariff) {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn receipt meter hash does not match the signed tariff",
             ));
         }
         if receipt.earned_fee > self.lease_fee {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn receipt earned fee exceeds the escrowed lease fee",
             ));
         }
         if receipt.started_at_ms < self.opened_at_ms || receipt.ended_at_ms > self.expires_at_ms {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn receipt service interval falls outside the signed lease",
             ));
         }
         if voucher.body.issued_at_ms < self.opened_at_ms
             || voucher.body.issued_at_ms >= self.expires_at_ms
         {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn voucher issuance timestamp falls outside the signed lease",
             ));
         }
         let earned_fee = self
             .tariff
             .fee_for_usage(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
-            .map_err(|error| invalid(format!("vpn tariff arithmetic failed: {error}")))?;
+            .map_err(|error| {
+                VpnSettlementEvidenceError::invalid(format!(
+                    "vpn tariff arithmetic failed: {error}"
+                ))
+            })?;
         if receipt.earned_fee != earned_fee {
-            return Err(invalid("vpn receipt earned fee does not match tariff"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt earned fee does not match tariff",
+            ));
         }
         Ok(earned_fee)
     }
+}
+
+// Usage projection follows both signatures and the exact receipt/voucher binding.
+fn verify_vpn_receipt_usage(
+    receipt: &VpnSessionReceiptV1,
+    voucher: &VpnUsageVoucherBodyV1,
+) -> Result<u64, VpnSettlementEvidenceError> {
+    let active_ms = receipt
+        .ended_at_ms
+        .checked_sub(receipt.started_at_ms)
+        .ok_or_else(|| {
+            VpnSettlementEvidenceError::invalid("vpn receipt service interval is inverted")
+        })?;
+    if !voucher.authorizes(receipt.ingress_bytes, receipt.egress_bytes, active_ms) {
+        return Err(VpnSettlementEvidenceError::invalid(
+            "vpn receipt usage exceeds the signed prepaid voucher ceilings",
+        ));
+    }
+    let expected_uptime_secs = u32::try_from(active_ms.div_ceil(1_000)).map_err(|_| {
+        VpnSettlementEvidenceError::invalid("vpn receipt active time exceeds receipt range")
+    })?;
+    if receipt.uptime_secs != expected_uptime_secs {
+        return Err(VpnSettlementEvidenceError::invalid(
+            "vpn receipt uptime must equal its observed service interval rounded up",
+        ));
+    }
+    if voucher.issued_at_ms > receipt.ended_at_ms {
+        return Err(VpnSettlementEvidenceError::invalid(
+            "vpn receipt ends before the highest prepaid voucher was issued",
+        ));
+    }
+    Ok(active_ms)
 }
 
 /// Failure while verifying the complete client-and-relay VPN settlement evidence.
@@ -1707,6 +1734,13 @@ impl VpnLeaseRecordV1 {
 #[error("{message}")]
 pub struct VpnSettlementEvidenceError {
     message: String,
+}
+impl VpnSettlementEvidenceError {
+    fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
 }
 /// Billing and telemetry receipt emitted by an exit gateway.
 #[derive(
@@ -2214,7 +2248,7 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
 /// routes are applied in order. Every variable-length value is length-delimited, each sequence has
 /// an explicit element count, and integers are big-endian, so no two policy tuples share a
 /// serialization. The V1 QUIC ALPN is protocol-fixed rather than caller-controlled and is also
-/// authenticated by the SoraNet handshake. Callers must separately enforce canonical endpoint,
+/// authenticated by the `SoraNet` handshake. Callers must separately enforce canonical endpoint,
 /// server-name, CIDR, and IP-address syntax.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -2656,6 +2690,7 @@ impl fmt::Display for VpnCellError {
 impl std::error::Error for VpnCellError {}
 #[cfg(test)]
 mod tests {
+    mod settlement_usage;
     use super::*;
     use hex::FromHex;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -2769,7 +2804,7 @@ mod tests {
         metering_public_key: PublicKey,
     ) -> VpnQuoteBodyV1 {
         let asset_definition = AssetDefinitionId::derive_from_components(
-            crate::domain::DomainId::parse_fully_qualified("universal.universal")
+            iroha_model_base::domain::DomainId::parse_fully_qualified("universal.universal")
                 .expect("static universal domain"),
             "xor".parse().expect("static XOR name"),
         );
@@ -4027,11 +4062,11 @@ mod tests {
                 class: VpnCellClassV1::Data,
                 flags: VpnCellFlagsV1::new(false, false, false, false),
                 circuit_id: [0xA5; 16],
-                flow_label: VpnFlowLabelV1::from_u32(0x00AB_CD).expect("flow label"),
+                flow_label: VpnFlowLabelV1::from_u32(0x0000_ABCD).expect("flow label"),
                 sequence: 7,
                 ack: 6,
                 padding_budget_ms: 9,
-                payload_len: payload.len() as u16,
+                payload_len: u16::try_from(payload.len()).expect("fixture value fits u16"),
             },
             payload,
         };
@@ -4090,7 +4125,7 @@ mod tests {
                 sequence: 1,
                 ack: 0,
                 padding_budget_ms: 5,
-                payload_len: expected.len() as u16,
+                payload_len: u16::try_from(expected.len()).expect("fixture value fits u16"),
             },
             payload: expected.clone(),
         };

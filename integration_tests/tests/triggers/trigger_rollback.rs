@@ -4,6 +4,7 @@ use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError, trigger::TriggerId};
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::task::spawn_blocking;

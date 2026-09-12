@@ -3,7 +3,7 @@
 //! These types provide a stable, schema-driven interface between smart-contract ISI definitions and
 //! the runtime registry that tracks provider capacity declarations, telemetry snapshots, and fee
 //! accrual ledgers.
-use crate::metadata::Metadata;
+use iroha_model_base::metadata::Metadata;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use core::fmt;

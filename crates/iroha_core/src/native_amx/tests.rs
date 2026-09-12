@@ -5,10 +5,10 @@ use iroha_data_model::{
         consensus::NativeAmxAttestationBodyV2,
         consensus_v2::{ConsensusRound, HeightContext, HeightContextId},
     },
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::TransactionEntrypoint,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use std::num::NonZeroUsize;
 fn checked_bls_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)

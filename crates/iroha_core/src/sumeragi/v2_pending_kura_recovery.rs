@@ -970,7 +970,7 @@ impl DeferredReleasedLifecycleValidatedMarkerV1 {
             drop(prepared);
             return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
         };
-        let persisted_apply = match persisted_apply.complete_exact_apply(
+        let persisted_apply = match persisted_apply.complete_exact_released_apply(
             predecessor,
             &self.validate_pending,
             child_pending,

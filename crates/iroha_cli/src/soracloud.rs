@@ -12,8 +12,7 @@ use crate::{Run, RunContext};
 use eyre::{Report, Result, WrapErr, eyre};
 #[cfg(test)]
 use iroha::data_model::{
-    nexus::{DataSpaceId, FeeDebitSource},
-    peer::PeerId,
+    nexus::FeeDebitSource,
     soracloud::{
         CanonicalRequestSignatureWitnessV1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         SoraUploadedModelPackageFormatV1, SoracloudTxInstruction,
@@ -33,13 +32,7 @@ use iroha::{
         account::AccountId,
         asset::AssetDefinitionId,
         isi::{InstructionBox, decode_instruction_from_pair},
-        metadata::Metadata,
-        prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
-        query::{
-            CommittedTxFilters,
-            dsl::CompoundPredicate,
-            parameters::{FetchSize, Pagination},
-        },
+        prelude::TransactionEntrypoint,
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
             AgentApartmentManifestV1, AgentUpgradePolicyV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
@@ -113,7 +106,12 @@ use iroha_config::{
     parameters::{actual, defaults},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+#[cfg(test)]
+use iroha_model_base::peer::PeerId;
+#[cfg(test)]
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(test)]
 use iroha_torii_shared::{
@@ -14672,7 +14670,7 @@ pub(crate) fn taira_inrou_canary_pin_readiness_v1(
     config: &ClientConfig,
     stage_dir: &Path,
     torii_url: &str,
-    timeout_secs: u64,
+    request_timeout: Duration,
     requested_mode: crate::taira::InrouCanaryMode,
     operation: TairaInrouCanaryPreparedOperationV1,
 ) -> Result<TairaInrouCanaryPinReadinessV1> {
@@ -14699,7 +14697,13 @@ pub(crate) fn taira_inrou_canary_pin_readiness_v1(
         },
         &built.digest_hex,
     )?;
-    let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
+    if request_timeout.is_zero() {
+        return Ok(TairaInrouCanaryPinReadinessV1::Missing);
+    }
+    let mut bounded_config = config.clone();
+    bounded_config.torii_api_url = url::Url::parse(torii_url)?;
+    bounded_config.torii_request_timeout = request_timeout;
+    let client = Client::new(bounded_config)?;
     Ok(match sorafs_pin_manifest_readiness(&client, expected)? {
         SorafsPinManifestReadiness::Missing => TairaInrouCanaryPinReadinessV1::Missing,
         SorafsPinManifestReadiness::Pending => TairaInrouCanaryPinReadinessV1::Pending,
@@ -19259,13 +19263,21 @@ pub(crate) fn prepare_soracloud_draft_transaction(
 pub(crate) fn submit_prepared_soracloud_transaction(
     config: &ClientConfig,
     torii_url: &str,
-    timeout_secs: u64,
+    deadline: Instant,
     prepared: &PreparedSoracloudTransactionV1,
 ) -> Result<Hash> {
     let transaction = prepared.decode_and_validate()?;
-    let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if (remaining / 2).is_zero() {
+        return Err(eyre!("prepared Soracloud submission deadline is exhausted"));
+    }
+    let mut bounded_config = config.clone();
+    bounded_config.torii_api_url = url::Url::parse(torii_url)?;
+    // Compatibility and one exact POST share the existing caller budget.
+    bounded_config.torii_request_timeout = remaining / 2;
+    let client = Client::new(bounded_config)?;
     client
-        .submit_transaction_and_wait(&transaction)
+        .submit_transaction(&transaction)
         .map(Into::into)
         .wrap_err("failed to submit exact prepared Soracloud mutation transaction")
 }
@@ -19296,16 +19308,26 @@ pub(crate) enum PreparedSoracloudRecoveryV1 {
 
 /// Classify one exact prepared Soracloud transaction without submitting it.
 ///
-/// Applied classification includes a one-result, hash-filtered committed query;
-/// this never scans the transaction set.
+/// Applied classification includes the authenticated exact transaction-details route;
+/// it never requests global transaction inventory.
 pub(crate) fn recover_prepared_soracloud_transaction(
     config: &ClientConfig,
     torii_url: &str,
-    timeout_secs: u64,
+    deadline: Instant,
     prepared: &PreparedSoracloudTransactionV1,
 ) -> Result<PreparedSoracloudRecoveryV1> {
     let expected = prepared.decode_and_validate()?;
-    let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let request_budget = remaining / 3;
+    if request_budget.is_zero() {
+        return Ok(PreparedSoracloudRecoveryV1::Pending {
+            terminal_kind: "ObservationBudgetExhausted".to_owned(),
+        });
+    }
+    let mut bounded_config = config.clone();
+    bounded_config.torii_api_url = url::Url::parse(torii_url)?;
+    bounded_config.torii_request_timeout = request_budget;
+    let client = Client::new(bounded_config)?;
     let Some(status) = client
         .client()
         .get_transaction_status_response_global(expected.hash())
@@ -19325,7 +19347,15 @@ pub(crate) fn recover_prepared_soracloud_transaction(
                 .block_height
                 .filter(|height| *height > 0)
                 .ok_or_else(|| eyre!("Applied Soracloud transaction omits its block height"))?;
-            verify_committed_prepared_soracloud_transaction(&client, prepared, &expected)?;
+            match verify_committed_prepared_soracloud_transaction(&client, prepared, &expected) {
+                Ok(()) => {}
+                Err(error) if crate::taira::exact_transaction_details_not_found(&error) => {
+                    return Ok(PreparedSoracloudRecoveryV1::Pending {
+                        terminal_kind: "AppliedEvidencePending".to_owned(),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
             Ok(PreparedSoracloudRecoveryV1::Applied {
                 block_height,
                 evidence_sha256: prepared.tx_hash_hex.clone(),
@@ -19363,23 +19393,11 @@ fn verify_committed_prepared_soracloud_transaction(
     expected: &SignedTransaction,
 ) -> Result<()> {
     let entrypoint_hash = expected.hash_as_entrypoint();
-    let one = NonZeroU64::new(1).expect("nonzero committed lookup bound");
-    let committed = client
+    let details = client
         .client()
-        .query(FindTransactions::new())
-        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
-            entry_eq: Some(entrypoint_hash),
-            ..CommittedTxFilters::default()
-        }))
-        .with_pagination(Pagination::new(Some(one), 0))
-        .with_fetch_size(FetchSize::new(Some(one)))
-        .execute_all()
-        .wrap_err("bounded committed Soracloud transaction proof query failed")?;
-    let [committed] = committed.as_slice() else {
-        return Err(eyre!(
-            "Applied Soracloud status lacks one exact committed transaction proof"
-        ));
-    };
+        .get_transaction_details(entrypoint_hash)
+        .wrap_err("exact committed Soracloud transaction proof query failed")?;
+    let committed = &details.transaction;
     if committed.result().is_err() {
         return Err(eyre!(
             "Applied Soracloud status resolves to a failed committed transaction"
@@ -23938,7 +23956,7 @@ mod tests {
                 &stage_config,
                 &stage_dir,
                 &pin_server.base_url,
-                5,
+                Duration::from_secs(5),
                 crate::taira::InrouCanaryMode::Deploy,
                 TairaInrouCanaryPreparedOperationV1::DiscoveryPin,
             )
@@ -23960,7 +23978,7 @@ mod tests {
                 &stage_config,
                 &stage_dir,
                 &pin_server.base_url,
-                5,
+                Duration::from_secs(5),
                 crate::taira::InrouCanaryMode::Deploy,
                 TairaInrouCanaryPreparedOperationV1::DiscoveryPin,
             )
@@ -27556,7 +27574,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "lease".parse().expect("name"),
         )
     }
@@ -27643,7 +27661,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             isi::{Register, framed_instruction_payload},
         };
         let instruction = InstructionBox::from(Register::domain(Domain::new(
-            iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
                 .expect("domain id"),
         )));
         let (wire_id, framed) = framed_instruction_payload(&instruction)
@@ -28674,12 +28692,14 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     #[derive(Clone)]
     struct MockHttpResponse {
+        status: &'static str,
         content_type: &'static str,
         body: Vec<u8>,
     }
     impl MockHttpResponse {
         fn json(body: Vec<u8>) -> Self {
             Self {
+                status: "200 OK",
                 content_type: "application/json",
                 body,
             }
@@ -28777,13 +28797,15 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                                 {
                                     (
                                         MockHttpResponse {
+                                            status: "200 OK",
                                             content_type: "text/plain",
                                             body: b"invalid pin registration transaction".to_vec(),
                                         },
                                         "400 Bad Request",
                                     )
                                 } else if let Some(response) = configured_response {
-                                    (response, "200 OK")
+                                    let status = response.status;
+                                    (response, status)
                                 } else if let Some(response) = fee_quote_response {
                                     (response, "200 OK")
                                 } else if let Some(response) = pin_registry_response {
@@ -28791,6 +28813,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                                 } else {
                                     (
                                         MockHttpResponse {
+                                            status: "200 OK",
                                             content_type: "text/plain",
                                             body: b"not found".to_vec(),
                                         },
@@ -28875,6 +28898,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             },
         };
         Some(MockHttpResponse {
+            status: "200 OK",
             content_type: "application/json",
             body: json::to_vec(&response).ok()?,
         })
@@ -28967,6 +28991,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             manifest: record,
         };
         Some(MockHttpResponse {
+            status: "200 OK",
             content_type: "application/json",
             body: json::to_vec(&finalized).expect("encode mock SoraFS pin registry response"),
         })
@@ -29405,8 +29430,13 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             .encode_wire_v1()
             .expect("encode Ordinary pin transaction");
         ordinary.tx_hash_hex = hex::encode(ordinary_transaction.hash().as_ref());
-        let error = submit_prepared_soracloud_transaction(&config, "://invalid", 1, &ordinary)
-            .expect_err("Ordinary prepared public submissions must fail before HTTP setup");
+        let error = submit_prepared_soracloud_transaction(
+            &config,
+            "://invalid",
+            Instant::now() + Duration::from_secs(1),
+            &ordinary,
+        )
+        .expect_err("Ordinary prepared public submissions must fail before HTTP setup");
         assert!(error.to_string().contains("QueuePlanSynced"));
         assert_eq!(server.requests().len(), requests.len());
         assert!(prepared.tx_hash_hex.as_bytes().last().is_some_and(|byte| {
@@ -29418,6 +29448,147 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             .decode_and_validate()
             .expect_err("marker-cleared prepared transaction hash must fail closed");
         assert!(error.to_string().contains("Iroha hash marker set"));
+
+        // The real pin recovery path must work on a mixed-dataspace testnet
+        // without asking for unrestricted FindTransactions inventory.
+        let result = iroha::data_model::transaction::TransactionResult::new(Ok(
+            iroha::data_model::transaction::DataTriggerSequence::default(),
+        ));
+        let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
+            hash: transaction.hash_as_entrypoint().to_string(),
+            transaction: iroha::data_model::query::CommittedTransaction {
+                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"exact proof block",
+                )),
+                entrypoint_hash: transaction.hash_as_entrypoint(),
+                entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                entrypoint: TransactionEntrypoint::External(transaction.clone()),
+                result_hash: result.hash(),
+                result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                result,
+                merge_inclusion: None,
+            },
+            trigger_completions: Vec::new(),
+        };
+        for (resolved_from, proof, expected) in [
+            (
+                "cache",
+                None,
+                PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "Applied".to_owned(),
+                },
+            ),
+            (
+                "state",
+                None,
+                PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "AppliedEvidencePending".to_owned(),
+                },
+            ),
+            (
+                "state",
+                Some(norito::to_bytes(&details).unwrap()),
+                PreparedSoracloudRecoveryV1::Applied {
+                    block_height: 7,
+                    evidence_sha256: prepared.tx_hash_hex.clone(),
+                },
+            ),
+        ] {
+            let status = PipelineTransactionStatusResponse::new(
+                prepared.tx_hash_hex.clone(),
+                iroha_torii_shared::PipelineTransactionStatus {
+                    kind: "Applied".to_owned(),
+                    block_height: Some(7),
+                },
+                "global".to_owned(),
+                resolved_from.to_owned(),
+            );
+            let mut routes = BTreeMap::from([
+                (
+                    format!(
+                        "/v1/pipeline/transactions/status?hash={}&scope=global",
+                        transaction.hash()
+                    ),
+                    MockHttpResponse::json(json::to_vec(&status).unwrap()),
+                ),
+                (
+                    "/v1/node/capabilities".to_owned(),
+                    MockHttpResponse::json(
+                        json::to_vec(&norito::json!({
+                            "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                        }))
+                        .unwrap(),
+                    ),
+                ),
+            ]);
+            let (proof_status, body) = match proof {
+                Some(body) => ("200 OK", body),
+                None => (
+                    "404 Not Found",
+                    norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+                        "transaction_details_not_found",
+                        "The exact committed transaction proof is not available.",
+                    ))
+                    .unwrap(),
+                ),
+            };
+            routes.insert(
+                "/v1/pipeline/transactions/details".to_owned(),
+                MockHttpResponse {
+                    status: proof_status,
+                    content_type: "application/x-norito",
+                    body,
+                },
+            );
+            let mut malformed_routes = routes.clone();
+            malformed_routes.insert(
+                "/v1/pipeline/transactions/details".to_owned(),
+                MockHttpResponse {
+                    status: "404 Not Found",
+                    content_type: "text/plain",
+                    body: b"untyped missing proof".to_vec(),
+                },
+            );
+            let proof_server = MockHttpServer::start(routes);
+            assert_eq!(
+                recover_prepared_soracloud_transaction(
+                    &config,
+                    &proof_server.base_url,
+                    Instant::now() + Duration::from_secs(5),
+                    &prepared
+                )
+                .expect("exact prepared pin observation"),
+                expected
+            );
+            let requests = proof_server.requests();
+            assert_eq!(requests.len(), if resolved_from == "state" { 3 } else { 1 });
+            assert!(requests.iter().all(|request| request.method != "POST"
+                || request.path == "/v1/pipeline/transactions/details"));
+            if resolved_from == "state"
+                && matches!(expected, PreparedSoracloudRecoveryV1::Applied { .. })
+            {
+                let mut bounded_config = config.clone();
+                bounded_config.torii_api_url = proof_server.base_url.parse().unwrap();
+                let client = Client::new(bounded_config).unwrap();
+                let mut substituted = prepared.clone();
+                substituted.wire[0] ^= 1;
+                let _ = verify_committed_prepared_soracloud_transaction(
+                    &client,
+                    &substituted,
+                    &transaction,
+                )
+                .expect_err("the exact pin proof cannot authorize altered retained bytes");
+                let malformed_server = MockHttpServer::start(malformed_routes);
+                let _ = recover_prepared_soracloud_transaction(
+                    &config,
+                    &malformed_server.base_url,
+                    Instant::now() + Duration::from_secs(5),
+                    &prepared,
+                )
+                .expect_err("an untyped HTTP404 cannot become pending proof visibility");
+                assert_eq!(malformed_server.requests().len(), 3);
+            }
+        }
 
         let mut zero_height = prepared;
         zero_height.fee_quote.observation.next_block_height = 0;
@@ -30228,7 +30399,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         };
 
         let instruction = InstructionBox::from(Register::domain(Domain::new(
-            iroha_data_model::domain::DomainId::try_new("soracloud_cli_test", "universal")
+            iroha_model_base::domain::DomainId::try_new("soracloud_cli_test", "universal")
                 .expect("canonical mock domain id"),
         )));
         let (wire_id, framed) = framed_instruction_payload(&instruction)
@@ -30416,6 +30587,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             (
                 "/api/v1/health".to_owned(),
                 MockHttpResponse {
+                    status: "200 OK",
                     content_type: "application/json",
                     body: br#"{"status":"ready"}"#.to_vec(),
                 },
@@ -30423,6 +30595,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             (
                 "/".to_owned(),
                 MockHttpResponse {
+                    status: "200 OK",
                     content_type: "text/html",
                     body: b"<!doctype html><title>ready</title>".to_vec(),
                 },
@@ -31758,6 +31931,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 let server = MockHttpServer::start(BTreeMap::from([(
                     $endpoint.to_owned(),
                     MockHttpResponse {
+                        status: "200 OK",
                         content_type: "application/json",
                         body: json::to_vec(&response).expect($response_label),
                     },
@@ -31812,6 +31986,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 let server = MockHttpServer::start(BTreeMap::from([(
                     $endpoint.to_owned(),
                     MockHttpResponse {
+                        status: "200 OK",
                         content_type: "application/json",
                         body: json::to_vec(&response).expect($response_label),
                     },

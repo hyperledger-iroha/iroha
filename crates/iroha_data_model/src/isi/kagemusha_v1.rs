@@ -29,9 +29,9 @@ use crate::{
         kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
-    peer::PeerId,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::peer::PeerId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -1480,15 +1480,12 @@ impl KagemushaMintFinalitySealMessageV1 {
         hasher.update(self.execution_commitment_digest);
         hasher.update(self.kagemusha_top_up_root.as_ref());
         hasher.update(self.kagemusha_top_up_count.to_le_bytes());
-        match self.next_finality_epoch_id {
-            Some(next_epoch_id) => {
-                hasher.update([1]);
-                hasher.update(next_epoch_id);
-            }
-            None => {
-                hasher.update([0]);
-                hasher.update([0; 32]);
-            }
+        if let Some(next_epoch_id) = self.next_finality_epoch_id {
+            hasher.update([1]);
+            hasher.update(next_epoch_id);
+        } else {
+            hasher.update([0]);
+            hasher.update([0; 32]);
         }
         Ok(hasher.finalize().into())
     }
@@ -2479,7 +2476,6 @@ mod tests {
     use super::*;
     use crate::{
         block::BlockHeader,
-        domain::DomainId,
         kagemusha::{
             KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
             KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1,
@@ -2490,6 +2486,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
     fn network() -> NetworkId {
@@ -2824,7 +2821,7 @@ mod tests {
         attach_test_mint_authorization(request)
     }
 
-    pub(super) fn redemption_request() -> KagemushaRedemptionRequestV1 {
+    fn redemption_statement() -> crate::kagemusha::KagemushaRedemptionStatementV1 {
         let network_id = network();
         let asset = asset();
         let asset_incarnation = asset_incarnation(1);
@@ -2857,7 +2854,7 @@ mod tests {
                 time_evidence_commitment: [0x15; 32],
             },
         );
-        let statement = crate::kagemusha::KagemushaRedemptionStatementV1 {
+        crate::kagemusha::KagemushaRedemptionStatementV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             lifecycle,
             amount: 12_000,
@@ -2868,7 +2865,12 @@ mod tests {
             commit_evidence,
         }
         .seal_redemption_id()
-        .expect("seal redemption identity");
+        .expect("seal redemption identity")
+    }
+
+    pub(super) fn redemption_request() -> KagemushaRedemptionRequestV1 {
+        let statement = redemption_statement();
+        let commit_evidence = statement.commit_evidence;
         let semantic_digest = statement
             .canonical_digest()
             .expect("redemption semantic digest");

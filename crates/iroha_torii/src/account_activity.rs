@@ -284,14 +284,14 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
-        domain::DomainId,
         isi::{Burn, Grant, Mint, RemoveKeyValue, SetKeyValue, Transfer},
-        metadata::Metadata,
         nft::{Nft, NftId},
         permission::Permission,
         prelude::Numeric,
         role::RoleId,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)

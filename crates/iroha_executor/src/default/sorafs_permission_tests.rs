@@ -23,7 +23,6 @@ mod sorafs_permission_tests {
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, UnregisterProviderOwner, UpsertProviderCredit,
         },
-        metadata::Metadata,
         permission::Permission as PermissionObject,
         prelude::{Quantity, ValidationFail},
         query::sorafs::prelude::{
@@ -81,6 +80,8 @@ mod sorafs_permission_tests {
         parameter::{CanSetHijiriParameters, CanSetParameters},
         sccp::CanManageSccpGovernance,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     const AUTHORITY_PUBLIC_KEY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
     const OWNER_PUBLIC_KEY: &str =
@@ -446,7 +447,7 @@ mod sorafs_permission_tests {
             predecessor_policy_digest: None,
             challenge_voting_asset_id:
                 iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    iroha_data_model::domain::DomainId::try_new("sora", "universal")
+                    iroha_model_base::domain::DomainId::try_new("sora", "universal")
                         .expect("governance domain"),
                     "xor".parse().expect("governance asset name"),
                 ),
@@ -739,11 +740,11 @@ mod sorafs_permission_tests {
             sorafs::visit_raise_moderation_challenge,
         );
         assert_allowed_without_permission(
-            ExpireSorafsModerationChallenge::new(
-                "appeal-case".to_owned(),
-                "round-1".to_owned(),
-                "challenge-1".to_owned(),
-            ),
+            ExpireSorafsModerationChallenge {
+                case_id: "appeal-case".to_owned(),
+                round_id: "round-1".to_owned(),
+                challenge_id: "challenge-1".to_owned(),
+            },
             sorafs::visit_expire_moderation_challenge,
         );
         assert_allowed_without_permission(

@@ -7,6 +7,7 @@ use iroha::{
     data_model::{prelude::*, query::error::QueryExecutionFail},
 };
 use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;

@@ -8,6 +8,8 @@ use super::*;
 pub use bridge_filters_model::BridgeEventFilter;
 use getset::Getters;
 use iroha_data_model_derive::model;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use std::fmt::Debug;
 #[model]
 mod model {
@@ -201,7 +203,7 @@ mod model {
     )]
     pub struct SpaceDirectoryEventFilter {
         /// If specified, matches only events originating from this dataspace.
-        pub(super) dataspace_matcher: Option<crate::nexus::DataSpaceId>,
+        pub(super) dataspace_matcher: Option<iroha_model_base::topology::DataSpaceId>,
         /// If specified, matches only events associated with this UAID.
         pub(super) uaid_matcher: Option<crate::nexus::UniversalAccountId>,
         /// Matches only events from this set.
@@ -248,7 +250,7 @@ mod model {
     #[norito_schema(name = "iroha_data_model::events::data::filters::model::PeerEventFilter")]
     pub struct PeerEventFilter {
         /// If specified matches only events originating from this peer
-        pub(super) id_matcher: Option<super::PeerId>,
+        pub(super) id_matcher: Option<iroha_model_base::peer::PeerId>,
         /// Matches only event from this set
         pub(super) event_set: PeerEventSet,
     }
@@ -260,7 +262,7 @@ mod model {
     pub struct DomainEventFilter {
         /// If specified matches only events originating from this domain
         #[getset(get = "pub")]
-        pub(super) id_matcher: Option<super::DomainId>,
+        pub(super) id_matcher: Option<iroha_model_base::domain::DomainId>,
         /// Matches only event from this set
         pub(super) event_set: DomainEventSet,
     }
@@ -611,7 +613,7 @@ impl SpaceDirectoryEventFilter {
     }
     /// Filter by dataspace identifier.
     #[must_use]
-    pub fn for_dataspace(mut self, dataspace: crate::nexus::DataSpaceId) -> Self {
+    pub fn for_dataspace(mut self, dataspace: iroha_model_base::topology::DataSpaceId) -> Self {
         self.dataspace_matcher = Some(dataspace);
         self
     }
@@ -1779,6 +1781,8 @@ mod tests {
     use super::*;
     use crate::nexus::UniversalAccountId;
     use iroha_crypto::{Hash, KeyPair};
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
     fn checked_random_account_id() -> AccountId {
         AccountId::new(
@@ -2373,8 +2377,8 @@ mod tests {
                 ArchiveId, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseDigestV1,
                 MusubiReleaseIdV1,
             },
-            nexus::DataSpaceId,
         };
+        use iroha_model_base::topology::DataSpaceId;
         let package = MusubiPackageIdV1::new(
             DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
@@ -2443,7 +2447,7 @@ mod bridge_filters_model {
             name = "iroha_data_model::events::data::filters::bridge_filters_model::model::BridgeEventFilter"
         )]
         pub struct BridgeEventFilter {
-            pub(super) id_matcher: Option<crate::nexus::LaneId>,
+            pub(super) id_matcher: Option<iroha_model_base::topology::LaneId>,
             pub(super) event_set: crate::events::data::events::bridge::BridgeEventSet,
         }
     }
@@ -2458,7 +2462,7 @@ mod bridge_filters_model {
         }
         /// Restrict the filter to events originating from the provided lane id.
         #[must_use]
-        pub fn for_lane(mut self, lane: crate::nexus::LaneId) -> Self {
+        pub fn for_lane(mut self, lane: iroha_model_base::topology::LaneId) -> Self {
             self.id_matcher = Some(lane);
             self
         }

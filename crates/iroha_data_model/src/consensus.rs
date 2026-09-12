@@ -59,11 +59,11 @@ pub struct ValidatorSetCheckpoint {
     /// Re-chain sequence bound into the checkpoint's aggregate signature.
     pub rechain_seq: u64,
     /// Stable hash of the validator set encoded with [`VALIDATOR_SET_HASH_VERSION_V1`].
-    pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
+    pub validator_set_hash: HashOf<Vec<iroha_model_base::peer::PeerId>>,
     /// Version of the validator-set hashing scheme.
     pub validator_set_hash_version: u16,
     /// Ordered validator set used to assemble the commit certificate.
-    pub validator_set: Vec<crate::peer::PeerId>,
+    pub validator_set: Vec<iroha_model_base::peer::PeerId>,
     /// Compact signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
@@ -84,7 +84,7 @@ impl ValidatorSetCheckpoint {
         rechain_seq: u64,
         parent_state_root: Hash,
         post_state_root: Hash,
-        validator_set: Vec<crate::peer::PeerId>,
+        validator_set: Vec<iroha_model_base::peer::PeerId>,
         signers_bitmap: Vec<u8>,
         bls_aggregate_signature: Vec<u8>,
         validator_set_hash_version: u16,
@@ -182,9 +182,9 @@ pub struct NposConsensusSlashAction {
     /// Signer index in the evidence roster.
     pub signer: u32,
     /// Peer identity resolved from the evidence roster.
-    pub peer_id: crate::peer::PeerId,
+    pub peer_id: iroha_model_base::peer::PeerId,
     /// Public lane containing the validator registration.
-    pub lane_id: crate::nexus::LaneId,
+    pub lane_id: iroha_model_base::topology::LaneId,
     /// Validator account to slash.
     pub validator: crate::account::AccountId,
     /// Slash identifier recorded in validator status.
@@ -269,7 +269,7 @@ pub struct ValidatorElectionParameters {
 )]
 pub struct ValidatorTieBreak {
     /// Candidate peer identifier.
-    pub peer_id: crate::peer::PeerId,
+    pub peer_id: iroha_model_base::peer::PeerId,
     /// Blake2b-derived score used to order candidates (lower is preferred).
     pub score: [u8; 32],
 }
@@ -297,9 +297,9 @@ pub struct ValidatorElectionOutcome {
     /// Total candidates considered.
     pub candidates_total: u32,
     /// Ordered elected validator set.
-    pub validator_set: Vec<crate::peer::PeerId>,
+    pub validator_set: Vec<iroha_model_base::peer::PeerId>,
     /// Stable hash of the elected validator set.
-    pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
+    pub validator_set_hash: HashOf<Vec<iroha_model_base::peer::PeerId>>,
     /// Parameters in effect for the election.
     pub params: ValidatorElectionParameters,
     /// Optional rejection or misconfiguration reason.
@@ -438,7 +438,6 @@ pub enum ConsensusKeyStatus {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
-
 pub struct ConsensusKeyRecord {
     /// Identifier of the key (role + name).
     pub id: ConsensusKeyId,
@@ -956,8 +955,8 @@ mod tests {
     struct ForgedNposConsensusSlashAction {
         evidence_key: Hash,
         signer: u32,
-        peer_id: crate::peer::PeerId,
-        lane_id: crate::nexus::LaneId,
+        peer_id: iroha_model_base::peer::PeerId,
+        lane_id: iroha_model_base::topology::LaneId,
         validator: crate::account::AccountId,
         slash_id: Hash,
         amount: Numeric,
@@ -993,10 +992,16 @@ mod tests {
         let dealer_commitments = (1_u16..=4)
             .map(|dealer_index| GlobalThresholdBeaconDkgDealerCommitmentV1 {
                 dealer_index,
-                coefficient_commitments: vec![[dealer_index as u8 + 0x20; 96]; 2],
+                coefficient_commitments: vec![
+                    [u8::try_from(dealer_index).expect("fixture value fits u8") + 0x20;
+                        96];
+                    2
+                ],
                 constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
-                    commitment: [dealer_index as u8 + 0x30; 96],
-                    response: [dealer_index as u8 + 0x40; 32],
+                    commitment: [u8::try_from(dealer_index).expect("fixture value fits u8") + 0x30;
+                        96],
+                    response: [u8::try_from(dealer_index).expect("fixture value fits u8") + 0x40;
+                        32],
                 },
             })
             .collect();
@@ -1011,8 +1016,10 @@ mod tests {
             public_shares: (1_u16..=4)
                 .map(|index| GlobalThresholdBeaconPublicShareV1 {
                     index,
-                    participant_seat_binding: [index as u8; 32],
-                    public_key_share: [index as u8 + 0x50; 96],
+                    participant_seat_binding: [u8::try_from(index).expect("fixture value fits u8");
+                        32],
+                    public_key_share: [u8::try_from(index).expect("fixture value fits u8") + 0x50;
+                        96],
                 })
                 .collect(),
             adaptive_dkg: GlobalThresholdBeaconDkgTranscriptV1 {
@@ -1106,12 +1113,12 @@ mod tests {
     #[test]
     fn negative_numeric_payload_cannot_decode_as_consensus_slash_amount() {
         let key_pair = checked_random_keypair();
-        let peer_id = crate::peer::PeerId::new(key_pair.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::new(key_pair.public_key().clone());
         let slash = ForgedNposConsensusSlashAction {
             evidence_key: Hash::new(b"forged-negative-consensus-slash"),
             signer: 0,
             peer_id,
-            lane_id: crate::nexus::LaneId::SINGLE,
+            lane_id: iroha_model_base::topology::LaneId::SINGLE,
             validator: crate::account::AccountId::new(key_pair.public_key().clone()),
             slash_id: Hash::new(b"negative-consensus-slash"),
             amount: Numeric::new(-1_i32, 0),
@@ -1127,8 +1134,8 @@ mod tests {
         let kp_a = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
         let kp_b = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
         let validator_set = vec![
-            crate::peer::PeerId::new(kp_a.public_key().clone()),
-            crate::peer::PeerId::new(kp_b.public_key().clone()),
+            iroha_model_base::peer::PeerId::new(kp_a.public_key().clone()),
+            iroha_model_base::peer::PeerId::new(kp_b.public_key().clone()),
         ];
         let block_hash = HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xAA; 32]),

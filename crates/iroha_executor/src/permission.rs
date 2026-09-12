@@ -1507,7 +1507,7 @@ pub mod account {
         pub account: &'asset AccountId,
     }
     pub(super) fn validate_dataspace_alias_owner(
-        dataspace: crate::smart_contract::data_model::nexus::DataSpaceId,
+        dataspace: iroha_model_base::topology::DataSpaceId,
         authority: &AccountId,
         host: &Iroha,
     ) -> Result {
@@ -1529,7 +1529,7 @@ pub mod account {
         }
     }
     fn validate_account_alias_domain_owner(
-        domain: &crate::smart_contract::data_model::domain::DomainId,
+        domain: &iroha_model_base::domain::DomainId,
         authority: &AccountId,
         context: &Context,
         host: &Iroha,
@@ -1761,6 +1761,7 @@ pub mod domain {
         domain::{CanModifyDomainMetadata, CanRegisterDomain, CanUnregisterDomain},
         nft::CanRegisterNft,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_smart_contract::data_model::{
         isi::error::InstructionExecutionError, query::error::FindError,
     };
@@ -1955,11 +1956,11 @@ mod tests {
             Iroha,
             data_model::{
                 block::BlockHeader,
-                nexus::{DataSpaceId, FeeSponsorProgramId, UniversalAccountId},
+                nexus::{FeeSponsorProgramId, UniversalAccountId},
                 permission::Permission as PermissionObject,
                 prelude::{
-                    AccountId, AssetDefinitionId, AssetId, DomainId, Json,
-                    ResolvedAssetDefinitionAliasV1, RoleId,
+                    AccountId, AssetDefinitionId, AssetId, Json, ResolvedAssetDefinitionAliasV1,
+                    RoleId,
                 },
                 smart_contract::ContractAddress,
             },
@@ -1993,6 +1994,8 @@ mod tests {
         smart_contract::CanInvokeContractEntrypoint,
         soranet::{CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use std::{num::NonZeroU64, vec::Vec};
     fn make_context(authority: &AccountId, height: u64) -> Context {
         let header = BlockHeader::new(
@@ -2642,11 +2645,11 @@ mod tests {
         let authority = make_account_id();
         let context = make_context(&authority, 2);
         let delegated_scope = AccountAliasPermissionScope::Domain(
-            iroha_data_model::domain::DomainId::try_new("hbl", "sbp")
+            iroha_model_base::domain::DomainId::try_new("hbl", "sbp")
                 .expect("HBL SBP domain fixture"),
         );
         let sibling_scope = AccountAliasPermissionScope::Domain(
-            iroha_data_model::domain::DomainId::try_new("ubl", "sbp")
+            iroha_model_base::domain::DomainId::try_new("ubl", "sbp")
                 .expect("UBL SBP domain fixture"),
         );
         let held = CanDelegateAccountAliasResolution {

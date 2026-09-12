@@ -1,11 +1,9 @@
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{
-    da::types::{
-        BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
-        RetentionPolicy, StorageTicketId,
-    },
-    nexus::LaneId,
+use crate::da::types::{
+    BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
+    RetentionPolicy, StorageTicketId,
 };
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use iroha_model_base::topology::LaneId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// Role for a chunk within an erasure-coded stripe.
@@ -148,7 +146,6 @@ impl ChunkCommitment {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct DaManifestV1 {
     /// Manifest format version. Currently always 1.
     pub version: u16,

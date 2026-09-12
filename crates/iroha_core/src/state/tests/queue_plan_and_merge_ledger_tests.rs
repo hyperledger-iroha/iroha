@@ -583,6 +583,7 @@ state_test! { sync staged_merge_missing_transaction_block_mutates_nothing
         .kura
         .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
         .expect("store exact merge carrier before State commit");
+    persist_merge_carrier_finality_for_state_test(&state.kura, &carrier);
     let committed_height_before = state.committed_height();
     let state_hash_before = state.lane_execution_state_hash();
     let roots_before = state.world.merge_hint_roots.view().clone();
@@ -591,7 +592,7 @@ state_test! { sync staged_merge_missing_transaction_block_mutates_nothing
     let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry, ConsensusMode::Permissioned) .expect("stage exact certified merge entry") };
     state_block.block_hashes.push(carrier.hash());
     let_row! { error = state_block .commit() .expect_err("missing transaction membership must abort the staged merge") };
-    assert!(matches!(error, TransactionsBlockError::MissingInsertBlock));
+    assert!(matches!(error, TransactionsBlockError::MissingInsertBlock), "unexpected missing membership rejection: {error:?}");
     assert_eq!(state.committed_height(), committed_height_before);
     assert_eq!(state.lane_execution_state_hash(), state_hash_before);
     assert_eq!(*state.world.merge_hint_roots.view(), roots_before);
@@ -603,7 +604,7 @@ state_test! { sync staged_merge_missing_transaction_block_mutates_nothing
     let admission = state.merge_admission.read();
     assert!(admission.latest_entry().is_none());
     assert!(admission.latest_lane_snapshots.is_empty());
-    assert!(admission.latest_execution_heights.is_empty());
+    assert!(admission.latest_execution_frontiers.is_empty());
 }
 state_test! { sync durable_kura_carrier_requires_exact_committed_state_carrier_before_publication
     let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
@@ -628,7 +629,7 @@ state_test! { sync durable_kura_carrier_requires_exact_committed_state_carrier_b
         let admission = state.merge_admission.read();
         assert!(admission.latest_entry().is_none());
         assert!(admission.latest_lane_snapshots.is_empty());
-        assert!(admission.latest_execution_heights.is_empty());
+        assert!(admission.latest_execution_frontiers.is_empty());
     }
     commit_exact_merge_carrier_to_state(&state, &carrier, &entry);
     assert_eq!(state.merge_ledger.snapshot().len(), 1);
@@ -683,13 +684,29 @@ state_test! { sync stale_staged_merge_fails_before_wsv_when_admission_advances
 }
 state_test! { sync same_block_merge_and_lane_replacement_preserves_history_and_prunes_old_progress
     let replaced_lane = LaneId::new(1);
-    let (state, validator_keypairs, commit_keypairs, parent) = configured_two_lane_merge_state();
-    let_row! { entry = next_relay_merge_entry_for_lane( &state, 1, replaced_lane, &validator_keypairs, &commit_keypairs, ) };
-    let carrier = certified_merge_carrier_after(&parent, &entry);
+    let (state, validator_keypairs, commit_keypairs, previous) = configured_two_lane_merge_state();
+    let proposal_height = previous.header().height().get().saturating_add(1);
+    let envelope = seed_effect_authenticated_relay_for_merge_test(
+        &state,
+        sample_lane_relay_envelope_for_state_at_heights_with_view(
+            &state, proposal_height, 1, replaced_lane, 0, &validator_keypairs,
+        ),
+    );
+    state.record_lane_relay(&envelope).expect("record the first local lane block at the current global height");
+    seed_committed_height_for_state_test(&state, proposal_height);
+    ensure_merge_carrier_parent_for_test(&state);
+    let candidate = state.merge_entry_candidates_from_lane_relays().into_iter().next().expect("current replacement-lane merge candidate");
+    let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+    let entry = merge_entry_from_candidate(candidate, qc);
+    let parent = state.kura.get_block(NonZeroUsize::new(proposal_height as usize).expect("positive source height")).expect("canonical source block is the merge carrier parent");
+    state.update_latest_block_header_cache_for_tests(parent.header());
+    seed_empty_transaction_height_for_state_test(&state, proposal_height);
+    let carrier = certified_merge_carrier_after(parent.as_ref(), &entry);
     state
         .kura
         .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
         .expect("store merge+lifecycle carrier");
+    persist_merge_carrier_finality_for_state_test(&state.kura, &carrier);
     let_row! { old_incarnation = state .lane_incarnation(replaced_lane) .expect("replaceable lane has an incarnation") };
     let catalog = state.nexus_snapshot().lane_catalog;
     let_row! { canonical_incarnations = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations( &catalog, &state.lane_incarnations_snapshot(), ) .expect("current lane incarnation set is canonical") };
@@ -729,7 +746,7 @@ state_test! { sync same_block_merge_and_lane_replacement_preserves_history_and_p
     );
     assert!(
         admission
-            .latest_execution_heights
+            .latest_execution_frontiers
             .keys()
             .all(|(lane_id, _, _)| *lane_id != replaced_lane),
         "replacement must prune old-incarnation execution tips"
@@ -964,6 +981,8 @@ state_test! { sync v2_authority_requires_exact_context_before_post_execution_mut
         )
         .unpack(|_| {})
         .expect("fixture block binds exact v2 finality");
+    let transactions_before = norito::json::to_vec(&state_block.transactions)
+        .expect("encode staged transaction history before failed apply");
     let_row! { error = state_block .apply_without_execution_with_verified_v2_finality(&committed) .expect_err("v2 apply without durable exact context must fail closed") };
     assert!(
         error.to_string().contains("missing exact v2 finality context"),
@@ -976,9 +995,10 @@ state_test! { sync v2_authority_requires_exact_context_before_post_execution_mut
             .all(|hash| *hash != block_hash),
         "failed v2 pre-apply validation must not publish the block hash"
     );
-    assert!(
-        !state_block.transactions.has_staged_block(),
-        "failed v2 pre-apply validation must not publish transaction history"
+    assert_eq!(
+        norito::json::to_vec(&state_block.transactions).expect("encode history after failed apply"),
+        transactions_before,
+        "failed v2 pre-apply validation must preserve staged transaction history"
     );
 }
 state_test! { sync v2_state_apply_rejects_ordinary_commit_capability
@@ -990,6 +1010,8 @@ state_test! { sync v2_state_apply_rejects_ordinary_commit_capability
     let mut state_block = state.block(block.header());
     let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
+    let transactions_before = norito::json::to_vec(&state_block.transactions)
+        .expect("encode staged transaction history before failed apply");
     let_row! { error = state_block .apply_without_execution_with_verified_v2_finality(&committed) .expect_err("ordinary commit must not authorize production State apply") };
     assert!(
         error
@@ -1004,9 +1026,10 @@ state_test! { sync v2_state_apply_rejects_ordinary_commit_capability
             .all(|hash| *hash != block_hash),
         "failed capability validation must precede block-hash publication"
     );
-    assert!(
-        !state_block.transactions.has_staged_block(),
-        "failed capability validation must precede transaction-history publication"
+    assert_eq!(
+        norito::json::to_vec(&state_block.transactions).expect("encode history after failed apply"),
+        transactions_before,
+        "failed capability validation must preserve staged transaction history"
     );
 }
 state_test! { sync height_mismatch_does_not_publish_staged_commit_topology
@@ -1034,6 +1057,8 @@ state_test! { sync height_mismatch_does_not_publish_staged_commit_topology
     }
     let_row! { first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypairs[0].private_key()) .unpack(|_| {}) .into() };
     let_row! { second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, Some(&first_block)) .sign(keypairs[0].private_key()) .unpack(|_| {}) .into() };
+    state.kura.store_block(Arc::new(first_block)).expect("retain exact predecessor");
+    seed_committed_height_for_state_test(&state, 1);
     let mut state_block = state.block(second_block.header());
     let valid = ValidBlock::validate_unchecked(second_block, &mut state_block).unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
@@ -2049,9 +2074,29 @@ state_test! { sync commit_merge_entry_rejects_headerless_settlement_hash
     assert!(state.merge_ledger().is_empty());
 }
 state_test! { sync live_merge_rejects_historical_incarnation_reuse_beyond_rolling_cache
-    let first = merge_entry_from_candidate(merge_candidate_with_lanes(1, 2), dummy_merge_qc());
-    let gap = merge_entry_from_candidate(merge_candidate_with_lanes(2, 1), dummy_merge_qc());
-    let replay = merge_entry_from_candidate(merge_candidate_with_lanes(3, 2), dummy_merge_qc());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let (candidate, commit_keypairs, _) = record_commit_ready_merge_candidate_with_lanes(&mut state, 2, 1);
+    let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+    let first = merge_entry_from_candidate(candidate.clone(), qc);
+    // Seed the retained history independently of the bounded query cache. The
+    // attempted replay still carries the current, fully qualified lane authority.
+    let mut gap_candidate = candidate.clone();
+    gap_candidate.epoch_id = 2;
+    gap_candidate.lane_catalog_hash = merge_lane_catalog_hash(&LaneCatalog::default());
+    gap_candidate.active_lanes.truncate(1);
+    gap_candidate.lane_snapshots.truncate(1);
+    let retained_roster = gap_candidate.lane_authority_catalog.roster_for_lane(0).expect("first lane authority").validators.clone();
+    gap_candidate.lane_authority_catalog = iroha_data_model::merge::MergeLaneAuthorityCatalogV1::from_lane_committees(&[retained_roster]).expect("retained one-lane authority");
+    gap_candidate.incarnation_root = iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(&[iroha_data_model::nexus::LaneLifecycleIncarnationEntry { lane_id: gap_candidate.active_lanes[0].lane_id, incarnation: gap_candidate.active_lanes[0].incarnation }]);
+    gap_candidate.activation_root = crate::merge::merge_activation_root(&gap_candidate.active_lanes);
+    gap_candidate.global_state_root = crate::merge::reduce_merge_hint_roots(&[gap_candidate.lane_snapshots[0].merge_hint_root]);
+    let gap_qc = merge_qc_for_candidate(&state, &gap_candidate, &commit_keypairs, &[0]);
+    let gap = merge_entry_from_candidate(gap_candidate, gap_qc);
+    let replay_candidate = crate::merge::MergeLedgerCandidate { epoch_id: 3, ..candidate };
+    let replay_qc = merge_qc_for_candidate(&state, &replay_candidate, &commit_keypairs, &[0]);
+    let replay = merge_entry_from_candidate(replay_candidate, replay_qc);
     let mut history = MergeBindingHistory::default();
     history
         .validate_next(&first)
@@ -2060,9 +2105,6 @@ state_test! { sync live_merge_rejects_historical_incarnation_reuse_beyond_rollin
     history.validate_next(&gap).expect("lane omission is valid");
     history.record(&gap);
     let_row! { shared_err = history .validate_next(&replay) .expect_err("a retired incarnation must never become active again") };
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
     state.set_merge_ledger_cache_capacity(1);
     state.merge_ledger.replace(vec![first, gap]);
     assert_eq!(
@@ -2519,9 +2561,9 @@ state_test! { sync commit_merge_entry_rejects_qc_digest_mismatch
 state_test! { sync commit_merge_entry_rejects_qc_signer_superset
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query);
+    let mut state = State::new_for_testing(World::default(), kura, query);
+    let (candidate, _, _) = record_commit_ready_merge_candidate_with_lanes(&mut state, 1, 1);
     let keypairs = configure_commit_topology(&state, 4);
-    let candidate = merge_candidate_with_lanes(1, 1);
     let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0, 1, 2, 3]);
     let entry = merge_entry_from_candidate(candidate, qc);
     let_row! { err = state .commit_merge_entry(entry) .expect_err("signer superset must be rejected") };
@@ -2756,9 +2798,15 @@ state_test! { sync apply_without_execution_refreshes_merge_metadata
         tx.apply();
         block.commit();
     }
-    let_row! { block = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); }) };
+    let parent = state.kura.get_block(NonZeroUsize::new(state.committed_height()).expect("committed parent"));
+    let block = Arc::new(empty_signed_block_after(parent.as_deref(), 3));
+    // The relay fixture published its source block hash without replaying its
+    // empty transaction history. Restore that predecessor before applying the
+    // next canonical block, as startup replay requires.
+    seed_predecessor_height_for_state_commit(&state, block.as_ref());
+    store_block_for_state_commit(&state.kura, block.as_ref());
     let mut state_block = state.block(block.as_ref().header());
-    let _ = state_block.apply_without_execution(&block, Vec::new());
+    apply_empty_test_block_metadata(&state, &mut state_block, &block);
     state_block.commit().expect("commit apply block");
     assert_eq!(
         &*state.world.merge_hint_roots.view(),

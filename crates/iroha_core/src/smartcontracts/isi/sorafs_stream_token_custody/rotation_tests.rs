@@ -21,10 +21,10 @@ fn revoked_generations_cannot_revive_through_policy_rotation_and_enrollment_sequ
         instruction(
             tx,
             f.provider,
-            Action::Revoke {
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                 signer: true,
                 attester: true,
-            },
+            }),
         )
         .execute(&f.authority, tx)
         .expect("revoke both");
@@ -159,10 +159,10 @@ fn exact_authorized_historical_retry_never_reactivates_replaced_or_revoked_state
         instruction(
             tx,
             f.provider,
-            Action::Revoke {
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                 signer: true,
                 attester: true,
-            },
+            }),
         )
         .execute(&f.authority, tx)
         .expect("revoke");
@@ -234,20 +234,20 @@ fn normal_capacity_reserves_two_terminal_revocations_without_reset_or_pruning() 
         instruction(
             tx,
             f.provider,
-            Action::Revoke {
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                 signer: true,
                 attester: false,
-            },
+            }),
         )
         .execute(&f.authority, tx)
         .expect("reserved signer revocation");
         instruction(
             tx,
             f.provider,
-            Action::Revoke {
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                 signer: false,
                 attester: true,
-            },
+            }),
         )
         .execute(&f.authority, tx)
         .expect("reserved attester revocation");
@@ -261,10 +261,10 @@ fn normal_capacity_reserves_two_terminal_revocations_without_reset_or_pruning() 
             instruction(
                 tx,
                 f.provider,
-                Action::Revoke {
+                Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                     signer: true,
                     attester: true
-                }
+                })
             )
             .execute(&f.authority, tx)
             .is_err()
@@ -288,10 +288,10 @@ fn earlier_revocations_consume_total_capacity_and_noop_revoke_does_not_consume_a
         instruction(
             tx,
             f.provider,
-            Action::Revoke {
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                 signer: true,
                 attester: false,
-            },
+            }),
         )
         .execute(&f.authority, tx)
         .expect("ordinary-slot revocation");
@@ -300,10 +300,10 @@ fn earlier_revocations_consume_total_capacity_and_noop_revoke_does_not_consume_a
             instruction(
                 tx,
                 f.provider,
-                Action::Revoke {
+                Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                     signer: true,
                     attester: false
-                }
+                })
             )
             .execute(&f.authority, tx)
             .is_err()

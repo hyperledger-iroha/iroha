@@ -18,15 +18,17 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId, Registrable,
+    Registrable,
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{InstructionBox, governance::RegisterCitizen},
     permission::Permission,
     smart_contract::manifest::ContractManifest,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
@@ -620,7 +622,7 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
                 .expect("canonical test network id"),
             &authority,
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let contract_address_literal = contract_address.to_string();
@@ -745,7 +747,7 @@ seiyaku GovernedReadFixture {
             .expect("canonical test network id"),
         &harness.authority,
         91,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("governed contract address");
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2247,7 +2249,7 @@ async fn governed_contract_read_serializes_exact_missing_shape() {
             .expect("canonical test network id"),
         &harness.authority,
         92,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("inactive contract address");
     let response = handle_gov_contract_get(
@@ -2287,7 +2289,7 @@ async fn governed_contract_read_retains_inactive_lifecycle_projection() {
             .expect("canonical test network id"),
         &harness.authority,
         94,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("inactive contract address");
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2422,7 +2424,7 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
             .expect("canonical test network id"),
         &harness.authority,
         93,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("incomplete contract address");
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

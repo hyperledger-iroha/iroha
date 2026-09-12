@@ -299,7 +299,8 @@ enum RealProcessBoundRequestV1 {
     Leakage(RealProcessLeakageRequestV1),
 }
 
-#[derive(Clone, Debug, norito::JsonSerialize)]
+#[derive(Clone, Debug, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct RealProcessInventoryRowV1 {
     role: String,
     #[norito(required)]
@@ -312,7 +313,8 @@ struct RealProcessInventoryRowV1 {
     health_observed: bool,
 }
 
-#[derive(Clone, Debug, norito::JsonSerialize)]
+#[derive(Clone, Debug, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct RealProcessBenchmarkResultPayloadV1 {
     stages_ms: HarnessJsonValue,
     throughput_bundles_per_second: f64,
@@ -329,7 +331,8 @@ struct RealProcessBenchmarkResultPayloadV1 {
     partial_spendable_observations: u64,
 }
 
-#[derive(Debug, norito::JsonSerialize)]
+#[derive(Debug, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct RealProcessBenchmarkResultV1 {
     version: u8,
     protocol: String,
@@ -343,6 +346,294 @@ struct RealProcessBenchmarkResultV1 {
     authenticated_message_control: bool,
     process_inventory: Vec<RealProcessInventoryRowV1>,
     payload: RealProcessBenchmarkResultPayloadV1,
+}
+
+/// Closed completion-deadline vocabulary, separate from measured latency stages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BenchmarkDeadlineStageV1 {
+    CoordinatorAck,
+    StateConvergence,
+    TransparentConsents,
+    TransparentBalances,
+    NativeAmxReceipt,
+    CanonicalCarrier,
+    PrivateReceipt,
+}
+
+impl BenchmarkDeadlineStageV1 {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CoordinatorAck => "coordinator_ack",
+            Self::StateConvergence => "state_convergence",
+            Self::TransparentConsents => "transparent_consents",
+            Self::TransparentBalances => "transparent_balances",
+            Self::NativeAmxReceipt => "native_amx_receipt",
+            Self::CanonicalCarrier => "canonical_carrier",
+            Self::PrivateReceipt => "private_receipt",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "coordinator_ack" => Some(Self::CoordinatorAck),
+            "state_convergence" => Some(Self::StateConvergence),
+            "transparent_consents" => Some(Self::TransparentConsents),
+            "transparent_balances" => Some(Self::TransparentBalances),
+            "native_amx_receipt" => Some(Self::NativeAmxReceipt),
+            "canonical_carrier" => Some(Self::CanonicalCarrier),
+            "private_receipt" => Some(Self::PrivateReceipt),
+            _ => None,
+        }
+    }
+}
+
+/// Produced only where an existing declared completion deadline is exhausted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BenchmarkDeadlineV1 {
+    stage: BenchmarkDeadlineStageV1,
+    budget_ms: u64,
+    elapsed_ms: u64,
+}
+
+impl std::fmt::Display for BenchmarkDeadlineV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "declared completion deadline exhausted: {}",
+            self.stage.as_str()
+        )
+    }
+}
+
+impl std::error::Error for BenchmarkDeadlineV1 {}
+
+fn benchmark_duration_ms(duration: Duration) -> Result<u64> {
+    u64::try_from(duration.as_millis()).wrap_err("benchmark duration exceeds u64 milliseconds")
+}
+
+fn benchmark_deadline_error(
+    stage: BenchmarkDeadlineStageV1,
+    budget: Duration,
+    elapsed: Duration,
+) -> eyre::Report {
+    let deadline = (|| -> Result<BenchmarkDeadlineV1> {
+        ensure!(elapsed >= budget, "completion deadline has not elapsed");
+        let budget_ms = benchmark_duration_ms(budget)?;
+        ensure!(
+            budget_ms > 0,
+            "completion deadline budget must be positive milliseconds"
+        );
+        Ok(BenchmarkDeadlineV1 {
+            stage,
+            budget_ms,
+            elapsed_ms: benchmark_duration_ms(elapsed)?,
+        })
+    })();
+    match deadline {
+        Ok(deadline) => eyre::Report::new(deadline),
+        Err(error) => error,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BenchmarkFailureReasonV1 {
+    ExecutionError,
+    WorkerPanic,
+    WorkerSpawnError,
+}
+
+impl BenchmarkFailureReasonV1 {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ExecutionError => "execution_error",
+            Self::WorkerPanic => "worker_panic",
+            Self::WorkerSpawnError => "worker_spawn_error",
+        }
+    }
+}
+
+/// Exactly one outcome; unsuccessful attempts cannot carry measurement payloads.
+#[derive(Debug)]
+enum RealProcessBenchmarkOutcomeV1 {
+    Succeeded(RealProcessBenchmarkResultV1),
+    Failed(BenchmarkFailureReasonV1),
+    TimedOut(BenchmarkDeadlineV1),
+}
+
+impl RealProcessBenchmarkOutcomeV1 {
+    fn from_error(error: &eyre::Report) -> Self {
+        // Eyre preserves typed causes through wrap_err; diagnostic text is never a classifier.
+        match error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<BenchmarkDeadlineV1>())
+        {
+            Some(deadline) => Self::TimedOut(*deadline),
+            None => Self::Failed(BenchmarkFailureReasonV1::ExecutionError),
+        }
+    }
+}
+
+impl norito::json::FastJsonWrite for RealProcessBenchmarkOutcomeV1 {
+    fn write_json(&self, out: &mut String) {
+        norito::json::write_json_unbounded(self, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> std::result::Result<(), norito::json::BoundedJsonError> {
+        use norito::json::FastJsonWrite as _;
+        out.begin_container()?;
+        match self {
+            Self::Succeeded(result) => {
+                out.push_str("{\"kind\":\"succeeded\",\"result\":")?;
+                result.write_json_to(out)?;
+            }
+            Self::Failed(reason) => {
+                out.push_str("{\"kind\":\"failed\",\"stage\":\"benchmark_worker\",\"reason\":")?;
+                reason.as_str().write_json_to(out)?;
+            }
+            Self::TimedOut(deadline) => {
+                out.push_str("{\"kind\":\"timed_out\",\"stage\":")?;
+                deadline.stage.as_str().write_json_to(out)?;
+                out.push_str(",\"budget_ms\":")?;
+                deadline.budget_ms.write_json_to(out)?;
+                out.push_str(",\"elapsed_ms\":")?;
+                deadline.elapsed_ms.write_json_to(out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for RealProcessBenchmarkOutcomeV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> std::result::Result<Self, norito::json::Error> {
+        #[derive(norito::JsonDeserialize)]
+        #[norito(deny_unknown_fields)]
+        struct Success {
+            result: RealProcessBenchmarkResultV1,
+        }
+        #[derive(norito::JsonDeserialize)]
+        #[norito(deny_unknown_fields)]
+        struct Failure {
+            stage: String,
+            reason: String,
+        }
+        #[derive(norito::JsonDeserialize)]
+        #[norito(deny_unknown_fields)]
+        struct Timeout {
+            stage: String,
+            budget_ms: u64,
+            elapsed_ms: u64,
+        }
+        let invalid = || norito::json::Error::Message("invalid benchmark terminal outcome".into());
+        let mut value =
+            <HarnessJsonValue as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        let kind = value
+            .as_object_mut()
+            .and_then(|fields| fields.remove("kind"))
+            .ok_or_else(invalid)?;
+        match kind.as_str() {
+            Some("succeeded") => Ok(Self::Succeeded(
+                norito::json::from_value::<Success>(value)?.result,
+            )),
+            Some("failed") => {
+                let failure: Failure = norito::json::from_value(value)?;
+                if failure.stage != "benchmark_worker" {
+                    return Err(invalid());
+                }
+                let reason = match failure.reason.as_str() {
+                    "execution_error" => BenchmarkFailureReasonV1::ExecutionError,
+                    "worker_panic" => BenchmarkFailureReasonV1::WorkerPanic,
+                    "worker_spawn_error" => BenchmarkFailureReasonV1::WorkerSpawnError,
+                    _ => return Err(invalid()),
+                };
+                Ok(Self::Failed(reason))
+            }
+            Some("timed_out") => {
+                let timeout: Timeout = norito::json::from_value(value)?;
+                if timeout.budget_ms == 0 || timeout.elapsed_ms < timeout.budget_ms {
+                    return Err(invalid());
+                }
+                Ok(Self::TimedOut(BenchmarkDeadlineV1 {
+                    stage: BenchmarkDeadlineStageV1::parse(&timeout.stage).ok_or_else(invalid)?,
+                    budget_ms: timeout.budget_ms,
+                    elapsed_ms: timeout.elapsed_ms,
+                }))
+            }
+            _ => Err(invalid()),
+        }
+    }
+}
+
+/// Retained before the validated request moves into the benchmark worker.
+#[derive(Clone, Debug)]
+struct BenchmarkTerminalIdentityV1 {
+    request_id: String,
+    invocation_nonce: String,
+    request_sha256: String,
+    commit: String,
+    participants: usize,
+}
+
+impl BenchmarkTerminalIdentityV1 {
+    fn from_request(request: &RealProcessBenchmarkRequestV1, request_sha256: String) -> Self {
+        Self {
+            request_id: request.request_id.clone(),
+            invocation_nonce: request.invocation_nonce.clone(),
+            request_sha256,
+            commit: request.commit.clone(),
+            participants: request.participants,
+        }
+    }
+
+    fn terminal(
+        self,
+        elapsed_ms: u64,
+        outcome: RealProcessBenchmarkOutcomeV1,
+    ) -> Result<RealProcessBenchmarkTerminalV1> {
+        if let RealProcessBenchmarkOutcomeV1::Succeeded(result) = &outcome {
+            ensure!(
+                result.version == 1
+                    && result.protocol == "AtomicPrivateSettlementV1"
+                    && result.request_id == self.request_id
+                    && result.invocation_nonce == self.invocation_nonce
+                    && result.request_sha256 == self.request_sha256
+                    && result.commit == self.commit
+                    && result.participants == self.participants,
+                "benchmark success does not match retained request identity"
+            );
+        }
+        Ok(RealProcessBenchmarkTerminalV1 {
+            version: 1,
+            protocol: "AtomicPrivateSettlementV1".to_owned(),
+            request_id: self.request_id,
+            invocation_nonce: self.invocation_nonce,
+            request_sha256: self.request_sha256,
+            commit: self.commit,
+            participants: self.participants,
+            elapsed_ms,
+            outcome,
+        })
+    }
+}
+
+#[derive(Debug, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields, no_fast_from_json)]
+struct RealProcessBenchmarkTerminalV1 {
+    version: u8,
+    protocol: String,
+    request_id: String,
+    invocation_nonce: String,
+    request_sha256: String,
+    commit: String,
+    participants: usize,
+    elapsed_ms: u64,
+    outcome: RealProcessBenchmarkOutcomeV1,
 }
 
 #[derive(Debug, norito::JsonSerialize)]
@@ -1545,29 +1836,88 @@ fn executable_for_pid(pid: u32) -> Result<PathBuf> {
     }
 }
 
+/// Parse the portable ps CPU clock without accepting signed or nonfinite values.
 fn parse_ps_cpu_time(value: &str) -> Result<f64> {
-    let (days, clock) = value
-        .split_once('-')
-        .map_or((0_u64, value), |(days, clock)| {
-            (days.parse::<u64>().unwrap_or(u64::MAX), clock)
-        });
-    ensure!(days != u64::MAX, "invalid ps CPU day count");
-    let components = clock.split(':').collect::<Vec<_>>();
-    ensure!((2..=3).contains(&components.len()), "invalid ps CPU time");
-    let (hours, minutes, seconds) = if components.len() == 3 {
-        (
-            components[0].parse::<u64>()?,
-            components[1].parse::<u64>()?,
-            components[2].parse::<f64>()?,
-        )
-    } else {
-        (
-            0,
-            components[0].parse::<u64>()?,
-            components[1].parse::<f64>()?,
-        )
+    let decimal_integer = |part: &str| -> Result<u64> {
+        ensure!(
+            !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()),
+            "invalid ps CPU integer component"
+        );
+        Ok(part.parse::<u64>()?)
     };
-    Ok(days as f64 * 86_400.0 + hours as f64 * 3_600.0 + minutes as f64 * 60.0 + seconds)
+    let (days, clock, has_days) = if let Some((days, clock)) = value.split_once('-') {
+        (decimal_integer(days)?, clock, true)
+    } else {
+        (0_u64, value, false)
+    };
+    let parts = clock.split(':').collect::<Vec<_>>();
+    ensure!(
+        (2..=3).contains(&parts.len()) && (!has_days || parts.len() == 3),
+        "invalid ps CPU clock shape"
+    );
+    let (hours, minutes, seconds) = if parts.len() == 3 {
+        let hours = decimal_integer(parts[0])?;
+        let minutes = decimal_integer(parts[1])?;
+        ensure!(
+            minutes < 60 && (!has_days || hours < 24),
+            "invalid ps CPU clock range"
+        );
+        (hours, minutes, parts[2])
+    } else {
+        (0, decimal_integer(parts[0])?, parts[1])
+    };
+    let mut second_parts = seconds.split('.');
+    decimal_integer(second_parts.next().expect("split yields one component"))?;
+    if let Some(fraction) = second_parts.next() {
+        ensure!(
+            !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit()),
+            "invalid ps CPU fractional seconds"
+        );
+    }
+    ensure!(second_parts.next().is_none(), "invalid ps CPU seconds");
+    let seconds = seconds.parse::<f64>()?;
+    ensure!(
+        seconds.is_finite() && (0.0..60.0).contains(&seconds),
+        "invalid ps CPU seconds range"
+    );
+    let total = days as f64 * 86_400.0 + hours as f64 * 3_600.0 + minutes as f64 * 60.0 + seconds;
+    ensure!(total.is_finite(), "ps CPU total is not finite");
+    Ok(total)
+}
+
+/// Require a complete sample of exactly the requested live process set.
+fn parse_process_resource_rows(text: &str, pids: &[u32]) -> Result<ProcessResourceSample> {
+    ensure!(
+        !pids.is_empty()
+            && pids.iter().all(|pid| *pid != 0)
+            && pids.iter().copied().collect::<BTreeSet<_>>().len() == pids.len(),
+        "resource process inventory is empty, duplicated, or invalid"
+    );
+    let mut observed = BTreeSet::new();
+    let mut cpu_seconds = 0.0;
+    let mut rss_kib = 0_u64;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        ensure!(fields.len() == 3, "unexpected ps resource row");
+        let pid = fields[0].parse::<u32>()?;
+        ensure!(pids.contains(&pid), "ps returned an unrequested PID");
+        ensure!(observed.insert(pid), "ps returned a duplicate PID");
+        rss_kib = rss_kib
+            .checked_add(fields[1].parse::<u64>()?)
+            .ok_or_else(|| eyre!("RSS total overflow"))?;
+        cpu_seconds += parse_ps_cpu_time(fields[2])?;
+        ensure!(cpu_seconds.is_finite(), "process CPU total is not finite");
+    }
+    ensure!(
+        observed.len() == pids.len(),
+        "one measured process disappeared"
+    );
+    Ok(ProcessResourceSample {
+        cpu_seconds,
+        rss_bytes: rss_kib
+            .checked_mul(1_024)
+            .ok_or_else(|| eyre!("RSS byte total overflow"))?,
+    })
 }
 
 fn sample_process_resources(pids: &[u32]) -> Result<ProcessResourceSample> {
@@ -1583,76 +1933,61 @@ fn sample_process_resources(pids: &[u32]) -> Result<ProcessResourceSample> {
         .wrap_err("sample process resources")?;
     ensure!(output.status.success(), "ps resource sampling failed");
     let text = std::str::from_utf8(&output.stdout).wrap_err("ps output is not UTF-8")?;
-    let mut observed = BTreeSet::new();
-    let mut cpu_seconds = 0.0;
-    let mut rss_kib = 0_u64;
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        ensure!(fields.len() == 3, "unexpected ps resource row");
-        let pid = fields[0].parse::<u32>()?;
-        ensure!(pids.contains(&pid), "ps returned an unrequested PID");
-        ensure!(observed.insert(pid), "ps returned a duplicate PID");
-        rss_kib = rss_kib
-            .checked_add(fields[1].parse::<u64>()?)
-            .ok_or_else(|| eyre!("RSS total overflow"))?;
-        cpu_seconds += parse_ps_cpu_time(fields[2])?;
-    }
-    ensure!(
-        observed.len() == pids.len(),
-        "one measured process disappeared"
-    );
-    Ok(ProcessResourceSample {
-        cpu_seconds,
-        rss_bytes: rss_kib
-            .checked_mul(1_024)
-            .ok_or_else(|| eyre!("RSS byte total overflow"))?,
-    })
+    parse_process_resource_rows(text, pids)
 }
 
+/// A failed periodic sample invalidates the measurement instead of hiding a gap.
 struct ProcessResourceSampler {
     stop: Arc<AtomicBool>,
-    peak_rss: Arc<AtomicU64>,
-    handle: Option<thread::JoinHandle<()>>,
+    handle: Option<thread::JoinHandle<Result<u64>>>,
 }
 
 impl ProcessResourceSampler {
     fn start(pids: Vec<u32>, initial_rss_bytes: u64) -> Result<Self> {
-        ensure!(!pids.is_empty(), "cannot sample an empty process set");
+        Self::start_with_sampler(pids, initial_rss_bytes, sample_process_resources)
+    }
+
+    /// Keep sampler ownership identical for native sampling and deterministic failure tests.
+    fn start_with_sampler<F>(pids: Vec<u32>, initial_rss_bytes: u64, mut sample: F) -> Result<Self>
+    where
+        F: FnMut(&[u32]) -> Result<ProcessResourceSample> + Send + 'static,
+    {
+        ensure!(
+            !pids.is_empty()
+                && pids.iter().all(|pid| *pid != 0)
+                && pids.iter().copied().collect::<BTreeSet<_>>().len() == pids.len(),
+            "resource process inventory is empty, duplicated, or invalid"
+        );
         let stop = Arc::new(AtomicBool::new(false));
-        let peak_rss = Arc::new(AtomicU64::new(initial_rss_bytes));
         let sampler_stop = Arc::clone(&stop);
-        let sampler_peak = Arc::clone(&peak_rss);
         let handle = thread::Builder::new()
             .name("aps-real-process-rss-sampler".to_owned())
             .spawn(move || {
+                let mut peak_rss_bytes = initial_rss_bytes;
                 while !sampler_stop.load(Ordering::Relaxed) {
-                    if let Ok(sample) = sample_process_resources(&pids) {
-                        sampler_peak.fetch_max(sample.rss_bytes, Ordering::Relaxed);
-                    }
+                    let observed =
+                        sample(&pids).wrap_err("periodic process resource sample failed")?;
+                    peak_rss_bytes = peak_rss_bytes.max(observed.rss_bytes);
                     thread::sleep(Duration::from_millis(100));
                 }
+                Ok(peak_rss_bytes)
             })?;
         Ok(Self {
             stop,
-            peak_rss,
             handle: Some(handle),
         })
     }
 
-    fn stop_and_join(&mut self) -> Result<()> {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            handle
-                .join()
-                .map_err(|_| eyre!("RSS sampler thread panicked"))?;
-        }
-        Ok(())
-    }
-
     fn finish(mut self, final_rss_bytes: u64) -> Result<u64> {
-        self.peak_rss.fetch_max(final_rss_bytes, Ordering::Relaxed);
-        self.stop_and_join()?;
-        Ok(self.peak_rss.load(Ordering::Relaxed))
+        self.stop.store(true, Ordering::Relaxed);
+        let handle = self
+            .handle
+            .take()
+            .ok_or_else(|| eyre!("RSS sampler ownership missing"))?;
+        let peak = handle
+            .join()
+            .map_err(|_| eyre!("RSS sampler thread panicked"))??;
+        Ok(peak.max(final_rss_bytes))
     }
 }
 
@@ -2807,7 +3142,7 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
 
 fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     let client = client.client();
-    let domain = iroha::data_model::domain::DomainId::try_new("default", "universal")?;
+    let domain = iroha_model_base::domain::DomainId::try_new("default", "universal")?;
     let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair().private_key().clone());
     let mut root = Table::new();
     root.insert(
@@ -2979,7 +3314,12 @@ impl CoordinatorProcessV1 {
             }
             thread::sleep(POLL_INTERVAL);
         }
-        Err(eyre!("timed out waiting for coordinator acknowledgement"))
+        Err(benchmark_deadline_error(
+            BenchmarkDeadlineStageV1::CoordinatorAck,
+            FINALITY_TIMEOUT,
+            started.elapsed(),
+        )
+        .wrap_err("timed out waiting for coordinator acknowledgement"))
     }
 
     fn restart_with(
@@ -4339,10 +4679,15 @@ fn wait_for_converged_fault_state_snapshot(
         }
         thread::sleep(POLL_INTERVAL);
     }
-    Err(eyre!(
+    Err(benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::StateConvergence,
+        FINALITY_TIMEOUT,
+        started.elapsed(),
+    )
+    .wrap_err(format!(
         "timed out waiting for a coherent APS state snapshot `{label}`: {}",
         last.unwrap_or_else(|| "no state response".to_owned())
-    ))
+    )))
 }
 
 fn wait_for_recovered_prepare_registration(
@@ -7584,9 +7929,14 @@ fn wait_for_transparent_control_balances(
         }
         thread::sleep(POLL_INTERVAL);
     }
-    Err(eyre!(
+    Err(benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::TransparentBalances,
+        FINALITY_TIMEOUT,
+        started.elapsed(),
+    )
+    .wrap_err(format!(
         "{context}: transparent-control balances did not converge: {last_observed:?}"
-    ))
+    )))
 }
 
 fn native_receipt_from_diagnostics(
@@ -7654,9 +8004,13 @@ fn wait_for_identical_native_amx_receipt(
         }
         thread::sleep(POLL_INTERVAL);
     }
-    Err(eyre!(
+    Err(benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::NativeAmxReceipt,
+        FINALITY_TIMEOUT,
+        started.elapsed(),
+    ).wrap_err(format!(
         "timed out waiting for the production Native AMX receipt on every validator: {last_observed:?}"
-    ))
+    )))
 }
 
 fn canonical_carrier_header(
@@ -7716,9 +8070,14 @@ fn wait_for_identical_canonical_carrier(
         }
         thread::sleep(POLL_INTERVAL);
     }
-    Err(eyre!(
+    Err(benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::CanonicalCarrier,
+        FINALITY_TIMEOUT,
+        started.elapsed(),
+    )
+    .wrap_err(format!(
         "timed out waiting for exact-once canonical carrier convergence: {last_observed:?}"
-    ))
+    )))
 }
 
 fn validate_transparent_native_receipt(
@@ -7868,9 +8227,13 @@ fn wait_for_transparent_control_consents(network: &Network, settlements: &[DvpIs
         }
         thread::sleep(POLL_INTERVAL);
     }
-    Err(eyre!(
+    Err(benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::TransparentConsents,
+        FINALITY_TIMEOUT,
+        started.elapsed(),
+    ).wrap_err(format!(
         "transparent-control consents did not converge before measurement: authority={authority}; {last_observed:?}"
-    ))
+    )))
 }
 
 fn build_transparent_control_carrier(
@@ -9305,6 +9668,13 @@ fn write_real_process_result<T: norito::json::JsonSerialize>(result: &T) -> Resu
     let path = PathBuf::from(
         std::env::var(HARNESS_RESULT_ENV).wrap_err("missing real-process result path")?,
     );
+    write_real_process_result_at(&path, result)
+}
+
+fn write_real_process_result_at<T: norito::json::JsonSerialize>(
+    path: &Path,
+    result: &T,
+) -> Result<()> {
     ensure!(!path.exists(), "real-process result path already exists");
     let parent = path
         .parent()
@@ -9319,6 +9689,7 @@ fn write_real_process_result<T: norito::json::JsonSerialize>(result: &T) -> Resu
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
+        .mode(0o600)
         .open(&temporary)
         .wrap_err("create temporary Rust result")?;
     file.write_all(encoded.as_bytes())?;
@@ -9330,34 +9701,77 @@ fn write_real_process_result<T: norito::json::JsonSerialize>(result: &T) -> Resu
     Ok(())
 }
 
+/// Publish the terminal before preserving the worker's failing return or panic.
+fn complete_benchmark_worker(
+    identity: BenchmarkTerminalIdentityV1,
+    elapsed_ms: u64,
+    completion: std::thread::Result<Result<RealProcessBenchmarkResultV1>>,
+    publish: impl FnOnce(&RealProcessBenchmarkTerminalV1) -> Result<()>,
+) -> Result<()> {
+    match completion {
+        Ok(Ok(result)) => publish(
+            &identity.terminal(elapsed_ms, RealProcessBenchmarkOutcomeV1::Succeeded(result))?,
+        ),
+        Ok(Err(error)) => {
+            publish(&identity.terminal(
+                elapsed_ms,
+                RealProcessBenchmarkOutcomeV1::from_error(&error),
+            )?)?;
+            Err(error)
+        }
+        Err(panic) => {
+            publish(&identity.terminal(
+                elapsed_ms,
+                RealProcessBenchmarkOutcomeV1::Failed(BenchmarkFailureReasonV1::WorkerPanic),
+            )?)?;
+            std::panic::resume_unwind(panic)
+        }
+    }
+}
+
 #[test]
 #[ignore = "release-only: starts 12-68 real validators and runs private or transparent Native AMX"]
 fn atomic_private_settlement_real_process_benchmark_harness() -> Result<()> {
-    let handle = thread::Builder::new()
+    let started = Instant::now();
+    let (bound, request_sha) = read_bound_real_process_request()?;
+    let RealProcessBoundRequestV1::Benchmark(request) = bound else {
+        return Err(eyre!(
+            "benchmark entrypoint received a non-benchmark request"
+        ));
+    };
+    let identity = BenchmarkTerminalIdentityV1::from_request(&request, request_sha.clone());
+    let worker = thread::Builder::new()
         .name("atomic-private-settlement-real-process-harness".to_owned())
         .stack_size(TEST_STACK_BYTES)
-        .spawn(|| {
-            let (bound, request_sha) = read_bound_real_process_request()?;
-            let RealProcessBoundRequestV1::Benchmark(request) = bound else {
-                return Err(eyre!(
-                    "benchmark entrypoint received a non-benchmark request"
-                ));
-            };
+        .spawn(move || {
             let profile = request.payload.profile.clone();
-            let result = match profile.as_str() {
-                "private" => run_real_process_private_benchmark(request, request_sha)?,
+            match profile.as_str() {
+                "private" => run_real_process_private_benchmark(request, request_sha),
                 "transparent_control" => {
-                    run_real_process_transparent_control_benchmark(request, request_sha)?
+                    run_real_process_transparent_control_benchmark(request, request_sha)
                 }
-                _ => return Err(eyre!("unsupported real-process benchmark profile")),
-            };
-            write_real_process_result(&result)
-        })
-        .expect("spawn real-process release harness thread");
-    match handle.join() {
-        Ok(result) => result,
-        Err(panic) => std::panic::resume_unwind(panic),
-    }
+                _ => Err(eyre!("unsupported real-process benchmark profile")),
+            }
+        });
+    let handle = match worker {
+        Ok(handle) => handle,
+        Err(error) => {
+            write_real_process_result(&identity.terminal(
+                benchmark_duration_ms(started.elapsed())?,
+                RealProcessBenchmarkOutcomeV1::Failed(BenchmarkFailureReasonV1::WorkerSpawnError),
+            )?)?;
+            return Err(
+                eyre::Report::new(error).wrap_err("spawn real-process release harness thread")
+            );
+        }
+    };
+    let completion = handle.join();
+    complete_benchmark_worker(
+        identity,
+        benchmark_duration_ms(started.elapsed())?,
+        completion,
+        write_real_process_result,
+    )
 }
 
 #[test]
@@ -9998,7 +10412,94 @@ fn ps_cpu_time_parser_accepts_portable_shapes_and_rejects_malformed_values() {
     assert_eq!(parse_ps_cpu_time("01:02").unwrap(), 62.0);
     assert_eq!(parse_ps_cpu_time("01:02:03.5").unwrap(), 3_723.5);
     assert_eq!(parse_ps_cpu_time("2-01:02:03").unwrap(), 176_523.0);
-    assert!(parse_ps_cpu_time("broken").is_err());
+    assert_eq!(parse_ps_cpu_time("120:00.25").unwrap(), 7_200.25);
+    assert_eq!(parse_ps_cpu_time("00:00").unwrap(), 0.0);
+    for malformed in [
+        "broken",
+        "01:NaN",
+        "01:inf",
+        "01:-1",
+        "01:+1",
+        "01:1e1",
+        "01:60",
+        "01:02.",
+        "01:.5",
+        "01:02.3.4",
+        "1-01:02",
+        "1-24:00:00",
+        "01:60:00",
+        "+01:02",
+        "-1-01:02:03",
+        "18446744073709551616-01:02:03",
+    ] {
+        assert!(
+            parse_ps_cpu_time(malformed).is_err(),
+            "accepted {malformed}"
+        );
+    }
+}
+
+#[test]
+fn process_resource_rows_require_exact_finite_complete_samples() {
+    let sample = parse_process_resource_rows("23 4 01:02.5\n11 8 00:03\n", &[11, 23]).unwrap();
+    assert_eq!(sample.cpu_seconds, 65.5);
+    assert_eq!(sample.rss_bytes, 12 * 1_024);
+    for text in [
+        "11 8 00:03\n",
+        "11 8 00:03\n11 4 00:01\n",
+        "11 8 00:03\n24 4 00:01\n",
+        "11 8 00:03\n23 4 00:NaN\n",
+        "11 8 00:03\n23 -4 00:01\n",
+        "11 8 00:03 extra\n23 4 00:01\n",
+        "11 18446744073709551615 00:03\n23 1 00:01\n",
+    ] {
+        assert!(parse_process_resource_rows(text, &[11, 23]).is_err());
+    }
+    assert!(parse_process_resource_rows("11 18446744073709551615 00:03\n", &[11]).is_err());
+    for pids in [vec![], vec![0], vec![11, 11]] {
+        assert!(parse_process_resource_rows("11 8 00:03\n", &pids).is_err());
+    }
+}
+
+#[test]
+fn process_resource_sampler_preserves_observed_and_endpoint_peaks() {
+    for (initial, observed, final_rss, expected) in [
+        (900, 500, 300, 900),
+        (100, 900, 300, 900),
+        (100, 300, 900, 900),
+    ] {
+        let (ready, received) = std::sync::mpsc::channel();
+        let sampler = ProcessResourceSampler::start_with_sampler(vec![11], initial, move |_| {
+            ready.send(()).unwrap();
+            Ok(ProcessResourceSample {
+                cpu_seconds: 1.0,
+                rss_bytes: observed,
+            })
+        })
+        .unwrap();
+        received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(sampler.finish(final_rss).unwrap(), expected);
+    }
+}
+
+#[test]
+fn process_resource_sampler_propagates_sampling_failure() {
+    let (ready, received) = std::sync::mpsc::channel();
+    let sampler = ProcessResourceSampler::start_with_sampler(vec![11], 100, move |_| {
+        ready.send(()).unwrap();
+        Err(eyre!("measured process disappeared"))
+    })
+    .unwrap();
+    received.recv_timeout(Duration::from_secs(5)).unwrap();
+    let error = sampler.finish(900).unwrap_err();
+    assert!(format!("{error:#}").contains("measured process disappeared"));
+}
+
+#[test]
+fn process_resource_sampler_rejects_invalid_process_inventory() {
+    for pids in [vec![], vec![0], vec![11, 11]] {
+        assert!(ProcessResourceSampler::start(pids, 100).is_err());
+    }
 }
 
 #[test]
@@ -10012,6 +10513,398 @@ fn real_process_benchmark_stage_inventory_is_profile_exact() {
         TRANSPARENT_CONTROL_BENCHMARK_STAGES
     );
     assert!(benchmark_stages("ordinary-transfer-substitute").is_err());
+}
+
+/// Protocol-only fixture; never used as a network measurement or release evidence.
+fn benchmark_terminal_request_fixture() -> RealProcessBenchmarkRequestV1 {
+    RealProcessBenchmarkRequestV1 {
+        version: 1,
+        protocol: "AtomicPrivateSettlementV1".to_owned(),
+        request_id: "a".repeat(64),
+        invocation_nonce: "b".repeat(64),
+        kind: "benchmark".to_owned(),
+        commit: "c".repeat(40),
+        hardware_sha256: "d".repeat(64),
+        hardware_profile_sha256: "e".repeat(64),
+        configuration_sha256: "f".repeat(64),
+        participants: 3,
+        participant_visibilities: vec![
+            "public".to_owned(),
+            "restricted".to_owned(),
+            "restricted".to_owned(),
+        ],
+        validators_per_dataspace: 4,
+        global_validators: 4,
+        quorum: "2f+1".to_owned(),
+        mandatory_signed_rs16_da_rbc: true,
+        minimum_signed_rs16_da_observations: 1,
+        authenticated_message_control: true,
+        seed: 1,
+        run: 0,
+        configuration: norito::json!({}),
+        payload: RealProcessBenchmarkPayloadV1 {
+            profile: "private".to_owned(),
+            warmup: false,
+            stages: PRIVATE_BENCHMARK_STAGES
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            resources: Vec::new(),
+        },
+    }
+}
+
+fn benchmark_terminal_fixture() -> (BenchmarkTerminalIdentityV1, RealProcessBenchmarkResultV1) {
+    let request = benchmark_terminal_request_fixture();
+    let identity = BenchmarkTerminalIdentityV1::from_request(&request, "d".repeat(64));
+    let result = RealProcessBenchmarkResultV1 {
+        version: 1,
+        protocol: "AtomicPrivateSettlementV1".to_owned(),
+        request_id: identity.request_id.clone(),
+        invocation_nonce: identity.invocation_nonce.clone(),
+        request_sha256: identity.request_sha256.clone(),
+        commit: identity.commit.clone(),
+        participants: identity.participants,
+        mandatory_signed_rs16_da_rbc: true,
+        signed_rs16_da_observations: 1,
+        authenticated_message_control: true,
+        process_inventory: Vec::new(),
+        payload: RealProcessBenchmarkResultPayloadV1 {
+            stages_ms: norito::json!({"end_to_end_ms": 1.5}),
+            throughput_bundles_per_second: 2.0,
+            cpu_seconds: 0.5,
+            peak_rss_bytes: 1,
+            network_bytes: 2,
+            proof_bytes: 3,
+            receipt_bytes: 4,
+            storage_growth_bytes: 5,
+            finalized_receipt_observed: true,
+            successful_leg_applications: 3,
+            each_leg_applied_exactly_once: true,
+            partial_visible_observations: 0,
+            partial_spendable_observations: 0,
+        },
+    };
+    (identity, result)
+}
+
+#[test]
+fn benchmark_terminal_deadline_classification_preserves_typed_causes() {
+    for stage in [
+        BenchmarkDeadlineStageV1::CoordinatorAck,
+        BenchmarkDeadlineStageV1::StateConvergence,
+        BenchmarkDeadlineStageV1::TransparentConsents,
+        BenchmarkDeadlineStageV1::TransparentBalances,
+        BenchmarkDeadlineStageV1::NativeAmxReceipt,
+        BenchmarkDeadlineStageV1::CanonicalCarrier,
+        BenchmarkDeadlineStageV1::PrivateReceipt,
+    ] {
+        let error =
+            benchmark_deadline_error(stage, Duration::from_millis(10), Duration::from_millis(11))
+                .wrap_err("restricted diagnostic context")
+                .wrap_err("benchmark operation");
+        let outcome = RealProcessBenchmarkOutcomeV1::from_error(&error);
+        assert!(
+            matches!(outcome, RealProcessBenchmarkOutcomeV1::TimedOut(BenchmarkDeadlineV1 {
+            stage: observed, budget_ms: 10, elapsed_ms: 11,
+        }) if observed == stage)
+        );
+        let encoded = norito::json::to_value(&outcome).unwrap();
+        assert_eq!(
+            encoded,
+            norito::json!({
+                "kind": "timed_out", "stage": (stage.as_str()), "budget_ms": 10, "elapsed_ms": 11,
+            })
+        );
+        assert!(
+            !norito::json::to_json(&outcome)
+                .unwrap()
+                .contains("restricted")
+        );
+    }
+    for message in [
+        "timeout",
+        "timed out waiting for receipt",
+        "ordinary failure",
+    ] {
+        let error = eyre!(message.to_owned()).wrap_err("outer context");
+        assert!(matches!(
+            RealProcessBenchmarkOutcomeV1::from_error(&error),
+            RealProcessBenchmarkOutcomeV1::Failed(BenchmarkFailureReasonV1::ExecutionError)
+        ));
+    }
+    let premature = benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::PrivateReceipt,
+        Duration::from_millis(10),
+        Duration::from_millis(9),
+    );
+    assert!(matches!(
+        RealProcessBenchmarkOutcomeV1::from_error(&premature),
+        RealProcessBenchmarkOutcomeV1::Failed(BenchmarkFailureReasonV1::ExecutionError)
+    ));
+    assert_eq!(
+        benchmark_duration_ms(Duration::from_micros(1_999)).unwrap(),
+        1
+    );
+    assert!(benchmark_duration_ms(Duration::MAX).is_err());
+    for budget in [Duration::ZERO, Duration::from_nanos(1)] {
+        let error = benchmark_deadline_error(
+            BenchmarkDeadlineStageV1::PrivateReceipt,
+            budget,
+            Duration::from_millis(1),
+        );
+        assert!(matches!(
+            RealProcessBenchmarkOutcomeV1::from_error(&error),
+            RealProcessBenchmarkOutcomeV1::Failed(BenchmarkFailureReasonV1::ExecutionError)
+        ));
+    }
+}
+
+#[test]
+fn benchmark_terminal_serialization_is_exact_and_rejects_unknown_fields() {
+    let (identity, result) = benchmark_terminal_fixture();
+    let expected_result = norito::json::to_value(&result).unwrap();
+    let mut outcomes = vec![RealProcessBenchmarkOutcomeV1::Succeeded(result)];
+    for reason in [
+        BenchmarkFailureReasonV1::ExecutionError,
+        BenchmarkFailureReasonV1::WorkerPanic,
+        BenchmarkFailureReasonV1::WorkerSpawnError,
+    ] {
+        outcomes.push(RealProcessBenchmarkOutcomeV1::Failed(reason));
+    }
+    outcomes.push(RealProcessBenchmarkOutcomeV1::TimedOut(
+        BenchmarkDeadlineV1 {
+            stage: BenchmarkDeadlineStageV1::PrivateReceipt,
+            budget_ms: 10,
+            elapsed_ms: 11,
+        },
+    ));
+    for outcome in outcomes {
+        let terminal = identity.clone().terminal(15, outcome).unwrap();
+        let value = norito::json::to_value(&terminal).unwrap();
+        assert_eq!(
+            value
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            [
+                "version",
+                "protocol",
+                "request_id",
+                "invocation_nonce",
+                "request_sha256",
+                "commit",
+                "participants",
+                "elapsed_ms",
+                "outcome"
+            ]
+            .into_iter()
+            .collect()
+        );
+        if value["outcome"]["kind"].as_str() == Some("succeeded") {
+            assert_eq!(value["outcome"]["result"], expected_result);
+        } else {
+            assert!(value["outcome"].get("result").is_none());
+        }
+        let decoded: RealProcessBenchmarkTerminalV1 =
+            norito::json::from_value(value.clone()).unwrap();
+        assert_eq!(norito::json::to_value(&decoded).unwrap(), value);
+        for key in [
+            "version",
+            "protocol",
+            "request_id",
+            "invocation_nonce",
+            "request_sha256",
+            "commit",
+            "participants",
+            "elapsed_ms",
+            "outcome",
+        ] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(
+                norito::json::from_value::<RealProcessBenchmarkTerminalV1>(missing).is_err(),
+                "missing {key}"
+            );
+        }
+        let mut extra = value.clone();
+        extra
+            .as_object_mut()
+            .unwrap()
+            .insert("unbound".to_owned(), true.into());
+        assert!(norito::json::from_value::<RealProcessBenchmarkTerminalV1>(extra).is_err());
+        let mut extra = value;
+        extra
+            .as_object_mut()
+            .unwrap()
+            .get_mut("outcome")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unbound".to_owned(), true.into());
+        assert!(norito::json::from_value::<RealProcessBenchmarkTerminalV1>(extra).is_err());
+    }
+    for invalid in [
+        norito::json!({"kind":"legacy_success"}),
+        norito::json!({"kind":"failed","stage":"unknown","reason":"execution_error"}),
+        norito::json!({"kind":"failed","stage":"benchmark_worker","reason":"private error"}),
+        norito::json!({"kind":"timed_out","stage":"unknown","budget_ms":10,"elapsed_ms":11}),
+        norito::json!({"kind":"timed_out","stage":"private_receipt","budget_ms":0,"elapsed_ms":0}),
+        norito::json!({"kind":"timed_out","stage":"private_receipt","budget_ms":10,"elapsed_ms":9}),
+    ] {
+        assert!(norito::json::from_value::<RealProcessBenchmarkOutcomeV1>(invalid).is_err());
+    }
+    for duplicate in [
+        r#"{"kind":"failed","kind":"failed","stage":"benchmark_worker","reason":"execution_error"}"#,
+        r#"{"kind":"failed","stage":"benchmark_worker","stage":"benchmark_worker","reason":"execution_error"}"#,
+        r#"{"kind":"failed","stage":"benchmark_worker","reason":"execution_error","reason":"execution_error"}"#,
+    ] {
+        assert!(norito::json::from_json::<RealProcessBenchmarkOutcomeV1>(duplicate).is_err());
+    }
+    let (identity, _) = benchmark_terminal_fixture();
+    let terminal = identity
+        .terminal(
+            15,
+            RealProcessBenchmarkOutcomeV1::Failed(BenchmarkFailureReasonV1::ExecutionError),
+        )
+        .unwrap();
+    let mut duplicate = norito::json::to_json(&terminal).unwrap();
+    assert_eq!(duplicate.pop(), Some('}'));
+    duplicate.push_str(
+        r#", "outcome":{"kind":"failed","stage":"benchmark_worker","reason":"execution_error"}}"#,
+    );
+    assert!(norito::json::from_json::<RealProcessBenchmarkTerminalV1>(&duplicate).is_err());
+}
+
+#[test]
+fn benchmark_terminal_success_requires_retained_request_identity() {
+    let mut request = benchmark_terminal_request_fixture();
+    let identity = BenchmarkTerminalIdentityV1::from_request(&request, "d".repeat(64));
+    request.request_id = "f".repeat(64);
+    request.invocation_nonce = "e".repeat(64);
+    drop(request);
+    assert_eq!(identity.request_id, "a".repeat(64));
+    assert_eq!(identity.invocation_nonce, "b".repeat(64));
+    for field in [
+        "version",
+        "protocol",
+        "request_id",
+        "invocation_nonce",
+        "request_sha256",
+        "commit",
+        "participants",
+    ] {
+        let (identity, mut result) = benchmark_terminal_fixture();
+        match field {
+            "version" => result.version = 2,
+            "protocol" => result.protocol.clear(),
+            "request_id" => result.request_id.clear(),
+            "invocation_nonce" => result.invocation_nonce.clear(),
+            "request_sha256" => result.request_sha256.clear(),
+            "commit" => result.commit.clear(),
+            "participants" => result.participants = 2,
+            _ => unreachable!(),
+        }
+        assert!(
+            identity
+                .terminal(15, RealProcessBenchmarkOutcomeV1::Succeeded(result))
+                .is_err(),
+            "accepted {field}"
+        );
+    }
+}
+
+#[test]
+fn benchmark_terminal_publication_preserves_failures_and_panics() {
+    let directory = tempfile::tempdir().unwrap();
+    for (name, error, expected) in [
+        (
+            "failure.json",
+            eyre!("restricted worker diagnostic"),
+            "failed",
+        ),
+        (
+            "timeout.json",
+            benchmark_deadline_error(
+                BenchmarkDeadlineStageV1::PrivateReceipt,
+                Duration::from_millis(10),
+                Duration::from_millis(11),
+            ),
+            "timed_out",
+        ),
+    ] {
+        let path = directory.path().join(name);
+        let (identity, _) = benchmark_terminal_fixture();
+        let returned = complete_benchmark_worker(identity, 15, Ok(Err(error)), |terminal| {
+            write_real_process_result_at(&path, terminal)
+        });
+        assert!(returned.is_err());
+        let bytes = fs::read(&path).unwrap();
+        let terminal: HarnessJsonValue = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(terminal["outcome"]["kind"].as_str(), Some(expected));
+        assert!(
+            !String::from_utf8(bytes)
+                .unwrap()
+                .contains("restricted worker diagnostic")
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let path = directory.path().join("panic.json");
+    let (identity, _) = benchmark_terminal_fixture();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        complete_benchmark_worker(
+            identity,
+            15,
+            Err(Box::new("restricted panic payload")),
+            |terminal| write_real_process_result_at(&path, terminal),
+        )
+    }))
+    .unwrap_err();
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"restricted panic payload")
+    );
+    let terminal: HarnessJsonValue = norito::json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        terminal["outcome"],
+        norito::json!({
+            "kind":"failed", "stage":"benchmark_worker", "reason":"worker_panic",
+        })
+    );
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 3);
+}
+
+#[test]
+fn benchmark_terminal_publication_is_required_and_never_overwrites() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("result.json");
+    let (identity, result) = benchmark_terminal_fixture();
+    complete_benchmark_worker(identity, 15, Ok(Ok(result)), |terminal| {
+        write_real_process_result_at(&path, terminal)
+    })
+    .unwrap();
+    let first = fs::read(&path).unwrap();
+    let (identity, result) = benchmark_terminal_fixture();
+    assert!(
+        complete_benchmark_worker(identity, 15, Ok(Ok(result)), |terminal| {
+            write_real_process_result_at(&path, terminal)
+        })
+        .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), first);
+    let (identity, result) = benchmark_terminal_fixture();
+    assert!(
+        complete_benchmark_worker(identity, 15, Ok(Ok(result)), |_| Err(eyre!(
+            "publication unavailable"
+        )))
+        .is_err()
+    );
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
 #[test]

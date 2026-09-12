@@ -11,10 +11,11 @@ use crate::{
         prelude::DaStripeLayout,
         types::{BlobClass, BlobDigest, RetentionPolicy},
     },
-    nexus::{DataSpaceId, LaneId, UniversalAccountId},
+    nexus::UniversalAccountId,
     role::RoleId,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeMap;

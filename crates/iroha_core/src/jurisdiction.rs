@@ -9,13 +9,11 @@
 use iroha_crypto::{
     Algorithm, HashOf, Signature, ed25519_parse_signature, mldsa65_parse_signature,
 };
-use iroha_data_model::{
-    jurisdiction::{
-        JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
-        JdgSdnRegistryError, JdgSdnValidationError, JdgSignatureScheme,
-    },
-    nexus::DataSpaceId,
+use iroha_data_model::jurisdiction::{
+    JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
+    JdgSdnRegistryError, JdgSdnValidationError, JdgSignatureScheme,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::{codec::Encode, decode_from_reader};
 use std::{
@@ -1031,12 +1029,10 @@ mod tests {
     #[cfg(feature = "bls")]
     use iroha_crypto::Algorithm;
     use iroha_crypto::{Hash, Signature, SignatureOf};
-    use iroha_data_model::{
-        jurisdiction::{
-            JdgAttestationScope, JdgBlockRange, JdgSignatureScheme, JdgStateAccessSet, JdgVerdict,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::jurisdiction::{
+        JdgAttestationScope, JdgBlockRange, JdgSignatureScheme, JdgStateAccessSet, JdgVerdict,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::io::Cursor;
     use tempfile::tempdir;
     fn simple_signature_schemes() -> BTreeSet<JdgSignatureScheme> {

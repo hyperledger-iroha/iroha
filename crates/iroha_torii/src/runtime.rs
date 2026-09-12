@@ -1941,7 +1941,8 @@ mod tests {
     #[tokio::test]
     async fn node_query_projection_shard_catalog_builds_accounts_entries() {
         use iroha_data_model::Registrable;
-        use iroha_data_model::prelude::{Account, Domain, DomainId};
+        use iroha_data_model::prelude::{Account, Domain};
+        use iroha_model_base::domain::DomainId;
         let authority_id = checked_projection_account(0x85);
         let alice_id = checked_projection_account(0x86);
         let bob_id = checked_projection_account(0x87);
@@ -2002,8 +2003,9 @@ mod tests {
     async fn node_query_projection_shard_catalog_builds_asset_holder_entries() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{
-            Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
+            Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain,
         };
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::numeric::Quantity;
         let authority_id = checked_projection_account(0x88);
         let alice_id = checked_projection_account(0x89);
@@ -2090,7 +2092,8 @@ mod tests {
     #[tokio::test]
     async fn node_query_projection_shard_export_builds_accounts_archive() {
         use iroha_data_model::Registrable;
-        use iroha_data_model::prelude::{Account, Domain, DomainId};
+        use iroha_data_model::prelude::{Account, Domain};
+        use iroha_model_base::domain::DomainId;
         let authority_id = checked_projection_account(0x8B);
         let alice_id = checked_projection_account(0x8C);
         let domain_id = DomainId::try_new("projection", "universal").expect("domain");
@@ -2165,8 +2168,9 @@ mod tests {
     async fn node_query_projection_shard_export_builds_asset_holders_archive() {
         use iroha_data_model::Registrable;
         use iroha_data_model::prelude::{
-            Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
+            Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain,
         };
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::numeric::Quantity;
         let authority_id = checked_projection_account(0x8D);
         let alice_id = checked_projection_account(0x8E);

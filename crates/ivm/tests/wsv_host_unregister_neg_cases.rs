@@ -21,7 +21,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
+    let _domain = iroha_model_base::domain::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
@@ -127,8 +127,8 @@ fn unregister_domain_with_only_accounts_fails() {
     // Link the subject into `wonder.universal` explicitly so unregistering the
     // domain still exercises the "domain has linked accounts" rejection path.
     {
-        let wonder =
-            iroha_data_model::DomainId::try_new("wonder", "universal").expect("wonder domain id");
+        let wonder = iroha_model_base::domain::DomainId::try_new("wonder", "universal")
+            .expect("wonder domain id");
         let host_any = vm.host_mut_any().expect("host");
         let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
         assert!(host.wsv.link_subject_to_domain(bob.clone(), wonder));

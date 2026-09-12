@@ -582,7 +582,8 @@ pub mod da {
     //! Data availability pin intent query definitions.
     //!
     //! Queries for retrieving DA pin intents stored in the `SoraFS` registry surface.
-    use crate::{da::types::StorageTicketId, nexus::LaneId, sorafs::pin_registry::ManifestDigest};
+    use crate::{da::types::StorageTicketId, sorafs::pin_registry::ManifestDigest};
+    use iroha_model_base::topology::LaneId;
     queries! {
         /// Fetch a DA pin intent by its storage ticket.
         #[repr(transparent)]
@@ -796,7 +797,7 @@ pub mod domain {
         #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomainById")]
         pub struct FindDomainById {
             /// Fully qualified domain identifier to resolve.
-            pub id: crate::domain::DomainId,
+            pub id: iroha_model_base::domain::DomainId,
         }
         /// [`FindDomains`] Iroha Query finds all `Domain`s presented.
         #[derive(Copy, Display)]
@@ -817,7 +818,7 @@ pub mod domain {
     }
     impl FindDomainById {
         /// Return the queried domain identifier.
-        pub fn domain_id(&self) -> &crate::domain::DomainId {
+        pub fn domain_id(&self) -> &iroha_model_base::domain::DomainId {
             &self.id
         }
     }
@@ -836,8 +837,8 @@ pub mod endorsement {
     //! Domain endorsement-related query definitions.
     //!
     //! Queries related to domain endorsement committees and policies.
-    use crate::domain::DomainId;
     use derive_more::Display;
+    use iroha_model_base::domain::DomainId;
     queries! {
         /// Fetch all recorded endorsements for a given domain.
         #[derive(Display)]

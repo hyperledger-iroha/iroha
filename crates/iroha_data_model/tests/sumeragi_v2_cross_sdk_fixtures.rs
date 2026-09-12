@@ -24,8 +24,8 @@ use iroha_data_model::{
         KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use norito::codec::{DecodeAll, Encode};
 use std::collections::BTreeMap;
 const FIXTURES: &str = include_str!("../../../fixtures/sumeragi_v2/wire_v2.tsv");

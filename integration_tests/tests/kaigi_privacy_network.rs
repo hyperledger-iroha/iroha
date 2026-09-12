@@ -27,11 +27,12 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
     },
     kaigi::{KaigiId, KaigiPrivacyMode, KaigiRecord, KaigiStatus, NewKaigi, kaigi_metadata_key},
-    metadata::Metadata,
-    prelude::{AssetId, DomainId, FindDomainById, HasMetadata},
+    prelude::{AssetId, FindDomainById, HasMetadata, Identifiable},
     transaction::{FeePaymentIntent, SignedTransaction, error::TransactionRejectionReason},
 };
 use iroha_executor_data_model::permission::governance::CanManageVerifyingKeys;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};

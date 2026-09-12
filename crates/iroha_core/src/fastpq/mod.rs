@@ -43,7 +43,6 @@ use iroha_config::parameters::actual::FastpqExecutionMode;
 use iroha_config::parameters::actual::{Fastpq, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    DataSpaceId,
     account::AccountId,
     asset::id::AssetDefinitionId,
     block::{BlockHeader, consensus::ExecWitness},
@@ -56,6 +55,7 @@ use iroha_data_model::{
     },
     role::{Role, RoleId},
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon as halo2_poseidon;
 use norito::{codec::Encode as NoritoEncode, to_bytes};
@@ -82,6 +82,31 @@ static DIGEST_ACCELERATION_ENABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static DIGEST_ACCELERATION_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+/// Serialize tests that inspect digest acceleration or start a lane that changes it.
+/// Keep this guard alive until the lane's worker and backend initialization finish.
+#[cfg(test)]
+struct DigestAccelerationTestGuard {
+    previous: bool,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+#[cfg(test)]
+impl DigestAccelerationTestGuard {
+    fn new() -> Self {
+        let lock = DIGEST_ACCELERATION_TEST_LOCK
+            .lock()
+            .expect("digest acceleration test lock poisoned");
+        Self {
+            previous: poseidon_digest_acceleration_enabled(),
+            _lock: lock,
+        }
+    }
+}
+#[cfg(test)]
+impl Drop for DigestAccelerationTestGuard {
+    fn drop(&mut self) {
+        set_poseidon_digest_acceleration_enabled(self.previous);
+    }
+}
 /// Base fields for FASTPQ public inputs shared across batches in a block.
 #[derive(Debug, Clone, Copy)]
 pub struct FastpqPublicInputsTemplate {
@@ -1338,11 +1363,11 @@ mod tests {
             BlockHeader,
             consensus::{ExecKv, ExecWitness},
         },
-        domain::DomainId,
         fastpq::{TransferTranscript, TransferTranscriptBundle},
         permission::Permission,
         role::{Role, RoleId},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::decode_from_bytes;
@@ -1505,7 +1530,7 @@ mod tests {
     }
     #[test]
     fn poseidon_digest_batch_cpu_or_gpu_matches_ordered_cpu_output() {
-        let _guard = DigestAccelerationGuard::new();
+        let _guard = DigestAccelerationTestGuard::new();
         set_poseidon_digest_acceleration_enabled(true);
         let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_GPU_THRESHOLD);
         for idx in 0..DIGEST_FINALIZE_GPU_THRESHOLD {
@@ -1517,7 +1542,7 @@ mod tests {
     }
     #[test]
     fn poseidon_digest_batch_failed_gpu_submission_disables_acceleration() {
-        let _guard = DigestAccelerationGuard::new();
+        let _guard = DigestAccelerationTestGuard::new();
         set_poseidon_digest_acceleration_enabled(true);
         let mut batch = PoseidonDigestBatch::with_capacity(DIGEST_FINALIZE_GPU_THRESHOLD);
         for idx in 0..DIGEST_FINALIZE_GPU_THRESHOLD {
@@ -1607,7 +1632,7 @@ mod tests {
     }
     #[test]
     fn finalize_transfer_transcripts_batched_cpu_matches_canonical_oracle() {
-        let _guard = DigestAccelerationGuard::new();
+        let _guard = DigestAccelerationTestGuard::new();
         set_poseidon_digest_acceleration_enabled(false);
         let mut entries = Vec::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
         let mut expected = Vec::with_capacity(DIGEST_FINALIZE_PARALLEL_THRESHOLD);
@@ -2980,26 +3005,6 @@ mod tests {
         let mut chunk = [0u8; 8];
         chunk[..bytes.len()].copy_from_slice(bytes);
         u64::from_le_bytes(chunk)
-    }
-    struct DigestAccelerationGuard {
-        previous: bool,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-    impl DigestAccelerationGuard {
-        fn new() -> Self {
-            let lock = super::DIGEST_ACCELERATION_TEST_LOCK
-                .lock()
-                .expect("digest acceleration test lock poisoned");
-            Self {
-                previous: poseidon_digest_acceleration_enabled(),
-                _lock: lock,
-            }
-        }
-    }
-    impl Drop for DigestAccelerationGuard {
-        fn drop(&mut self) {
-            set_poseidon_digest_acceleration_enabled(self.previous);
-        }
     }
     fn fastpq_cfg(
         execution_mode: FastpqExecutionMode,

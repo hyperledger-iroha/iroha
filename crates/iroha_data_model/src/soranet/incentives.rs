@@ -13,9 +13,9 @@ use crate::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, Transfer},
-    metadata::Metadata,
 };
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -130,7 +130,6 @@ impl RelayBondPolicyV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct RelayBondLedgerEntryV1 {
     /// Relay fingerprint as advertised in the directory.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -379,7 +378,6 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct RelayEpochMetricsV1 {
     /// Relay fingerprint as advertised in the directory consensus.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -446,7 +444,6 @@ impl RelayEpochMetricsV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct RelayRewardInstructionV1 {
     /// Relay fingerprint for which the payout is being issued.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -564,7 +561,6 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct RelayRewardDisputeV1 {
     /// Relay fingerprint associated with the disputed payout.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -622,8 +618,9 @@ impl RelayRewardDisputeV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{domain::DomainId, isi::TransferBox};
+    use crate::isi::TransferBox;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_primitives::{json::Json, numeric::Numeric};
     use std::str::FromStr;

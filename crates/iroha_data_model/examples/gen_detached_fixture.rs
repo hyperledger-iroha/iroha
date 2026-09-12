@@ -6,7 +6,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    metadata::Metadata,
     smart_contract::ContractAddress,
     transaction::{
         Executable, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
@@ -14,6 +13,7 @@ use iroha_data_model::{
         signed::TransactionBuilder,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_version::codec::EncodeVersioned as _;
 use std::{num::NonZeroU64, str::FromStr as _, time::Duration};

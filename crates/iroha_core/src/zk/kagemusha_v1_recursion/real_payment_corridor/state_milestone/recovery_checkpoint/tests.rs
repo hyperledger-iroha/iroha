@@ -70,7 +70,7 @@ fn simulated_checkpoint_enrollment_pins_recipient_and_complete_runtime() {
     );
     assert_eq!(
         binding.owner.runtime.ledger_dataspace_id,
-        iroha_data_model::nexus::DataSpaceId::new(10)
+        iroha_model_base::topology::DataSpaceId::new(10)
     );
     assert_eq!(
         binding.owner.runtime.network_id,

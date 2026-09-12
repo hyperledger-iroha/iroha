@@ -1,9 +1,15 @@
 /// Stream-token custody uses a dedicated provider-scoped native permission.
 mod stream_token_custody_permission_tests {
     use super::*;
+    use crate::executor::Executor;
     use iroha_data_model::{
         isi::sorafs::MutateSorafsStreamTokenCustody,
-        sorafs::{capacity::ProviderId, stream_token_custody::SorafsStreamTokenCustodyActionV1},
+        sorafs::{
+            capacity::ProviderId,
+            stream_token_custody::{
+                SorafsStreamTokenCustodyActionV1, SorafsStreamTokenCustodyRevocationV1,
+            },
+        },
     };
     use iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody;
 
@@ -18,10 +24,12 @@ mod stream_token_custody_permission_tests {
             provider_id: ProviderId::new([1; 32]),
             expected_revision: 1,
             expected_digest: [7; 32],
-            action: SorafsStreamTokenCustodyActionV1::Revoke {
-                signer: true,
-                attester: false,
-            },
+            action: SorafsStreamTokenCustodyActionV1::Revoke(
+                SorafsStreamTokenCustodyRevocationV1 {
+                    signer: true,
+                    attester: false,
+                },
+            ),
         }
         .into()
     }

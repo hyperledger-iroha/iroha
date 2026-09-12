@@ -15,6 +15,7 @@ default = []
 gui = ["dep:eframe", "dep:egui_plot"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 mochi-core = { path = "../mochi-core" }
 eframe = { version = "0.33.0", default-features = true, optional = true }
 egui_plot = { version = "0.34.0", optional = true }

@@ -17,6 +17,7 @@ use iroha_data_model::{
     prelude::*,
     transaction::{IvmBytecode, TransactionBuilder},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::gen_account_in;
 use std::sync::{Arc, LazyLock};
 static STARTER_DOMAIN: LazyLock<DomainId> =

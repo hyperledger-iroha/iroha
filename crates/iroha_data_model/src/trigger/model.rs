@@ -2,7 +2,8 @@
 // If editing this file, consider updating `iroha_core/src/smartcontracts/isi/triggers/specialized.rs`
 // It mirrors structures from this file.
 pub use self::model::*;
-use crate::{Identifiable, Registered, metadata::Metadata, transaction::Executable};
+use crate::{Identifiable, Registered, transaction::Executable};
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 
 use base64::Engine as _;
@@ -86,7 +87,7 @@ impl Registered for Trigger {
     type With = Self;
 }
 impl crate::HasMetadata for Trigger {
-    fn metadata(&self) -> &crate::metadata::Metadata {
+    fn metadata(&self) -> &iroha_model_base::metadata::Metadata {
         crate::HasMetadata::metadata(self.action())
     }
 }
@@ -394,7 +395,7 @@ pub mod action {
         }
     }
     impl crate::HasMetadata for Action {
-        fn metadata(&self) -> &crate::metadata::Metadata {
+        fn metadata(&self) -> &iroha_model_base::metadata::Metadata {
             &self.metadata
         }
     }

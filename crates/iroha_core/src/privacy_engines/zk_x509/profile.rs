@@ -2,8 +2,8 @@
 //!
 //! The profile is executable documentation.  It fixes every capacity, hash
 //! domain, accepted algorithm, custom EKU, trace segment, and transparent-proof
-//! parameter that can affect consensus.  Changing any value creates a new
-//! protocol identifier; there is no legacy decoder or parameter negotiation.
+//! parameter that can affect consensus. Changing any value changes the compiled
+//! profile digest; there is no alternate decoder or parameter negotiation.
 mod readiness_certificates;
 use crate::privacy_engines::{
     aggregate_stark::{
@@ -190,16 +190,16 @@ pub(crate) const ZK_X509_PROVER_TARGET_SECONDS_V1: u64 = 300;
 /// and made proof construction fail closed.
 pub(crate) const ZK_X509_MAX_CONSTRAINT_DEGREE_V1: u8 = 7;
 /// Low-degree-extension blow-up factor.
-pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 64;
+pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 8;
 /// Sole common MAIN LDE logarithm.
 ///
 /// The maximum native registration is the four-segment SHA batch at log 19;
-/// the release blow-up is 64 (log 6), so every MAIN prover, verifier, fixed
-/// preprocessing certificate, and resource calculation must use log 25.
+/// the shared blow-up is eight (log three), so every MAIN prover, verifier,
+/// fixed schedule, and resource calculation uses log 22.
 pub(crate) const ZK_X509_MAIN_COMMON_LDE_LOG2_V1: u8 =
     ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 + ZK_X509_FRI_BLOWUP_FACTOR_V1.ilog2() as u8;
 /// Number of independent Fiat-Shamir query positions.
-pub(crate) const ZK_X509_FRI_QUERY_COUNT_V1: u8 = 58;
+pub(crate) const ZK_X509_FRI_QUERY_COUNT_V1: u8 = 136;
 /// Number of independently mixed composition lanes.
 pub(crate) const ZK_X509_COMPOSITION_LANES_V1: u8 = 1;
 /// Binary FRI folding arity.
@@ -207,22 +207,22 @@ pub(crate) const ZK_X509_FRI_FOLDING_ARITY_V1: u8 = 2;
 /// Maximum final FRI polynomial length.
 pub(crate) const ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1: u16 = 1_024;
 /// Maximum degree of the terminal FRI polynomial.
-pub(crate) const ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 31;
+pub(crate) const ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
 /// Coefficient chunks used to normalize the maximum degree-seven quotient.
-pub(crate) const ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 4;
+pub(crate) const ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 6;
 /// Inclusive degree of each trace zero-knowledge mask multiplier.
 ///
 /// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4 extension degree four, one DEEP
-/// point, and 58 FRI queries, requires 802 randomizer coefficients.
-pub(crate) const ZK_X509_TRACE_MASK_DEGREE_V1: u16 = 801;
+/// point, and 136 FRI queries, requires 1,816 randomizer coefficients.
+pub(crate) const ZK_X509_TRACE_MASK_DEGREE_V1: u16 = 1_815;
 /// Exact common-domain FRI rounds at the maximum native trace size.
-pub(crate) const ZK_X509_FRI_ROUNDS_V1: u8 = 15;
+pub(crate) const ZK_X509_FRI_ROUNDS_V1: u8 = 12;
 /// Exclusive common FRI degree cap.
-pub(crate) const ZK_X509_FRI_EXCLUSIVE_DEGREE_CAP_V1: u32 = 1_048_576;
+pub(crate) const ZK_X509_FRI_EXCLUSIVE_DEGREE_CAP_V1: u32 = 589_824;
 /// Exact effective-code-rate numerator.
-pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_NUMERATOR_V1: u16 = 1;
+pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_NUMERATOR_V1: u16 = 9;
 /// Exact effective-code-rate denominator.
-pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_DENOMINATOR_V1: u16 = 32;
+pub(crate) const ZK_X509_FRI_EFFECTIVE_RATE_DENOMINATOR_V1: u16 = 64;
 /// BCI/Haböck affine batching parameter, distinct from the one Fp4 lane.
 pub(crate) const ZK_X509_FRI_BATCHING_PARAMETER_M_V1: u8 = 3;
 /// Exact affine arities in theorem order.
@@ -232,27 +232,27 @@ pub(crate) const ZK_X509_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 252;
 /// Number of transcript-derived DEEP points per subproof.
 pub(crate) const ZK_X509_DEEP_POINT_COUNT_V1: usize = 1;
 /// Compact-CA local LDE logarithm.
-pub(crate) const ZK_X509_CA_FRI_LDE_LOG2_V1: u8 = 14;
+pub(crate) const ZK_X509_CA_FRI_LDE_LOG2_V1: u8 = 16;
 /// Compact-CA FRI terminal logarithm.
-pub(crate) const ZK_X509_CA_FRI_TERMINAL_LOG2_V1: u8 = 9;
+pub(crate) const ZK_X509_CA_FRI_TERMINAL_LOG2_V1: u8 = 10;
 /// Compact-CA terminal degree bound.
-pub(crate) const ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 15;
+pub(crate) const ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
 /// Compact-CA binary fold count.
-pub(crate) const ZK_X509_CA_FRI_ROUNDS_V1: u8 = 5;
+pub(crate) const ZK_X509_CA_FRI_ROUNDS_V1: u8 = 6;
 /// Compact-CA composition coefficient chunks.
-pub(crate) const ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 3;
-/// Compact-CA trace mask degree for `h = 5q + 16 = 306`.
-pub(crate) const ZK_X509_CA_TRACE_MASK_DEGREE_V1: u16 = 305;
+pub(crate) const ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 4;
+/// Compact-CA trace mask degree for `h = 5q + 16 = 696`.
+pub(crate) const ZK_X509_CA_TRACE_MASK_DEGREE_V1: u16 = 695;
 /// Exact maximum of the main aggregate proof before DEEP openings.
-pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 6_812_632;
+pub(crate) const ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 16_087_744;
 /// Exact maximum of the compact-CA aggregate proof before DEEP openings.
-pub(crate) const ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 984_216;
+pub(crate) const ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 2_642_112;
 /// Exact X5C1 claim-envelope bytes around the compact-CA aggregate proof.
 pub(crate) const ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1: u32 = 1_310;
 /// Exact X5M1 fixed framing plus DER, RFC, SHA, and P-256 terminal frames.
 pub(crate) const ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 11_952;
 /// Exact main plus compact-CA current/next Fp4 DEEP openings and composition claims.
-pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 402_336;
+pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 412_864;
 /// Fiat-Shamir proof-of-work grinding bits.
 pub(crate) const ZK_X509_GRINDING_BITS_V1: u8 = 20;
 /// Required computational-soundness target for the released proof system.
@@ -264,7 +264,7 @@ pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 /// Consensus proof-byte ceiling inherited by this engine.
 pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
 // The shared first-release STARK verifier accepts exactly this geometry.  Keep
-// these requirements independent of the pre-cut zk-X509 constants below so a
+// these requirements independent of the zk-X509 constants above so a
 // stale local profile cannot make itself appear compatible by supplying a
 // protocol-specific theorem certificate.
 const ZK_X509_SHARED_STARK_QUERY_COUNT_V1: u8 = 136;
@@ -294,9 +294,9 @@ const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 16_447_808;
 /// complete proof cap before roots, FRI, multiproofs, or DEEP openings.
 #[cfg(test)]
 const ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 12_235_648;
-/// Exact maximum compact-CA inner proof after padding its 128 active rows to a
-/// log-13 native trace and using the shared log-16 LDE.
-const ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1: u32 = 2_690_528;
+/// Exact maximum compact-CA inner proof after padding its 104 active rows to a
+/// log-13 native trace and using four composition chunks on the shared log-16 LDE.
+const ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1: u32 = 2_694_912;
 
 /// Whether zk-X509 has completed the non-negotiable shared-STARK hard cut.
 ///
@@ -326,7 +326,7 @@ const fn zk_x509_shared_stark_geometry_is_release_ready_v1() -> bool {
         && ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1
 }
 /// Exact maximum encoded canonical aggregate proof under the frozen layout.
-pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 8_212_538;
+pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 19_156_074;
 /// Exact encoded byte length of the deterministic first-release X5S1 KAT.
 ///
 /// This stays zero only while the one-time capture corridor is open. The production activation gate
@@ -341,9 +341,9 @@ pub(crate) const ZK_X509_NATIVE_RELEASE_EXPECTATIONS_JSON_SHA256_V1: [u8; 32] = 
 /// Frozen first-release transparent-proof envelope descriptor.
 ///
 /// Consensus activation stays fail-closed while this descriptor records the
-/// pre-cut geometry.  Governance and release-evidence pins cannot override the
+/// current oversized opening schedule.  Governance and release-evidence pins cannot override the
 /// shared q=136/blowup-eight verifier or the fixed proof-byte ceiling.
-pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-openings=canonical-sorted-unique-current-next-union-after-grinding-max116|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8212538|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=blocked-pending-q136-blowup8-digest384-fp4-proof-cap-redesign|activation=unavailable";
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log13-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-openings=canonical-sorted-unique-current-next-union-after-grinding-max272|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=696|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=157|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=19156074|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-proof-cap-redesign|activation=unavailable";
 #[cfg(feature = "privacy-release-evidence")]
 pub(crate) use readiness_certificates::{
     ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1, ZkX509ResourceCertificateV1,
@@ -390,6 +390,7 @@ const fn release_evidence_pins_are_complete_v1(
 ) -> bool {
     kat_proof_bytes > 0
         && kat_proof_bytes <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1
+        && kat_proof_bytes <= ZK_X509_MAX_PROOF_BYTES_V1
         && digest_is_nonzero_v1(kat_proof_sha256)
         && digest_is_nonzero_v1(expectations_norito_sha256)
         && digest_is_nonzero_v1(expectations_json_sha256)
@@ -692,9 +693,6 @@ fn validate_fri_subproof_v1(
 }
 /// Validate the immutable profile constants.
 pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
-    if !zk_x509_shared_stark_geometry_is_release_ready_v1() {
-        return Err(ZkX509ProfileErrorV1::InvalidStarkParameters);
-    }
     let maximum_native_rows = u64::from(ZK_X509_MAX_NATIVE_TRACE_ROWS_V1);
     let common_lde_rows = maximum_native_rows
         .checked_mul(u64::from(ZK_X509_FRI_BLOWUP_FACTOR_V1))
@@ -740,14 +738,14 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1,
     )?;
     let ca_fri = validate_fri_subproof_v1(
-        7,
-        ZK_X509_CA_FRI_LDE_LOG2_V1 - 7,
+        super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
+        ZK_X509_CA_FRI_LDE_LOG2_V1 - super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
         ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
         ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1,
         ZK_X509_CA_FRI_ROUNDS_V1,
         ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1,
     )?;
-    checked_transparent_stark_work_security_v1(128, 129, 256, 64)
+    checked_transparent_stark_work_security_v1(128, 157, 256, 64)
         .map_err(|_| ZkX509ProfileErrorV1::InvalidStarkParameters)?;
     let streaming_lde_batch_bytes = u64::from(ZK_X509_MAX_NATIVE_TRACE_ROWS_V1)
         .checked_mul(u64::from(ZK_X509_LDE_COLUMN_BATCH_V1))
@@ -775,27 +773,27 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
         return Err(ZkX509ProfileErrorV1::InvalidTraceEnvelope);
     }
     if ZK_X509_GOLDILOCKS_MODULUS_V1 != 0xffff_ffff_0000_0001
-        || ZK_X509_FRI_BLOWUP_FACTOR_V1 != 64
-        || ZK_X509_FRI_QUERY_COUNT_V1 != 58
+        || ZK_X509_FRI_BLOWUP_FACTOR_V1 != 8
+        || ZK_X509_FRI_QUERY_COUNT_V1 != 136
         || ZK_X509_COMPOSITION_LANES_V1 != 1
         || ZK_X509_FRI_FOLDING_ARITY_V1 != 2
         || ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1 != 1_024
-        || ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1 != 31
-        || ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 != 4
-        || ZK_X509_TRACE_MASK_DEGREE_V1 != 801
-        || main_mask.minimum_mask_coefficients != 802
+        || ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1 != 143
+        || ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 != 6
+        || ZK_X509_TRACE_MASK_DEGREE_V1 != 1_815
+        || main_mask.minimum_mask_coefficients != 1_816
         || main_mask.minimum_mask_degree != usize::from(ZK_X509_TRACE_MASK_DEGREE_V1)
-        || ca_mask.minimum_mask_coefficients != 306
+        || ca_mask.minimum_mask_coefficients != 696
         || ca_mask.minimum_mask_degree != usize::from(ZK_X509_CA_TRACE_MASK_DEGREE_V1)
         || main_fri
             != (AggregateFriTheorem2BoundV1 {
-                query_error_bits: 132,
-                commitment_error_bits: 181,
+                query_error_bits: 160,
+                commitment_error_bits: 187,
             })
         || ca_fri
             != (AggregateFriTheorem2BoundV1 {
-                query_error_bits: 132,
-                commitment_error_bits: 203,
+                query_error_bits: 160,
+                commitment_error_bits: 199,
             })
         || common_lde_rows
             != 1_u64
@@ -839,11 +837,11 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
 pub(crate) fn require_activation_readiness_v1(
     readiness: ZkX509ReadinessV1,
 ) -> Result<(), ZkX509ProfileErrorV1> {
-    validate_profile_v1()?;
     let canonical = zk_x509_activation_readiness_v1();
     if readiness != canonical || !canonical.is_complete() {
         return Err(ZkX509ProfileErrorV1::EngineIncomplete);
     }
+    validate_profile_v1()?;
     Ok(())
 }
 #[cfg(test)]
@@ -867,10 +865,10 @@ mod tests {
         }
     }
     #[test]
-    fn pre_cut_profile_is_rejected_until_shared_stark_geometry_and_wire_fit() {
+    fn mandatory_stark_geometry_rejects_oversized_main_profile() {
         assert_eq!(
             validate_profile_v1(),
-            Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
+            Err(ZkX509ProfileErrorV1::InvalidProofCap)
         );
         assert!(!zk_x509_shared_stark_geometry_is_release_ready_v1());
         assert_eq!(ZK_X509_SHARED_STARK_QUERY_COUNT_V1, 136);
@@ -879,7 +877,7 @@ mod tests {
         assert_eq!(ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1, 16);
         assert_eq!(
             ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1,
-            2_690_528
+            2_694_912
         );
         assert!(
             ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1
@@ -899,19 +897,19 @@ mod tests {
         assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNKS_V1, 80);
         assert_eq!(ZK_X509_PHYSICAL_COMMITMENT_CHUNK_COLUMNS_V1, 64);
         assert_eq!(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, 19);
-        assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 25);
-        assert_eq!(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, 6_812_632);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 8_212_538);
+        assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 22);
+        assert_eq!(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, 16_087_744);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 19_156_074);
         assert_eq!(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1, 11_952);
         assert_eq!(
-            ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            1_224_646
+            ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 - ZK_X509_MAX_PROOF_BYTES_V1,
+            9_718_890
         );
-        assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 58);
+        assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 136);
         assert_eq!(ZK_X509_MAX_CONSTRAINT_DEGREE_V1, 7);
-        assert_eq!(ZK_X509_TRACE_MASK_DEGREE_V1, 801);
-        assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1, 305);
-        assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 <= ZK_X509_MAX_PROOF_BYTES_V1);
+        assert_eq!(ZK_X509_TRACE_MASK_DEGREE_V1, 1_815);
+        assert_eq!(ZK_X509_CA_TRACE_MASK_DEGREE_V1, 695);
+        assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 > ZK_X509_MAX_PROOF_BYTES_V1);
         assert_eq!(ZK_X509_TARGET_SOUNDNESS_BITS_V1, 128);
         assert_eq!(ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1, 12 * 1024 * 1024 * 1024);
         assert_eq!(
@@ -922,7 +920,7 @@ mod tests {
             String::from_utf8_lossy(ZK_X509_STARK_PROFILE_DESCRIPTOR_V1)
                 .contains("address-space-ceiling-bytes=34359738368")
         );
-        assert_ne!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
+        assert_eq!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
         let readiness = zk_x509_activation_readiness_v1();
         assert!(!readiness.prover);
         assert!(!readiness.verifier);
@@ -942,11 +940,11 @@ mod tests {
         }
         assert_eq!(
             require_activation_readiness_v1(readiness),
-            Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
+            Err(ZkX509ProfileErrorV1::EngineIncomplete)
         );
         assert_eq!(
             require_activation_readiness_v1(complete_readiness()),
-            Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
+            Err(ZkX509ProfileErrorV1::EngineIncomplete)
         );
     }
     #[test]
@@ -1208,7 +1206,7 @@ mod tests {
     fn independent_readiness_requirements_fail_closed() {
         let canonical = zk_x509_activation_readiness_v1();
         assert!(!canonical.is_complete());
-        let expected = Err(ZkX509ProfileErrorV1::InvalidStarkParameters);
+        let expected = Err(ZkX509ProfileErrorV1::EngineIncomplete);
         assert_eq!(require_activation_readiness_v1(canonical), expected);
         assert_eq!(
             require_activation_readiness_v1(complete_readiness()),
@@ -1267,10 +1265,7 @@ mod tests {
         ];
         for gate in gates {
             assert!(!gate.is_complete());
-            assert_eq!(
-                require_activation_readiness_v1(gate),
-                Err(ZkX509ProfileErrorV1::InvalidStarkParameters)
-            );
+            assert_eq!(require_activation_readiness_v1(gate), expected);
         }
     }
     #[test]

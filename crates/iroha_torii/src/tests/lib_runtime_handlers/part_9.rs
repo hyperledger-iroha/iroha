@@ -1103,17 +1103,17 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
         .then_some(2);
         world.public_lane_validators_mut_for_testing().insert(
             (
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 validator_account_id.clone(),
             ),
             iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: validator_account_id.clone(),
                 peer_id: peer_id.parse().expect("validator peer id"),
                 stake_account: validator_account_id,
                 total_stake: Quantity::from(1_u64),
                 self_stake: Quantity::from(1_u64),
-                metadata: iroha_data_model::metadata::Metadata::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 status,
                 activation_height: 1,
                 deactivation_height,
@@ -1472,7 +1472,7 @@ async fn telemetry_handlers_ok() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     app.state.metrics().set_axt_proof_cache_state(
-        iroha_data_model::nexus::DataSpaceId::new(1),
+        iroha_model_base::topology::DataSpaceId::new(1),
         "miss",
         [0x11; 32],
         2,
@@ -1695,7 +1695,7 @@ impl RuntimeApiRouterFixture {
         let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
         let torii = Torii::new_with_handle(
             ChainId::from(chain_id),
-            signed_query_test_network_id(),
+            *state.network_id_ref(),
             kiso,
             cfg.torii.clone(),
             queue,
@@ -1720,6 +1720,50 @@ impl RuntimeApiRouterFixture {
     async fn shutdown(self) {
         self.router.shutdown().await;
     }
+}
+#[tokio::test]
+async fn node_capabilities_http_bootstraps_without_registered_account() {
+    // This fixture has an empty world and mounts the production route catalog,
+    // including authentication middleware. Calling the handler alone misses
+    // the circular dependency between account registration and SDK preflight.
+    let fixture = RuntimeApiRouterFixture::standard("public-node-capabilities-test");
+    for (path, expected) in [
+        ("/v1/node/capabilities", StatusCode::OK),
+        ("/v1/privacy/capabilities", StatusCode::UNAUTHORIZED),
+        ("/v1/runtime/upgrades", StatusCode::UNAUTHORIZED),
+    ] {
+        let mut request = Request::builder()
+            .method(HttpMethod::GET)
+            .uri(path)
+            .header(axum::http::header::ACCEPT, "application/json")
+            .body(Body::empty())
+            .expect("unsigned metadata request");
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("production route response");
+        assert_eq!(response.status(), expected, "GET {path}");
+        if expected == StatusCode::OK {
+            let body = torii_body_bytes(response, "node capabilities body").await;
+            let capabilities: crate::runtime::NodeCapabilitiesResponse =
+                norito::json::from_slice(&body).expect("typed node capability metadata");
+            assert_eq!(capabilities.abi_version, 1);
+            assert_eq!(
+                capabilities.data_model_version,
+                iroha_data_model::DATA_MODEL_VERSION
+            );
+            assert_eq!(
+                capabilities.signed_transaction_schema_hash_hex,
+                hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
+            );
+        }
+    }
+    fixture.shutdown().await;
 }
 #[cfg(not(feature = "app_api"))]
 #[tokio::test]
@@ -2146,7 +2190,12 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
     use tower::ServiceExt as _;
     let fixture = RuntimeApiRouterFixture::standard("contracts-aliases-router-test");
     let router = fixture.router.router();
-    for path in ["/v1/contracts/aliases", "/v1/contracts/call/simulate"] {
+    for path in [
+        "/v1/contracts/aliases",
+        "/v1/contracts/call/simulate",
+        "/v1/contracts/view",
+        "/v1/contracts/view/batch",
+    ] {
         let mut request = Request::builder()
             .method(Method::POST)
             .uri(path)
@@ -2163,7 +2212,7 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
             .expect("protected route response");
         assert_eq!(
             response.status(),
-            StatusCode::FORBIDDEN,
+            StatusCode::UNAUTHORIZED,
             "{path} must authenticate the bounded raw body before DTO decoding"
         );
     }
@@ -2182,6 +2231,82 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         .expect("public query response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     fixture.shutdown().await;
+}
+#[tokio::test]
+async fn contract_compute_routes_bind_authenticated_authority_before_work() {
+    use axum::{
+        body::Body,
+        extract::ConnectInfo,
+        http::{Method, Request},
+        routing::post,
+    };
+    use tower::ServiceExt as _;
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key = checked_torii_test_ed25519_keypair(0xb4, "contract view caller fixture");
+    let caller = AccountId::new(key.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let router = axum::Router::new()
+        .route(
+            "/v1/contracts/view",
+            post(super::handler_post_contract_view),
+        )
+        .route(
+            "/v1/contracts/view/batch",
+            post(super::handler_post_contract_view_batch),
+        )
+        .route(
+            "/v1/contracts/call/simulate",
+            post(super::handler_post_contract_call_simulate),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            super::CanonicalAccountBodyAuthState {
+                app: app.clone(),
+                max_body_bytes: 4096,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
+            },
+            super::enforce_canonical_account_body_authentication,
+        ))
+        .with_state(app);
+    for path in [
+        "/v1/contracts/view",
+        "/v1/contracts/view/batch",
+        "/v1/contracts/call/simulate",
+    ] {
+        for (authority, expected) in [
+            (&*ALICE_ID, StatusCode::FORBIDDEN),
+            (&caller, StatusCode::BAD_REQUEST),
+        ] {
+            let body = if path.ends_with("/batch") {
+                norito::json!({"authority": (authority.to_string()), "items": []})
+            } else {
+                norito::json!({"authority": (authority.to_string()), "entrypoint": "view", "gas_limit": 1})
+            };
+            let body = norito::json::to_vec(&body).expect("request JSON");
+            let uri = path.parse().expect("request URI");
+            let headers = signed_app_headers(&caller, &key, &Method::POST, &uri, &body);
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("signed view request");
+            request.headers_mut().extend(headers);
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("view response");
+            assert_eq!(
+                response.status(),
+                expected,
+                "{path}: foreign authority is rejected before target/VM validation; exact caller reaches ordinary request validation"
+            );
+        }
+    }
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]

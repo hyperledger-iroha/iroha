@@ -2,7 +2,7 @@
 //!
 //! This sole canonical selector replaces host storage paths at the native open boundary.
 //! Its identity is deterministic correlation data. Decoding or matching it proves neither
-//! MiBank approval, enrollment, hardware custody, current selection nor monetary authority.
+//! `MiBank` approval, enrollment, hardware custody, current selection nor monetary authority.
 
 use super::{KAGEMUSHA_WIRE_VERSION_V1, KagemushaRetailEnrollmentOwnerV1};
 
@@ -145,9 +145,10 @@ mod tests {
         account::AccountId,
         asset::AssetDefinitionId,
         kagemusha::{KAGEMUSHA_ASSET_SCALE_MAX_V1, KagemushaRetailEnrollmentRuntimeV1},
-        nexus::{AxtAssetIncarnationV1, DataSpaceId},
+        nexus::AxtAssetIncarnationV1,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_model_base::topology::DataSpaceId;
 
     fn owner() -> KagemushaRetailEnrollmentOwnerV1 {
         KagemushaRetailEnrollmentOwnerV1 {

@@ -21,7 +21,7 @@ fn time_trigger(id: &str, namespace: Option<&str>, entrypoint: &str) -> TriggerD
             ),
         ),
         authority: None,
-        metadata: iroha_data_model::metadata::Metadata::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         callback: TriggerCallback {
             namespace: namespace.map(str::to_owned),
             entrypoint: entrypoint.to_owned(),

@@ -34,8 +34,8 @@ use iroha_data_model::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::codec::Encode as _;
 use std::{

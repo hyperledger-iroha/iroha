@@ -30,7 +30,7 @@ use iroha::{
             BlockHeader,
             consensus::{NativeAmxReceipt, SumeragiDiagnosticsStatus},
         },
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             Grant, GrantBox, InstructionBox, Log, Mint, Register,
             privacy::RegisterPrivacyProtocolActivationV1,
@@ -44,10 +44,9 @@ use iroha::{
             },
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        metadata::Metadata,
         nexus::{
-            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId, LaneId,
-            LaneVisibility, PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
+            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, LaneVisibility,
+            PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
             PrivateSettlementAuditEncryptionOpeningV1, PrivateSettlementAuditNoteOpeningV1,
             PrivateSettlementAuditOutputRoleV1, PrivateSettlementAuditOutputV1,
             PrivateSettlementAuditPayerAuthorizationBodyV1,
@@ -64,7 +63,6 @@ use iroha::{
             PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
             PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementRouteV1,
         },
-        peer::PeerId,
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
@@ -115,6 +113,10 @@ use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance, settlement::CanExecuteSettlement,
 };
 use iroha_genesis::GenesisTopologyEntry;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_test_network::{
     CommitteeValidatorP2pBootstrap, Network, NetworkBuilder, NetworkPeer,
@@ -1014,11 +1016,17 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?.into(),
     );
     let mut ticks = 0_u64;
+    let mut last_observed_height = None;
     let tick_limit = PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
         .checked_add(16)
         .expect("privacy activation tick limit fits u64");
     loop {
-        let capability = client.client().get_privacy_capabilities()?;
+        let capability = client.client().get_privacy_capabilities().wrap_err_with(|| {
+            format!(
+                "private-note activation phase=capability confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
+            )
+        })?;
+        last_observed_height = Some(capability.committed_height);
         let row = capability
             .protocols
             .iter()
@@ -1083,8 +1091,16 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
                 ))
                 .and_then(|payload| account.sign_transaction(payload))
         }
-        .wrap_err("build integration-test transaction")?;
-        client.submit_transaction_and_wait(&tick)?;
+        .wrap_err_with(|| {
+            format!(
+                "private-note activation phase=tick_build confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
+            )
+        })?;
+        client.submit_transaction_and_wait(&tick).wrap_err_with(|| {
+            format!(
+                "private-note activation phase=tick_confirmation confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
+            )
+        })?;
         ticks += 1;
     }
 }
@@ -2070,9 +2086,14 @@ fn wait_for_identical_receipt(
         }
         thread::sleep(POLL_INTERVAL);
     }
-    Err(eyre!(
+    Err(benchmark_deadline_error(
+        BenchmarkDeadlineStageV1::PrivateReceipt,
+        FINALITY_TIMEOUT,
+        started.elapsed(),
+    )
+    .wrap_err(format!(
         "all peers did not converge on one atomic receipt: {last}"
-    ))
+    )))
 }
 
 fn run_n3_real_process_smoke() -> Result<()> {

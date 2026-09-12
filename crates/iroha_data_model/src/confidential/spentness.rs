@@ -428,6 +428,12 @@ impl ConfidentialSpentnessCheckpointV1 {
     }
 
     /// Validate the immutable checkpoint chain shape and non-zero bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ZeroBinding` for a zero root or finalized block hash, or a zero predecessor
+    /// digest at a nonzero height. Returns `InvalidPredecessor` if height zero has a
+    /// predecessor or a later height has none.
     pub fn validate(&self) -> Result<(), ConfidentialSpentnessErrorV1> {
         if self.root.is_zero()
             || self
@@ -560,6 +566,13 @@ impl ConfidentialSpentnessProofV1 {
     }
 
     /// Verify the exact checkpoint binding, leaf state, and all 256 siblings.
+    ///
+    /// # Errors
+    ///
+    /// Propagates checkpoint and proof-shape errors for zero bindings/siblings, invalid
+    /// predecessor shape or inconsistent spent/unspent leaf fields. Returns
+    /// `CheckpointMismatch` for another checkpoint digest, `InvalidSpentHeight` for
+    /// spending after the checkpoint, or `RootMismatch` for a different reconstructed root.
     pub fn verify(
         &self,
         checkpoint: &ConfidentialSpentnessCheckpointV1,
@@ -586,6 +599,12 @@ impl ConfidentialSpentnessProofV1 {
     ///
     /// This is used by consensus while constructing the next checkpoint as
     /// well as by point-proof verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ZeroBinding` for a zero checkpoint digest or nullifier, `ZeroSibling` for a
+    /// zero path sibling, or `InvalidUnspentLeaf`/`InvalidSpentLeaf` when the transaction
+    /// digest and height do not match the leaf kind.
     pub fn compute_root(
         &self,
         network_id: &NetworkId,

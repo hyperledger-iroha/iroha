@@ -12,6 +12,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use nonzero_ext::nonzero;
 use std::env;

@@ -7,7 +7,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::{BlockHeader, consensus_v2::HeightContextId},
-    domain::DomainId,
     isi::{Log, kagemusha_v1::TopUpKagemushaV1},
     kagemusha::{
         KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
@@ -22,6 +21,7 @@ use iroha_data_model::{
     testing::kagemusha::KagemushaFixtureSignerV1,
     transaction::{FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder},
 };
+use iroha_model_base::domain::DomainId;
 
 const FIXTURE_TOP_UP_PUBLIC_KEY_HEX: &str = "04209c317b637935dd3da1c54f63495dfb31f97d293df085710320595c9aacb83fdde4c69fc17a0c74c20cc692662f049892ba37a4ba47d2c70cd8a99986391f9b";
 

@@ -14,19 +14,17 @@ use super::{
     },
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::{
-    nexus::{
-        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_BLS_BYTES_V1,
-        PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
-        PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
-        PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
-        PrivateSettlementAuditorViewAttestationBodyV1, PrivateSettlementAuditorViewAttestationV1,
-        PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitteeAuthorityV1,
-        PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementSidecarAvailabilityBodyV1,
-        PrivateSettlementSidecarAvailabilityV1,
-    },
-    peer::PeerId,
+use iroha_data_model::nexus::{
+    ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_BLS_BYTES_V1,
+    PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
+    PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
+    PrivateSettlementAuditApprovalAcknowledgementAttestationV1,
+    PrivateSettlementAuditorViewAttestationBodyV1, PrivateSettlementAuditorViewAttestationV1,
+    PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitteeAuthorityV1,
+    PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementSidecarAvailabilityBodyV1,
+    PrivateSettlementSidecarAvailabilityV1,
 };
+use iroha_model_base::peer::PeerId;
 use std::{collections::BTreeMap, fmt};
 use thiserror::Error;
 

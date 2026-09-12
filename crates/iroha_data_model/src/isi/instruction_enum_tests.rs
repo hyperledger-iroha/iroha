@@ -1,6 +1,8 @@
 #![allow(clippy::too_many_lines)]
 use super::*;
 use crate::prelude::*;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::const_vec::ConstVec;
 const RECORD_SCCP_MESSAGE_WIRE_ID: &str = "iroha.instruction.v1::bridge::RecordSccpMessage";

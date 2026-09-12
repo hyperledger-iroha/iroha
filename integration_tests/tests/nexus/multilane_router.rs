@@ -26,15 +26,16 @@ use iroha_data_model::{
         InstructionBox,
         prelude::{Mint, Register},
     },
-    metadata::Metadata,
     nexus::{
-        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-        DataSpaceMetadata, LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId,
-        LaneStorageProfile, LaneVisibility,
+        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceMetadata,
+        LaneCatalog, LaneConfig as LaneConfigMetadata, LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
     transaction::TransactionBuilder,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;

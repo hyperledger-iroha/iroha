@@ -1,10 +1,8 @@
 //! Golden-structure tests for pointer-ABI TLV envelopes.
 //! These tests validate big-endian length encoding and basic layout.
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    nexus::{DataSpaceId, LaneId},
-    prelude::Quantity,
-};
+use iroha_data_model::prelude::Quantity;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use ivm::{
     Memory, PointerType,
     axt::{

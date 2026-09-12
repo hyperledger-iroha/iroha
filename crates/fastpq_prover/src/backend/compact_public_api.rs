@@ -491,7 +491,7 @@ mod tests {
         for field in 0..5 {
             let mut changed = context(&fixture);
             match field {
-                0 => changed.mirrors.dsid = iroha_data_model::DataSpaceId::new(8),
+                0 => changed.mirrors.dsid = iroha_model_base::topology::DataSpaceId::new(8),
                 1 => changed.mirrors.manifest_root[0] ^= 1,
                 2 => changed.mirrors.da_commitment = None,
                 3 => changed.mirrors.committed_amount = None,
@@ -1138,7 +1138,7 @@ mod tests {
         for field in 0..5 {
             let mut bad = context(&fixture);
             match field {
-                0 => bad.mirrors.dsid = iroha_data_model::DataSpaceId::new(8),
+                0 => bad.mirrors.dsid = iroha_model_base::topology::DataSpaceId::new(8),
                 1 => bad.mirrors.manifest_root[0] ^= 1,
                 2 => bad.mirrors.da_commitment = None,
                 3 => bad.mirrors.committed_amount = None,

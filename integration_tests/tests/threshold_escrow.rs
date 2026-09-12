@@ -16,6 +16,7 @@ use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
@@ -962,7 +963,7 @@ fn threshold_call_intent_uses_canonical_arguments_from_the_trusted_artifact() {
         &network,
         &ALICE_ID,
         0,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("fixture address");
     let payload = open_escrow_args(10);

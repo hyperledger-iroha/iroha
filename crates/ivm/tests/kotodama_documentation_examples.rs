@@ -1,12 +1,12 @@
 use iroha_crypto::PublicKey;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
     IVM, KotodamaCompiler, VMError,
     host::IVMHost,
     kotodama::compiler::CompilerOptions,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId,
-        PermissionToken, WsvHost,
+        AccountId, AssetDefinitionId, Mintable, MockWorldStateView, NftId, PermissionToken, WsvHost,
     },
     syscalls,
 };
@@ -109,7 +109,8 @@ where
     check(host_ref);
 }
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").expect("domain id");
+    let _domain =
+        iroha_model_base::domain::DomainId::try_new(domain, "universal").expect("domain id");
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }
@@ -153,8 +154,8 @@ impl IVMHost for LoggingCoreHost {
     }
 }
 fn setup_base_world(caller: &AccountId) -> MockWorldStateView {
-    let domain: DomainId =
-        iroha_data_model::DomainId::try_new("default", "universal").expect("default domain id");
+    let domain: DomainId = iroha_model_base::domain::DomainId::try_new("default", "universal")
+        .expect("default domain id");
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(caller, PermissionToken::RegisterDomain);

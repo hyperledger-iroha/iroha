@@ -112,8 +112,8 @@ use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, SignedBlock, consensus_v2 as wire},
     events::{EventBox, pipeline::PipelineEventBox},
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use thiserror::Error;
 
 #[path = "v2_runner/lifecycle_height_driver.rs"]
@@ -2075,7 +2075,7 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     SettledReleasedValidateApply,
     PendingReleasedValidateApply,
     SettledLifecycleOutput,
-    DelayedLifecycleOutputAdmitted,
+    PendingDelayedLifecycleApplySuccessor,
     PendingLifecycleOutput,
     SettledDurableValidate,
     PendingDurableValidate,
@@ -2103,7 +2103,7 @@ impl AdvanceExecutorYieldV1 {
             AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
                 | AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped
                 | AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
-                | AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+                | AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor
         )
     }
 }
@@ -2210,15 +2210,15 @@ pub(in crate::sumeragi) fn advance_executor(
                     if matches!(
                         attestation.mode(),
                         super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-                    ) || (matches!(
+                    ) || matches!(
                         attestation.mode(),
                         super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. }
-                    ) && executor.lifecycle_decision_apply_dispatch_available(Some(&attestation))?) =>
+                    ) =>
                 {
-                    // The delayed observer output has no retained Apply. A
-                    // delayed validator suffix retries Completion only after
-                    // the full executor dispatch gate is open; otherwise its
-                    // exact bounded runtime predecessor must drain below.
+                    // This output belongs to the protected Ready Apply even
+                    // while its dispatch gate is closed. Preserve Completion
+                    // priority; only the exact predecessor proof above may
+                    // drain runtime work ahead of that Apply.
                     (None, true)
                 }
                 Some(_) | None => (None, false),
@@ -2233,7 +2233,7 @@ pub(in crate::sumeragi) fn advance_executor(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::BeforeStep,
                     if delayed_apply_successor {
-                        AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+                        AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor
                     } else {
                         AdvanceExecutorYieldCauseV1::PendingLifecycleOutput
                     },

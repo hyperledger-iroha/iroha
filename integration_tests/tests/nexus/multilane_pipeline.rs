@@ -22,14 +22,16 @@ use iroha_core::{
 use iroha_data_model::{
     da::commitment::DaProofScheme,
     isi::{InstructionBox, prelude::SetKeyValue},
-    metadata::Metadata,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility,
+        DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig as LaneConfigMetadata,
+        LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
     transaction::TransactionBuilder,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;

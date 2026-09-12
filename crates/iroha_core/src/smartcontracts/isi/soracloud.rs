@@ -2,7 +2,9 @@
 use super::{asset::isi::assert_numeric_spec_with, *};
 use crate::{
     smartcontracts::{Execute, isi::staking::validator_election_eligible_at_height},
-    state::{StateReadOnly, StateTransaction, public_lane_validator_record_matches_key},
+    state::{
+        StateReadOnly, StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key,
+    },
 };
 #[cfg(all(test, feature = "zk-stark"))]
 use iroha_crypto::fhe_bfv::{
@@ -263,26 +265,33 @@ fn verify_signature_for_signer(
     }
     signature.verify(signer, payload)
 }
+/// Whether a registered account holds the exact SoraCloud management capability.
+///
+/// Both runtime authorization and offline genesis qualification use the final
+/// world state: only direct grants and permissions in currently assigned, live
+/// roles count. A same-named token with a different payload never authorizes.
+pub fn soracloud_management_authority_is_authorized(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+) -> bool {
+    let Ok(permissions) = world.account_permissions_iter(authority) else {
+        return false;
+    };
+    let required = Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(()));
+    permissions.into_iter().any(|actual| actual == &required)
+        || world.account_roles_iter(authority).any(|role_id| {
+            world
+                .roles()
+                .get(role_id)
+                .is_some_and(|role| role.permissions().any(|actual| actual == &required))
+        })
+}
+
 fn require_soracloud_permission(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let required = Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(()));
-    let has_direct = state_transaction
-        .world
-        .account_permissions_iter(authority)
-        .is_ok_and(|permissions| permissions.into_iter().any(|actual| actual == &required));
-    let has_role = state_transaction
-        .world
-        .account_roles_iter(authority)
-        .any(|role_id| {
-            state_transaction
-                .world
-                .roles
-                .get(role_id)
-                .is_some_and(|role| role.permissions().any(|actual| actual == &required))
-        });
-    if has_direct || has_role {
+    if soracloud_management_authority_is_authorized(&state_transaction.world, authority) {
         Ok(())
     } else {
         Err(InstructionExecutionError::InvariantViolation(
@@ -11632,7 +11641,6 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         source_record.repo_id = repo_id.clone();
         source_record.resolved_revision = resolved_revision.clone();
         source_record.updated_at_ms = now_ms;
-        record_hf_source(state_transaction, source_record.clone())?;
 
         let member_key = (pool_id.to_string(), authority.to_string());
         let mut pool_record = state_transaction
@@ -11643,6 +11651,21 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         if let Some(pool) = pool_record.as_ref() {
             ensure_hf_shared_lease_settlement_asset_matches(pool, &lease_asset_definition_id)?;
         }
+        let reconciles_queued_window = pool_record.as_ref().is_some_and(|pool| {
+            pool.window_expires_at_ms <= now_ms
+                && matches!(
+                    pool.status,
+                    SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+                )
+                && pool.queued_next_window.is_some()
+        });
+        // A queued-window transition emits one event before the join's own event.
+        // Reserve the complete sequence range before publishing a source or moving funds.
+        ensure_soracloud_audit_sequence_capacity(
+            state_transaction,
+            1 + usize::from(reconciles_queued_window),
+        )?;
+        record_hf_source(state_transaction, source_record.clone())?;
         if let Some(pool) = pool_record.as_mut()
             && pool.window_expires_at_ms <= now_ms
             && matches!(
@@ -17074,6 +17097,8 @@ pub fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_relea
 }
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
     include!("soracloud_tests.rs");
     mod agent_apartment;
 }

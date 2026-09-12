@@ -40,7 +40,6 @@ use iroha_data_model::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
     },
-    metadata::Metadata,
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
     proof::VerifyingKeyId,
@@ -52,6 +51,7 @@ use iroha_data_model::{
         OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
@@ -257,7 +257,7 @@ impl ContractDispatchSource<'_> {
     }
 }
 fn parse_raw_contract_call_execution_context(
-    metadata: &iroha_data_model::metadata::Metadata,
+    metadata: &iroha_model_base::metadata::Metadata,
     bytecode: &[u8],
     gas_limit: u64,
 ) -> Result<Option<ContractCallExecutionContext>, OverlayBuildError> {
@@ -3684,6 +3684,10 @@ mod tests_overlay_manifest {
     use super::*;
     use crate::state::State;
     use iroha_data_model::prelude::*;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
@@ -5257,7 +5261,7 @@ seiyaku GuardedOverlay {
             )
         };
         let unauthorized_state = make_state(false);
-        let metadata = iroha_data_model::metadata::Metadata::default();
+        let metadata = iroha_model_base::metadata::Metadata::default();
         let transaction = TransactionBuilder::new(
             unauthorized_state.network_id,
             authority.clone(),
@@ -6157,7 +6161,7 @@ seiyaku GuardedOverlayRebound {
             .code_hash
             .expect("verified manifest code hash");
         let manifest = verified_manifest.signed(&kp);
-        let mut md = iroha_data_model::metadata::Metadata::default();
+        let mut md = iroha_model_base::metadata::Metadata::default();
         md.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             Json::new("main"),
@@ -6297,12 +6301,13 @@ mod tests {
     use crate::state::State;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId, Registrable,
-        domain::DomainId,
+        Registrable,
         isi::smart_contract_code::RemoveSmartContractBytes,
-        nexus::DataSpaceId,
         prelude::{IvmBytecode, TransactionBuilder},
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
@@ -6408,10 +6413,8 @@ mod tests {
     include!("overlay_admission_policy_tests.rs");
     #[test]
     fn plain_ivm_axt_only_overlay_fails_closed_without_authenticated_proof() {
-        use iroha_data_model::{
-            block::BlockHeader,
-            nexus::{AxtHandleReplayKey, DataSpaceId, LaneId},
-        };
+        use iroha_data_model::{block::BlockHeader, nexus::AxtHandleReplayKey};
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use ivm::axt::{
             AssetHandle, GroupBinding, HandleBudget, HandleSubject, HandleUsage, ProofBlob,
             RemoteSpendIntent, SpendOp, TouchManifest,
@@ -6548,13 +6551,13 @@ mod tests {
         use iroha_data_model::block::BlockHeader;
         use nonzero_ext::nonzero;
         let (descriptor, binding) = ivm::axt::AxtDescriptor::builder()
-            .dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+            .dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
             .build_with_binding()
             .expect("AXT descriptor");
         let mut completed = ivm::axt::HostAxtState::new(descriptor, binding);
         completed
             .record_proof(
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 Some(ivm::axt::ProofBlob {
                     payload: vec![1],
                     expiry_slot: None,
@@ -6731,7 +6734,7 @@ mod tests {
         );
         let attachments = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
@@ -6843,7 +6846,7 @@ seiyaku ProtectedProvedOverlay {
                 .expect("canonical test network id"),
             &authority,
             92,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("derive proved-overlay contract address");
         let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -6884,7 +6887,7 @@ seiyaku ProtectedProvedOverlay {
         // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
         // time-based rejection so slow debug builds don't flap.
         state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("open"),
@@ -7434,7 +7437,7 @@ seiyaku ProtectedProvedOverlay {
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
         state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let network_id = state.network_id;
         let build_tx = |vk_ref: VerifyingKeyId| {
@@ -7559,7 +7562,7 @@ seiyaku ProtectedProvedOverlay {
         state.zk.stark.enabled = true;
         state.zk.halo2.enabled = false;
         state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let replay_tx =
             TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
@@ -7697,7 +7700,7 @@ seiyaku ProtectedProvedOverlay {
         state.zk.stark.enabled = true;
         state.zk.halo2.enabled = false;
         state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let replay_tx =
             TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
@@ -7820,7 +7823,7 @@ seiyaku ProtectedProvedOverlay {
         // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
         // time-based rejection so slow debug builds don't flap.
         state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let replay_tx =
             TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
@@ -8066,7 +8069,7 @@ seiyaku ProtectedProvedOverlay {
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
         let attachments = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let _ = overlay_bad_hash; // mismatch is exercised via `overlay_hash` in proof public inputs.
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
@@ -8165,7 +8168,7 @@ seiyaku ProtectedProvedOverlay {
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
         let attachments = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
@@ -8267,7 +8270,7 @@ seiyaku ProtectedProvedOverlay {
         // Unit tests should validate overlay plumbing, not benchmark ZK verifiers. Disable
         // time-based rejection so slow debug builds don't flap.
         state.zk.verify_timeout = std::time::Duration::ZERO;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let replay_tx =
             TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
@@ -8355,7 +8358,7 @@ seiyaku ProtectedProvedOverlay {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let tx = TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
             .with_metadata(metadata.clone())
@@ -8484,7 +8487,7 @@ seiyaku DeriveDispatch {
                 .expect("canonical test network id"),
             &authority,
             94,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("derive proved-payload contract address");
         let code_hash = manifest.code_hash.expect("verified code hash");
@@ -8506,7 +8509,7 @@ seiyaku DeriveDispatch {
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         state.zk.halo2.enabled = true;
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("open"),
@@ -8545,7 +8548,7 @@ seiyaku DeriveDispatch {
         )
         .into();
         assert_eq!(proved.overlay.as_ref(), &[expected]);
-        let mut restricted_metadata = iroha_data_model::metadata::Metadata::default();
+        let mut restricted_metadata = iroha_model_base::metadata::Metadata::default();
         restricted_metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("restricted"),
@@ -8747,7 +8750,7 @@ seiyaku ProtectedProved {
                 .expect("canonical test network id"),
             &authority,
             93,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("derive protected proved-call contract address");
         let code_hash = manifest.code_hash.expect("verified code hash");
@@ -8976,10 +8979,8 @@ seiyaku ProtectedProved {
     }
     #[test]
     fn overlay_rejects_manifest_abi_mismatch_before_execution() {
-        use iroha_data_model::{
-            metadata::Metadata,
-            prelude::{AccountId, TransactionBuilder},
-        };
+        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
@@ -9040,10 +9041,10 @@ seiyaku ProtectedProved {
     #[test]
     fn raw_and_proved_ivm_reject_spoofed_contract_alias_metadata() {
         use iroha_data_model::{
-            metadata::Metadata,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             transaction::IvmProved,
         };
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use std::sync::Arc;
         let compiler =
@@ -9077,7 +9078,7 @@ seiyaku AliasBoundArguments {
                 .expect("canonical test network id"),
             &authority,
             9,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let active_alias: iroha_data_model::smart_contract::ContractAlias =
@@ -9208,10 +9209,10 @@ seiyaku AliasBoundArguments {
     #[test]
     fn raw_and_proved_ivm_reject_header_substitution_for_bound_contract() {
         use iroha_data_model::{
-            metadata::Metadata,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             transaction::IvmProved,
         };
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use std::sync::Arc;
         let (stored_program, header_len, meta) = sample_program_zk_mode();
@@ -9241,7 +9242,7 @@ seiyaku AliasBoundArguments {
                 .expect("canonical test network id"),
             &authority,
             10,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let mut world = crate::state::World::default();
@@ -9306,10 +9307,11 @@ seiyaku AliasBoundArguments {
     #[allow(clippy::too_many_lines)]
     fn overlay_rejects_axt_without_policy_entries() {
         use iroha_data_model::{
-            nexus::{AxtRejectReason, DataSpaceId, LaneId},
+            nexus::AxtRejectReason,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
             transaction::Executable,
         };
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use ivm::{
             axt::{
                 self, AssetHandle, GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent,
@@ -9459,7 +9461,7 @@ seiyaku AliasBoundArguments {
             state.view().axt_policy_snapshot().entries.is_empty(),
             "expected empty AXT policy snapshot"
         );
-        let metadata = iroha_data_model::metadata::Metadata::default();
+        let metadata = iroha_model_base::metadata::Metadata::default();
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
@@ -9486,10 +9488,8 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn overlay_rejects_contract_binding_code_hash_mismatch() {
-        use iroha_data_model::{
-            metadata::Metadata,
-            prelude::{AccountId, TransactionBuilder},
-        };
+        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
@@ -9549,10 +9549,8 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn overlay_requires_manifest_for_bound_instance() {
-        use iroha_data_model::{
-            metadata::Metadata,
-            prelude::{AccountId, TransactionBuilder},
-        };
+        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
@@ -9590,10 +9588,8 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn overlay_requires_manifest_abi_for_bound_instance() {
-        use iroha_data_model::{
-            metadata::Metadata,
-            prelude::{AccountId, TransactionBuilder},
-        };
+        use iroha_data_model::prelude::{AccountId, TransactionBuilder};
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
@@ -9706,7 +9702,7 @@ seiyaku AliasBoundArguments {
             &ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes(),
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let metadata = iroha_data_model::metadata::Metadata::default();
+        let metadata = iroha_model_base::metadata::Metadata::default();
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
@@ -9746,7 +9742,7 @@ seiyaku AliasBoundArguments {
             &ivm::encoding::wide::encode_halt().to_le_bytes(),
             &[literal],
         );
-        let metadata = iroha_data_model::metadata::Metadata::default();
+        let metadata = iroha_model_base::metadata::Metadata::default();
         let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
@@ -9825,9 +9821,8 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn sample_smart_contract_overlay_executes() {
-        use iroha_data_model::{
-            metadata::Metadata, prelude::TransactionBuilder, transaction::Executable,
-        };
+        use iroha_data_model::{prelude::TransactionBuilder, transaction::Executable};
+        use iroha_model_base::metadata::Metadata;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
         use std::sync::Arc;
         let metadata = Metadata::default();

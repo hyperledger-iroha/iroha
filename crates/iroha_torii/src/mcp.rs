@@ -71,7 +71,8 @@ pub(crate) use response::{
     jsonrpc_response_too_large,
 };
 use response::{
-    error_envelope_value, http_status_error_code, jsonrpc_error_response, jsonrpc_result_response,
+    bounded_json_value_len, error_envelope_value, http_status_error_code, jsonrpc_error_response,
+    jsonrpc_result_response,
 };
 const JSONRPC_VERSION: &str = "2.0";
 const MCP_PROTOCOL_VERSION: &str = protocol::LEGACY_PROTOCOL_VERSION;
@@ -625,7 +626,7 @@ impl ToolSpec {
         );
         obj.insert(
             "inputSchema".into(),
-            sanitize_tool_input_schema(&self.input_schema),
+            advertised_tool_input_schema(&self.input_schema),
         );
         obj.insert("outputSchema".into(), default_tool_output_schema());
         let semantics = tool_semantics(self);
@@ -708,6 +709,152 @@ fn tool_semantics(tool: &ToolSpec) -> ToolSemantics {
     )
     .expect("MCP semantic classifier must preserve operation/mutation invariants")
 }
+// Visit only JSON Schema subschemas. Values of const/enum/default/examples and
+// extension metadata are application data, even when they contain schema keys.
+fn visit_schema_children(schema: &mut Map, depth: usize, mut visit: impl FnMut(&mut Value, usize)) {
+    for (keyword, value) in schema {
+        match keyword.as_str() {
+            "properties" | "patternProperties" | "dependentSchemas" | "$defs" | "definitions"
+            | "dependencies" => {
+                if let Some(children) = value.as_object_mut() {
+                    for child in children.values_mut() {
+                        // Legacy dependencies can also contain property-name arrays.
+                        if child.is_object() || matches!(child, Value::Bool(_)) {
+                            visit(child, depth + 2);
+                        }
+                    }
+                }
+            }
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                if let Some(children) = value.as_array_mut() {
+                    for child in children {
+                        visit(child, depth + 2);
+                    }
+                }
+            }
+            "items" if value.is_array() => {
+                for child in value.as_array_mut().expect("schema array") {
+                    visit(child, depth + 2);
+                }
+            }
+            "additionalProperties"
+            | "additionalItems"
+            | "items"
+            | "contains"
+            | "propertyNames"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "unevaluatedProperties"
+            | "unevaluatedItems"
+            | "contentSchema" => {
+                visit(value, depth + 1);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn advertised_tool_input_schema(schema: &Value) -> Value {
+    // Norito permits 32 nested JSON containers. Keep each schema segment within
+    // 12 containers, including its root/$defs placement, leaving space for the
+    // descriptor, JSON-RPC envelope, and literal keyword values. Literal data
+    // remains subject to the final serializer's unchanged depth/byte bounds.
+    const MAX_SCHEMA_SEGMENT_DEPTH: usize = 12;
+
+    fn factor(
+        schema: &mut Value,
+        depth: usize,
+        definitions: &mut Map,
+        reserved: &mut BTreeSet<String>,
+        next: &mut usize,
+        scoped_references: &mut bool,
+    ) {
+        let Some(object) = schema.as_object_mut() else {
+            return;
+        };
+        *scoped_references |= [
+            "$id",
+            "id",
+            "$anchor",
+            "$dynamicAnchor",
+            "$ref",
+            "$dynamicRef",
+            "$recursiveRef",
+        ]
+        .iter()
+        .any(|keyword| object.contains_key(*keyword));
+        *scoped_references |= object.get("$defs").is_some_and(|value| !value.is_object());
+        if depth >= MAX_SCHEMA_SEGMENT_DEPTH {
+            let name = loop {
+                let name = format!("mcp_schema_{next}");
+                *next += 1;
+                if reserved.insert(name.clone()) {
+                    break name;
+                }
+            };
+            let mut definition = std::mem::replace(schema, Value::Null);
+            // inputSchema -> $defs -> definition: three JSON containers.
+            factor(
+                &mut definition,
+                3,
+                definitions,
+                reserved,
+                next,
+                scoped_references,
+            );
+            definitions.insert(name.clone(), definition);
+            *schema = norito::json!({ "$ref": (format!("#/$defs/{name}")) });
+        } else {
+            visit_schema_children(object, depth, |child, child_depth| {
+                factor(
+                    child,
+                    child_depth,
+                    definitions,
+                    reserved,
+                    next,
+                    scoped_references,
+                );
+            });
+        }
+    }
+
+    let original = sanitize_tool_input_schema(schema);
+    let mut advertised = original.clone();
+    let mut reserved = advertised
+        .get("$defs")
+        .and_then(Value::as_object)
+        .map(|definitions| definitions.keys().cloned().collect())
+        .unwrap_or_default();
+    let mut definitions = Map::new();
+    let mut scoped_references = false;
+    factor(
+        &mut advertised,
+        1,
+        &mut definitions,
+        &mut reserved,
+        &mut 0,
+        &mut scoped_references,
+    );
+    // Registry schemas are expanded and ref-free. Preserve any future resource
+    // identifiers verbatim rather than changing their reference resolution base.
+    if scoped_references {
+        return original;
+    }
+    if !definitions.is_empty() {
+        let root = advertised.as_object_mut().expect("factored schema object");
+        let existing = root
+            .entry("$defs".into())
+            .or_insert_with(|| Value::Object(Map::new()));
+        existing
+            .as_object_mut()
+            .expect("schema definitions object")
+            .extend(definitions);
+    }
+    advertised
+}
+
 fn sanitize_tool_input_schema(schema: &Value) -> Value {
     let root = match schema {
         Value::Object(map) => map,
@@ -1806,7 +1953,12 @@ pub(crate) async fn handle_jsonrpc_request(
         "ping" => {
             JsonRpcRequestOutcome::Response(jsonrpc_result_response(id, Value::Object(Map::new())))
         }
-        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(id, &app, &params)),
+        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(
+            id,
+            &app,
+            &params,
+            ProtocolEra::Legacy,
+        )),
         "tools/call_batch" | "tools/call" => {
             let registration = match register_authenticated_inflight_request(
                 &app,
@@ -1886,7 +2038,13 @@ pub(crate) async fn handle_validated_jsonrpc_request(
                 ))
             }
         }
-        "tools/list" | "tools/call" | "tools/call_batch" => {
+        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(
+            id,
+            &app,
+            validated_modern_request_params(&request),
+            validated.era,
+        )),
+        "tools/call" | "tools/call_batch" => {
             handle_jsonrpc_request(app, inbound_headers, request).await
         }
         "resources/list" => {
@@ -2164,7 +2322,12 @@ fn is_jsonrpc_id(id: &Value) -> bool {
 fn is_jsonrpc_integer(value: &Value) -> bool {
     value.as_f64().is_some_and(|number| number.fract() == 0.0)
 }
-fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
+fn handle_tools_list(
+    id: Option<Value>,
+    app: &SharedAppState,
+    params: &Map,
+    era: ProtocolEra,
+) -> Value {
     let visible_tools = visible_tools_for_app(app);
     let toolset_version = compute_toolset_version(&visible_tools);
     let list_changed = params
@@ -2196,14 +2359,92 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
     };
     let start = requested_start;
     let page_size = app.mcp.max_tools_per_list.max(1);
-    let end = start.saturating_add(page_size).min(visible_tools.len());
-    let tools = visible_tools[start..end]
-        .iter()
-        .map(|tool| tool.descriptor())
-        .collect::<Vec<_>>();
+    let limit = start.saturating_add(page_size).min(visible_tools.len());
+    let mut tools = Vec::new();
+    let mut tools_bytes = 0_usize;
+    let mut response = tools_list_page_response(
+        id.clone(),
+        Vec::new(),
+        None,
+        &toolset_version,
+        list_changed,
+        era,
+    );
+    for (index, tool) in visible_tools.iter().enumerate().take(limit).skip(start) {
+        let next_cursor = (index + 1 < visible_tools.len()).then_some(index + 1);
+        let mut candidate = tools_list_page_response(
+            id.clone(),
+            vec![tool.descriptor()],
+            next_cursor,
+            &toolset_version,
+            list_changed,
+            era,
+        );
+        // Measure each descriptor at its actual JSON nesting depth, with the
+        // exact id, cursor and protocol metadata. Previously admitted tool bytes
+        // contribute additively, so pagination never repeatedly serializes them.
+        let separator = usize::from(!tools.is_empty());
+        let remaining = app
+            .mcp
+            .max_request_bytes
+            .checked_sub(tools_bytes)
+            .and_then(|remaining| remaining.checked_sub(separator));
+        let measured = remaining
+            .ok_or(BoundedJsonError::BodyTooLarge)
+            .and_then(|remaining| bounded_json_value_len(&candidate, remaining));
+        let candidate_bytes = match measured {
+            Ok(bytes) => bytes,
+            Err(BoundedJsonError::BodyTooLarge) if !tools.is_empty() => break,
+            Err(BoundedJsonError::BodyTooLarge) => {
+                return jsonrpc_response_too_large(id, app.mcp.max_request_bytes);
+            }
+            Err(error) => {
+                let error_class = match error {
+                    BoundedJsonError::Unsupported => "unsupported",
+                    BoundedJsonError::LengthMismatch => "length_mismatch",
+                    BoundedJsonError::AllocationFailed => "allocation_failed",
+                    BoundedJsonError::BodyTooLarge => unreachable!("handled above"),
+                };
+                return jsonrpc_error_response(
+                    id,
+                    JSONRPC_INTERNAL_ERROR,
+                    "MCP tool descriptor cannot be serialized within its response envelope",
+                    Some(norito::json!({
+                        "error_code": "response_serialization_failed",
+                        "tool": (tool.name.as_str()),
+                        "serialization_error": error_class
+                    })),
+                );
+            }
+        };
+        let descriptor = candidate
+            .pointer_mut("/result/tools")
+            .and_then(Value::as_array_mut)
+            .and_then(Vec::pop)
+            .expect("one measured tool descriptor");
+        let envelope_bytes = bounded_json_value_len(&candidate, app.mcp.max_request_bytes)
+            .expect("removing a measured descriptor cannot exceed its envelope bounds");
+        tools_bytes += separator + candidate_bytes - envelope_bytes;
+        tools.push(descriptor);
+        response = candidate;
+    }
+    *response
+        .pointer_mut("/result/tools")
+        .expect("tools-list response has its exact tools slot") = Value::Array(tools);
+    response
+}
+
+fn tools_list_page_response(
+    id: Option<Value>,
+    tools: Vec<Value>,
+    next_cursor: Option<usize>,
+    toolset_version: &str,
+    list_changed: bool,
+    era: ProtocolEra,
+) -> Value {
     let mut result = Map::new();
     result.insert("tools".into(), Value::Array(tools));
-    if end < visible_tools.len() {
+    if let Some(end) = next_cursor {
         result.insert("nextCursor".into(), Value::String(end.to_string()));
     }
     result.insert(
@@ -2215,7 +2456,11 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
             }
         }),
     );
-    jsonrpc_result_response(id, Value::Object(result))
+    let mut response = jsonrpc_result_response(id, Value::Object(result));
+    if era.is_modern() {
+        decorate_modern_response("tools/list", &mut response);
+    }
+    response
 }
 async fn handle_tools_call(
     id: Option<Value>,

@@ -13,20 +13,18 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, NetworkId, Registrable,
+    NetworkId, Registrable,
     account::AccountId,
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
         ExternalExecutionRouteLeg, ExternalExecutionRouteRole, SignedBlock,
     },
     content::ContentAuthMode,
-    domain::DomainId,
     isi::smart_contract_code::{
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
         SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
     },
     jurisdiction::JdgSignatureScheme,
-    nexus::{DataSpaceId, LaneId},
     permission,
     prelude::{
         Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Register, TransactionBuilder,
@@ -35,7 +33,10 @@ use iroha_data_model::{
     sorafs::pricing::PricingScheduleRecord,
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
@@ -330,7 +331,7 @@ pub fn random_authority() -> AuthorityCreds {
 }
 /// Build a minimal world that contains the given authority account in `wonderland`.
 pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
-    let domain_id: iroha_data_model::domain::DomainId =
+    let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
@@ -1460,13 +1461,14 @@ mod tests {
     };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
-        ChainId, Level, Registrable,
+        Level, Registrable,
         account::{Account, AccountId},
         block::ExternalExecutionRouteRole,
         isi::Log,
-        nexus::{DataSpaceId, LaneId},
         transaction::{TransactionBuilder, TransactionEntrypoint},
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{borrow::Cow, sync::Arc};
     #[test]
     fn minimal_root_cfg_keeps_durable_torii_paths_in_the_test_data_dir() {

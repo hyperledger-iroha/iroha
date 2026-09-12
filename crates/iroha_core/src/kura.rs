@@ -112,7 +112,7 @@ use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
-    AccountId, DomainId, NetworkId,
+    AccountId, NetworkId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
@@ -139,7 +139,7 @@ use iroha_data_model::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
     },
-    nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
+    nexus::{LaneCatalog, LaneLifecycleParameterV1},
     parliament_casting::{
         ParliamentTimedOvnCastingContextBindingV1,
         ParliamentTimedOvnCastingContextMembershipProofV1,
@@ -147,7 +147,6 @@ use iroha_data_model::{
         ParliamentTimedOvnFinalizedCastingProofV1,
     },
     parliament_types::BallotAttemptId,
-    peer::PeerId,
     privacy::GoldilocksDigest384V1,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
@@ -155,7 +154,10 @@ use iroha_data_model::{
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_logger::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
 #[cfg(test)]
@@ -325,6 +327,7 @@ struct DecodedAutonomousLaneAttemptRead {
 #[cfg(test)]
 std::thread_local! {
     static AUTONOMOUS_ATTEMPT_FRAME_DECODES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static SIDECAR_DIRECTORY_CANONICALIZATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static AUTONOMOUS_ARTIFACT_VALIDATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
@@ -2388,7 +2391,7 @@ impl Kura {
             .map(|entry| iroha_data_model::nexus::LaneConfig {
                 id: entry.lane_id,
                 shard_id: (entry.shard_id != entry.lane_id.as_u32())
-                    .then_some(iroha_data_model::nexus::ShardId::new(entry.shard_id)),
+                    .then_some(iroha_model_base::topology::ShardId::new(entry.shard_id)),
                 dataspace_id: entry.dataspace_id,
                 alias: entry.alias.clone(),
                 description: None,
@@ -3137,7 +3140,31 @@ impl Kura {
             }
         }
         let startup_lane_storage_entries = if defer_lane_provisioning {
-            BTreeMap::from([(primary_lane.lane_id, primary_lane.clone())])
+            // Pending primary relabels have already resolved and authenticated
+            // their physical pair. Startup sidecar readers must use that same
+            // pair until State publishes its authoritative geometry.
+            let mut resolved_primary = primary_lane.clone();
+            resolved_primary.kura_segment = blocks_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            resolved_primary.merge_segment = merge_log_path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            if resolved_primary.kura_segment.is_empty()
+                || resolved_primary.merge_segment.is_empty()
+                || resolved_primary.blocks_dir(&store_dir) != blocks_root
+                || resolved_primary.merge_log_path(&store_dir) != merge_log_path
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    store_dir.clone(),
+                    "resolved primary storage pair is outside its canonical lane namespace",
+                ));
+            }
+            BTreeMap::from([(primary_lane.lane_id, resolved_primary)])
         } else {
             Self::lane_storage_entries_from_config(lane_config)
         };
@@ -3393,6 +3420,7 @@ impl Kura {
         }
         if !provisional_open {
             if config.init_mode == InitMode::Strict {
+                kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
                 kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
                 kura.recover_lane_consensus_sidecar_pairs_on_startup()?;
@@ -3414,11 +3442,7 @@ impl Kura {
                 if let Some(intent) = prune_intent.as_ref() {
                     kura.complete_recovered_prune_intent(intent)?;
                 }
-                kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
-                kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;
-                kura.repair_lane_merge_application_frontiers_on_startup()?;
-                kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
-                kura.repair_autonomous_lane_merge_bundles_on_startup()?;
+                kura.recover_lane_histories_on_startup()?;
                 kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
                 kura.refresh_v2_startup_replay_auxiliary_binding()?;
             } else {
@@ -5859,15 +5883,12 @@ impl Kura {
             );
             return Ok(());
         }
+        self.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
-        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
-        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
-        self.repair_lane_merge_application_frontiers_on_startup()?;
-        self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
-        self.repair_autonomous_lane_merge_bundles_on_startup()?;
+        self.recover_lane_histories_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;
         Ok(())
@@ -5943,15 +5964,12 @@ impl Kura {
             );
             return Ok(());
         }
+        self.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
-        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
-        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
-        self.repair_lane_merge_application_frontiers_on_startup()?;
-        self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
-        self.repair_autonomous_lane_merge_bundles_on_startup()?;
+        self.recover_lane_histories_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;
         Ok(())
@@ -6690,6 +6708,12 @@ impl Kura {
         store_root: &Path,
         expected_directory: &Path,
     ) -> Result<Option<(PathBuf, SecureMetadata)>> {
+        #[cfg(test)]
+        SIDECAR_DIRECTORY_CANONICALIZATIONS.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
         let before = match secure_file_metadata::from_path(expected_directory) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -8096,6 +8120,23 @@ impl Kura {
         index_path: &Path,
     ) -> Result<BoundProgressPair> {
         let namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+        self.open_bound_progress_pair_in_namespace(namespace)
+    }
+    /// Bind an exact pair without reopening its already held directory chain.
+    fn open_bound_progress_pair_in_namespace(
+        &self,
+        namespace: BoundProgressNamespace,
+    ) -> Result<BoundProgressPair> {
+        let data_path_owned = namespace.data_path.clone();
+        let index_path_owned = namespace.index_path.clone();
+        let data_path = data_path_owned.as_path();
+        let index_path = index_path_owned.as_path();
+        if !self.bound_progress_namespace_unchanged(&namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path.to_path_buf(),
+                "progress namespace changed before opening its exact pair",
+            ));
+        }
         let sidecar_dir = namespace
             .data_path
             .parent()
@@ -8148,6 +8189,12 @@ impl Kura {
         }
         Ok(BoundProgressPair::Present(bound))
     }
+    fn bound_progress_pair_namespace(pair: &BoundProgressPair) -> &BoundProgressNamespace {
+        match pair {
+            BoundProgressPair::Absent(namespace) => namespace,
+            BoundProgressPair::Present(bound) => &bound.namespace,
+        }
+    }
     #[expect(
         dead_code,
         reason = "retained by the proof-ledger structural sidecar source contract"
@@ -8174,12 +8221,23 @@ impl Kura {
                 let Ok(opened) = secure_file_metadata::from_file(&directory.file) else {
                     return false;
                 };
+                if !opened.is_dir()
+                    || !Self::sidecar_directory_binding_unchanged(&directory.metadata, &opened)
+                {
+                    return false;
+                }
                 #[cfg(unix)]
                 if let Some(name) = directory.entry_name.as_deref() {
                     use std::os::unix::fs::MetadataExt as _;
                     let Some(parent) = namespace.directories.get(_index.saturating_add(1)) else {
                         return false;
                     };
+                    if directory.expected_path.parent() != Some(parent.expected_path.as_path())
+                        || directory.expected_path.file_name() != Some(name)
+                        || directory.canonical_path != parent.canonical_path.join(name)
+                    {
+                        return false;
+                    }
                     let Ok(entry) = rustix::fs::statat(
                         &parent.file,
                         name,
@@ -8187,18 +8245,15 @@ impl Kura {
                     ) else {
                         return false;
                     };
-                    if rustix::fs::FileType::from_raw_mode(entry.st_mode)
-                        != rustix::fs::FileType::Directory
-                        || entry.st_dev as u64 != opened.dev()
-                        || entry.st_ino as u64 != opened.ino()
-                    {
-                        return false;
-                    }
-                }
-                let opened_matches =
-                    Self::sidecar_directory_binding_unchanged(&directory.metadata, &opened);
-                if !opened.is_dir() || !opened_matches {
-                    return false;
+                    // Every ancestor is checked by this same traversal. The
+                    // terminal root (or standalone directory) below retains
+                    // its full canonical path binding. A fresh no-follow link
+                    // to that bound parent proves this child's path identity
+                    // without resolving the whole root-to-child path again.
+                    return rustix::fs::FileType::from_raw_mode(entry.st_mode)
+                        == rustix::fs::FileType::Directory
+                        && entry.st_dev as u64 == opened.dev()
+                        && entry.st_ino as u64 == opened.ino();
                 }
                 Self::canonical_sidecar_directory_for(&self.store_root, &directory.expected_path)
                     .ok()
@@ -8212,46 +8267,160 @@ impl Kura {
                     })
             })
     }
-    fn bound_progress_sidecar_unchanged(&self, bound: &BoundProgressSidecar) -> bool {
-        let Some(sidecar_dir) = bound.namespace.data_path.parent() else {
+    /// Revalidate one exact child through its already authenticated parent handle.
+    ///
+    /// The no-op production observer is a test seam after the no-follow lookup,
+    /// before fresh descriptor metadata detects concurrent file writes.
+    #[cfg(unix)]
+    fn bound_progress_file_unchanged<F>(
+        directory: &BoundProgressDirectory,
+        path: &Path,
+        expected: &StableSidecarMetadata,
+        file: &std::fs::File,
+        after_lookup: F,
+    ) -> bool
+    where
+        F: FnOnce(),
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let Some(name) = path.file_name() else {
             return false;
         };
-        if bound.namespace.index_path.parent() != Some(sidecar_dir) {
-            return false;
-        }
-        let Ok(data_opened) = secure_file_metadata::from_file(&bound.data) else {
-            return false;
-        };
-        let Ok(index_opened) = secure_file_metadata::from_file(&bound.index) else {
-            return false;
-        };
-        if !Self::sidecar_file_metadata_unchanged(&bound.data_metadata.file, &data_opened)
-            || !Self::sidecar_file_metadata_unchanged(&bound.index_metadata.file, &index_opened)
+        if path.parent() != Some(directory.expected_path.as_path())
+            || expected.canonical_path != directory.canonical_path.join(name)
         {
             return false;
         }
-        let Ok(data_after) = Self::regular_sidecar_metadata_for(
-            &self.store_root,
-            &bound.namespace.data_path,
-            sidecar_dir,
-        ) else {
+        let Ok(entry) =
+            rustix::fs::statat(&directory.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        else {
             return false;
         };
-        let Ok(index_after) = Self::regular_sidecar_metadata_for(
-            &self.store_root,
-            &bound.namespace.index_path,
-            sidecar_dir,
-        ) else {
-            return false;
-        };
-        if !data_after.as_ref().is_some_and(|after| {
-            Self::stable_sidecar_metadata_unchanged(&bound.data_metadata, after)
-        }) || !index_after.as_ref().is_some_and(|after| {
-            Self::stable_sidecar_metadata_unchanged(&bound.index_metadata, after)
-        }) {
+        if rustix::fs::FileType::from_raw_mode(entry.st_mode) != rustix::fs::FileType::RegularFile
+            || entry.st_nlink as u64 != 1
+        {
             return false;
         }
-        self.bound_progress_namespace_unchanged(&bound.namespace)
+        after_lookup();
+        let Ok(opened) = secure_file_metadata::from_file(file) else {
+            return false;
+        };
+        opened.is_file()
+            && Self::sidecar_file_metadata_unchanged(&expected.file, &opened)
+            && entry.st_dev as u64 == opened.dev()
+            && entry.st_ino as u64 == opened.ino()
+    }
+
+    /// Retain the strong present-pair snapshot checks without repeated full-path resolution.
+    #[cfg(unix)]
+    fn bound_progress_sidecar_unchanged_with_observer<F>(
+        &self,
+        bound: &BoundProgressSidecar,
+        mut after_lookup: F,
+    ) -> bool
+    where
+        F: FnMut(usize),
+    {
+        if !self.bound_progress_namespace_unchanged(&bound.namespace) {
+            return false;
+        }
+        let Some(directory) = bound.namespace.directories.first() else {
+            return false;
+        };
+        let Ok(before) = secure_file_metadata::from_file(&directory.file) else {
+            return false;
+        };
+        // Namespace binding permits sibling publications. This pair snapshot
+        // intentionally retains the stronger directory timestamp contract.
+        let directory_matches = |current: &SecureMetadata| {
+            current.is_dir()
+                && Self::sidecar_directory_metadata_unchanged(
+                    &bound.data_metadata.directory,
+                    current,
+                )
+                && Self::sidecar_directory_metadata_unchanged(
+                    &bound.index_metadata.directory,
+                    current,
+                )
+        };
+        if !directory_matches(&before) {
+            return false;
+        }
+        for (ordinal, (path, expected, file)) in [
+            (
+                &bound.namespace.data_path,
+                &bound.data_metadata,
+                &bound.data,
+            ),
+            (
+                &bound.namespace.index_path,
+                &bound.index_metadata,
+                &bound.index,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !Self::bound_progress_file_unchanged(directory, path, expected, file, || {
+                after_lookup(ordinal);
+            }) {
+                return false;
+            }
+        }
+        let Ok(after) = secure_file_metadata::from_file(&directory.file) else {
+            return false;
+        };
+        directory_matches(&after)
+            && Self::sidecar_directory_metadata_unchanged(&before, &after)
+            && self.bound_progress_namespace_unchanged(&bound.namespace)
+    }
+    fn bound_progress_sidecar_unchanged(&self, bound: &BoundProgressSidecar) -> bool {
+        #[cfg(unix)]
+        {
+            self.bound_progress_sidecar_unchanged_with_observer(bound, |_| {})
+        }
+        #[cfg(not(unix))]
+        {
+            let Some(sidecar_dir) = bound.namespace.data_path.parent() else {
+                return false;
+            };
+            if bound.namespace.index_path.parent() != Some(sidecar_dir) {
+                return false;
+            }
+            let Ok(data_opened) = secure_file_metadata::from_file(&bound.data) else {
+                return false;
+            };
+            let Ok(index_opened) = secure_file_metadata::from_file(&bound.index) else {
+                return false;
+            };
+            if !Self::sidecar_file_metadata_unchanged(&bound.data_metadata.file, &data_opened)
+                || !Self::sidecar_file_metadata_unchanged(&bound.index_metadata.file, &index_opened)
+            {
+                return false;
+            }
+            let Ok(data_after) = Self::regular_sidecar_metadata_for(
+                &self.store_root,
+                &bound.namespace.data_path,
+                sidecar_dir,
+            ) else {
+                return false;
+            };
+            let Ok(index_after) = Self::regular_sidecar_metadata_for(
+                &self.store_root,
+                &bound.namespace.index_path,
+                sidecar_dir,
+            ) else {
+                return false;
+            };
+            if !data_after.as_ref().is_some_and(|after| {
+                Self::stable_sidecar_metadata_unchanged(&bound.data_metadata, after)
+            }) || !index_after.as_ref().is_some_and(|after| {
+                Self::stable_sidecar_metadata_unchanged(&bound.index_metadata, after)
+            }) {
+                return false;
+            }
+            self.bound_progress_namespace_unchanged(&bound.namespace)
+        }
     }
     fn sync_bound_progress_namespace(
         &self,
@@ -26365,25 +26534,138 @@ impl Kura {
         index_path: &Path,
         kind: &str,
     ) -> Result<()> {
-        let paths = [
+        #[cfg(unix)]
+        {
+            self.ensure_bound_progress_recovery_absent_with_observer(
+                namespace,
+                data_path,
+                index_path,
+                kind,
+                |_| {},
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            let paths = [
+                data_path.with_extension("norito.tmp"),
+                index_path.with_extension("index.tmp"),
+                index_path.with_extension("index.prepend.tmp"),
+                Self::bound_progress_append_build_path(index_path),
+                Self::bound_progress_append_intent_path(index_path),
+            ];
+            for path in paths {
+                if self
+                    .open_optional_bound_progress_file(namespace, &path)?
+                    .is_some()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        format!(
+                            "{kind} has unresolved recovery state; read-only startup planning cannot mutate it"
+                        ),
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+    /// Prove absence of the fixed recovery inventory through held parent handles.
+    /// The observer is a no-op in production and injects filesystem races in tests.
+    #[cfg(unix)]
+    fn ensure_bound_progress_recovery_absent_with_observer<F>(
+        &self,
+        namespace: &BoundProgressNamespace,
+        data_path: &Path,
+        index_path: &Path,
+        kind: &str,
+        mut after_lookup: F,
+    ) -> Result<()>
+    where
+        F: FnMut(usize),
+    {
+        let invalid = |path: &Path, message: &str| {
+            Self::invalid_lane_artifact_error(path.to_path_buf(), message)
+        };
+        let immediate = namespace.directories.first().ok_or_else(|| {
+            invalid(
+                data_path,
+                "bound recovery namespace has no immediate directory",
+            )
+        })?;
+        if namespace.data_path != data_path
+            || namespace.index_path != index_path
+            || data_path.parent() != Some(immediate.expected_path.as_path())
+            || index_path.parent() != Some(immediate.expected_path.as_path())
+            || !self.bound_progress_namespace_unchanged(namespace)
+        {
+            return Err(invalid(
+                data_path,
+                "bound recovery namespace differs from the exact pair",
+            ));
+        }
+        let before = secure_file_metadata::from_file(&immediate.file)
+            .map_err(|error| Error::IO(error, immediate.expected_path.clone()))?;
+        if !before.is_dir()
+            || !Self::sidecar_directory_binding_unchanged(&immediate.metadata, &before)
+        {
+            return Err(invalid(
+                data_path,
+                "bound recovery directory changed before absence scan",
+            ));
+        }
+        for (ordinal, path) in [
             data_path.with_extension("norito.tmp"),
             index_path.with_extension("index.tmp"),
             index_path.with_extension("index.prepend.tmp"),
             Self::bound_progress_append_build_path(index_path),
             Self::bound_progress_append_intent_path(index_path),
-        ];
-        for path in paths {
-            if self
-                .open_optional_bound_progress_file(namespace, &path)?
-                .is_some()
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    format!(
-                        "{kind} has unresolved recovery state; read-only startup planning cannot mutate it"
-                    ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let name = path
+                .file_name()
+                .ok_or_else(|| invalid(&path, "bound recovery file has no immediate entry name"))?;
+            if path.parent() != Some(immediate.expected_path.as_path()) {
+                return Err(invalid(
+                    &path,
+                    "bound recovery file is outside its exact parent",
                 ));
             }
+            let observed =
+                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
+            after_lookup(ordinal);
+            match observed {
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => return Err(Error::IO(std::io::Error::from(error), path)),
+                Ok(metadata) => {
+                    if rustix::fs::FileType::from_raw_mode(metadata.st_mode)
+                        != rustix::fs::FileType::RegularFile
+                        || metadata.st_nlink != 1
+                    {
+                        return Err(invalid(
+                            &path,
+                            "recovery path is not a single-link regular file",
+                        ));
+                    }
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        format!(
+                            "{kind} has unresolved recovery state; read-only startup planning cannot mutate it"
+                        ),
+                    ));
+                }
+            }
+        }
+        let after = secure_file_metadata::from_file(&immediate.file)
+            .map_err(|error| Error::IO(error, immediate.expected_path.clone()))?;
+        if !Self::sidecar_directory_metadata_unchanged(&before, &after)
+            || !self.bound_progress_namespace_unchanged(namespace)
+        {
+            return Err(invalid(
+                data_path,
+                "bound recovery namespace changed during absence scan",
+            ));
         }
         Ok(())
     }
@@ -26393,6 +26675,8 @@ impl Kura {
     /// The boolean reports whether the ordinary indexed slot is absent or is
     /// an authority-permitted stale value that must be repaired from the
     /// frontier after every startup item has passed read-only preflight.
+    /// A singleton below the authenticated terminal retention window remains
+    /// the live monotonic anchor but is not repair work, so it returns `None`.
     pub(crate) fn preflight_latest_certified_lane_block_frontier_with_authority(
         &self,
         lane_id: LaneId,
@@ -26409,8 +26693,20 @@ impl Kura {
                 "latest certified lane block frontier storage is ambiguous until restart",
             ));
         }
+        let expected_entry = {
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            self.lane_storage_entry(lane_id)?
+        };
+        let retention =
+            self.authenticated_lane_history_retention_under_prune_guard(&expected_entry)?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
+        if entry != expected_entry {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "lane geometry changed during certified frontier repair preflight",
+            ));
+        }
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
@@ -26516,6 +26812,12 @@ impl Kura {
             &entry,
             &frontier_read.snapshot,
         )?;
+        if retention
+            .as_ref()
+            .is_some_and(|proof| proof.permits_discard(&artifact.proposal.descriptor))
+        {
+            return Ok(None);
+        }
         Ok(Some((artifact.clone(), pair_repair_required)))
     }
     /// Read one exact active certified lane slot without writer recovery or
@@ -26730,7 +27032,7 @@ impl Kura {
             "certified lane frontier",
         )?;
         let frontier = self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
-        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let mut pair = self.open_bound_progress_pair_in_namespace(namespace)?;
         let Some(frontier) = frontier else {
             if let BoundProgressPair::Present(bound) = &pair
                 && (bound
@@ -26764,7 +27066,7 @@ impl Kura {
                 }
             };
             self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
-                &namespace,
+                Self::bound_progress_pair_namespace(&pair),
                 &data_path,
                 &index_path,
                 "certified lane frontier",
@@ -26875,7 +27177,7 @@ impl Kura {
             ));
         }
         self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
-            &namespace,
+            Self::bound_progress_pair_namespace(&pair),
             &data_path,
             &index_path,
             "certified lane frontier",
@@ -31961,15 +32263,15 @@ impl Kura {
         }
         Ok(())
     }
-    /// Check one exact indexed lane-height slot without invoking sidecar
-    /// recovery. This is used only to resolve a claim temp after a crash; a
-    /// malformed or in-progress index is conservatively treated as occupied.
-    fn autonomous_lane_claim_target_may_be_durable_locked(
+    /// Check one exact indexed lane-height slot without invoking sidecar recovery.
+    /// `None` preserves a staged claim until its lane geometry and payload can be
+    /// resolved; uncertainty never grants a durable owner or proves absence.
+    fn autonomous_lane_claim_target_is_durable_locked(
         &self,
         claim: &AutonomousLaneEntrypointClaimV1,
-    ) -> bool {
+    ) -> Option<bool> {
         if !matches!(claim.state, AutonomousLaneEntrypointClaimStateV1::Active) {
-            return false;
+            return Some(false);
         }
         let Some(entry) = self
             .lane_storage_entries
@@ -31977,19 +32279,18 @@ impl Kura {
             .get(&claim.lane_id)
             .cloned()
         else {
-            // A retired lane may no longer have a readable active segment. Do
-            // not discard its crash-recovered replay claim.
-            return true;
+            // State has not restored secondary geometry yet, or this lane was
+            // retired. Keep the exact crash boundary until authority is known.
+            return None;
         };
         if self
             .require_active_lane_incarnation(&entry, claim.lane_incarnation, claim.proposal_height)
             .is_err()
         {
-            return false;
+            return None;
         }
-        // The exact current attempt is pointer-resolved. Any malformed or
-        // in-progress durable state remains conservatively occupied; only a
-        // proven absence lets a staged claim be discarded.
+        // Only an exact resolved attempt can promote a staged claim, and only
+        // proven absence allows its removal.
         match self.read_autonomous_lane_block_record_locked(
             &entry,
             claim.lane_id,
@@ -31998,9 +32299,9 @@ impl Kura {
             claim.epoch,
             None,
         ) {
-            Ok(Some(record)) => claim.active_for_payload(&record.artifact.executable_payload),
-            Ok(None) => false,
-            Err(_) => true,
+            Ok(Some(record)) => Some(claim.active_for_payload(&record.artifact.executable_payload)),
+            Ok(None) => Some(false),
+            Err(_) => None,
         }
     }
     fn reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked(&self) -> Result<()> {
@@ -32147,8 +32448,12 @@ impl Kura {
                     resource_child.finish();
                     continue;
                 }
-                let target_is_durable =
-                    self.autonomous_lane_claim_target_may_be_durable_locked(&pending);
+                let Some(target_is_durable) =
+                    self.autonomous_lane_claim_target_is_durable_locked(&pending)
+                else {
+                    resource_child.finish();
+                    continue;
+                };
                 if target_is_durable {
                     if let Some(claim) = existing.as_ref()
                         && !self.autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(
@@ -32296,7 +32601,15 @@ impl Kura {
                         "autonomous entrypoint temp claim has a mismatched or released identity",
                     ));
                 }
-                if self.autonomous_lane_claim_target_may_be_durable_locked(&pending) {
+                let target_is_durable = self
+                    .autonomous_lane_claim_target_is_durable_locked(&pending)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            temp_path.clone(),
+                            "autonomous entrypoint temp claim awaits exact lane payload recovery",
+                        )
+                    })?;
+                if target_is_durable {
                     let replaced_bytes = if existing.is_some() {
                         Self::file_len_or_zero(&path)?
                     } else {
@@ -34893,19 +35206,16 @@ impl Kura {
         let origin = artifact.executable_payload.origin_proposal.clone();
         Some((artifact.executable_payload, origin))
     }
-    /// Explicitly reconstruct the bounded route/incarnation latest pointers.
+    /// Discard bounded, unpublished atomic sidecars before startup repairs need capacity.
     ///
-    /// This is the only autonomous path that scans the versioned attempt
-    /// namespace. It runs during startup or restored-geometry activation before
-    /// consensus can hydrate work. Runtime hydration subsequently performs one
-    /// exact pointer lookup per configured route.
-    fn rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup(&self) -> Result<()> {
+    /// Only the authenticated active geometry is scanned. Named protocol publication
+    /// temporaries keep their dedicated recovery paths; generic atomic-writer residue
+    /// is never decoded or promoted into durable authority.
+    fn cleanup_autonomous_atomic_sidecar_temps_on_startup(&self) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let pending_canonical_bytes =
-            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -35018,6 +35328,83 @@ impl Kura {
                     directory,
                     "autonomous startup inventory directory changed during bounded preflight",
                 ));
+            }
+            if !temporary_paths.is_empty() {
+                if !Self::progress_mutation_namespace_unchanged(&namespace) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup inventory directory changed before temporary cleanup",
+                    ));
+                }
+                let mut accounting_mutation = self
+                    .begin_total_disk_usage_mutation()
+                    .with_resource_children(temporary_paths.len());
+                let mut removed_bytes = 0_u64;
+                for (path, expected_metadata) in &temporary_paths {
+                    let resource_child = accounting_mutation.resource_child(vec![path.clone()]);
+                    let current = secure_file_metadata::from_path(path)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    if !Self::sidecar_file_metadata_unchanged(expected_metadata, &current) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous startup temporary changed after bounded preflight",
+                        ));
+                    }
+                    removed_bytes = removed_bytes.checked_add(current.len()).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            directory.clone(),
+                            "autonomous startup temporary byte count overflows",
+                        )
+                    })?;
+                    Self::remove_bound_progress_temp_if_present(&namespace, path)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    resource_child.finish();
+                }
+                if !Self::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "autonomous startup temporary cleanup",
+                ) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup temporary cleanup lost its bound directory",
+                    ));
+                }
+                self.sub_disk_usage_bytes(removed_bytes);
+                accounting_mutation.finish();
+            }
+        }
+        Ok(())
+    }
+    /// Explicitly reconstruct the bounded route/incarnation latest pointers.
+    ///
+    /// After bounded temporary cleanup, this path validates the versioned attempt
+    /// namespace during startup or restored-geometry activation before
+    /// consensus can hydrate work. Runtime hydration subsequently performs one
+    /// exact pointer lookup per configured route.
+    fn rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup(&self) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
+        let _sidecar_guard = self.sidecar_lock.lock();
+        for entry in entries {
+            let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+            match std::fs::symlink_metadata(&directory) {
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
             }
             let directory_entries = std::fs::read_dir(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
@@ -35582,49 +35969,6 @@ impl Kura {
                         ));
                     }
                 }
-            }
-            if !temporary_paths.is_empty() {
-                if !Self::progress_mutation_namespace_unchanged(&namespace) {
-                    return Err(Self::invalid_lane_artifact_error(
-                        directory,
-                        "autonomous startup inventory directory changed before temporary cleanup",
-                    ));
-                }
-                let mut accounting_mutation = self
-                    .begin_total_disk_usage_mutation()
-                    .with_resource_children(temporary_paths.len());
-                let mut removed_bytes = 0_u64;
-                for (path, expected_metadata) in &temporary_paths {
-                    let resource_child = accounting_mutation.resource_child(vec![path.clone()]);
-                    let current = secure_file_metadata::from_path(path)
-                        .map_err(|error| Error::IO(error, path.clone()))?;
-                    if !Self::sidecar_file_metadata_unchanged(expected_metadata, &current) {
-                        return Err(Self::invalid_lane_artifact_error(
-                            path.clone(),
-                            "autonomous startup temporary changed after bounded preflight",
-                        ));
-                    }
-                    removed_bytes = removed_bytes.checked_add(current.len()).ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            directory.clone(),
-                            "autonomous startup temporary byte count overflows",
-                        )
-                    })?;
-                    Self::remove_bound_progress_temp_if_present(&namespace, path)
-                        .map_err(|error| Error::IO(error, path.clone()))?;
-                    resource_child.finish();
-                }
-                if !Self::sync_bound_progress_mutation_directories(
-                    &namespace,
-                    "autonomous startup temporary cleanup",
-                ) {
-                    return Err(Self::invalid_lane_artifact_error(
-                        directory,
-                        "autonomous startup temporary cleanup lost its bound directory",
-                    ));
-                }
-                self.sub_disk_usage_bytes(removed_bytes);
-                accounting_mutation.finish();
             }
             for directory_entry in std::fs::read_dir(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?
@@ -41033,20 +41377,45 @@ impl Kura {
         if entry.epoch_id != frontier.merge_epoch_id {
             return None;
         }
-        let carrier = self
-            .merge_carrier_for_entry_under_prune_and_canonical_guards(frontier.merge_entry_hash)
-            .ok()
-            .flatten()?;
-        if carrier
-            != (MergeLedgerCarrierRecord {
-                version: 1,
-                entry_hash: frontier.merge_entry_hash,
-                epoch_id: frontier.merge_epoch_id,
-                block_height: frontier.application_block_height,
-                block_hash: frontier.application_block_hash,
-            })
+        // The cursor already names the exact canonical carrier. Authenticate
+        // that identity from finality and the full entry, so startup can plan
+        // reconstruction of a missing reverse index before publishing it.
+        // Any retained index record must agree with the same authority.
+        let carrier = MergeLedgerCarrierRecord {
+            version: 1,
+            entry_hash: frontier.merge_entry_hash,
+            epoch_id: frontier.merge_epoch_id,
+            block_height: frontier.application_block_height,
+            block_hash: frontier.application_block_hash,
+        };
+        let height = NonZeroUsize::new(usize::try_from(carrier.block_height).ok()?)?;
+        // Read before finality authentication: an invalid inline body poisons
+        // canonical storage and must not be mistaken for a remote-only body.
+        let block = self.get_block_without_merge_sidecar(height);
+        let (header, finality, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                carrier.block_height,
+            )
+            .ok()??;
+        Self::validate_merge_carrier_finality_projection(carrier, &entry, &header, &finality)
+            .ok()?;
+        if let Some(block) = block
+            && (block.header() != header
+                || !Self::block_merge_reference(&block)
+                    .is_some_and(|reference| reference.matches_entry(&entry)))
         {
             return None;
+        }
+        {
+            let _carrier_guard = self.merge_carrier_lock.lock();
+            self.preflight_merge_carrier_record_unlocked(carrier).ok()?;
+            if self
+                .read_merge_carrier_path(&self.merge_carrier_path(carrier.block_height))
+                .ok()?
+                .is_some_and(|persisted| persisted != carrier)
+            {
+                return None;
+            }
         }
         let batch = entry.execution_batch.as_ref()?;
         let execution = batch.lanes.iter().find(|execution| {
@@ -46510,7 +46879,7 @@ pub(crate) mod tests {
 
     fn kaigi_signal_test_call(name: &str) -> iroha_data_model::kaigi::KaigiId {
         iroha_data_model::kaigi::KaigiId::new(
-            iroha_data_model::DomainId::try_new("kaigi", "universal").expect("test domain"),
+            iroha_model_base::domain::DomainId::try_new("kaigi", "universal").expect("test domain"),
             name.parse().expect("test call name"),
         )
     }

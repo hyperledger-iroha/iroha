@@ -40,9 +40,11 @@ pub mod isi {
             SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
             error::MintabilityError,
         },
-        nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
+        nexus::{CapabilityRequest, DataSpaceCatalog, ManifestVerdict},
         privacy::PrivacyStatementDigestV1,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
         json::Json,
@@ -3291,7 +3293,7 @@ pub mod isi {
     pub(crate) fn execute_staking_bond_transfer(
         state_transaction: &mut StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         validator: &AccountId,
         staker: &AccountId,
         genesis: bool,
@@ -3332,7 +3334,7 @@ pub mod isi {
     pub(crate) fn execute_staking_unbond_transfer(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         validator: &AccountId,
         staker: &AccountId,
         request_id: iroha_crypto::Hash,
@@ -7082,6 +7084,7 @@ pub mod isi {
     #[cfg(test)]
     mod prepared_source_additional_owner_tests {
         use super::*;
+        use iroha_model_base::domain::DomainId;
         include!("asset/prepared_source_additional_owner_tests.rs");
         #[test]
         fn oracle_movement_frames_bind_owner_and_replay_context() {
@@ -7241,6 +7244,7 @@ pub mod query {
             json::PredicateJson,
         },
     };
+    use iroha_model_base::domain::DomainId;
     use norito::json::Value;
     use std::{collections::BTreeSet, sync::Arc};
     #[derive(Debug, Default, Clone)]
@@ -8219,10 +8223,12 @@ pub mod query {
             transfer::{TransferAssetBatch, TransferAssetBatchEntry},
         };
         use iroha_data_model::nexus::{
-            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
-            ManifestEffect, ManifestEntry,
+            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, ManifestEffect,
+            ManifestEntry,
         };
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
+        use iroha_model_base::metadata::Metadata;
+        use iroha_model_base::topology::DataSpaceId;
         use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         use nonzero_ext::nonzero;
@@ -9000,7 +9006,7 @@ pub mod query {
         #[test]
         fn transfer_restricted_asset_uses_definition_home_dataspace_from_universal_route() {
             let home_dataspace = DataSpaceId::new(7);
-            let domain_id = wonderland_domain_id();
+            let domain_id = DomainId::try_new("wonderland", "paynet").expect("home domain");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);

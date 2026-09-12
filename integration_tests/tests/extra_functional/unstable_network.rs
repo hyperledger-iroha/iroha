@@ -8,10 +8,14 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId, Level, asset::AssetDefinition, block::consensus_v2::is_valid_committee_size,
-    isi::Register, parameter::BlockParameter, prelude::*,
+    Level, asset::AssetDefinition, block::consensus_v2::is_valid_committee_size, isi::Register,
+    parameter::BlockParameter, prelude::*,
 };
 use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::socket_addr;
 use iroha_test_network::{BlockHeight, Network, NetworkBuilder, NetworkPeer, once_blocks_sync};
 use iroha_test_samples::ALICE_ID;
@@ -51,7 +55,8 @@ mod relay {
     //! Relay provides [`P2pRelay::suspend`] to acquire a [`Suspend`] control (per-peer), which provides
     //! [`Suspend::activate`] and [`Suspend::deactivate`] in turn.
     use futures_util::{StreamExt, stream::FuturesUnordered};
-    use iroha_data_model::{peer::PeerId, prelude::Peer};
+    use iroha_data_model::prelude::Peer;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::{
         addr::{SocketAddr, socket_addr},
         unique_vec::UniqueVec,

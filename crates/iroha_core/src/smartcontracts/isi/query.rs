@@ -49,7 +49,9 @@ use iroha_data_model::{
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use norito::core::{Header, NoritoSerialize, SerializePayload};
 pub(crate) use ordinary_iterable::predicate_json_value_for_execution as ordinary_predicate_json_value;
 pub use ordinary_memory::{
@@ -2774,6 +2776,7 @@ where
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
+    let initial_processed_items = stats.processed_items();
     let batch_size = params
         .fetch_size
         .fetch_size
@@ -2865,7 +2868,12 @@ where
         let mut batch_iter =
             ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
         let (batch, _next) = batch_iter.next_batch(0)?;
-        debug_assert_eq!(stats.processed_items(), skipped.saturating_add(processed));
+        debug_assert_eq!(
+            stats.processed_items(),
+            initial_processed_items
+                .saturating_add(skipped)
+                .saturating_add(processed)
+        );
         return Ok((QueryOutput::new_bounded(batch, has_more, None), stats));
     }
     if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
@@ -2890,7 +2898,10 @@ where
             let (batch, _next) = batch_iter.next_batch(0)?;
             let remaining_items =
                 u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
-            debug_assert_eq!(stats.processed_items(), count);
+            debug_assert_eq!(
+                stats.processed_items(),
+                initial_processed_items.saturating_add(count)
+            );
             return Ok((QueryOutput::new(batch, remaining_items, None), stats));
         }
         let mut count = 0_u64;
@@ -2951,7 +2962,10 @@ where
         let (batch, _next) = batch_iter.next_batch(0)?;
         let remaining_items =
             u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
-        debug_assert_eq!(stats.processed_items(), count);
+        debug_assert_eq!(
+            stats.processed_items(),
+            initial_processed_items.saturating_add(count)
+        );
         return Ok((QueryOutput::new(batch, remaining_items, None), stats));
     }
     let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);
@@ -3381,11 +3395,14 @@ mod tests {
     use core::time::Duration;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        AccountId, ChainId, DomainId, Level, NetworkId,
+        AccountId, Level, NetworkId,
         isi::Log,
         query::{QueryRequest, SingularQueryBox, dsl::CompoundPredicate, prelude::FindParameters},
         transaction::TransactionBuilder,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use mv::storage::StorageReadOnly as _;
     use nonzero_ext::nonzero;
@@ -4137,7 +4154,7 @@ mod tests {
         );
         let alias = iroha_data_model::account::AccountAlias::domainless(
             "server-alias".parse().expect("alias label"),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         );
         let request = ValidQueryRequest {
             request: QueryRequest::Singular(

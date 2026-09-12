@@ -56,10 +56,8 @@ use super::{
 };
 use iroha_config::parameters::actual::SumeragiV2Config;
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
-    peer::PeerId,
-};
+use iroha_data_model::block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 use norito::codec::Encode;
 use std::{collections::BTreeMap, fmt, path::Path, sync::Arc};
 use thiserror::Error;
@@ -1438,7 +1436,7 @@ impl RecoveredDecisionFetchDispatchIdentityV1 {
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
-        sources: &[iroha_data_model::peer::PeerId],
+        sources: &[iroha_model_base::peer::PeerId],
         certificate: &wire::QuorumCertificate,
     ) -> bool {
         if self.key.height != tag.height()
@@ -2956,7 +2954,7 @@ impl ReadyRecoveredDecisionFetchAttestationV1 {
     pub(super) fn matches_ready_record(&self, record: &super::LifecycleRecord) -> bool {
         record.state == super::LifecycleState::Ready
             && record.work_class == LifecycleWorkClass::Fetch
-            && record.key.phase() == LifecyclePhase::Fetch
+            && record.key.phase() == LifecyclePhase::FetchDecision
             && record.stage.kind() == LifecycleStageKind::FetchBody
             && record.stage.predecessor_scope() == PredecessorScope::Independent
             && record.physical_slots.len() == 1

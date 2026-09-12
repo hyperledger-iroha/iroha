@@ -1,9 +1,7 @@
 //! Offline developer CLI helpers for inspecting the SoraFS storage backend.
 use iroha_config::base::util::Bytes;
-use iroha_data_model::{
-    account::{AccountId, address::AccountAddress},
-    peer::PeerId,
-};
+use iroha_data_model::account::{AccountId, address::AccountAddress};
+use iroha_model_base::peer::PeerId;
 use norito::json::{self, Map, Value};
 use sorafs_car::{
     CAR_PLAN_MAX_CHUNKS, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload,

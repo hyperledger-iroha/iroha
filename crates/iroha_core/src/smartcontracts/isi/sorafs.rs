@@ -15,7 +15,6 @@ use iroha_data_model::{
         SorafsRepairLedgerEventKind,
     },
     isi::error::{InstructionExecutionError, InvalidParameterError},
-    metadata::Metadata,
     musubi::{
         MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1,
         MusubiReplicationOrderArchiveBindingV1, MusubiReplicationOrderLocationReferenceV1,
@@ -68,6 +67,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,
@@ -1664,16 +1664,22 @@ fn has_permission(
     authority: &AccountId,
     permission: &str,
 ) -> bool {
-    state_transaction
+    let matches = |grant: &Permission| {
+        // Borrow canonical JSON so null remains distinct from "null", including
+        // when the enclosing instruction has exhausted its decode allocation budget.
+        grant.name() == permission && grant.payload().get().as_str() == "null"
+    };
+    let direct = state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|perms| {
-            perms.iter().any(|grant| {
-                // Raw canonical JSON preserves the distinction between null and "null".
-                grant.name() == permission && grant.payload().get().as_str() == "null"
-            })
-        })
+        .is_some_and(|perms| perms.iter().any(matches));
+    direct
+        || state_transaction
+            .world
+            .account_roles_iter(authority)
+            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+            .any(|role| role.permissions().any(matches))
 }
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -7824,6 +7830,7 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
 #[cfg(test)]
 mod sorafs_tests {
     include!("sorafs_fixture_and_admission_tests.rs");
+    include!("sorafs/initial_executor_tests.rs");
     include!("sorafs/pin_lifecycle_fixture.rs");
     fn insert_pin_record_with_accounting(
         stx: &mut crate::state::StateTransaction<'_, '_>,
@@ -11836,7 +11843,7 @@ mod sorafs_tests {
     #[test]
     fn bind_manifest_alias_registers_record() {
         let state = make_state();
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
@@ -11847,7 +11854,8 @@ mod sorafs_tests {
             bound_epoch: 8,
             expiry_epoch: 16,
         };
-        bind.execute(&alice(), &mut stx).expect("bind alias");
+        bind.execute_initial(&alice(), &mut stx)
+            .expect("bind alias");
         let stored = stx
             .world
             .pin_manifests

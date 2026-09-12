@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Domain, DomainId, Level,
+    Domain, Level,
     account::{MultisigMember, MultisigPolicy},
     prelude::{Log, Register, TriggerId},
     privacy::{
@@ -27,6 +27,8 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_version::{
     DecodeAll,
     codec::{DecodeVersioned, EncodeVersioned},
@@ -623,8 +625,8 @@ fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
         },
     );
     SubmitPrivacyProofV1::new(PrivacyProofEnvelopeV1 {
-        wire_magic: Default::default(),
-        catalog_commitment: Default::default(),
+        wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
+        catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
         protocol_id,
         proof_system_id: PrivacyProofSystemIdV1::JindoPolynomialCommitment,
         engine_id: protocol_id.expected_engine(),
@@ -860,7 +862,7 @@ fn privacy_test_contract_call() -> ContractInvocation {
             &test_network_id(0x30),
             &privacy_test_authority(),
             0,
-            crate::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("test contract address"),
         expected_code_hash: Hash::new(b"privacy intent test contract"),
@@ -1328,8 +1330,9 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
         else {
             panic!("ZK-ACE fixture statement");
         };
-        statement.public_balance_scope =
-            crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
+        statement.public_balance_scope = crate::asset::AssetBalanceScope::Dataspace(
+            iroha_model_base::topology::DataSpaceId::new(7),
+        );
     });
     assert_ne!(
         changed_scope
@@ -1467,8 +1470,9 @@ fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
             statement.output_commitments[0].0[0] ^= 1;
         },
         |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
-            statement.public_balance_scope =
-                crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
+            statement.public_balance_scope = crate::asset::AssetBalanceScope::Dataspace(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            );
         },
     ];
     for mutate in independent_mutations {
@@ -1952,7 +1956,7 @@ fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
         &network_id,
         &authority,
         0,
-        crate::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("contract address");
     let arguments = crate::transaction::executable::ContractArgumentRecord::try_new(vec![

@@ -92,11 +92,11 @@ pub mod trigger_completed;
 mod tests {
     use super::*;
     use crate::{
-        domain::DomainId,
         events::data::prelude::{DataEvent, DomainEvent, MetadataChanged},
         events::execute_trigger::ExecuteTriggerEventFilter,
     };
     use iroha_crypto::Hash;
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use std::{str::FromStr, sync::Arc};
@@ -165,8 +165,8 @@ mod tests {
         use crate::events::pipeline::{
             PipelineEventBox, TransactionEvent, TransactionEventFilter, TransactionStatus,
         };
-        use crate::nexus::{DataSpaceId, LaneId};
         use iroha_crypto::HashOf;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         let hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
         let hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH]));
         let ev_a: PipelineEventBox = TransactionEvent {

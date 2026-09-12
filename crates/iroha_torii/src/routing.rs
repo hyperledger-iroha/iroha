@@ -127,12 +127,11 @@ use iroha_data_model::{
     consensus::ConsensusKeyRecord,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
-        DataSpaceId, LaneConfig, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope, ManifestEffect,
-        ManifestEntry, ManifestVersion, PublicLaneRewardRecord, PublicLaneRewardRole,
-        PublicLaneRewardShare, PublicLaneStakeShare, PublicLaneUnbonding,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        LaneConfig, LaneLifecycleStatusV1, LaneRelayEnvelope, ManifestEffect, ManifestEntry,
+        ManifestVersion, PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare,
+        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId,
     },
-    peer::PeerId,
     prelude::*,
     proof::VerifyingKeyId,
     query::{QueryRequestWithAuthority, QueryResponse, SignedQuery, SignedQueryValidationError},
@@ -143,6 +142,8 @@ use iroha_data_model::{
         signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     },
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{Numeric, NumericSpec, Quantity},
@@ -478,15 +479,15 @@ use iroha_data_model::{
         },
         consensus_v2::SumeragiV2QcResponse,
     },
-    domain::DomainId,
     events::{
         EventBox, SharedDataEvent,
         pipeline::{BlockStatus, PipelineEventBox},
     },
-    metadata::Metadata,
     query::error::QueryExecutionFail,
     soradns::{DirectoryRotationPolicyV1, RadRevokeReason},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use sorafs_manifest::{
     ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
@@ -8971,8 +8972,9 @@ pub async fn handle_v1_sumeragi_bls_keys(
 }
 #[cfg(test)]
 mod bls_key_response_bounds_tests {
-    use super::{BLS_KEY_RESPONSE_CAP, PeerId, bounded_bls_key_map};
+    use super::{BLS_KEY_RESPONSE_CAP, bounded_bls_key_map};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::peer::PeerId;
     routing_test! { sync bls_key_snapshot_is_capped_at_the_voting_roster_protocol_bound
         let peers: Vec<_> = (1..=BLS_KEY_RESPONSE_CAP + 2)
             .map(|seed| {
@@ -10404,7 +10406,7 @@ fn insert_account_alias_binding_for_test(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     world.smart_contract_state_mut_for_testing().insert(
         iroha_core::sns::record_storage_key(&selector),
@@ -10450,7 +10452,7 @@ fn bind_account_alias_for_test(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     let header = iroha_data_model::block::BlockHeader::new(
         nonzero_ext::nonzero!(1_u64),
@@ -10487,7 +10489,7 @@ fn bind_account_alias_for_test(
             expected_policy_version: 0,
             expected_payment_asset:
                 iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    iroha_data_model::domain::DomainId::try_new("assets", "universal")
+                    iroha_model_base::domain::DomainId::try_new("assets", "universal")
                         .expect("fixture asset domain"),
                     "xor".parse().expect("fixture asset name"),
                 ),
@@ -12498,7 +12500,7 @@ pub async fn handle_transaction(
 fn observe_lane_admission_latency(
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
-    lane_id: iroha_data_model::nexus::LaneId,
+    lane_id: iroha_model_base::topology::LaneId,
     elapsed_seconds: f64,
 ) {
     let _ = telemetry.with_metrics(|telemetry| {
@@ -12597,7 +12599,7 @@ mod lane_admission_latency_tests {
     use super::*;
     use iroha_config::parameters::actual::TelemetryProfile;
     use iroha_core::telemetry::{StateTelemetry, Telemetry};
-    use iroha_data_model::nexus::LaneId;
+    use iroha_model_base::topology::LaneId;
     use iroha_telemetry::metrics::global_or_default;
     routing_test! { sync telemetry_observation_records_without_actor_sync
         let metrics = global_or_default();
@@ -13401,7 +13403,7 @@ fn encode_contract_state_pointer_tlv_bytes(
             (PointerType::NftId, to_bytes(&value).ok()?)
         }
         ivm::EmbeddedStateType::DomainId => {
-            let value = iroha_data_model::domain::DomainId::parse_fully_qualified(raw).ok()?;
+            let value = iroha_model_base::domain::DomainId::parse_fully_qualified(raw).ok()?;
             (PointerType::DomainId, to_bytes(&value).ok()?)
         }
         ivm::EmbeddedStateType::DataSpaceId => {
@@ -13410,7 +13412,7 @@ fn encode_contract_state_pointer_tlv_bytes(
             } else {
                 raw.parse::<u64>().ok()?
             };
-            let value = iroha_data_model::nexus::DataSpaceId::new(raw_id);
+            let value = iroha_model_base::topology::DataSpaceId::new(raw_id);
             (PointerType::DataSpaceId, to_bytes(&value).ok()?)
         }
         _ => return None,
@@ -13685,7 +13687,7 @@ fn decode_contract_state_pointer_json_fragment(
         Type::DomainId => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::DomainId, "DomainId")?;
-            let value: iroha_data_model::domain::DomainId =
+            let value: iroha_model_base::domain::DomainId =
                 decode_canonical_contract_state_norito(payload, "domain id")?;
             value.to_string()
         }
@@ -13695,7 +13697,7 @@ fn decode_contract_state_pointer_json_fragment(
                 PointerType::DataSpaceId,
                 "DataSpaceId",
             )?;
-            let value: iroha_data_model::nexus::DataSpaceId =
+            let value: iroha_model_base::topology::DataSpaceId =
                 decode_canonical_contract_state_norito(payload, "dataspace id")?;
             value.to_string()
         }
@@ -22538,7 +22540,7 @@ mod multisig_contract_call_tests {
                 .expect("canonical test network id"),
             &authority,
             1,
-            iroha_data_model::nexus::DataSpaceId::new(10),
+            iroha_model_base::topology::DataSpaceId::new(10),
         )
         .expect("first contract address");
         let second = iroha_data_model::smart_contract::ContractAddress::derive(
@@ -22547,7 +22549,7 @@ mod multisig_contract_call_tests {
                 .expect("canonical test network id"),
             &authority,
             2,
-            iroha_data_model::nexus::DataSpaceId::new(10),
+            iroha_model_base::topology::DataSpaceId::new(10),
         )
         .expect("second contract address");
         let expected =
@@ -22585,7 +22587,7 @@ mod multisig_contract_call_tests {
                 .expect("canonical test network id"),
             &multisig,
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let first = derive_multisig_contract_call_trigger_id(
@@ -22623,7 +22625,7 @@ mod multisig_contract_call_tests {
                 .expect("canonical test network id"),
             &multisig,
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let manifest = manifest_with_entrypoints(Some(vec![manifest::EntrypointDescriptor {
@@ -22699,7 +22701,7 @@ mod multisig_contract_call_tests {
                 .expect("canonical test network id"),
             &multisig,
             7,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let manifest = manifest_with_entrypoints(Some(
@@ -23420,7 +23422,7 @@ mod contract_payload_normalization_tests {
     };
     use iroha_data_model::{
         ValidationFail,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig},
+        nexus::{LaneCatalog, LaneConfig},
         query::error::QueryExecutionFail,
         smart_contract::{
             ContractAddress,
@@ -23430,6 +23432,7 @@ mod contract_payload_normalization_tests {
             },
         },
     };
+    use iroha_model_base::topology::DataSpaceId;
     const SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
     const SIGNED_512_MIN: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
     const ABOVE_SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
@@ -23864,12 +23867,11 @@ mod multisig_selector_tests {
             pipeline::{PipelineEventBox, TransactionStatus},
         },
         isi::Grant,
-        nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
-        },
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
         permission, prelude as dm,
         query::error::QueryExecutionFail,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_executor_data_model::isi::multisig::{
         MultisigAccountState, MultisigApprove, MultisigInvalidateOutstanding,
         MultisigProposalValue, MultisigPropose, MultisigSpec,
@@ -24388,7 +24390,7 @@ mod multisig_selector_tests {
                 .expect("canonical test network id"),
             authority,
             deploy_nonce,
-            iroha_data_model::nexus::DataSpaceId::new(0),
+            iroha_model_base::topology::DataSpaceId::new(0),
         )
         .expect("contract address")
     }
@@ -29064,7 +29066,7 @@ fn format_unix_timestamp_ms_rfc3339(value: u64) -> Result<String> {
 }
 fn load_asset_transfer_control_store(
     account_id: &iroha_data_model::account::AccountId,
-    metadata: &iroha_data_model::metadata::Metadata,
+    metadata: &iroha_model_base::metadata::Metadata,
 ) -> Result<iroha_data_model::asset::AssetTransferControlStoreV1> {
     let metadata_key = iroha_model_base::name::Name::from_str(
         iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
@@ -33560,10 +33562,10 @@ mod sorafs_capacity_tests {
     use super::*;
     use base64::Engine as _;
     use iroha_data_model::{
-        metadata::Metadata,
         prelude as dm,
         sorafs::capacity::{CapacityDeclarationRecord, CapacityTelemetryRecord, ProviderId},
     };
+    use iroha_model_base::metadata::Metadata;
     use norito::to_bytes;
     use sorafs_manifest::{
         StakePointer,
@@ -38562,10 +38564,8 @@ mod stateful_account_path_parser_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_data_model::{
-        account::Account,
-        domain::{Domain, DomainId},
-    };
+    use iroha_data_model::{account::Account, domain::Domain};
+    use iroha_model_base::domain::DomainId;
     use iroha_test_samples::ALICE_ID;
     use std::sync::Arc;
     routing_test! { async stateful_account_path_parser_resolves_bound_alias_literal
@@ -39943,8 +39943,8 @@ mod sse_filter_tests {
             data::prelude::DataEvent,
             pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
         },
-        nexus::{DataSpaceId, LaneId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use nonzero_ext::nonzero;
     routing_test! { sync tx_status_eq_builds_matching_filter
         // Build filter expr: tx_status == Approved
@@ -40465,7 +40465,7 @@ mod tx_query_filter_tests {
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
         result_ok: bool,
-        metadata: dm::Metadata,
+        metadata: iroha_model_base::metadata::Metadata,
         fee_payment: dm::FeePaymentIntent,
     ) -> iroha_data_model::query::CommittedTransaction {
         // Build External signed tx with explicit creation time using the provided authority/key.
@@ -40516,7 +40516,7 @@ mod tx_query_filter_tests {
             created_ms,
             entry_hash_override,
             result_ok,
-            dm::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
             dm::FeePaymentIntent::authority(Vec::new(), None),
         )
     }
@@ -40526,7 +40526,7 @@ mod tx_query_filter_tests {
         created_ms: u64,
         entry_hash_override: Option<GenericHashOf<dm::TransactionEntrypoint>>,
         result_ok: bool,
-        metadata: dm::Metadata,
+        metadata: iroha_model_base::metadata::Metadata,
     ) -> iroha_data_model::query::CommittedTransaction {
         build_external_tx(
             authority,
@@ -40555,7 +40555,7 @@ mod tx_query_filter_tests {
             1,
             None,
             true,
-            dm::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
             authority_intent.clone(),
         );
         assert_eq!(tx_fee_projection(&authority_tx), Some(authority_intent));
@@ -40571,11 +40571,11 @@ mod tx_query_filter_tests {
             2,
             None,
             true,
-            dm::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
             sponsor_intent.clone(),
         );
         assert_eq!(tx_fee_projection(&sponsor_tx), Some(sponsor_intent));
-        let mut legacy_metadata = dm::Metadata::default();
+        let mut legacy_metadata = iroha_model_base::metadata::Metadata::default();
         legacy_metadata.insert("gas_limit".parse().unwrap(), Json::new(1_u64));
         assert!(
             dm::TransactionBuilder::new(
@@ -40918,12 +40918,12 @@ mod tx_query_filter_tests {
         let (bob, _) = account_with_key();
         let reward_asset = dm::AssetId::new(test_asset_definition_id(), alice.clone());
         let rewards = RecordPublicLaneRewards {
-            lane_id: dm::LaneId::SINGLE,
+            lane_id: iroha_model_base::topology::LaneId::SINGLE,
             epoch: 1,
             reward_asset,
             total_reward: 1_u32.into(),
             shares: Vec::new(),
-            metadata: dm::Metadata::default(),
+            metadata: iroha_model_base::metadata::Metadata::default(),
         };
         let instruction: dm::InstructionBox = rewards.into();
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -41259,7 +41259,7 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync metadata_filters_apply_locally
         let (account, kp) = account_with_key();
-        let mut meta = dm::Metadata::default();
+        let mut meta = iroha_model_base::metadata::Metadata::default();
         meta.insert("display_name".parse().unwrap(), Json::new("Alice"));
         let tx = make_external_tx_with_metadata(&account, &kp, 1_710_000_000_000, None, true, meta);
         let expr_eq = crate::filter::FilterExpr::Eq(
@@ -41279,7 +41279,7 @@ mod tx_query_filter_tests {
         let expr_missing =
             crate::filter::FilterExpr::Exists(crate::filter::FieldPath("metadata.unknown".into()));
         assert!(!filter_tx(&expr_missing, &tx));
-        let mut meta_null = dm::Metadata::default();
+        let mut meta_null = iroha_model_base::metadata::Metadata::default();
         meta_null.insert("note".parse().unwrap(), Json::new(json::Value::Null));
         let tx_null =
             make_external_tx_with_metadata(&account, &kp, 1_710_000_000_500, None, true, meta_null);
@@ -41517,7 +41517,7 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync kaigi_signal_from_transaction_extracts_metadata
         let (authority, keypair) = account_with_key();
-        let mut metadata = dm::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(crate::json_object(vec![
@@ -41592,7 +41592,7 @@ mod tx_query_filter_tests {
             if let Some(signal_kind) = signal_kind {
                 fields.push(crate::json_entry("signalKind", signal_kind));
             }
-            let mut metadata = dm::Metadata::default();
+            let mut metadata = iroha_model_base::metadata::Metadata::default();
             metadata.insert(
                 "kaigi_signal".parse().expect("metadata key"),
                 Json::new(crate::json_object(fields)),
@@ -41701,7 +41701,7 @@ mod tx_query_filter_tests {
                 crate::json_entry("participantAccountId", authority.to_string()),
             ];
             fields.push(conflicting_alias);
-            let mut metadata = dm::Metadata::default();
+            let mut metadata = iroha_model_base::metadata::Metadata::default();
             metadata.insert(
                 "kaigi_signal".parse().expect("metadata key"),
                 Json::new(crate::json_object(fields)),
@@ -41726,7 +41726,7 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync kaigi_signal_from_transaction_hides_identities_for_private_calls
         let (authority, keypair) = account_with_key();
-        let mut metadata = dm::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(crate::json_object(vec![
@@ -41780,7 +41780,7 @@ mod tx_query_filter_tests {
             if let Some(schema) = schema {
                 fields.push(crate::json_entry("schema", schema));
             }
-            let mut metadata = dm::Metadata::default();
+            let mut metadata = iroha_model_base::metadata::Metadata::default();
             metadata.insert(
                 "kaigi_signal".parse().expect("metadata key"),
                 Json::new(crate::json_object(fields)),
@@ -41804,7 +41804,7 @@ mod tx_query_filter_tests {
     }
     routing_test! { sync kaigi_signal_from_transaction_rejects_failed_transactions
         let (authority, keypair) = account_with_key();
-        let mut metadata = dm::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(crate::json_object(vec![
@@ -41829,7 +41829,7 @@ mod tx_query_filter_tests {
     routing_test! { sync kaigi_signal_from_transaction_rejects_future_metadata_timestamp
         let (authority, keypair) = account_with_key();
         let carrier_at_ms = 1_700_000_000_100_u64;
-        let mut metadata = dm::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(crate::json_object(vec![
@@ -41861,7 +41861,7 @@ mod tx_query_filter_tests {
         let created_at_ms = 1_700_000_000_000_u64;
         let transaction_at_ms = created_at_ms + 100;
         let carrier_at_ms = created_at_ms + 200;
-        let mut metadata = dm::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(crate::json_object(vec![
@@ -42023,7 +42023,7 @@ mod tx_query_filter_tests {
         for label in ["unrelated-a", "unrelated-b"] {
             let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
                 label.parse().expect("account alias label"),
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             );
             world.replace_account_rekey_record_for_testing(
                 iroha_data_model::account::rekey::AccountRekeyRecord::new(
@@ -42199,7 +42199,7 @@ mod tx_query_filter_tests {
         ) {
             let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
                 label.parse().expect("account alias label"),
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             );
             let selector = iroha_core::sns::selector_for_account_alias(&alias, catalog)
                 .expect("account alias selector");
@@ -42214,7 +42214,7 @@ mod tx_query_filter_tests {
                 expires_at_ms,
                 expires_at_ms,
                 expires_at_ms,
-                dm::Metadata::default(),
+                iroha_model_base::metadata::Metadata::default(),
             );
             let mut block = world.block();
             let mut transaction = block.transaction_without_telemetry(
@@ -42908,7 +42908,7 @@ mod explorer_lookup_tests {
             Algorithm::BlsNormal,
             "derive explorer lookup block leader fixture key",
         );
-        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let _topology = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader.public_key().clone())]);
         let execution_context = route_plans.map(|route_plans| {
             use iroha_data_model::block::{
                 BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
@@ -43498,7 +43498,7 @@ mod explorer_lookup_tests {
             Algorithm::BlsNormal,
             "derive Kura-only explorer block leader fixture key",
         );
-        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let _topology = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
@@ -44605,7 +44605,7 @@ mod query_endpoint_tests {
             "derive proof roundtrip block leader fixture key",
         );
         let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
+            iroha_model_base::peer::PeerId::new(leader.public_key().clone()),
         ]);
         let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, latest_block.as_deref())
@@ -47993,9 +47993,9 @@ mod sse_stream_tests {
             EventBox,
             pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
         },
-        nexus::{DataSpaceId, LaneId},
         transaction::SignedTransaction,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use tokio::time::{Duration, timeout};
     async fn next_sse_chunk(body: &mut Body) -> String {
         let frame = timeout(Duration::from_secs(1), body.frame())
@@ -48503,14 +48503,11 @@ mod validation_fee_torii_ingress_tests {
         account::{AccountId, MultisigMember, MultisigPolicy},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
-        domain::DomainId,
         events::{
             EventFilterBox,
             time::{ExecutionTime, TimeEventFilter},
         },
         isi::Transfer,
-        metadata::Metadata,
-        nexus::DataSpaceId,
         prelude::*,
         smart_contract::{
             ContractAddress,
@@ -48532,6 +48529,9 @@ mod validation_fee_torii_ingress_tests {
     use iroha_executor_data_model::isi::multisig::{
         MultisigAccountState, MultisigPropose, MultisigSpec,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::{
         json::Json,
         numeric::{NumericSpec, Quantity},
@@ -55881,7 +55881,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         "derive repo agreement fixture block leader key",
     );
     let _topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
-        iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
+        iroha_model_base::peer::PeerId::new(leader.public_key().clone()),
     ]);
     let unverified = iroha_core::block::BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, latest_block.as_deref())
@@ -57141,9 +57141,8 @@ mod account_permissions_json_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_data_model::{
-        account::Account, nexus::DataSpaceId, permission::Permissions, prelude::AccountId,
-    };
+    use iroha_data_model::{account::Account, permission::Permissions, prelude::AccountId};
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_executor_data_model::permission::{
         account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
         parameter::CanSetParameters,
@@ -61222,7 +61221,7 @@ pub(crate) fn parse_asset_balance_scope_literal(
             ));
         }
         return Ok(iroha_data_model::asset::AssetBalanceScope::Dataspace(
-            iroha_data_model::nexus::DataSpaceId::new(dataspace),
+            iroha_model_base::topology::DataSpaceId::new(dataspace),
         ));
     }
     Err(conversion_error(
@@ -62202,8 +62201,9 @@ mod space_directory_manifest_helper_tests {
     use iroha_crypto::{Algorithm, Hash};
     use iroha_data_model::{
         account::AccountId,
-        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::sync::Arc;
     fn sample_manifest_record() -> SpaceDirectoryManifestRecord {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x44; Hash::LENGTH]));
@@ -63131,11 +63131,11 @@ mod asset_definitions_query_tests {
     fn state_with_asset_definitions() -> Arc<CoreState> {
         let authority =
             checked_asset_definition_authority(0xC0, "derive asset-definition fixture authority");
-        let domain_id: dm::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = dm::Domain::new(domain_id.clone()).build(&authority);
         let account = dm::Account::new(authority.clone()).build(&authority);
-        let mut cbdc_metadata = dm::Metadata::default();
+        let mut cbdc_metadata = iroha_model_base::metadata::Metadata::default();
         cbdc_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
         let cbdc_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let cbdc = dm::AssetDefinition::numeric(
@@ -63146,7 +63146,7 @@ mod asset_definitions_query_tests {
         )
         .with_metadata(cbdc_metadata)
         .build(&authority);
-        let mut usd_metadata = dm::Metadata::default();
+        let mut usd_metadata = iroha_model_base::metadata::Metadata::default();
         usd_metadata.insert("rank".parse().expect("metadata key"), 1_u32);
         let usd = dm::AssetDefinition::numeric(
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee"),
@@ -66074,14 +66074,14 @@ mod explorer_asset_definition_econometrics_tests {
             Algorithm::BlsNormal,
             "derive econometrics bootstrap leader fixture key",
         );
-        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain_id: iroha_model_base::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = checked_econometrics_keypair(
             0xD1,
             Algorithm::Ed25519,
@@ -66244,7 +66244,7 @@ mod explorer_asset_definition_econometrics_tests {
             Algorithm::BlsNormal,
             "derive econometrics transfer leader fixture key",
         );
-        let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader.public_key().clone())]);
         let unverified = BlockBuilder::new(vec![tx_mint, tx_transfer, tx_batch, tx_burn])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader.private_key())
@@ -66438,14 +66438,14 @@ mod explorer_asset_definition_snapshot_tests {
             Algorithm::BlsNormal,
             "derive snapshot distribution leader fixture key",
         );
-        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain_id: iroha_model_base::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = checked_snapshot_keypair(
             0xE1,
             Algorithm::Ed25519,
@@ -66615,14 +66615,14 @@ mod explorer_asset_definition_snapshot_tests {
             Algorithm::BlsNormal,
             "derive snapshot quantile leader fixture key",
         );
-        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(leader0.public_key().clone())]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain_id: iroha_model_base::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = checked_snapshot_keypair(
             0xE5,
             Algorithm::Ed25519,

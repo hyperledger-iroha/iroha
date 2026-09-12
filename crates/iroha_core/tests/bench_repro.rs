@@ -13,9 +13,10 @@ use iroha_data_model::{
         ResolvedDomainV1,
     },
     isi::alias_setup::EnsureAlias,
-    nexus::DataSpaceId,
     prelude::*,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

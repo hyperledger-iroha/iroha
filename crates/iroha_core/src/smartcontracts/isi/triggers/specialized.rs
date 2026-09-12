@@ -5,11 +5,11 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::AccountId,
     events::{EventFilter, EventFilterBox},
-    metadata::Metadata,
     prelude::*,
     trigger::action::EnsureTriggerAuthority,
 };
 use iroha_logger::trace;
+use iroha_model_base::metadata::Metadata;
 #[cfg(feature = "json")]
 use norito::json::native::Number as JsonNumber;
 #[cfg(feature = "json")]
@@ -542,8 +542,10 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(feature = "json")]
     use iroha_data_model::prelude::{
-        AccountId, DataEventFilter, InstructionBox, Level, Log, Metadata, Repeats,
+        AccountId, DataEventFilter, InstructionBox, Level, Log, Repeats,
     };
+    #[cfg(feature = "json")]
+    use iroha_model_base::metadata::Metadata;
     #[cfg(feature = "json")]
     use iroha_primitives::const_vec::ConstVec;
     #[cfg(feature = "json")]

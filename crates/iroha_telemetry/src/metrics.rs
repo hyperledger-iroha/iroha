@@ -5,8 +5,9 @@ pub mod musubi;
 use crate::privacy::PrivacyDrainSnapshot;
 use core::convert::{TryFrom, TryInto};
 use iroha_config::{kura::FsyncMode, parameters::actual::ConfidentialGas as ActualConfidentialGas};
+#[cfg(test)]
+use iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
 use iroha_data_model::{
-    block::consensus_v2::PERMISSIONED_TAG,
     da::types::DaRentQuote,
     nexus::MAX_ACTIVE_EXECUTION_LANES,
     prelude::Quantity,
@@ -2276,7 +2277,7 @@ fields {
     pub sumeragi_membership_view: gauge();
     /// Sumeragi: epoch associated with the membership view hash snapshot.
     pub sumeragi_membership_epoch: gauge();
-    /// Sumeragi: current runtime mode tag.
+    /// Sumeragi: frozen runtime mode tag; empty until the reducer owns a context.
     pub sumeragi_mode_tag: raw(Arc<RwLock<String>>);
     /// Sumeragi: current leader index (gauge)
     pub sumeragi_leader_index: gauge();
@@ -4024,7 +4025,7 @@ construct {
     {
         let sumeragi_prf_epoch_seed_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let sumeragi_mode_tag: Arc<RwLock<String>> =
-            Arc::new(RwLock::new(PERMISSIONED_TAG.to_string()));
+            Arc::new(RwLock::new(String::new()));
         let halo2_status: Arc<RwLock<Halo2Status>> = Arc::new(RwLock::new(Halo2Status::default()));
     }
     [sumeragi_prf_height sumeragi_prf_view sumeragi_membership_view_hash
@@ -5371,11 +5372,11 @@ impl Metrics {
             *guard = mode_tag.to_string();
         }
     }
-    /// Snapshot the cached consensus mode tag.
+    /// Snapshot the cached consensus mode tag; empty when unavailable.
     pub fn sumeragi_mode_tag(&self) -> String {
         self.sumeragi_mode_tag
             .read()
-            .map_or_else(|_| PERMISSIONED_TAG.to_string(), |guard| guard.clone())
+            .map_or_else(|_| String::new(), |guard| guard.clone())
     }
     /// Record the canonical IVM gas schedule hash (split into two 64-bit gauges).
     pub fn set_ivm_gas_schedule_hash(&self, hash: &[u8; 32]) {

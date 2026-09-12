@@ -79,8 +79,9 @@ macro_rules! def_ffi_fns {
         ///
         /// # Safety
         ///
-        /// All of the given pointers must be valid and the given handle id must match the expected
-        /// pointer type
+        /// For a recognized handle id, all pointers must be valid for their expected types
+        /// and the handle pointers must contain the type selected by that id. Unknown ids
+        /// return `UnknownHandle` without accessing any pointer or writing an output.
         #[unsafe(export_name = concat!($prefix, "__clone"))]
         unsafe extern "C" fn __clone(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
@@ -107,8 +108,9 @@ macro_rules! def_ffi_fns {
         ///
         /// # Safety
         ///
-        /// All of the given pointers must be valid and the given handle id must match the expected
-        /// pointer type
+        /// For a recognized handle id, all pointers must be valid for their expected types
+        /// and the handle pointers must contain the type selected by that id. Unknown ids
+        /// return `UnknownHandle` without accessing any pointer or writing an output.
         #[unsafe(no_mangle)]
         #[unsafe(export_name = concat!($prefix, "__default"))]
         unsafe extern "C" fn __default(
@@ -136,8 +138,9 @@ macro_rules! def_ffi_fns {
         ///
         /// # Safety
         ///
-        /// All of the given pointers must be valid and the given handle id must match the expected
-        /// pointer type
+        /// For a recognized handle id, all pointers must be valid for their expected types
+        /// and the handle pointers must contain the type selected by that id. Unknown ids
+        /// return `UnknownHandle` without accessing any pointer or writing an output.
         #[unsafe(export_name = concat!($prefix, "__eq"))]
         unsafe extern "C" fn __eq(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
@@ -172,8 +175,9 @@ macro_rules! def_ffi_fns {
         ///
         /// # Safety
         ///
-        /// All of the given pointers must be valid and the given handle id must match the expected
-        /// pointer type
+        /// For a recognized handle id, all pointers must be valid for their expected types
+        /// and the handle pointers must contain the type selected by that id. Unknown ids
+        /// return `UnknownHandle` without accessing any pointer or writing an output.
         #[unsafe(export_name = concat!($prefix, "__ord"))]
         unsafe extern "C" fn __ord(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,
@@ -208,8 +212,9 @@ macro_rules! def_ffi_fns {
         ///
         /// # Safety
         ///
-        /// All of the given pointers must be valid and the given handle id must match the expected
-        /// pointer type
+        /// For a recognized handle id, all pointers must be valid for their expected types
+        /// and the handle pointers must contain the type selected by that id. Unknown ids
+        /// return `UnknownHandle` without accessing any pointer or writing an output.
         #[unsafe(export_name = concat!($prefix, "__drop"))]
         unsafe extern "C" fn __drop(
             handle_id: <$crate::handle::Id as $crate::FfiType>::ReprC,

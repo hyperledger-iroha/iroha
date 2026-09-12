@@ -26,6 +26,7 @@ use iroha_data_model::{
     trigger::action::EnsureTriggerAuthority,
 };
 use iroha_logger::prelude::*;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::const_vec::ConstVec;
 use ivm::VMError;
 use mv::storage::{
@@ -550,6 +551,7 @@ fn data_event_index_keys(event: &DataEvent) -> BTreeSet<DataTriggerIndexKey> {
 mod data_trigger_index_tests {
     use super::*;
     use iroha_crypto::KeyPair;
+    use iroha_model_base::domain::DomainId;
 
     fn account_id() -> AccountId {
         AccountId::new(
@@ -976,7 +978,7 @@ mod merge_write_set_tests {
             .expect("SetBlock declaration must remain discoverable");
         let struct_tail = &source[struct_start..];
         let struct_end = struct_tail
-            .find("\n}\n\nfn append_delta_component")
+            .find("\n}")
             .expect("SetBlock declaration terminator must remain discoverable");
         let struct_body = &struct_tail[..struct_end];
         let encoder_start = source
@@ -2676,12 +2678,12 @@ mod tests {
             },
             time::Schedule,
         },
-        metadata::Metadata,
         prelude::{
             AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
             TimeEventFilter, TimeInterval, TriggerId,
         },
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::{const_vec::ConstVec, json::Json};
     fn sample_hash() -> HashOf<IvmBytecode> {
         let bytecode = IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]);
@@ -2833,7 +2835,7 @@ mod tests {
                 .expect("canonical test network id"),
             &authority,
             7,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("derive contract address");
         let items = ConstVec::from(vec![
@@ -3969,7 +3971,7 @@ mod dto_tests {
             .first_mut()
             .expect("sample set has one data trigger")
             .1
-            .metadata = dm::Metadata::default();
+            .metadata = iroha_model_base::metadata::Metadata::default();
         let error = match Set::try_from(dto) {
             Ok(_) => panic!("legacy data-trigger snapshot must be rejected"),
             Err(error) => error,
@@ -4095,7 +4097,7 @@ mod dto_tests {
             filter: dm::DataEventFilter::Any,
             retry_policy: None,
             retry_state: None,
-            metadata: dm::Metadata::default(),
+            metadata: iroha_model_base::metadata::Metadata::default(),
         };
         let call_action = LoadedActionDto {
             executable: ExecutableRefDto::Ivm(valid_hash),
@@ -4104,7 +4106,7 @@ mod dto_tests {
             filter: dm::ExecuteTriggerEventFilter::new(),
             retry_policy: None,
             retry_state: None,
-            metadata: dm::Metadata::default(),
+            metadata: iroha_model_base::metadata::Metadata::default(),
         };
         let dto = SetDto {
             data: vec![(data_id.clone(), data_action)],

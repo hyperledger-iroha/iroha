@@ -402,7 +402,7 @@ impl RuntimeProviderCatalogWireV1 {
 }
 fn validate_chain_id(chain_id: &str) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
     let parsed = chain_id
-        .parse::<iroha_data_model::ChainId>()
+        .parse::<iroha_model_base::chain::ChainId>()
         .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidChainId)?;
     if parsed.to_string() != chain_id {
         return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidChainId);

@@ -1047,7 +1047,7 @@ async fn trusted_internal_account_handler_emits_exact_json_and_norito_projection
         "derive trusted internal account projection fixture key",
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"trusted-internal-account"));
-    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         "tier".parse().expect("metadata key"),
         Json::new("regulated"),
@@ -1770,6 +1770,115 @@ fn signed_transaction_details_query(
     .sign(key_pair)
 }
 #[tokio::test]
+async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization() {
+    use axum::{
+        Router,
+        routing::{get, post},
+    };
+    use iroha_data_model::query::error::QueryExecutionFail;
+    let sender_key = checked_torii_test_ed25519_keypair(0x24, "exact proof HTTP sender");
+    let reader_key = checked_torii_test_ed25519_keypair(0x45, "exact proof HTTP registered reader");
+    let unknown_key = checked_torii_test_ed25519_keypair(0x46, "exact proof HTTP unknown signer");
+    let app = mk_app_state_for_tests_with_world(transaction_details_test_world(&[
+        AccountId::new(sender_key.public_key().clone()),
+        AccountId::new(reader_key.public_key().clone()),
+    ]));
+    let (block, committed_hash) = make_signed_block(1, None);
+    store_and_index_transaction_details_block(&app, block, committed_hash);
+    let missing_hash =
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(b"absent exact proof"));
+    let network_id = *app.state.network_id_ref();
+    let router = Router::new()
+        .route(
+            iroha_torii_shared::uri::TRANSACTION_DETAILS,
+            post(super::handler_pipeline_transaction_details),
+        )
+        .route(
+            "/v1/node/capabilities",
+            get(super::handler_node_capabilities),
+        )
+        .fallback(super::handler_route_not_found)
+        .layer(axum::middleware::from_fn(super::capture_response_format))
+        .layer(axum::middleware::from_fn(
+            super::enforce_typed_error_contract,
+        ))
+        .with_state(app);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind exact proof fixture");
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .expect("serve exact proof fixture");
+    });
+    for (key_pair, hash, expected_missing, expected_success) in [
+        (reader_key.clone(), missing_hash, true, false),
+        (unknown_key, missing_hash, false, false),
+        (reader_key, committed_hash, false, false),
+        (sender_key, committed_hash, false, true),
+    ] {
+        let config = iroha::config::Config {
+            chain: "exact-proof-fixture".into(),
+            network_id,
+            account: AccountId::new(key_pair.public_key().clone()),
+            account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            key_pair,
+            basic_auth: None,
+            torii_api_url: format!("http://{address}/").parse().unwrap(),
+            torii_request_timeout: Duration::from_secs(5),
+            transaction_ttl: Duration::from_secs(30),
+            transaction_status_timeout: Duration::from_secs(5),
+            transaction_add_nonce: false,
+            sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
+            sorafs_anonymity_policy: Default::default(),
+            sorafs_rollout_phase: Default::default(),
+        };
+        // `spawn_blocking` still enters Tokio's runtime context, which the synchronous
+        // SDK correctly rejects. A plain thread plus an async result channel lets the
+        // actual HTTP server keep progressing without bypassing that SDK guard.
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let worker = std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            let result = iroha::client::Client::builder(config)
+                .build()
+                .expect("exact SDK fixture")
+                .get_transaction_details(hash);
+            assert!(
+                result_tx.send(result).is_ok(),
+                "SDK fixture result receiver"
+            );
+        });
+        let result = result_rx.await.expect("SDK exact proof worker response");
+        worker.join().expect("SDK exact proof worker");
+        let failure = result
+            .as_ref()
+            .err()
+            .map(|error| format!("{error:?}").chars().take(2_048).collect::<String>());
+        assert_eq!(
+            result.is_ok(),
+            expected_success,
+            "actual Torii→HTTP→SDK success contract: {failure:?}"
+        );
+        assert_eq!(
+            matches!(
+                &result,
+                Err(iroha::query::QueryError::Validation(
+                    ValidationFail::QueryFailed(QueryExecutionFail::NotFound)
+                ))
+            ),
+            expected_missing,
+            "only a registered authority's exact missing proof may become typed absence: {failure:?}"
+        );
+    }
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other_accounts() {
     use iroha_data_model::events::data::prelude::{
         AssetBatchTransferLegStatus, AssetBatchTransferOutcome,
@@ -1836,9 +1945,17 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
             panic!("{label} should read involved transaction details: {error}")
         });
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            crate::utils::NORITO_MIME_TYPE,
+        );
         let body = torii_body_bytes(response, "transaction-details response body").await;
         let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
-            norito::json::from_slice(&body).expect("typed transaction-details JSON");
+            norito::decode_canonical_with_limits(
+                &body,
+                norito::canonical_decode_limits(body.len()),
+            )
+            .expect("typed transaction-details canonical Norito");
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
         assert_eq!(
             details.transaction.result().batch_transfer_outcomes(),
@@ -1865,6 +1982,199 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         super::Error::Query(ValidationFail::NotPermitted(_))
     ));
 }
+#[tokio::test]
+async fn transaction_details_native_beneficiaries_preserve_restricted_history_isolation() {
+    use iroha_data_model::{
+        alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
+        },
+        isi::{InstructionBox, Log, Register, Transfer, alias_setup::EnsureAlias},
+    };
+    let sender_key = checked_torii_test_ed25519_keypair(0x24, "native details sender");
+    let beneficiary_key = checked_torii_test_ed25519_keypair(0x37, "native details beneficiary");
+    let unrelated_key = checked_torii_test_ed25519_keypair(0x38, "native details unrelated");
+    let sender = AccountId::new(sender_key.public_key().clone());
+    let beneficiary = AccountId::new(beneficiary_key.public_key().clone());
+    let unrelated = AccountId::new(unrelated_key.public_key().clone());
+    let asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").expect("asset domain"),
+        Name::from_str("rose").expect("asset name"),
+    );
+    let instructions = [
+        (
+            "account creation without alias",
+            InstructionBox::from(Register::account(Account::new(beneficiary.clone()))),
+            true,
+        ),
+        (
+            "account alias",
+            InstructionBox::from(EnsureAlias::new(
+                AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                    alias: ResolvedAccountAliasV1::new(
+                        "nativebeneficiary@universal"
+                            .parse()
+                            .expect("beneficiary alias"),
+                        DataSpaceId::UNIVERSAL,
+                    ),
+                    target_account: beneficiary.clone(),
+                    provision: AccountProvisionV1::Create,
+                    role: AccountAliasRoleV1::Primary,
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 1,
+                    expected_payment_asset: asset_definition.clone(),
+                    max_amount: Quantity::from(1_u32),
+                    valid_until_ms: u64::MAX,
+                },
+            )),
+            true,
+        ),
+        (
+            "ordinary faucet transfer",
+            InstructionBox::from(Transfer::asset_quantity(
+                AssetId::new(asset_definition, sender.clone()),
+                Quantity::from(7_u32),
+                beneficiary.clone(),
+            )),
+            true,
+        ),
+        (
+            "unrelated payload naming the account",
+            InstructionBox::from(Log::new(
+                iroha_data_model::Level::INFO,
+                beneficiary.to_string(),
+            )),
+            false,
+        ),
+    ];
+    for (label, instruction, names_native_beneficiary) in instructions {
+        for applied in [true, false] {
+            let mut app = mk_app_state_for_tests_with_world(transaction_details_test_world(&[
+                sender.clone(),
+                beneficiary.clone(),
+                unrelated.clone(),
+            ]));
+            let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
+            assert!(
+                torii_all_dataspace_routes(app.as_ref())
+                    .iter()
+                    .any(|route| route.dataspace_id == restricted_dataspace)
+            );
+            let transaction = checked_torii_test_transaction(
+                TransactionBuilder::new(
+                    signed_query_test_network_id(),
+                    sender.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([instruction.clone()]),
+                &sender_key,
+                "sign native beneficiary details fixture",
+            );
+            let entrypoint_hash = transaction.hash_as_entrypoint();
+            let expected_wire = transaction
+                .encode_wire_v1()
+                .expect("native transaction wire");
+            // The same equality predicate still cannot be used as a global inventory read.
+            let request = request_for_test(
+                &beneficiary,
+                iroha_data_model::query::QueryRequest::Start(
+                    build_exact_transaction_details_query_for_test(entrypoint_hash),
+                ),
+            );
+            let scope = signed_query_scope_for_app(app.as_ref(), &request);
+            assert_eq!(scope, SignedQueryScope::AuthorityRouted);
+            let denied = torii_authorized_signed_query_routes(app.as_ref(), &request, &scope)
+                .expect_err("exact filters must not bypass restricted global history admission");
+            assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+            app.pipeline_status_cache.record_entry(
+                transaction.hash(),
+                PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+            );
+            assert!(
+                matches!(
+                    pipeline_transaction_details_response(&app, &beneficiary, entrypoint_hash),
+                    Err(Error::AppNotFound {
+                        code: "transaction_details_not_found",
+                        ..
+                    })
+                ),
+                "{label}: a queued target must not establish committed read authority"
+            );
+            let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+            let signature = checked_torii_test_block_signature(
+                0,
+                &sender_key,
+                &header,
+                "sign native beneficiary details block",
+            );
+            let mut block = SignedBlock::presigned(signature, header, vec![transaction]);
+            let result = if applied {
+                Ok(DataTriggerSequence::default())
+            } else {
+                Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted("native beneficiary fixture rejected".to_owned()),
+                ))
+            };
+            block
+                .set_transaction_results(Vec::new(), &[entrypoint_hash], vec![result])
+                .expect("bind actual committed native result");
+            store_and_index_transaction_details_block(&app, block, entrypoint_hash);
+            for (caller_label, key_pair, allowed) in [
+                ("sender", &sender_key, true),
+                (
+                    "beneficiary",
+                    &beneficiary_key,
+                    applied && names_native_beneficiary,
+                ),
+                ("unrelated", &unrelated_key, false),
+            ] {
+                let response = super::handler_pipeline_transaction_details(
+                    State(app.clone()),
+                    HeaderMap::new(),
+                    crate::loopback_connect_info(),
+                    None,
+                    versioned_query_for_test(signed_transaction_details_query(
+                        key_pair,
+                        entrypoint_hash,
+                    )),
+                )
+                .await;
+                if allowed {
+                    let response = response.unwrap_or_else(|error| {
+                        panic!("{label}/{caller_label}/{applied}: exact details denied: {error}")
+                    });
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(
+                        response.headers()[axum::http::header::CONTENT_TYPE],
+                        crate::utils::NORITO_MIME_TYPE,
+                    );
+                    let body = torii_body_bytes(response, "native beneficiary details").await;
+                    let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
+                        norito::decode_canonical_with_limits(
+                            &body,
+                            norito::canonical_decode_limits(body.len()),
+                        )
+                        .expect("native beneficiary details canonical Norito");
+                    let TransactionEntrypoint::External(committed) =
+                        details.transaction.entrypoint()
+                    else {
+                        panic!("native details must retain the actual external transaction");
+                    };
+                    assert_eq!(committed.encode_wire_v1().unwrap(), expected_wire);
+                    assert_eq!(details.transaction.result().is_ok(), applied);
+                } else {
+                    assert!(
+                        matches!(response, Err(Error::Query(ValidationFail::NotPermitted(_)))),
+                        "{label}/{caller_label}/{applied}: only a successful actual native beneficiary may read"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn transaction_details_allows_operator_and_rejects_wrong_network_and_replay() {
     let sender_key =

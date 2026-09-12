@@ -87,8 +87,8 @@ use iroha_data_model::{
         kagemusha_ciphertext_digest_v1, kagemusha_credit_opening_canonical_len_v1,
         kagemusha_mint_credit_opening_commitment_v1, kagemusha_recipient_credential_commitment_v1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use p256::ecdsa::{Signature, signature::Signer as _};
 use zeroize::Zeroizing;
 

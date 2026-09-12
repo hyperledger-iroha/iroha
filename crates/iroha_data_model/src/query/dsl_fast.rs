@@ -1047,7 +1047,6 @@ mod codec_tests {
     use crate::{
         account, block,
         domain::Domain,
-        domain::DomainId,
         prelude as dm,
         query::{self, tx_predicate::CommittedTxPredicate as P},
         transaction,
@@ -1055,6 +1054,7 @@ mod codec_tests {
         trigger,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleProof};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     use norito::SerializePayload;
     use std::time::Duration;
@@ -1154,7 +1154,7 @@ mod codec_tests {
         authority: &TestAuthority,
         ts_ms: u64,
         ok: bool,
-        metadata: dm::Metadata,
+        metadata: iroha_model_base::metadata::Metadata,
     ) -> query::CommittedTransaction {
         let mut builder = signed::TransactionBuilder::new(
             test_network_id(),
@@ -1430,7 +1430,12 @@ mod codec_tests {
         ));
 
         let authority = TestAuthority::new(41);
-        let transaction = build_ext_tx(&authority, 1, true, dm::Metadata::default());
+        let transaction = build_ext_tx(
+            &authority,
+            1,
+            true,
+            iroha_model_base::metadata::Metadata::default(),
+        );
         assert!(!predicate.applies(&transaction));
     }
     #[test]
@@ -1551,8 +1556,18 @@ mod codec_tests {
     #[test]
     fn committed_tx_compound_predicate_json_expression_uses_typed_tree_codec() {
         let authority = TestAuthority::new(0x11);
-        let ok_tx = build_ext_tx(&authority, 42, true, dm::Metadata::default());
-        let err_tx = build_ext_tx(&authority, 42, false, dm::Metadata::default());
+        let ok_tx = build_ext_tx(
+            &authority,
+            42,
+            true,
+            iroha_model_base::metadata::Metadata::default(),
+        );
+        let err_tx = build_ext_tx(
+            &authority,
+            42,
+            false,
+            iroha_model_base::metadata::Metadata::default(),
+        );
         let predicate: CompoundPredicate<query::CommittedTransaction> =
             norito::json::from_value(norito::json!({
                 "op": "eq",
@@ -1796,7 +1811,12 @@ mod codec_tests {
     #[test]
     fn committed_tx_predicate_from_filters_preserves_extended_field_order() {
         let authority = TestAuthority::new(0x44);
-        let tx = build_ext_tx(&authority, 90, true, dm::Metadata::default());
+        let tx = build_ext_tx(
+            &authority,
+            90,
+            true,
+            iroha_model_base::metadata::Metadata::default(),
+        );
         let predicate = committed_tx_predicate_from_filters(&query::CommittedTxFilters {
             authority_ne: Some(authority.id.clone()),
             ts_le: Some(90),
@@ -1824,13 +1844,9 @@ mod codec_tests {
 #[cfg(test)]
 mod predicate_tests {
     use super::*;
-    use crate::{
-        Registrable,
-        account::AccountId,
-        domain::{Domain, DomainId},
-        query::json::PredicateJson,
-    };
+    use crate::{Registrable, account::AccountId, domain::Domain, query::json::PredicateJson};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     use norito::json;
     fn test_authority() -> AccountId {
@@ -2034,7 +2050,11 @@ impl<T: 'static> EvaluateSelector<T> for () {
                     }
                 }};
             }
-            project_ids_ref!(crate::domain::Domain, crate::domain::DomainId, batch);
+            project_ids_ref!(
+                crate::domain::Domain,
+                iroha_model_base::domain::DomainId,
+                batch
+            );
             project_ids_ref!(crate::account::Account, crate::account::AccountId, batch);
             project_ids_ref!(
                 crate::asset::definition::AssetDefinition,
@@ -2074,7 +2094,11 @@ impl<T: 'static> EvaluateSelector<T> for () {
                     }
                 }};
             }
-            project_ids_owned!(crate::domain::Domain, crate::domain::DomainId, batch);
+            project_ids_owned!(
+                crate::domain::Domain,
+                iroha_model_base::domain::DomainId,
+                batch
+            );
             project_ids_owned!(crate::account::Account, crate::account::AccountId, batch);
             project_ids_owned!(
                 crate::asset::definition::AssetDefinition,

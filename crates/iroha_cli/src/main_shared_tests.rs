@@ -4,14 +4,16 @@ use clap::Parser;
 use eyre::eyre;
 use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
-    ChainId, Level,
+    Level,
     account::AccountId,
     events::{EventFilterBox, data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter},
     isi::Log,
-    metadata::Metadata,
     transaction::Executable,
 };
 use iroha_i18n::{Bundle, Language, Localizer};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use std::{
     fs,
     num::NonZeroU64,
@@ -406,7 +408,7 @@ fn run_context_returns_invalid_client_configuration() {
 }
 fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
     let _domain =
-        iroha::data_model::domain::DomainId::try_new(domain_literal, "universal").expect("domain");
+        iroha_model_base::domain::DomainId::try_new(domain_literal, "universal").expect("domain");
     let key_pair = fixture_key_pair(seed);
     AccountId::new(key_pair.public_key().clone())
 }
@@ -1639,7 +1641,7 @@ fn parse_asset_balance_scope_literal_accepts_dataspace() {
     assert_eq!(
         parsed,
         iroha::data_model::asset::AssetBalanceScope::Dataspace(
-            iroha::data_model::nexus::DataSpaceId::new(7)
+            iroha_model_base::topology::DataSpaceId::new(7)
         )
     );
 }
@@ -1934,7 +1936,8 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
         thread,
     };
 
-    use iroha::data_model::nexus::{DataSpaceId, FeeDebitSource};
+    use iroha::data_model::nexus::FeeDebitSource;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
 
     let invoke = |next_block_height, response_content_type: &'static str| {
@@ -2677,4 +2680,581 @@ fn trigger_register_data_domain_filter_builds() {
         iroha::data_model::events::EventFilterBox::Data(_) => {}
         _ => panic!("expected data filter"),
     }
+}
+
+#[derive(Debug)]
+struct CanonicalReadTransport {
+    requests: std::sync::Mutex<Vec<iroha::http::TransportRequest>>,
+    responses: std::sync::Mutex<std::collections::VecDeque<iroha::http::Response<Vec<u8>>>>,
+}
+impl iroha::http::HttpTransport for CanonicalReadTransport {
+    fn send_blocking(
+        &self,
+        request: iroha::http::TransportRequest,
+    ) -> Result<iroha::http::Response<Vec<u8>>> {
+        self.requests.lock().unwrap().push(request);
+        self.responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| eyre!("unexpected extra canonical read request"))
+    }
+    fn send(&self, request: iroha::http::TransportRequest) -> iroha::http::TransportFuture<'_> {
+        Box::pin(async move { self.send_blocking(request) })
+    }
+}
+struct CanonicalReadContext {
+    config: Config,
+    client: Client,
+    i18n: Localizer,
+    output: Option<String>,
+}
+impl RunContext for CanonicalReadContext {
+    fn config(&self) -> &Config {
+        &self.config
+    }
+    fn transaction_metadata(&self) -> Option<&Metadata> {
+        None
+    }
+    fn input_instructions(&self) -> bool {
+        false
+    }
+    fn output_instructions(&self) -> bool {
+        false
+    }
+    fn i18n(&self) -> &Localizer {
+        &self.i18n
+    }
+    fn print_data<T: JsonSerialize + ?Sized>(&mut self, data: &T) -> Result<()> {
+        self.output = Some(norito::json::to_json(data)?);
+        Ok(())
+    }
+    fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
+        self.output = Some(data.to_string());
+        Ok(())
+    }
+    fn client_from_config(&self) -> Result<Client> {
+        Ok(self.client.clone())
+    }
+}
+fn canonical_read_context(
+    responses: Vec<iroha::http::Response<Vec<u8>>>,
+) -> (CanonicalReadContext, std::sync::Arc<CanonicalReadTransport>) {
+    let config = fallback_config();
+    let transport = std::sync::Arc::new(CanonicalReadTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        responses: std::sync::Mutex::new(responses.into()),
+    });
+    let client = Client::builder(config.clone())
+        .http_transport(transport.clone())
+        .build()
+        .expect("canonical read client");
+    (
+        CanonicalReadContext {
+            config,
+            client,
+            i18n: Localizer::new(Bundle::Cli, Language::English),
+            output: None,
+        },
+        transport,
+    )
+}
+#[test]
+fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
+    use iroha::data_model::{
+        query::{
+            CommittedTransaction, CommittedTxFilters, QueryRequest, SignedQuery,
+            dsl::CompoundPredicate,
+        },
+        transaction::{TransactionResult, error::TransactionRejectionReason},
+    };
+    use iroha_version::codec::DecodeVersioned;
+    use norito::codec::Decode;
+
+    let config = fallback_config();
+    let signed = TransactionBuilder::new(
+        config.network_id,
+        config.account.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .try_sign(config.key_pair.private_key())
+    .expect("sign exact transaction fixture");
+    let hash = signed.hash_as_entrypoint();
+    let result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+        ValidationFail::NotPermitted("fixture contract permission denied".to_owned()),
+    )));
+    let transaction = CommittedTransaction {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"exact CLI transaction block")),
+        entrypoint_hash: hash,
+        entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+        entrypoint: TransactionEntrypoint::External(signed),
+        result_hash: result.hash(),
+        result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+        result,
+        merge_inclusion: None,
+    };
+    for mismatched_hash in [false, true] {
+        let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
+            hash: if mismatched_hash {
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                    b"other entrypoint",
+                ))
+                .to_string()
+            } else {
+                hash.to_string()
+            },
+            transaction: transaction.clone(),
+            trigger_completions: Vec::new(),
+        };
+        let capabilities = iroha::http::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(
+                format!(
+                    "{{\"data_model_version\":{}}}",
+                    iroha::data_model::DATA_MODEL_VERSION
+                )
+                .into_bytes(),
+            )
+            .unwrap();
+        let response = iroha::http::Response::builder()
+            .status(200)
+            .header("content-type", "application/x-norito")
+            .body(norito::to_bytes(&details).unwrap())
+            .unwrap();
+        let (mut context, transport) = canonical_read_context(vec![capabilities, response]);
+        let hash_literal = hash.to_string();
+        let outcome = Args::try_parse_from([
+            "iroha",
+            "ledger",
+            "transaction",
+            "get",
+            "--hash",
+            &hash_literal,
+        ])
+        .unwrap()
+        .command
+        .run(&mut context);
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "one capability read and one exact query");
+        assert_eq!(requests[1].method, iroha::http::Method::POST);
+        assert_eq!(requests[1].url.path(), "/v1/pipeline/transactions/details");
+        let query = SignedQuery::decode_all_versioned(&requests[1].body).unwrap();
+        query.verify_signature().unwrap();
+        assert_eq!(query.authority(), &config.account);
+        let QueryRequest::Start(query) = query.request() else {
+            panic!("transaction get must sign an exact transaction-details query");
+        };
+        let (_, predicate, _, _) = query.parts();
+        let predicate =
+            CompoundPredicate::<CommittedTransaction>::decode(&mut std::io::Cursor::new(predicate))
+                .unwrap();
+        assert_eq!(
+            predicate.committed_tx_filters(),
+            Some(CommittedTxFilters {
+                entry_eq: Some(hash),
+                ..CommittedTxFilters::default()
+            })
+        );
+        if mismatched_hash {
+            assert!(outcome.is_err(), "a substituted proof must fail");
+            assert!(context.output.is_none());
+        } else {
+            outcome.expect("rejected transactions still have readable details");
+            assert_eq!(
+                context.output,
+                Some(norito::json::to_json(&transaction).unwrap())
+            );
+        }
+    }
+}
+fn effective_permission_page(names: &[&str]) -> iroha::http::Response<Vec<u8>> {
+    let items: Vec<_> = names
+        .iter()
+        .map(|name| {
+            Permission::new(
+                (*name).to_owned(),
+                iroha_primitives::json::Json::from(norito::json!({})),
+            )
+        })
+        .collect();
+    let body = format!(
+        "{{\"items\":{},\"total\":{}}}",
+        norito::json::to_json(&items).unwrap(),
+        items.len()
+    );
+    iroha::http::Response::builder()
+        .status(200)
+        .header("content-type", "application/json; charset=utf-8")
+        .header("x-iroha-account-permission-semantics", "effective-v1")
+        .header("x-iroha-fanout-routes-attempted", "2")
+        .header("x-iroha-fanout-routes-succeeded", "2")
+        .header("x-iroha-fanout-routes-failed", "0")
+        .header("x-iroha-fanout-routes-denied", "0")
+        .header("x-iroha-fanout-routes-unavailable", "0")
+        .header("x-iroha-fanout-routes-not-found", "0")
+        .body(body.into_bytes())
+        .unwrap()
+}
+#[test]
+fn account_permission_list_reads_complete_effective_fanout_before_global_pagination() {
+    for bounded in [false, true] {
+        // Pages are merged per route, so a page can exceed --fetch-size and a permission
+        // may occur on different pages in different dataspaces. `total` is page-local.
+        let (mut context, transport) = canonical_read_context(vec![
+            effective_permission_page(&["CanC", "CanA", "CanB"]),
+            effective_permission_page(&["CanC", "CanD"]),
+            effective_permission_page(&["CanE"]),
+            effective_permission_page(&[]),
+        ]);
+        let account = context.config.account.to_string();
+        let mut argv = vec![
+            "iroha",
+            "account",
+            "permission",
+            "list",
+            "--id",
+            account.as_str(),
+            "--fetch-size",
+            "2",
+        ];
+        if bounded {
+            argv.extend(["--offset", "1", "--limit", "2"]);
+        }
+        Args::try_parse_from(argv)
+            .unwrap()
+            .command
+            .run(&mut context)
+            .unwrap();
+        let permissions: Vec<Permission> =
+            norito::json::from_json(context.output.as_deref().unwrap()).unwrap();
+        let names: Vec<_> = permissions.iter().map(Permission::name).collect();
+        assert_eq!(
+            names,
+            if bounded {
+                vec!["CanB", "CanC"]
+            } else {
+                vec!["CanA", "CanB", "CanC", "CanD", "CanE"]
+            }
+        );
+        let mut expected_url = context.config.torii_api_url.clone();
+        expected_url.set_path(&format!("/v1/accounts/{account}/permissions"));
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(request.method, iroha::http::Method::GET);
+            assert_eq!(request.url.path(), expected_url.path());
+            let params: std::collections::BTreeMap<_, _> = request.url.query_pairs().collect();
+            assert_eq!(params.get("limit").map(|v| v.as_ref()), Some("2"));
+            assert_eq!(params.get("offset").unwrap(), &(index * 2).to_string());
+            assert_eq!(params.get("count_mode").map(|v| v.as_ref()), Some("exact"));
+            for name in ["x-iroha-account", "x-iroha-signature"] {
+                assert!(
+                    request
+                        .headers
+                        .iter()
+                        .any(|(key, value)| key.as_str() == name && !value.is_empty())
+                );
+            }
+        }
+    }
+}
+#[test]
+fn account_permission_list_rejects_partial_or_non_effective_pages_without_output() {
+    for damage in 0..5 {
+        let mut damaged = effective_permission_page(&["CanB"]);
+        match damage {
+            0 => {
+                damaged
+                    .headers_mut()
+                    .remove("x-iroha-account-permission-semantics");
+            }
+            1 => {
+                damaged
+                    .headers_mut()
+                    .insert("x-iroha-fanout-routes-failed", "1".parse().unwrap());
+            }
+            2 => {
+                damaged
+                    .headers_mut()
+                    .remove("x-iroha-fanout-routes-succeeded");
+            }
+            3 => {
+                *damaged.body_mut() = br#"{"items":[],"total":1}"#.to_vec();
+            }
+            4 => {
+                *damaged.status_mut() = iroha::http::StatusCode::CONFLICT;
+            }
+            _ => unreachable!(),
+        }
+        let (mut context, transport) =
+            canonical_read_context(vec![effective_permission_page(&["CanA"]), damaged]);
+        let account = context.config.account.to_string();
+        let result = Args::try_parse_from([
+            "iroha",
+            "account",
+            "permission",
+            "list",
+            "--id",
+            account.as_str(),
+            "--fetch-size",
+            "1",
+        ])
+        .unwrap()
+        .command
+        .run(&mut context);
+        assert!(result.is_err(), "damage {damage} must fail");
+        assert!(
+            context.output.is_none(),
+            "no partial permission set may escape"
+        );
+        assert_eq!(transport.requests.lock().unwrap().len(), 2);
+    }
+}
+#[test]
+fn account_permission_list_rejects_zero_pagination_before_http() {
+    for flag in ["--limit", "--fetch-size"] {
+        let (mut context, transport) = canonical_read_context(Vec::new());
+        let account = context.config.account.to_string();
+        let error = Args::try_parse_from([
+            "iroha",
+            "account",
+            "permission",
+            "list",
+            "--id",
+            account.as_str(),
+            flag,
+            "0",
+        ])
+        .unwrap()
+        .command
+        .run(&mut context)
+        .expect_err("zero pagination rejected");
+        assert!(error.to_string().contains("must be positive"));
+        assert!(transport.requests.lock().unwrap().is_empty());
+    }
+}
+#[test]
+fn account_permission_list_propagates_server_page_cap_rejection() {
+    // The permission handler's enforce_app_pagination rejects an oversized explicit
+    // limit; it does not silently clamp the per-route stride to its configured cap.
+    let response = iroha::http::Response::builder()
+        .status(400)
+        .header("x-iroha-reject-code", "invalid_pagination")
+        .body(Vec::new())
+        .unwrap();
+    let (mut context, transport) = canonical_read_context(vec![response]);
+    let account = context.config.account.to_string();
+    let oversized = u64::MAX.to_string();
+    let error = Args::try_parse_from([
+        "iroha",
+        "account",
+        "permission",
+        "list",
+        "--id",
+        account.as_str(),
+        "--fetch-size",
+        oversized.as_str(),
+    ])
+    .unwrap()
+    .command
+    .run(&mut context)
+    .expect_err(
+        "server page cap rejection must not return a partial set or retry with a guessed stride",
+    );
+    assert!(error.to_string().contains("HTTP 400"));
+    assert!(context.output.is_none());
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let params: std::collections::BTreeMap<_, _> = requests[0].url.query_pairs().collect();
+    assert_eq!(params.get("limit").unwrap(), &oversized);
+    assert_eq!(params.get("offset").map(|value| value.as_ref()), Some("0"));
+}
+#[test]
+fn ledger_asset_get_uses_exact_singular_query_and_preserves_not_found() {
+    use iroha::data_model::asset::AssetBalanceScope;
+    use iroha::data_model::query::{
+        QueryRequest, QueryResponse, SignedQuery, SingularQueryBox, SingularQueryOutputBox,
+    };
+    use iroha_version::codec::DecodeVersioned;
+
+    for scope in [
+        AssetBalanceScope::Global,
+        AssetBalanceScope::Dataspace(DataSpaceId::new(3)),
+    ] {
+        for missing in [false, true] {
+            let account = fallback_config().account;
+            let definition = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "coin".parse().unwrap(),
+            );
+            let id = AssetId::with_scope(definition.clone(), account.clone(), scope);
+            let asset = Asset::new(id.clone(), 77_u32);
+            let capabilities = iroha::http::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(
+                    format!(
+                        "{{\"data_model_version\":{}}}",
+                        iroha::data_model::DATA_MODEL_VERSION
+                    )
+                    .into_bytes(),
+                )
+                .unwrap();
+            let response = if missing {
+                iroha::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap()
+            } else {
+                iroha::http::Response::builder()
+                    .status(200)
+                    .header("content-type", "application/x-norito")
+                    .body(
+                        norito::to_bytes(&QueryResponse::Singular(SingularQueryOutputBox::Asset(
+                            asset.clone(),
+                        )))
+                        .unwrap(),
+                    )
+                    .unwrap()
+            };
+            let (mut context, transport) = canonical_read_context(vec![capabilities, response]);
+            let definition_literal = definition.to_string();
+            let account_literal = account.to_string();
+            let scope_literal = match scope {
+                AssetBalanceScope::Global => "global",
+                AssetBalanceScope::Dataspace(_) => "dataspace:3",
+            };
+            let result = Args::try_parse_from([
+                "iroha",
+                "ledger",
+                "asset",
+                "get",
+                "--definition",
+                &definition_literal,
+                "--account",
+                &account_literal,
+                "--scope",
+                scope_literal,
+            ])
+            .unwrap()
+            .command
+            .run(&mut context);
+            let requests = transport.requests.lock().unwrap();
+            assert_eq!(
+                requests.len(),
+                2,
+                "only capability and singular query requests"
+            );
+            assert_eq!(requests[1].method, iroha::http::Method::POST);
+            assert_eq!(requests[1].url.path(), "/v1/query");
+            let signed = SignedQuery::decode_all_versioned(&requests[1].body).unwrap();
+            signed.verify_signature().unwrap();
+            assert_eq!(signed.authority(), &account);
+            let QueryRequest::Singular(SingularQueryBox::FindAssetById(query)) = signed.request()
+            else {
+                panic!("asset get must submit the singular query, never an iterable scan");
+            };
+            assert_eq!(query.asset_id(), &id);
+            if missing {
+                let error = result.expect_err("singular missing asset must remain an error");
+                assert!(matches!(
+                    error.downcast_ref::<iroha::query::QueryError>(),
+                    Some(iroha::query::QueryError::Validation(
+                        ValidationFail::QueryFailed(
+                            iroha::data_model::query::error::QueryExecutionFail::NotFound
+                        )
+                    ))
+                ));
+                assert!(context.output.is_none());
+            } else {
+                result.unwrap();
+                let found: Asset =
+                    norito::json::from_json(context.output.as_deref().unwrap()).unwrap();
+                assert_eq!(found, asset);
+            }
+        }
+    }
+}
+
+#[test]
+fn transaction_submission_receipt_hash_roundtrips_through_status_cli() {
+    use iroha::data_model::{nexus::FeeDebitSource, transaction::TransactionBuilder};
+    use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
+
+    let config = fallback_config();
+    let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
+    let transaction = TransactionBuilder::new(
+        config.network_id,
+        config.account.clone(),
+        fee_payment.clone(),
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        "submission receipt fixture".to_owned(),
+    )])
+    .try_sign(config.key_pair.private_key())
+    .expect("signed submission fixture");
+    let hash = transaction.hash();
+    let fee_quote = FeeQuoteResponse {
+        intent: fee_payment,
+        observation: FeeQuoteObservation {
+            ledger_time_ms: 1,
+            next_block_height: 2,
+            route_dataspace_id: DataSpaceId::UNIVERSAL,
+        },
+        components: Vec::new(),
+        capacities: Vec::new(),
+        decision: FeeQuoteDecision::Accepted {
+            debit_source: FeeDebitSource::Account(config.account),
+            program_revision: None,
+        },
+    };
+    let receipt = json_utils::json_object(
+        transaction_submission_receipt_fields(hash, &transaction, &fee_quote).unwrap(),
+    )
+    .unwrap();
+    let encoded = norito::json::to_json(&receipt).unwrap();
+    let exported: json::Value = norito::json::from_json(&encoded).unwrap();
+    let exported_hash = exported.get("hash").and_then(json::Value::as_str).unwrap();
+    assert_eq!(exported_hash, hex::encode(hash.as_ref()));
+    assert_eq!(exported_hash.len(), 64);
+    assert!(
+        exported_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    let args = Args::try_parse_from(["iroha", "tx", "status", "--hash", exported_hash, "--wait"])
+        .expect("the exported receipt hash must be accepted directly by tx status");
+    let Command::Tx(transaction::Command::Status(status)) = args.command else {
+        panic!("expected tx status");
+    };
+    assert_eq!(status.hash, hash);
+    assert!(status.wait.wait);
+    assert_eq!(
+        exported.get("transaction"),
+        Some(&json_utils::json_value(&transaction).unwrap())
+    );
+    assert_eq!(
+        exported.get("fee_quote"),
+        Some(&json_utils::json_value(&fee_quote).unwrap())
+    );
+    let checked_network = json_utils::json_value(&config.network_id).unwrap();
+    assert!(checked_network.as_str().unwrap().starts_with("hash:"));
+    assert_eq!(
+        norito::json::from_value::<NetworkId>(checked_network).unwrap(),
+        config.network_id
+    );
+    let checked_hash = json_utils::json_value(&hash).unwrap();
+    assert!(
+        Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            checked_hash.as_str().unwrap(),
+        ])
+        .is_err(),
+        "the raw transaction locator parser must not gain a checked-literal fallback"
+    );
 }

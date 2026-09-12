@@ -13,6 +13,38 @@ mod certified_body_fence_supersession {
         },
     };
 
+    impl V2EffectExecutor<crate::sumeragi::v2_runtime::SerializedV2Runtime> {
+        /// Observe cold Decision protection before and after the first Apply publication.
+        pub(in crate::sumeragi) fn assert_cold_decision_protection_for_test(
+            &self,
+            subject: wire::BlockSubject,
+            apply_published: bool,
+        ) {
+            let decision = self
+                .runtime
+                .decided_body()
+                .expect("actual recovered Decision")
+                .expect("the fixture has an authenticated durable Decision");
+            assert_eq!(decision.2, subject);
+            assert!(self.pending_runner_decision_cleanup.is_none());
+            assert_eq!(self.protected_decision, apply_published.then_some(decision));
+            assert_eq!(self.decision_body_drained, apply_published);
+            assert_eq!(
+                self.live_lifecycle_decision_apply.is_some(),
+                apply_published
+            );
+            if let Some(owner) = self.live_lifecycle_decision_apply.as_ref() {
+                assert_eq!(owner.decision, decision);
+                assert_eq!(owner.subject, subject);
+                assert_eq!(
+                    owner.tag,
+                    self.runtime.authoritative_tag().expect("current tag")
+                );
+                assert!(self.live_lifecycle_validate_successor.is_none());
+            }
+        }
+    }
+
     struct ReadyBodyFixture {
         transport: ProductionTransportFixture,
         owner: ProductionLifecycleOwnerV1,
@@ -153,6 +185,10 @@ mod certified_body_fence_supersession {
             Arc::clone(&transport.executor.output_guard),
             1,
         );
+        crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
+            &mut services,
+            &transport.validator_keys[usize::try_from(leader).expect("local validator index")],
+        );
         planner_io.install_output_guard_for_test(
             &mut services,
             Arc::clone(&transport.executor.output_guard),
@@ -280,6 +316,13 @@ mod certified_body_fence_supersession {
         now: Instant,
     ) -> Vec<AdapterEffect> {
         let executor = &mut fixture.transport.executor;
+        let previous_tag = executor.current_tag();
+        assert_eq!(timeout.round.height, previous_tag.height());
+        let expected_view = timeout.round.view.checked_add(1).expect("next TC view");
+        assert!(
+            timeout.round.view == previous_tag.view() || expected_view == previous_tag.view(),
+            "the TC must advance the view or strengthen the already installed view"
+        );
         if executor.lifecycle_live_clocks_are_unarmed() {
             executor
                 .arm_live_clocks(
@@ -290,78 +333,138 @@ mod certified_body_fence_supersession {
         }
         executor
             .enqueue_network(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout.clone()),
             ))
             .expect("enqueue the real authenticated timeout quorum");
-        executor
-            .publish_external_lifecycle_owners()
-            .expect("publish the exact runtime owner census");
-        assert!(
+        // Timer and deferred owners may precede this FIFO occurrence. Keep the
+        // supplied clock fixed and settle those owners through the production
+        // seams, stopping before service dispatch of the exact TC batch.
+        for _ in 0..128 {
+            if executor
+                .settle_pending_live_wal_sign_admission(&mut fixture.owner, services)
+                .expect("settle the preceding durable Sign owner")
+                != 0
+            {
+                continue;
+            }
+            let outputs = executor
+                .settle_pending_lifecycle_output_admissions(&mut fixture.owner, services)
+                .expect("settle the preceding exact lifecycle output");
+            if outputs.requires_outer_executor_yield() {
+                continue;
+            }
+            if executor
+                .settle_pending_durable_validate_admissions(&mut fixture.owner, services)
+                .expect("settle the preceding body admission without executing its callback")
+                != 0
+            {
+                continue;
+            }
+            if executor.retained_effect_batch.is_some() || executor.parked_effect_batch.is_some() {
+                executor
+                    .drain_retained_effect_batch(services, true)
+                    .expect("dispatch only the retained predecessor batch");
+                executor
+                    .consume_leader_wire_runtime_terminals(services)
+                    .expect("consume the preceding runtime occurrence after its effects");
+                continue;
+            }
+            executor
+                .publish_external_lifecycle_owners()
+                .expect("publish the exact runtime owner census");
+            assert!(
+                executor
+                    .runtime
+                    .decided_body()
+                    .expect("read the decision frontier")
+                    .is_none()
+            );
+            let wal_step = executor
+                .output_guard
+                .begin_fail_stop_operation()
+                .expect("the ordinary runtime WAL boundary is open");
+            let step = executor
+                .runtime
+                .step_effects(now)
+                .expect("service the actual scheduler owner before the queued TC");
             executor
                 .runtime
-                .decided_body()
-                .expect("read the exact decision frontier")
-                .is_none()
-        );
-        let wal_step = executor
-            .output_guard
-            .begin_fail_stop_operation()
-            .expect("the ordinary runtime WAL boundary is open");
-        let step = executor
-            .runtime
-            .step_effects(now)
-            .expect("normal TC scheduling installs and persists the new reducer generation");
-        executor
-            .runtime
-            .take_scheduler_ownership()
-            .expect("consume the real scheduler proof");
-        wal_step.complete();
-        executor
-            .finish_runtime_step_reconciliation(services)
-            .expect("retain the runtime's actual completion terminals");
-        assert!(
+                .take_scheduler_ownership()
+                .expect("consume the real scheduler proof");
+            wal_step.complete();
             executor
+                .finish_runtime_step_reconciliation(services)
+                .expect("retain the runtime's actual completion terminals");
+            assert!(
+                executor
+                    .runtime
+                    .decided_body()
+                    .expect("read the resulting frontier")
+                    .is_none()
+            );
+            let RuntimeStep::Advanced(effects) = step else {
+                continue;
+            };
+            let exact_tc = effects.iter().any(|effect| {
+                matches!(effect,
+                    AdapterEffect::EnterView { tag, certificate, .. }
+                        if certificate == &timeout && tag.height() == previous_tag.height()
+                            && tag.view() == expected_view && tag.strictly_advances(previous_tag)
+                )
+            });
+            if !exact_tc {
+                assert_eq!(
+                    executor.current_tag(),
+                    previous_tag,
+                    "a preceding runtime owner cannot install a different TC"
+                );
+                executor
+                    .consume_effects(effects, services)
+                    .expect("retain and dispatch the actual predecessor through its normal owner");
+                continue;
+            }
+            let entered_tag = executor.current_tag();
+            assert_eq!(entered_tag.view(), expected_view);
+            assert!(entered_tag.strictly_advances(previous_tag));
+            assert_eq!(executor.runtime.driver().current_tag(), entered_tag);
+            let observed = effects.clone();
+            let frontier = executor
                 .runtime
-                .decided_body()
-                .expect("read the resulting decision frontier")
-                .is_none()
-        );
-        let RuntimeStep::Advanced(effects) = step else {
-            panic!("the queued TC must advance the ordinary runtime");
-        };
-        let observed = effects.clone();
-        let frontier = executor
-            .runtime
-            .reconciliation_frontier()
-            .expect("derive the actual post-TC reconciliation frontier");
-        executor
-            .preflight_effect_batch_frontier(&effects, frontier)
-            .expect("the real EnterView leads the exact current effect batch");
-        let ownership = EffectRuntime::take_effect_ownership(&mut executor.runtime, &effects)
-            .expect("transfer the real runtime effect owners into the executor");
-        assert!(
+                .reconciliation_frontier()
+                .expect("derive the actual post-TC reconciliation frontier");
             executor
-                .plan_local_proposal_replay_consumptions(&effects, &ownership)
-                .expect("the TC carries no local ProposalIntent replay")
-                .is_empty()
-        );
-        assert!(
+                .preflight_effect_batch_frontier(&effects, frontier)
+                .expect("the real EnterView leads the exact current effect batch");
+            let ownership = EffectRuntime::take_effect_ownership(&mut executor.runtime, &effects)
+                .expect("transfer the real runtime effect owners into the executor");
+            assert!(
+                executor
+                    .plan_local_proposal_replay_consumptions(&effects, &ownership)
+                    .expect("the TC carries no local ProposalIntent replay")
+                    .is_empty()
+            );
+            assert!(
+                executor
+                    .runtime
+                    .take_live_proposal_intent_wal_sign(&effects)
+                    .expect("the TC has no live ProposalIntent WAL sidecar")
+                    .is_none()
+            );
             executor
-                .runtime
-                .take_live_proposal_intent_wal_sign(&effects)
-                .expect("the TC has no live ProposalIntent WAL sidecar")
-                .is_none()
+                .retain_effect_batch_at_frontier(effects, ownership, frontier)
+                .expect("retain all genuine current effects before any service dispatch");
+            executor
+                .commit_reconciliation_frontier(frontier, services)
+                .expect("commit the ordinary post-retention lock reconciliation");
+            executor
+                .consume_leader_wire_runtime_terminals(services)
+                .expect("consume the actual TC ingress retirement before lifecycle completion");
+            return observed;
+        }
+        panic!(
+            "the exact queued TC did not install view {expected_view} after bounded predecessor settlement; previous={previous_tag:?}, current={:?}",
+            executor.current_tag()
         );
-        executor
-            .retain_effect_batch_at_frontier(effects, ownership, frontier)
-            .expect("retain all genuine current effects before any service dispatch");
-        executor
-            .commit_reconciliation_frontier(frontier, services)
-            .expect("commit the ordinary post-retention lock reconciliation");
-        executor
-            .consume_leader_wire_runtime_terminals(services)
-            .expect("consume the actual TC ingress retirement before lifecycle completion");
-        observed
     }
 
     fn drive_current_body_to_validate(
@@ -529,7 +632,7 @@ mod certified_body_fence_supersession {
                 config: Hash::new(b"production transport config"),
             },
             [0x63; 32],
-            None,
+            |_| panic!("the cancelled active-body fixture has no completed validation marker"),
         );
         recovered.assert_body_recovery_snapshot_for_test(&expected);
         assert!(recovered.exact_recovered_body_pipeline_join_for_test());

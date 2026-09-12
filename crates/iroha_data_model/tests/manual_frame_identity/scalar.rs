@@ -13,12 +13,12 @@ use norito::{
 use iroha_data_model::{
     account::AccountId,
     id::NetworkId,
-    nexus::DataSpaceId,
     privacy::PrivacyX509KeyUsageRequirementV1,
     smart_contract::{ContractAddress, ContractAlias},
     sorafs::pin_registry::ManifestRootCid,
     transaction::executable::{ContractArgumentRecord, MAX_CONTRACT_ARGUMENT_RECORD_BYTES},
 };
+use iroha_model_base::topology::DataSpaceId;
 
 use crate::frame_identity_test_support::record;
 

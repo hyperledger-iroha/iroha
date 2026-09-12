@@ -50,6 +50,26 @@ FAKE_FAUCET_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 FAKE_FAUCET_AMOUNT = "25000"
 
 
+def restart_fixture_account_controller(
+    value: str, *, expected_discriminant: int | None = None
+) -> bytes:
+    """Isolate account parsing in restart tests, admitting only fixed mock accounts."""
+
+    if value not in {
+        *FAKE_VALIDATOR_AUTHORITIES,
+        FAKE_FAUCET_AUTHORITY,
+        FEE_QUOTE_AUTHORITY,
+        OTHER_CANONICAL_AUTHORITY,
+    }:
+        raise ValueError("unexpected restart fixture account")
+    if expected_discriminant is not None and (
+        expected_discriminant != module.DEFAULT_CHAIN_DISCRIMINANT
+        or not value.startswith("test")
+    ):
+        raise ValueError("unexpected restart fixture discriminant")
+    return value.removeprefix("test").removeprefix("sora").encode("utf-8")
+
+
 def fake_fee_payment() -> dict[str, object]:
     return {
         "payer": "authority",
@@ -484,7 +504,7 @@ class FakeRuntime:
             option
             for _binary, _subcommands, options in module.INROU_CANARY_CLI_SURFACES
             for option in options
-        } | {"--public-root", "--json"}
+        } | {"--scope", "--public-root", "--json"}
         self.sumeragi_status_http = 401
         self.initial_sumeragi_transport_unavailable_once = False
         self.restart_sumeragi_transport_unavailable_once = False
@@ -1255,7 +1275,6 @@ class FakeRuntime:
                     self._advance_restarted_guest(index)
             if targeted:
                 self.targeted_restart_started = True
-                self.height += 1
         elif values[0] == "/bin/bash" and values[1].endswith("/stop.sh"):
             target = Path(str(kwargs["cwd"]))
             selector = values[2:]
@@ -2364,7 +2383,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(
             restart["local_placement"]["placement_incarnation"], "a" * 63 + "b"
         )
-        self.assertGreater(restart["height_after"], restart["height_before"])
+        self.assertEqual(restart["height_after"], restart["height_before"])
         self.assertNotEqual(
             restart["processes_after"][0], restart["processes_before"][0]
         )
@@ -2680,6 +2699,70 @@ class TairaDevnetTests(unittest.TestCase):
             self.assertEqual(
                 command[command.index("--faucet-amount") + 1],
                 FAKE_FAUCET_AMOUNT,
+            )
+
+    @mock.patch.object(module, "_I105_ACCOUNT_DECODER", restart_fixture_account_controller)
+    def test_idle_restart_preserves_height_without_submitting_work(self) -> None:
+        runtime = FakeRuntime()
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        restart = report["inrou_restart"]
+        self.assertEqual(restart["height_after"], restart["height_before"])
+        target = self.root / "state" / "network"
+        start = ("/bin/bash", str(target / "start.sh"), "--peer-index", "0")
+        after_restart = runtime.commands[runtime.commands.index(start) + 1 :]
+        self.assertTrue(any("inrou-check" in command for command in after_restart))
+        self.assertFalse(
+            any(
+                "ping" in command or "--submit-prepared-envelope-fd" in command
+                for command in after_restart
+            )
+        )
+        self.assertEqual(
+            [row["app_data_marker_sha256"] for row in restart["inrou_check"]["replica_identities"]],
+            [row["app_data_marker_sha256"] for row in report["inrou_canary"]["replica_identities"]],
+        )
+
+    @mock.patch.object(module, "_I105_ACCOUNT_DECODER", restart_fixture_account_controller)
+    def test_restart_rejects_cluster_below_committed_floor(self) -> None:
+        runtime = FakeRuntime()
+
+        def run(command, **kwargs):
+            completed = runtime.run(command, **kwargs)
+            values = tuple(str(value) for value in command)
+            if (
+                values[0] == "/bin/bash"
+                and values[1].endswith("/start.sh")
+                and "--peer-index" in values
+            ):
+                runtime.height -= 1
+            return completed
+
+        args = self.up_args()
+        args.timeout_seconds = 0.01
+        with (
+            mock.patch.object(module.time, "sleep"),
+            self.assertRaisesRegex(module.DevnetError, "minimum_height="),
+        ):
+            module.up(args, run=run, request=runtime.request)
+        self.assertFalse(runtime.process_commands)
+
+    @mock.patch.object(module, "_I105_ACCOUNT_DECODER", restart_fixture_account_controller)
+    def test_restart_proof_rejects_regressed_retained_height(self) -> None:
+        runtime = FakeRuntime()
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        restart = dict(report["inrou_restart"])
+        restart["height_after"] = restart["height_before"] - 1
+
+        with self.assertRaisesRegex(module.DevnetError, "preserve the committed cluster height"):
+            module.require_inrou_restart_proof(
+                self.root / "state" / "network",
+                report["torii_roots"][0].rstrip("/"),
+                report["inrou_canary"],
+                report["source_observation"],
+                self.rust_target,
+                restart,
             )
 
     def test_restart_proof_accepts_same_pid_only_with_new_start_time(self) -> None:
@@ -3966,7 +4049,7 @@ class TairaDevnetTests(unittest.TestCase):
         args.timeout_seconds = 0.01
 
         with mock.patch.object(module.time, "sleep", return_value=None):
-            with self.assertRaisesRegex(module.DevnetError, "required_above=0"):
+            with self.assertRaisesRegex(module.DevnetError, "minimum_height=1"):
                 module.up(args, run=runtime.run, request=runtime.request)
 
         self.assertFalse(any("--no-wait" in command for command in runtime.commands))
@@ -5092,6 +5175,15 @@ class TairaDevnetTests(unittest.TestCase):
             any("doctor" in command and "--help" not in command for command in runtime.commands)
         )
 
+    def test_full_doctor_command_uses_explicit_full_scope(self) -> None:
+        runtime = FakeRuntime()
+        target = self.root / "doctor"
+        target.mkdir()
+        module.run_full_doctor(target, Path("/fake/iroha"), "http://127.0.0.1:8080/", runtime.run)
+        command = runtime.commands[-1]
+        self.assertEqual(command[command.index("--scope") + 1], "full")
+        self.assertEqual(command[command.index("--public-root") + 1], "http://127.0.0.1:8080")
+
     def test_full_doctor_runs_after_mandatory_canary(self) -> None:
         runtime = FakeRuntime()
 
@@ -5111,6 +5203,7 @@ class TairaDevnetTests(unittest.TestCase):
             if "doctor" in command and "--help" not in command
         ]
         self.assertEqual(len(doctors), 1)
+        self.assertEqual(doctors[0][doctors[0].index("--scope") + 1], "full")
         deploy_index = next(
             index
             for index, command in enumerate(runtime.commands)

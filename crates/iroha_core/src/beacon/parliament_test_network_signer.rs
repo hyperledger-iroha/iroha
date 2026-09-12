@@ -34,8 +34,8 @@ use iroha_data_model::{
         GlobalThresholdBeaconDkgDealerCommitmentV1, GlobalThresholdBeaconDkgSessionV1,
         GlobalThresholdBeaconPartialSignatureV1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use rand::{SeedableRng as _, rngs::StdRng};
 use thiserror::Error;
 

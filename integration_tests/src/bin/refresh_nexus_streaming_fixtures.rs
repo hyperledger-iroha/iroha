@@ -1,9 +1,9 @@
 //! Regenerate grouped Nexus and streaming golden fixtures from canonical Rust encoders.
 use hex::encode as hex_encode;
-use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Quantity, TriggerId,
 };
+use iroha_model_base::domain::DomainId;
 use norito::{
     codec::Encode,
     streaming::{

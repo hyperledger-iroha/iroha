@@ -392,9 +392,6 @@ impl_sorafs_reserve_instruction_box!(
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsPopIssuerPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::CommitSorafsPopCredentialBatch);
 impl_direct_instruction_box!(crate::isi::sorafs::PublishSorafsPopRevocationList);
-impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsCitizenBond);
-impl_direct_instruction_box!(crate::isi::sorafs::RotateSorafsCitizenBondAuthorization);
-impl_direct_instruction_box!(crate::isi::sorafs::RequestSorafsCitizenBondExit);
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsModerationPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationAppeal);
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsModerationJurorEligibility);
@@ -1505,12 +1502,11 @@ impl InstructionRegistry {
             || self.entries.contains_key(entry.wire_id)
             || self.wire_entries.contains_key(entry.type_name)
             || self.wire_entries.contains_key(entry.wire_id);
-        if collision {
-            panic!(
-                "instruction registry key collision for type `{}` and wire identifier `{}`",
-                entry.type_name, entry.wire_id
-            );
-        }
+        assert!(
+            !collision,
+            "instruction registry key collision for type `{}` and wire identifier `{}`",
+            entry.type_name, entry.wire_id
+        );
         self.entries.insert(entry.type_name, entry);
         self.wire_entries.insert(entry.wire_id, entry);
     }
@@ -2773,12 +2769,11 @@ pub mod prelude {
             PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
             RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterSorafsCitizenBond, RegisterSorafsModerationJurorEligibility,
-            RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsCitizenBondExit,
-            RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
+            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
+            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
             ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
-            RevokeProviderIngestCompletionAuthority, RotateSorafsCitizenBondAuthorization,
-            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,

@@ -187,7 +187,7 @@ impl PrivateSettlementPoolGovernanceProjectionV1 {
     /// Validate the complete public projection after snapshot recovery.
     pub(crate) fn validate_current_fields(&self) -> Result<(), PrivateSettlementStateErrorV1> {
         if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
-            || self.route.dataspace_id == iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+            || self.route.dataspace_id == iroha_model_base::topology::DataSpaceId::UNIVERSAL
             || self.route.lane_incarnation == zero_hash_v1()
             || self.pool_id.is_zero()
             || self.asset_binding_commitment == zero_hash_v1()
@@ -1300,7 +1300,7 @@ pub(crate) enum PrivateSettlementStateErrorV1 {
 mod tests {
     use super::*;
     use crate::private_settlement::sidecar_store::tests::sidecar_fixture;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
     #[test]
     fn pool_state_and_governance_frames_keep_their_declared_owner_roots() {

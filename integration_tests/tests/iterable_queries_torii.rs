@@ -4,6 +4,7 @@
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use std::{thread::sleep, time::Duration};
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // trait extension not needed in this test

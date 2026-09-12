@@ -1021,7 +1021,7 @@ fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
         &status,
         LaneLifecyclePlan {
             additions: Vec::new(),
-            retire: vec![iroha_data_model::nexus::LaneId::SINGLE],
+            retire: vec![iroha_model_base::topology::LaneId::SINGLE],
         },
     )
     .expect("build signed lifecycle transaction");
@@ -2389,7 +2389,7 @@ fn account_controller_replaced_summary_mentions_old_and_new_controllers() {
 fn account_recovery_policy_summary_mentions_alias_and_quorum() {
     let alias = iroha_data_model::account::AccountAlias::domainless(
         "primary".parse().expect("valid alias label"),
-        iroha_data_model::nexus::DataSpaceId::new(7),
+        iroha_model_base::topology::DataSpaceId::new(7),
     );
     let policy = iroha_data_model::account::AccountRecoveryPolicy::new(
         vec![iroha_data_model::account::RecoveryGuardian::new(

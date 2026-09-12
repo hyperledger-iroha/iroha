@@ -1,6 +1,7 @@
-//! Direct fallible IdBox decoding rejects malformed tags after frame authentication.
+//! Direct fallible `IdBox` decoding rejects malformed tags after frame authentication.
 
-use iroha_data_model::{id::IdBox, nexus::LaneId};
+use iroha_data_model::id::IdBox;
+use iroha_model_base::topology::LaneId;
 use norito::{SerializePayload as _, core as ncore};
 
 fn layouts() -> impl Iterator<Item = u8> {

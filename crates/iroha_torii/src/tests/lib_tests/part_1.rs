@@ -19,18 +19,15 @@ use iroha_crypto::{
     try_bfv_programmed_public_parameters_with_program,
 };
 use iroha_data_model::{
-    ChainId, Identifiable, Registrable, ValidationFail,
+    Identifiable, Registrable, ValidationFail,
     account::rekey::AccountAlias,
     account::{Account, AccountId, OpaqueAccountId},
     block::{BlockHeader, BlockSignature, SignedBlock},
-    domain::{Domain, DomainId},
+    domain::Domain,
     identifier::{IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId},
     isi::identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
     isi::ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
-    nexus::{
-        AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId,
-        UniversalAccountId,
-    },
+    nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, UniversalAccountId},
     permission::Permission,
     prelude::{Parameter, Quantity},
     proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId, VerifyingKeyRecord},
@@ -46,7 +43,10 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_samples::ALICE_ID;
 #[cfg(feature = "app_api")]
 use jsonwebtoken::EncodingKey;
@@ -2881,7 +2881,7 @@ fn sample_ivm_fee_payment() -> iroha_data_model::transaction::FeePaymentIntent {
 }
 #[test]
 fn zk_ivm_fee_payment_requires_typed_gas_bound_and_rejects_legacy_metadata() {
-    let metadata = iroha_data_model::metadata::Metadata::default();
+    let metadata = iroha_model_base::metadata::Metadata::default();
     let missing_gas = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
     assert!(validate_zk_ivm_fee_payment(&missing_gas, &metadata).is_err());
     let valid = sample_ivm_fee_payment();
@@ -2902,7 +2902,7 @@ fn make_ivm_prove_request(
         vk_ref,
         authority: sample_ivm_prove_authority(),
         fee_payment: sample_ivm_fee_payment(),
-        metadata: iroha_data_model::metadata::Metadata::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         bytecode,
         proved,
     }
@@ -3141,15 +3141,16 @@ fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) ->
     app
 }
 fn install_account_alias_policy_for_test(world: &mut World, authority: &AccountId) {
-    let mut policy = iroha_data_model::sns::fixtures::default_policy();
-    policy.suffix_id = iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID;
-    policy.suffix = "account-alias".to_owned();
+    // Use the same full alias grammar and pricing as first-release State initialization.
+    iroha_core::sns::seed_default_namespace_policies(world);
+    let mut policy = iroha_core::sns::policy_by_id(
+        &world.view(),
+        iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+    )
+    .expect("read native account alias policy")
+    .expect("native account alias policy is installed");
     policy.steward = authority.clone();
     policy.fund_splitter_account = authority.clone();
-    policy.payment_asset_id = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-    for tier in &mut policy.pricing {
-        tier.base_price.asset_id = policy.payment_asset_id.clone();
-    }
     world.smart_contract_state_mut_for_testing().insert(
         iroha_core::sns::policy_storage_key(iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID),
         norito::codec::Encode::encode(&policy),
@@ -3161,7 +3162,7 @@ fn install_onboarding_parent_leases_for_test(world: &mut World, owner: &AccountI
     );
     let dataspace_selector =
         iroha_core::sns::selector_for_dataspace_alias("sbp").expect("SBP selector");
-    let mut dataspace_metadata = iroha_data_model::metadata::Metadata::default();
+    let mut dataspace_metadata = iroha_model_base::metadata::Metadata::default();
     dataspace_metadata.insert(
         iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
             .parse()
@@ -3195,7 +3196,7 @@ fn install_onboarding_parent_leases_for_test(world: &mut World, owner: &AccountI
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         world.smart_contract_state_mut_for_testing().insert(
             iroha_core::sns::record_storage_key(&selector),

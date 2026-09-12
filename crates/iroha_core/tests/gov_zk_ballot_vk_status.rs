@@ -26,8 +26,8 @@ fn zk_ballot_rejects_when_vk_not_active() {
     // Minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
+    let domain_id: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = iroha_core::state::World::with([domain], [account], []);

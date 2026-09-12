@@ -5,10 +5,12 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::{Execute, ValidQuery},
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{prelude::*, query::dsl::CompoundPredicate};
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use mv::storage::StorageReadOnly;
 use std::collections::BTreeSet;
 #[test]
 fn multi_account_mint_returns_only_positive_holders() {
@@ -47,7 +49,7 @@ fn multi_account_mint_returns_only_positive_holders() {
         definition_id.clone(),
         "multi_coin".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(domain_id),
     ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
@@ -57,12 +59,32 @@ fn multi_account_mint_returns_only_positive_holders() {
     Mint::asset_quantity(7u32, AssetId::new(definition_id.clone(), holder_b.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("mint to holder B");
-    Mint::asset_quantity(
-        Quantity::zero(),
-        AssetId::new(definition_id.clone(), zero_holder.clone()),
-    )
-    .execute(&ALICE_ID, &mut stx)
-    .expect("zero mint succeeds");
+    let zero_asset_id = AssetId::new(definition_id.clone(), zero_holder.clone());
+    let error = Mint::asset_quantity(Quantity::zero(), zero_asset_id.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("zero mint must be rejected");
+    assert_eq!(
+        error,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+            "asset mint amount must be non-zero".into(),
+        ),
+    );
+    assert!(stx.world.assets().get(&zero_asset_id).is_none());
+    // Exercise the holder index through valid balance changes, including removal at zero.
+    Mint::asset_quantity(1u32, zero_asset_id.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("mint to the holder whose balance will return to zero");
+    assert!(
+        FindAccountsWithAsset::new(definition_id.clone())
+            .execute(CompoundPredicate::PASS, &stx)
+            .expect("query after mint succeeds")
+            .any(|account| account.id() == &zero_holder),
+        "a positive balance must add the account to the holder index"
+    );
+    Burn::asset_quantity(1u32, zero_asset_id.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("burn the holder's full balance");
+    assert!(stx.world.assets().get(&zero_asset_id).is_none());
     stx.apply();
     state_block.commit_world_overlay_for_testing().unwrap();
     let expected: BTreeSet<_> = [holder_a.clone(), holder_b.clone()].into_iter().collect();

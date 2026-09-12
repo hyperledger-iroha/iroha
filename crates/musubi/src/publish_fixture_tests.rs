@@ -1,9 +1,5 @@
 // Publication sidecar, compact-envelope, and journal transition tests.
-use std::{collections::VecDeque, io::Cursor};
-#[cfg(unix)]
-use std::io::Write as _;
-#[cfg(unix)]
-use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+use super::*;
 use iroha::{
     crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf},
     data_model::{
@@ -25,7 +21,6 @@ use iroha::{
             MusubiStorageAvailabilityV1, MusubiVerificationLockV1, MusubiVersionV1,
             musubi_provider_bundle_attestation_set_digest_v1, validate_musubi_account_id_v1,
         },
-        nexus::DataSpaceId,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
@@ -34,8 +29,13 @@ use iroha::{
         transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
+use iroha_model_base::topology::DataSpaceId;
+#[cfg(unix)]
+use std::io::Write as _;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt as _;
+use std::{collections::VecDeque, io::Cursor};
 use tempfile::tempdir;
-use super::*;
 fn publication_test_network_id(marker: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([marker; 32]),

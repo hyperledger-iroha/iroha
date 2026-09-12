@@ -11,8 +11,6 @@ use iroha_data_model::{
         pin_intent::{DaPinIntent, DaPinIntentWithLocation},
         types::BlobDigest,
     },
-    domain::DomainId,
-    nexus::LaneId,
     parameter::Parameters,
     query::{
         QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
@@ -20,6 +18,8 @@ use iroha_data_model::{
     },
     rwa::{Rwa, RwaControlPolicy, RwaId},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::LaneId;
 use nonzero_ext::nonzero;
 fn checked_da_authorization(lane_id: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
     let key_pair =
@@ -198,7 +198,7 @@ fn rwa_iterable_query_response_roundtrips_header_and_json() {
         iroha_primitives::numeric::NumericSpec::fractional(1),
         "https://example.test/rwa/lot-1".to_owned(),
         Some("vaulted".parse().expect("status")),
-        iroha_data_model::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
         Vec::new(),
         RwaControlPolicy::default(),
         checked_random_account_id(),

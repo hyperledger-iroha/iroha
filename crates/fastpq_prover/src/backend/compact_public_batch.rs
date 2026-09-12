@@ -387,7 +387,8 @@ mod tests {
         },
     };
     use iroha_crypto::Hash;
-    use iroha_data_model::{DomainId, asset::id::AssetDefinitionId};
+    use iroha_data_model::asset::id::AssetDefinitionId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use iroha_zkp_halo2::poseidon::PoseidonByteHasher;

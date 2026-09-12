@@ -762,7 +762,6 @@ mod tests {
     use iroha_data_model::{
         Level,
         asset::AssetDefinitionId,
-        domain::DomainId,
         events::data::sorafs::{SorafsReserveLedgerEvent, SorafsReserveLedgerEventKind},
         isi::{
             InstructionBox, Log,
@@ -771,7 +770,6 @@ mod tests {
                 RepaySorafsReserveCredit, RequestSorafsReserveMovement, SubmitSorafsReserveAppeal,
             },
         },
-        metadata::Metadata,
         sorafs::{
             capacity::ProviderId,
             pin_registry::StorageClass,
@@ -786,6 +784,8 @@ mod tests {
         },
         transaction::{Executable, FeePaymentIntent, IvmBytecode, SignedTransaction},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use std::{num::NonZeroU64, sync::Arc, time::Duration};
     const EXACT_RESERVE_TTL: Duration = Duration::from_secs(300);
     const MOVEMENT_ID: [u8; 32] = [0x61; 32];

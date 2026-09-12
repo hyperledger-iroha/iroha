@@ -277,7 +277,6 @@ use iroha_data_model::proof::ProofRecord;
 use iroha_data_model::sorafs::capacity::ProviderId;
 #[cfg(feature = "app_api")]
 use iroha_data_model::{
-    ChainId,
     account::{
         AccountAddress, AccountId,
         rekey::{AccountAlias, AccountAliasDomain},
@@ -288,12 +287,11 @@ use iroha_data_model::{
         AssetId,
     },
     block::proofs::BlockProofs,
-    domain::DomainId,
     events::trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
-    nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
+    nexus::{FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId},
     nft::NftId,
-    peer::{Peer, PeerId},
+    peer::Peer,
     permission::Permission,
     query::{CommittedTransaction, SignedQuery},
     rwa::RwaId,
@@ -323,8 +321,13 @@ use iroha_executor_data_model::permission::query::{
     CanReadAllLedgerData, CanReadRestrictedDataspace,
 };
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::chain::ChainId;
+#[cfg(feature = "app_api")]
+use iroha_model_base::domain::DomainId;
 #[cfg(feature = "app_api")]
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_primitives::{addr::SocketAddr, numeric::Quantity};
@@ -8571,7 +8574,7 @@ struct InternalAccountReadResponse {
     /// Canonical domainless account identifier.
     id: AccountId,
     /// Complete account metadata.
-    metadata: iroha_data_model::metadata::Metadata,
+    metadata: iroha_model_base::metadata::Metadata,
     /// Universal account identifier, when assigned.
     #[norito(default)]
     uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
@@ -13762,10 +13765,9 @@ async fn handler_runtime_abi_hash(
 // -------------- Core info (AppState-based) --------------
 #[cfg(feature = "connect")]
 fn torii_proxy_authenticated_peer_is_trusted(app: &AppState, peer_id: &PeerId) -> bool {
+    // A connected observer proves possession of a peer key, not authority to
+    // delegate account-visible reads or other internal Torii operations.
     app.local_peer_id.as_ref() == Some(peer_id)
-        || app
-            .online_peers
-            .with_snapshot(|peers| peers.iter().any(|peer| peer.id() == peer_id))
         || app
             .state
             .world_view()
@@ -14045,12 +14047,31 @@ async fn handler_health(
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Future ordinary chain-readiness checks belong here.
+/// probe. Admission remains unavailable until Queue startup reconciliation finishes.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Emergency Fast mode is live but intentionally not production-ready",
+        )
+            .into_response();
+    }
+    if app.queue.lane_reservation_startup_reconciliation_pending() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Queue startup reconciliation is still pending",
+        )
+            .into_response();
+    }
+    if app.queue.transaction_selection_durability_faulted()
+        || app
+            .sumeragi
+            .as_ref()
+            .is_some_and(|sumeragi| !sumeragi.admission_ready())
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Consensus admission is unavailable",
         )
             .into_response();
     }
@@ -14169,7 +14190,7 @@ async fn handler_runtime_metrics(
     let payload = crate::runtime::handle_runtime_metrics(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-/// GET /v1/node/capabilities — wrapper enforcing access policy.
+/// GET /v1/node/capabilities — public compatibility metadata with listener access policy.
 async fn handler_node_capabilities(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -14501,7 +14522,7 @@ pub struct ZkIvmDeriveRequestDto {
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Transaction metadata. Retired fee and gas keys are rejected.
     #[norito(default)]
-    pub metadata: iroha_data_model::metadata::Metadata,
+    pub metadata: iroha_model_base::metadata::Metadata,
     /// IVM bytecode to execute.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
 }
@@ -14547,7 +14568,7 @@ pub struct ZkIvmProveRequestDto {
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Transaction metadata. Retired fee and gas keys are rejected.
     #[norito(default)]
-    pub metadata: iroha_data_model::metadata::Metadata,
+    pub metadata: iroha_model_base::metadata::Metadata,
     /// IVM bytecode to execute and prove.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
     /// Optional client-provided proved payload.
@@ -15904,7 +15925,7 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
 #[cfg(feature = "app_api")]
 fn validate_zk_ivm_fee_payment(
     fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
-    metadata: &iroha_data_model::metadata::Metadata,
+    metadata: &iroha_model_base::metadata::Metadata,
 ) -> Result<(), Error> {
     let invalid = |message: String| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -17417,7 +17438,7 @@ fn authoritative_pending_public_mailbox_messages(
 #[cfg(feature = "app_api")]
 fn exact_local_soracloud_runtime_peer_id(
     app: &SharedAppState,
-) -> Result<iroha_data_model::peer::PeerId, SoracloudRuntimeExecutionError> {
+) -> Result<iroha_model_base::peer::PeerId, SoracloudRuntimeExecutionError> {
     let runtime = app.soracloud_runtime.as_ref().ok_or_else(|| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -17430,7 +17451,7 @@ fn exact_local_soracloud_runtime_peer_id(
             "Soracloud runtime does not advertise a local peer id",
         )
     })?;
-    let runtime_peer_id: iroha_data_model::peer::PeerId =
+    let runtime_peer_id: iroha_model_base::peer::PeerId =
         runtime_peer_id.parse().map_err(|error| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -17877,7 +17898,7 @@ fn torii_autoscale_capacity_lane_ids_for_status(
 }
 fn resolve_torii_route_for_dataspace_id(
     app: &AppState,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    dataspace_id: iroha_model_base::topology::DataSpaceId,
 ) -> Result<RoutingDecision, queue::RoutingResolveError> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -17913,7 +17934,7 @@ fn resolve_torii_route_for_dataspace_id(
 }
 fn torii_routes_for_dataspaces(
     app: &AppState,
-    dataspaces: impl IntoIterator<Item = iroha_data_model::nexus::DataSpaceId>,
+    dataspaces: impl IntoIterator<Item = iroha_model_base::topology::DataSpaceId>,
 ) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     let mut routes = BTreeMap::new();
     for dataspace_id in dataspaces {
@@ -17985,7 +18006,7 @@ fn resolve_torii_target_alias_routes(
 }
 fn torii_target_domain_routes(
     app: &AppState,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
 ) -> Result<Vec<RoutingDecision>, Response> {
     resolve_torii_target_domain_routes(app, domain_id).map_err(|error| {
         torii_proxy_error_response(
@@ -17997,7 +18018,7 @@ fn torii_target_domain_routes(
 }
 fn resolve_torii_target_domain_routes(
     app: &AppState,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
 ) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     let dataspace_id = app
         .state
@@ -18788,7 +18809,7 @@ fn validate_incoming_read_proxy_route(
 #[cfg(feature = "app_api")]
 fn torii_route_for_lane_id(
     app: &AppState,
-    lane_id: iroha_data_model::nexus::LaneId,
+    lane_id: iroha_model_base::topology::LaneId,
 ) -> Result<RoutingDecision, Error> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -18828,7 +18849,7 @@ fn torii_route_for_lane_id(
 #[cfg(feature = "app_api")]
 fn torii_route_for_public_lane_id(
     app: &AppState,
-    lane_id: iroha_data_model::nexus::LaneId,
+    lane_id: iroha_model_base::topology::LaneId,
 ) -> Result<RoutingDecision, Error> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -18848,7 +18869,7 @@ fn torii_route_for_public_lane_id(
 #[cfg(feature = "app_api")]
 fn torii_route_for_dataspace_id(
     app: &AppState,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    dataspace_id: iroha_model_base::topology::DataSpaceId,
 ) -> Result<RoutingDecision, Error> {
     resolve_torii_route_for_dataspace_id(app, dataspace_id).map_err(|error| Error::PushIntoQueue {
         source: Box::new(queue::Error::UnresolvedRoute {
@@ -19777,8 +19798,10 @@ fn torii_account_read_route_scope(
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
-    let mut routes =
-        BTreeMap::<iroha_data_model::nexus::DataSpaceId, iroha_data_model::nexus::LaneId>::new();
+    let mut routes = BTreeMap::<
+        iroha_model_base::topology::DataSpaceId,
+        iroha_model_base::topology::LaneId,
+    >::new();
     for lane in nexus.lane_catalog.lanes() {
         if !torii_lane_active_for_routing(app, lane.id) {
             continue;
@@ -20172,7 +20195,7 @@ enum SignedQueryScope {
     CrossDataspaceFanout,
     TargetAccount(AccountId),
     TargetAlias(iroha_data_model::account::AccountAlias),
-    TargetDomain(iroha_data_model::domain::DomainId),
+    TargetDomain(iroha_model_base::domain::DomainId),
 }
 fn torii_signed_query_permission_denied_response(
     authority: &AccountId,
@@ -20465,7 +20488,7 @@ fn resolve_asset_definition_scope(
 #[cfg(feature = "app_api")]
 fn asset_definition_domain_snapshot(
     app: &AppState,
-) -> BTreeMap<iroha_data_model::asset::AssetDefinitionId, iroha_data_model::domain::DomainId> {
+) -> BTreeMap<iroha_data_model::asset::AssetDefinitionId, iroha_model_base::domain::DomainId> {
     app.state
         .world_view()
         .asset_definition_domains()
@@ -20514,7 +20537,7 @@ fn target_account_iterable_query(
 }
 fn target_domain_iterable_query(
     _query: &iroha_data_model::query::QueryWithParams,
-) -> Option<iroha_data_model::domain::DomainId> {
+) -> Option<iroha_model_base::domain::DomainId> {
     None
 }
 fn target_scope_singular_query_for_app(
@@ -20535,7 +20558,7 @@ fn target_scope_singular_query_for_app(
 fn target_domain_iterable_query_for_app(
     app: &AppState,
     query: &iroha_data_model::query::QueryWithParams,
-) -> Option<iroha_data_model::domain::DomainId> {
+) -> Option<iroha_model_base::domain::DomainId> {
     use iroha_data_model::prelude::FindAccountsWithAsset;
     (query.item == iroha_data_model::query::QueryItemKind::Account)
         .then(|| decode_query_payload::<FindAccountsWithAsset>(&query.query_payload))
@@ -20621,7 +20644,7 @@ fn target_domain_iterable_query_for_app_bounded(
     app: &AppState,
     query: &iroha_data_model::query::QueryWithParams,
     memory_limits: QueryScopeMemoryLimits,
-) -> Result<Option<iroha_data_model::domain::DomainId>, Response> {
+) -> Result<Option<iroha_model_base::domain::DomainId>, Response> {
     use iroha_data_model::prelude::FindAccountsWithAsset;
     let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     if item_kind != iroha_data_model::query::QueryItemKind::Account {
@@ -25464,6 +25487,23 @@ fn execute_trusted_internal_account_asset_local_read(
     )
 }
 #[cfg(feature = "app_api")]
+fn require_routed_contract_view_authority(
+    scope: &ToriiFanoutRouteScopeV1,
+    authority: &AccountId,
+) -> Result<(), Error> {
+    let ToriiFanoutRouteScopeV1::VisibleAccount {
+        caller_account_id: Some(caller),
+    } = scope
+    else {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "routed contract view requires an authenticated caller".to_owned(),
+            ),
+        ));
+    };
+    require_runtime_governance_canonical_account_literal(caller, authority, "routed contract view")
+}
+#[cfg(feature = "app_api")]
 async fn execute_torii_read_request_locally(
     app: &SharedAppState,
     request: ToriiReadProxyRequestV1,
@@ -26421,7 +26461,7 @@ async fn execute_torii_read_request_locally(
             )
         }
         ToriiReadEndpointV1::ContractViewPost => {
-            let request = match decode_torii_proxy_json_body::<routing::ContractViewDto>(
+            let view = match decode_torii_proxy_json_body::<routing::ContractViewDto>(
                 request_decode_plan,
                 &request.body,
                 "contract view body",
@@ -26429,10 +26469,15 @@ async fn execute_torii_read_request_locally(
                 Ok(request) => request,
                 Err(response) => return response,
             };
+            if let Err(error) =
+                require_routed_contract_view_authority(&request.route_scope, &view.authority)
+            {
+                return error.into_response();
+            }
             let mut response = match execute_bounded_contract_view_work(
                 app,
                 "v1/contracts/view",
-                BoundedContractViewWork::Single(request),
+                BoundedContractViewWork::Single(view),
             )
             .await
             {
@@ -26451,7 +26496,7 @@ async fn execute_torii_read_request_locally(
             response
         }
         ToriiReadEndpointV1::ContractViewBatchPost => {
-            let request = match decode_torii_proxy_json_body::<routing::ContractViewBatchDto>(
+            let view = match decode_torii_proxy_json_body::<routing::ContractViewBatchDto>(
                 request_decode_plan,
                 &request.body,
                 "contract view batch body",
@@ -26459,10 +26504,15 @@ async fn execute_torii_read_request_locally(
                 Ok(request) => request,
                 Err(response) => return response,
             };
+            if let Err(error) =
+                require_routed_contract_view_authority(&request.route_scope, &view.authority)
+            {
+                return error.into_response();
+            }
             let mut response = match execute_bounded_contract_view_work(
                 app,
                 "v1/contracts/view/batch",
-                BoundedContractViewWork::Batch(request),
+                BoundedContractViewWork::Batch(view),
             )
             .await
             {
@@ -26524,6 +26574,8 @@ async fn execute_torii_read_for_route(
             | ToriiReadEndpointV1::AliasLookupByAccount
             | ToriiReadEndpointV1::ContractAliasResolve
             | ToriiReadEndpointV1::ContractDeploymentState
+            | ToriiReadEndpointV1::ContractViewPost
+            | ToriiReadEndpointV1::ContractViewBatchPost
             | ToriiReadEndpointV1::AccountOnboardingCurrentState
             | ToriiReadEndpointV1::InternalAccountGet
             | ToriiReadEndpointV1::InternalAccountTransactionGet
@@ -26607,6 +26659,7 @@ async fn execute_torii_single_route_read(
         query_string,
         body,
         ToriiProxyResponseFormatV1::Json,
+        None,
     )
     .await
 }
@@ -26643,6 +26696,7 @@ async fn execute_torii_single_route_read_with_format(
     query_string: Option<String>,
     body: Vec<u8>,
     response_format: ToriiProxyResponseFormatV1,
+    caller: Option<&AccountId>,
 ) -> Response {
     let reservation = match try_acquire_query_fanout_memory(app) {
         Ok(reservation) => reservation,
@@ -26687,7 +26741,7 @@ async fn execute_torii_single_route_read_with_format(
     let mut request = torii_read_request(
         endpoint,
         ToriiFanoutRouteScopeV1::VisibleAccount {
-            caller_account_id: None,
+            caller_account_id: caller.map(ToString::to_string),
         },
         route,
         path_args,
@@ -27170,6 +27224,20 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
             "Torii proxy request attempted to revisit the receiving peer",
+        );
+    }
+    #[cfg(feature = "app_api")]
+    if matches!(
+        &proxy_request.request,
+        ToriiProxyRequestKindV1::Read(_) | ToriiProxyRequestKindV1::ReadFanout(_)
+    ) && !immediate_sender_peer_id
+        .as_ref()
+        .is_some_and(|peer| torii_proxy_authenticated_peer_is_trusted(app.as_ref(), peer))
+    {
+        return torii_proxy_error_response(
+            StatusCode::FORBIDDEN,
+            "untrusted_proxy_ingress",
+            "delegated Torii reads require a registered or consensus-authorized ingress peer",
         );
     }
     // Fanout request variants carry the potentially large signed-query byte
@@ -32419,10 +32487,16 @@ async fn handler_post_contract_call_batch_prepare(
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_simulate(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ContractCallSimulateDto>,
 ) -> Result<AxResponse, Error> {
+    require_runtime_governance_account(
+        &request.0.authority,
+        &verified.account,
+        "contract simulation",
+    )?;
     check_public_contract_route_rate_limit(
         &app,
         &headers,
@@ -32567,10 +32641,12 @@ async fn handler_post_bridge_message_submit(
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_view(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ContractViewDto>,
 ) -> Result<AxResponse, Error> {
+    require_runtime_governance_account(&request.0.authority, &verified.account, "contract view")?;
     check_public_contract_route_rate_limit(
         &app,
         &headers,
@@ -32589,13 +32665,15 @@ async fn handler_post_contract_view(
                 "failed to encode routed contract view request: {error}"
             )))
         })?;
-        return Ok(execute_torii_single_route_read(
+        return Ok(execute_torii_single_route_read_with_format(
             &app,
             route,
             ToriiReadEndpointV1::ContractViewPost,
             Vec::new(),
             None,
             body,
+            ToriiProxyResponseFormatV1::Json,
+            Some(&verified.account),
         )
         .await
         .into_response());
@@ -32635,10 +32713,16 @@ async fn handler_post_contract_view(
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_view_batch(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ContractViewBatchDto>,
 ) -> Result<AxResponse, Error> {
+    require_runtime_governance_account(
+        &request.0.authority,
+        &verified.account,
+        "contract view batch",
+    )?;
     check_public_contract_route_rate_limit(
         &app,
         &headers,
@@ -32681,13 +32765,15 @@ async fn handler_post_contract_view_batch(
                 "failed to encode routed contract view batch request: {error}"
             )))
         })?;
-        return Ok(execute_torii_single_route_read(
+        return Ok(execute_torii_single_route_read_with_format(
             &app,
             route,
             ToriiReadEndpointV1::ContractViewBatchPost,
             Vec::new(),
             None,
             body,
+            ToriiProxyResponseFormatV1::Json,
+            Some(&verified.account),
         )
         .await
         .into_response());
@@ -36966,13 +37052,28 @@ fn alias_setup_transaction_size_blocker(
     })
 }
 #[cfg(feature = "app_api")]
-const ALIAS_SETUP_PLAN_TTL_MS: u64 = 60_000;
+const ALIAS_PLAN_TTL_MS: u64 = 60_000;
 #[cfg(feature = "app_api")]
-fn alias_setup_plan_deadline(now_ms: u64, guarded_deadline_ms: Option<u64>) -> u64 {
-    let planner_deadline_ms = now_ms.saturating_add(ALIAS_SETUP_PLAN_TTL_MS);
-    guarded_deadline_ms.map_or(planner_deadline_ms, |guarded_deadline_ms| {
-        planner_deadline_ms.min(guarded_deadline_ms)
-    })
+fn alias_plan_deadline(
+    request_time: SystemTime,
+    guarded_deadline_ms: Option<u64>,
+) -> Result<u64, Error> {
+    // This is a client-observed request expiry, not consensus lease time. An idle chain's
+    // latest block remains the exact plan anchor but must not expire a newly requested plan.
+    let request_time_ms = request_time
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .ok_or_else(|| Error::AppServiceUnavailable {
+            code: "alias.plan.clock_unavailable",
+            message: "alias planner wall clock is outside the supported Unix time range".to_owned(),
+        })?;
+    let planner_deadline_ms = request_time_ms.saturating_add(ALIAS_PLAN_TTL_MS);
+    Ok(
+        guarded_deadline_ms.map_or(planner_deadline_ms, |guarded_deadline_ms| {
+            planner_deadline_ms.min(guarded_deadline_ms)
+        }),
+    )
 }
 #[cfg(feature = "app_api")]
 async fn handler_alias_setup_plan(
@@ -37089,7 +37190,7 @@ async fn handler_alias_setup_plan(
     let mut planned_authority_domains = BTreeSet::new();
     let mut planned_expiries = BTreeMap::new();
     let mut warnings = Vec::new();
-    let mut valid_until_ms = alias_setup_plan_deadline(now_ms, None);
+    let mut valid_until_ms = alias_plan_deadline(SystemTime::now(), None)?;
     for (index, ensure) in request.intents.into_iter().enumerate() {
         let target = ensure.intent.target();
         let disposition = match classify_alias_intent_with_planned_parents_and_endorsement_policy(
@@ -37328,7 +37429,7 @@ async fn handler_alias_setup_plan(
         nonce: None,
         fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-        metadata: iroha_data_model::metadata::Metadata::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         attachments: None,
     };
     let canonical_unsigned_payload_bytes =
@@ -37356,8 +37457,6 @@ async fn handler_alias_setup_plan(
     });
     Ok(JsonBody(plan).into_response())
 }
-#[cfg(feature = "app_api")]
-const ALIAS_LIFECYCLE_PLAN_TTL_MS: u64 = 60_000;
 #[cfg(feature = "app_api")]
 fn alias_lifecycle_instruction_frame(
     instruction: &iroha_data_model::isi::InstructionBox,
@@ -37622,7 +37721,7 @@ async fn handler_alias_auto_renew_plan(
         totals_by_asset: Vec::new(),
         warnings: Vec::new(),
         blockers: Vec::new(),
-        valid_until_ms: now_ms.saturating_add(ALIAS_LIFECYCLE_PLAN_TTL_MS),
+        valid_until_ms: alias_plan_deadline(SystemTime::now(), None)?,
     });
     Ok(JsonBody(plan).into_response())
 }
@@ -40185,8 +40284,17 @@ fn validate_account_onboarding_readiness(
                     &nexus.fees.fee_asset_id,
                 )
             {
+                // State initialization seeds SNS policies before a joining node
+                // has replayed the fee asset. The policy is present in this
+                // snapshot, so NotFound means its otherwise-matching configured
+                // asset is not registered yet; configuration conflicts stay blocked.
+                let code = if matches!(&error, iroha_core::sns::SnsError::NotFound(_)) {
+                    "alias.onboarding.payment_asset_missing"
+                } else {
+                    "alias.onboarding.payment_asset_mismatch"
+                };
                 blocked(
-                    "alias.onboarding.payment_asset_mismatch",
+                    code,
                     Some(policy.payment_asset_id.clone()),
                     "nexus.fees.fee_asset_id",
                     &format!(
@@ -40225,6 +40333,19 @@ fn validate_account_onboarding_readiness(
                 Some(permission.clone()),
                 "torii.account_onboarding.additional_permissions",
                 "remove the permission or install an executor data model that declares it",
+            );
+        }
+    }
+    if signer.allowed_permissions.contains("DpnUser") {
+        let admin = Permission::from(iroha_executor_data_model::permission::dpn::DpnAdmin);
+        // Native DPN grants require the exact direct unit token; role-derived or
+        // differently scoped permissions do not authorize this lifecycle.
+        if !world.account_contains_inherent_permission(&signer.authority, &admin) {
+            blocked(
+                "alias.onboarding.dpn_user_grant_authority_missing",
+                Some("DpnUser".to_owned()),
+                "torii.account_onboarding.authority",
+                "use an onboarding authority with direct DpnAdmin permission or remove DpnUser from additional_permissions",
             );
         }
     }
@@ -40387,8 +40508,10 @@ fn validate_account_onboarding_readiness(
                 diagnostic.code.as_str(),
                 "alias.onboarding.authority_missing"
                     | "alias.onboarding.policy_missing"
+                    | "alias.onboarding.payment_asset_missing"
                     | "alias.onboarding.payer_unfunded"
                     | "alias.onboarding.additional_permission_unknown"
+                    | "alias.onboarding.dpn_user_grant_authority_missing"
                     | "alias.onboarding.sponsor_program_missing"
                     | "alias.onboarding.credential_dataspace_unknown"
                     | "alias.onboarding.credential_domain_missing"
@@ -45008,7 +45131,7 @@ impl Torii {
             RUNTIME_ABI_ACTIVE => canonical_account_get(handler_runtime_abi_active, app_state, 0);
             RUNTIME_ABI_HASH => public_get(handler_runtime_abi_hash);
             RUNTIME_METRICS => canonical_account_get(handler_runtime_metrics, app_state, 0);
-            NODE_CAPABILITIES => canonical_account_get(handler_node_capabilities, app_state, 0);
+            NODE_CAPABILITIES => public_get(handler_node_capabilities);
             PRIVACY_CAPABILITIES => canonical_account_get(handler_privacy_capabilities, app_state, 0);
             PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_authorize, 1);
             PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_issue, privacy_issuance_api::BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1);

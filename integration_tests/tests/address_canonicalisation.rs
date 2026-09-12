@@ -14,8 +14,9 @@ use iroha::data_model::{
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
 use iroha_data_model::account::address::AccountAddress;
-use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -1635,7 +1636,7 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
             domain_id.name().clone(),
         )),
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let account_id = checked_random_account_id();
     let account = Account::new(account_id.clone()).with_label(Some(label.clone()));

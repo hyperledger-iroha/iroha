@@ -990,16 +990,13 @@ mod tests {
         package::{PackageLayout, plan_package},
         workspace::load_workspace,
     };
-    use iroha_data_model::{
-        musubi::{
-            ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiExactDependencyEdgeV1,
-            MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
-            MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiReleaseIdV1,
-            MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
-            MusubiVerificationNodeV1,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::musubi::{
+        ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiExactDependencyEdgeV1,
+        MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiRegistrySnapshotV1,
+        MusubiReleaseDigestV1, MusubiReleaseIdV1, MusubiReleaseMetadataV1,
+        MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1, MusubiVerificationNodeV1,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::fs;
     use tempfile::TempDir;
     struct EmptyRegistry;

@@ -69,13 +69,14 @@ fn assert_default_status(actual: &NodeStatus) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn status_uses_async_transport_and_one_catalog_route_with_exact_negotiation() {
+    fn require_send(_: impl Send) {}
+
     let (client, requests, completed) = attach(
         |_| Ok(status_response()),
         Duration::from_millis(15),
         Duration::from_secs(1),
         WireFormatPreference::JsonPreferred,
     );
-    fn require_send(_: impl Send) {}
     let capability = client.status();
     require_send(capability.get());
     let (result, ticked) = tokio::join!(capability.get(), async {
@@ -346,7 +347,7 @@ async fn version_uses_the_canonical_text_contract_and_exact_size_limit() {
         .filter(|(name, _)| name == http::header::ACCEPT)
         .collect();
     assert_eq!(accepts.len(), 1);
-    assert_eq!(accepts[0].1, "text/plain");
+    assert_eq!(accepts[0].1, "text/plain, application/json");
     for reply in [
         response(Vec::new(), "text/plain"),
         response(b" \n ".to_vec(), "text/plain"),

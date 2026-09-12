@@ -3,19 +3,20 @@ pub use self::model::*;
 use crate::{
     IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref, split_nonempty},
-    metadata::Metadata,
     prelude::AccountId,
 };
 use iroha_data_model_derive::model;
 use iroha_model_base::error::ParseError;
+use iroha_model_base::metadata::Metadata;
 use std::{format, str::FromStr, string::String, vec::Vec};
 #[model]
 mod model {
     use super::*;
-    use crate::{Identifiable, account::prelude::*, domain::prelude::*};
+    use crate::{Identifiable, account::prelude::*};
     use derive_more::Constructor;
     use getset::{CopyGetters, Getters};
     use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
@@ -120,7 +121,7 @@ impl Nft {
 impl NftId {
     /// Convenience alias for [`Self::new`]
     pub fn of(
-        domain: crate::domain::prelude::DomainId,
+        domain: iroha_model_base::domain::DomainId,
         name: iroha_model_base::name::Name,
     ) -> Self {
         Self::new(domain, name)
@@ -141,9 +142,9 @@ impl FromStr for NftId {
             .parse()
             .map_err(|_| ParseError::new("Failed to parse `name` part in `name$domain`"))?;
         let domain_id = if domain_id_candidate.contains('.') {
-            crate::domain::DomainId::parse_fully_qualified(domain_id_candidate)
+            iroha_model_base::domain::DomainId::parse_fully_qualified(domain_id_candidate)
         } else {
-            crate::domain::DomainId::try_new(domain_id_candidate, "universal")
+            iroha_model_base::domain::DomainId::try_new(domain_id_candidate, "universal")
         }
         .map_err(|_| {
             ParseError::new(
@@ -169,7 +170,8 @@ impl IntoKeyValue for Nft {
 #[cfg(test)]
 mod json_tests {
     use super::*;
-    use crate::{domain::prelude::DomainId, metadata::Metadata};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     #[test]
     fn new_nft_json_roundtrip() {
@@ -190,7 +192,7 @@ mod json_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::prelude::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
 
     #[test]

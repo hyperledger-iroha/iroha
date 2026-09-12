@@ -2618,7 +2618,6 @@ pub(crate) mod tests {
     use iroha_data_model::{
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::DomainId,
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
             DeployContractProposal, GovernanceExpectedHeadAbsentV1,
@@ -2633,6 +2632,7 @@ pub(crate) mod tests {
             validation_fee_payout_min_xor, validation_fee_payout_recipient_share,
         },
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use rand::{SeedableRng as _, rngs::StdRng};
 

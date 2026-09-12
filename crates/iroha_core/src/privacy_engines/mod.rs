@@ -45,7 +45,7 @@ use iroha_data_model::privacy::{
 use thiserror::Error;
 /// Exact maximum byte length of one canonical first-release `X5S1` proof.
 pub const ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1: usize =
-    self::zk_x509::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
+    self::zk_x509::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize;
 /// Structural or public-binding failure for one externally produced `X5S1` proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ZkX509CredentialProofContainerErrorV1 {
@@ -187,8 +187,12 @@ mod tests {
         ZkX509CredentialPublicBindingV1, encode_zk_x509_credential_envelope_v1,
     };
     fn fixture() -> (IrohaZkX509StarkP256StatementV1, [u8; 32], Vec<u8>) {
-        let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
-        let genesis = [0xA5; 32];
+        let (mut statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
+        statement.context.action_index = 0;
+        PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+            .validate(&PrivacyConsensusLimitsV1::taira_default())
+            .expect("canonical worker statement");
+        let genesis = *statement.context.network_id.as_bytes();
         let public =
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis)
                 .expect("fixture public binding");
@@ -198,6 +202,7 @@ mod tests {
     }
     #[test]
     fn x509_worker_container_boundary_accepts_only_exact_bound_x5s1() {
+        assert_eq!(ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1, 9_437_184);
         let (statement, genesis, proof) = fixture();
         validate_zk_x509_credential_proof_container_v1(&statement, genesis, &proof)
             .expect("canonical fixed-capacity container");

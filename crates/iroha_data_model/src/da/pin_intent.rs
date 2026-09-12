@@ -5,11 +5,11 @@ use crate::{
         ingest::{DaIngestAuthorizationV1, DaPinScopeAuthorizationV1},
         types::StorageTicketId,
     },
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
 use core::cmp::Ordering;
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::topology::LaneId;
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -287,10 +287,10 @@ mod tests {
             },
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
+    use iroha_model_base::topology::LaneId;
     fn test_key_pair() -> KeyPair {
         KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
             .expect("valid deterministic pin-intent key")

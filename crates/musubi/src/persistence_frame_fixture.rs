@@ -75,7 +75,7 @@ where
 }
 
 /// Check both root identities and every independently captured container shape.
-pub(super) fn assert_captured<T>(nominal: &str, value: Option<&T>)
+pub fn assert_captured<T>(nominal: &str, value: Option<&T>)
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + Clone + PartialEq + Debug,
 {

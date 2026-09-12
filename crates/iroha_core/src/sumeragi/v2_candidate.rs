@@ -1603,14 +1603,15 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        nexus::{AxtPolicySnapshot, DataSpaceId, LaneId},
-        peer::PeerId,
+        nexus::AxtPolicySnapshot,
         transaction::TransactionBuilder,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use nonzero_ext::nonzero;
     use std::{
         borrow::Cow,

@@ -230,12 +230,12 @@ mod tests {
             prelude::RetentionPolicy,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneId},
         prelude::*,
         sorafs::pin_registry::ManifestDigest,
         transaction::signed::TransactionBuilder,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use nonzero_ext::nonzero;
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)

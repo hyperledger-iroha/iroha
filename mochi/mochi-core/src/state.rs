@@ -4,9 +4,7 @@ use iroha_data_model::{
     HasMetadata, Identifiable,
     account::{Account, AccountId},
     asset::{AssetId, definition::AssetDefinition, id::AssetDefinitionId, value::Asset},
-    domain::{Domain, DomainId},
-    metadata::Metadata,
-    peer::PeerId,
+    domain::Domain,
     query::{
         QueryItemKind, QueryOutput, QueryOutputBatchBox, QueryRequest, QueryWithParams,
         account::prelude::FindAccounts,
@@ -17,6 +15,9 @@ use iroha_data_model::{
         peer::prelude::FindPeers,
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json;
 use std::{
@@ -712,9 +713,10 @@ mod tests {
             id::{AssetDefinitionId, AssetId},
             value::Asset,
         },
-        domain::{Domain, DomainId},
+        domain::Domain,
         query::{QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{NumericSpec, Quantity};
     use iroha_test_samples::ALICE_ID;
     use norito::{json, to_bytes};

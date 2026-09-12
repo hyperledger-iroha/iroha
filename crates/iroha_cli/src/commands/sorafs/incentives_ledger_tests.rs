@@ -102,7 +102,7 @@ fn sample_account_literal(name: &str) -> String {
 }
 fn xor_asset_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
-        iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+        iroha_model_base::domain::DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     )
 }

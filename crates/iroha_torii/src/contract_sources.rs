@@ -3207,9 +3207,13 @@ mod tests {
         let verified = ivm::verify_contract_artifact(&compiled.artifact)
             .expect("verify compiled source fixture");
         let network_id = *state.network_id_ref();
-        let contract_address =
-            dm::ContractAddress::derive(&network_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
-                .expect("contract address");
+        let contract_address = dm::ContractAddress::derive(
+            &network_id,
+            &authority,
+            0,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),
             &authority,

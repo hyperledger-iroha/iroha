@@ -965,11 +965,11 @@ mod tests {
             .expect("canonical existing snapshot fixture");
         let catalog = ResolverIndexCacheCatalogV1::default();
         catalog.validate().expect("canonical empty catalog");
-        super::persistence_frame_fixture::assert_captured(
+        crate::persistence_frame_fixture::assert_captured(
             "musubi::registry_cache::ResolverIndexCacheSnapshotV1",
             Some(&snapshot),
         );
-        super::persistence_frame_fixture::assert_captured(
+        crate::persistence_frame_fixture::assert_captured(
             "musubi::registry_cache::ResolverIndexCacheCatalogV1",
             Some(&catalog),
         );
@@ -980,13 +980,11 @@ mod tests {
     use crate::{
         graph::resolve_workspace_offline_cached, resolver::ResolveModeV1, workspace::load_workspace,
     };
-    use iroha_data_model::{
-        musubi::{
-            MusubiNamespaceBindingV1, MusubiNamespaceV1, MusubiOrderedPackageEntryV1,
-            MusubiOrderedPrefixV1, MusubiPackageScopeV1, MusubiPageRequestV1,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::musubi::{
+        MusubiNamespaceBindingV1, MusubiNamespaceV1, MusubiOrderedPackageEntryV1,
+        MusubiOrderedPrefixV1, MusubiPackageScopeV1, MusubiPageRequestV1,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use tempfile::TempDir;
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
@@ -1393,7 +1391,3 @@ exports = []
         ));
     }
 }
-
-#[cfg(test)]
-#[path = "persistence_frame_fixture.rs"]
-mod persistence_frame_fixture;

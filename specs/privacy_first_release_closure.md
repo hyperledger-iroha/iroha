@@ -64,13 +64,28 @@ independent audit, SDK, hardware, and deployment evidence.
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
 | ZK-AMS | Admission/provisioning structure exists; composite MKHE readiness unavailable. | Complete resource, wire, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
-| ZK-X509 | Native certificate relation exists; compiled profile unavailable. | Narrow or recursively compose the relation to fit the 9 MiB limit. The current shared-geometry projection is 16,447,808 bytes, with 12,235,648 bytes of raw trace openings alone. Regenerate artifacts and measure the real implementation. |
+| ZK-X509 | Native certificate relation and pinned compiled metadata exist; activation is unavailable. | Narrow or recursively compose the relation to fit the 9 MiB limit. The shared-geometry MAIN maximum is 16,447,808 bytes, including 12,235,648 bytes of raw trace openings; the combined X5S1 maximum is 19,156,074 bytes. Regenerate artifacts and measure the real implementation. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |
 | Bootle/Lantern | Native lattice anonymous credential and Falcon issuer implementation. | Independent arithmetic/sampling/custody review, issuer lifecycle, maximum-shape and release qualification. |
 | Orchard | Sole Orchard/PostNu6_3 profile with two-pass preparation and authorization. | Audited parameter/proof provenance and full native/SDK/network qualification. |
 | FCMP++ | Native membership, generalized Bulletproofs, ranges, linkability, conservation and wallet paths. | Complete maximum-shape, cross-authority, resource and release qualification. |
 | IVM private note | Native profile and lifecycle integration exist. | Shared STARK soundness/qualification, program/authority adversaries, SDK and network evidence. |
 | PQ-MASP | Native note/AIR/profile and lifecycle integration exist. | Shared STARK soundness/qualification, full action/asset conservation, SDK and network evidence. |
+
+The X509 diagnostic geometry uses the shared 136-query, eightfold-LDE profile:
+MAIN has a log-22 common domain and the accumulator pads its 104 active rows to
+8,192 rows on a log-16 LDE. Canonical registration and arithmetic diagnostics do
+not establish activation. The combined maximum wire is 19,156,074 bytes; the
+unchanged production ceiling is 9,437,184 bytes. Full MAIN proving rejects the
+resource preflight before witness preparation or entropy. A narrower relation or
+reviewed recursive composition and new soundness/resource evidence remain required.
+
+BFV arithmetic diagnostics reconstruct artifact-bound traces and bounds through
+`bfv_full_bootstrap_diagnostic_execution_v1`. They share the witness relation and
+retain its parameter, artifact, key and ciphertext checks, but confer no production
+qualification. Audited execution still rejects
+`MissingRegisteredHeOrgLatticeNoiseAndQromEvidence`; synthetic signed review
+fixtures cannot satisfy that requirement.
 
 The compiled-profile owner is
 [`privacy_profiles.rs`](../crates/iroha_core/src/privacy_profiles.rs). Engine

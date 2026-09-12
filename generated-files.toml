@@ -58,22 +58,6 @@ inputs = [
 check = "python3 scripts/sdk_operation_inventory.py"
 
 [[generated]]
-name = "data-model-public-api"
-kind = "file"
-outputs = [
-  "crates/iroha_data_model/non_transparent_api.rs",
-  "crates/iroha_data_model/transparent_api.rs",
-]
-# The obsolete extractor was retired because it could not reproduce this
-# curated public API facade. The crate tests remain the authoritative check.
-generator = "retired legacy extractor; no authoritative generator"
-generator_sources = []
-inputs = []
-check = "cargo test --locked -p iroha_data_model"
-external = true
-provenance = "checked-in public API facade; obsolete non-authoritative extractor retired"
-
-[[generated]]
 name = "musubi-v1-signed-fixtures"
 kind = "file"
 outputs = [
@@ -90,7 +74,11 @@ generator_sources = [
   "scripts/write_musubi_fixtures.py",
 ]
 inputs = [
+  "crates/iroha_model_base/src/topology.rs",
   "crates/iroha_data_model/src/id.rs",
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/chain.rs",
+  "crates/iroha_primitives/src/chain_id.rs",
   "crates/iroha_data_model/src/isi/mod.rs",
   "crates/iroha_data_model/src/isi/musubi.rs",
   "crates/iroha_data_model/src/musubi.rs",
@@ -304,6 +292,12 @@ outputs = [
   "fixtures/sorafs_manifest/reference_sdk/bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
   "fixtures/sorafs_manifest/reference_sdk/bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
   "fixtures/sorafs_manifest/reference_sdk/bundle_routing_admission_positive_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/pop_membership_current_v1.to",
+  "fixtures/sorafs_manifest/reference_sdk/pop_membership_current_v1_validation_outcome.json",
+  "fixtures/sorafs_manifest/reference_sdk/pop_membership_missing_binding_v1.to",
+  "fixtures/sorafs_manifest/reference_sdk/pop_membership_missing_binding_v1_validation_outcome.json",
+  "fixtures/sorafs_manifest/reference_sdk/pop_membership_zero_binding_v1.to",
+  "fixtures/sorafs_manifest/reference_sdk/pop_membership_zero_binding_v1_validation_outcome.json",
   "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
   "fixtures/sorafs_manifest/repair/negative/task_manifest_mismatch_v1.json",
   "fixtures/sorafs_manifest/repair/negative/task_manifest_mismatch_v1.to",
@@ -316,6 +310,7 @@ generator = "NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked --offline --jobs 1 -
 generator_sources = [
   "crates/sorafs_manifest/Cargo.toml",
   "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs",
+  "crates/sorafs_manifest/src/bin/generate_por_fixtures/pop_membership_structural.rs",
 ]
 inputs = [
   "fixtures/sorafs_manifest/appeal_finance/**",
@@ -361,6 +356,8 @@ generator_sources = [
   "crates/ivm/src/bin/support/mod.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
   "crates/iroha_primitives/src/**/*.rs",
@@ -397,6 +394,8 @@ generator_sources = [
   "crates/ivm/src/predecoder_fixtures.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
   "crates/iroha_primitives/src/**/*.rs",
@@ -451,6 +450,8 @@ generator_sources = [
   "xtask/src/nexus.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "Cargo.toml",
   "crates/iroha/Cargo.toml",
   "crates/iroha/src/nexus_app.rs",
@@ -587,6 +588,8 @@ generator_sources = [
   "xtask/src/norito_rpc/alias_setup_fixture.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "Cargo.lock",
   "Cargo.toml",
   "crates/iroha_crypto/src/**/*.rs",
@@ -612,6 +615,8 @@ generator_sources = [
   "crates/connect_norito_bridge/src/bin/swift_parity_regen.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "IrohaSwift/Fixtures/swift_parity_payloads.json",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
@@ -633,6 +638,8 @@ generator_sources = [
   "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
   "crates/iroha_primitives/src/**/*.rs",
@@ -657,6 +664,8 @@ generator_sources = [
   "mochi/mochi-core/src/torii/tests_part1.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "Cargo.toml",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
@@ -688,6 +697,8 @@ generator_sources = [
   "mochi/mochi-integration/src/mock_torii/tests/replay_fixture_owner.rs",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "Cargo.toml",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
@@ -773,6 +784,8 @@ generator_sources = [
   "scripts/regenerate_kotodama_goldens.py",
 ]
 inputs = [
+  "crates/iroha_model_base/Cargo.toml",
+  "crates/iroha_model_base/src/**/*.rs",
   "**/*.ko",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
@@ -812,3 +825,73 @@ check = "bash scripts/tests/consistency.sh docker-compose"
 # Complete Kagami profile bundles are operator-generated release artifacts and are intentionally
 # untracked. Checked-in `.template.json` files are non-signable source references, not generated
 # outputs; production generation requires an externally provisioned public-authority directory.
+
+# Upstream-generated Go sources imported unchanged into the SCCP vendor tree.
+
+[[generated]]
+name = "sccp-vendor-bitset"
+kind = "file"
+external = true
+outputs = [
+  "circuits/sccp/vendor/github.com/bits-and-blooms/bitset/pext.gen.go",
+]
+generator = "cd circuits/sccp && GOTOOLCHAIN=local go mod vendor"
+generator_sources = []
+inputs = [
+  "circuits/sccp/go.mod",
+  "circuits/sccp/go.sum",
+  "circuits/sccp/vendor/modules.txt",
+  "scripts/check_sccp_vendor_generated.py",
+]
+check = "python3 scripts/check_sccp_vendor_generated.py"
+provenance = "Upstream cmd/pextgen/main.go generates pext.gen.go; bitset.go records the go:generate invocation. Both are present in the module archive pinned by circuits/sccp/go.mod and authenticated by circuits/sccp/go.sum. The check verifies imported bytes; upstream generator execution is not asserted."
+
+[[generated]]
+name = "sccp-vendor-testify"
+kind = "file"
+external = true
+outputs = [
+  "circuits/sccp/vendor/github.com/stretchr/testify/assert/assertion_format.go",
+  "circuits/sccp/vendor/github.com/stretchr/testify/assert/assertion_forward.go",
+  "circuits/sccp/vendor/github.com/stretchr/testify/require/require.go",
+  "circuits/sccp/vendor/github.com/stretchr/testify/require/require_forward.go",
+]
+generator = "cd circuits/sccp && GOTOOLCHAIN=local go mod vendor"
+generator_sources = []
+inputs = [
+  "circuits/sccp/go.mod",
+  "circuits/sccp/go.sum",
+  "circuits/sccp/vendor/modules.txt",
+  "scripts/check_sccp_vendor_generated.py",
+]
+check = "python3 scripts/check_sccp_vendor_generated.py"
+provenance = "Upstream github.com/stretchr/testify/_codegen generates the assert and require forwarding/formatting files from their adjacent .go.tmpl templates. The templates and go:generate directives are in the pinned module archive; _codegen is a separate upstream module. Version and authentication are owned by circuits/sccp/go.mod and circuits/sccp/go.sum. The check verifies imported bytes; upstream generator execution is not asserted."
+
+[[generated]]
+name = "sccp-vendor-x-sys"
+kind = "file"
+external = true
+outputs = [
+  "circuits/sccp/vendor/golang.org/x/sys/cpu/zcpu_windows.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/zerrors_linux.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_armnn_linux.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_linux_arm64.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_mipsnn_linux.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_mipsnnle_linux.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_x86_linux.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/zsyscall_linux.go",
+  "circuits/sccp/vendor/golang.org/x/sys/unix/ztypes_linux.go",
+  "circuits/sccp/vendor/golang.org/x/sys/windows/zerrors_windows.go",
+  "circuits/sccp/vendor/golang.org/x/sys/windows/zknownfolderids_windows.go",
+  "circuits/sccp/vendor/golang.org/x/sys/windows/zsyscall_windows.go",
+]
+generator = "cd circuits/sccp && GOTOOLCHAIN=local go mod vendor"
+generator_sources = []
+inputs = [
+  "circuits/sccp/go.mod",
+  "circuits/sccp/go.sum",
+  "circuits/sccp/vendor/modules.txt",
+  "scripts/check_sccp_vendor_generated.py",
+]
+check = "python3 scripts/check_sccp_vendor_generated.py"
+provenance = "Upstream generators are cpu/cpu_windows.go and windows/mksyscall.go go:generate directives invoking windows/mkwinsyscall, unix/internal/mkmerge with unix/linux/mkall.go, and windows/mkerrors.bash and windows/mkknownfolderids.bash. The pinned module archive contains those inputs; circuits/sccp/go.mod owns its version and circuits/sccp/go.sum authenticates it. The check verifies imported bytes; upstream generator execution is not asserted."

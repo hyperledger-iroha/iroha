@@ -222,6 +222,7 @@ on:
       - "crates/iroha/src/http_default.rs"
       - "crates/iroha_cli/src/commands/sorafs.rs"
       - "xtask/src/sorafs.rs"
+      - "xtask/src/sorafs/**"
       - "CHANGELOG.md"
       - "LICENSE"
       - "crates/sorafs_car/**"

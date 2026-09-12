@@ -9,13 +9,13 @@ use iroha_core::{
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
-    domain::DomainId,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
     permission::Permission,
     prelude::{Account, Domain, Grant},
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

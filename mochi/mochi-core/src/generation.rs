@@ -1636,8 +1636,10 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::{AccountId, ChainId, peer::PeerId};
+    use iroha_data_model::AccountId;
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     const FIXTURE_CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
     const FIXTURE_GENESIS_PUBLIC_KEY: &str =

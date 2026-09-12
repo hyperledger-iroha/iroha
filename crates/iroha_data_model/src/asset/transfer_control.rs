@@ -321,7 +321,7 @@ impl AssetTransferControlRecord {
 #[cfg(test)]
 mod availability_tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     fn definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
@@ -468,7 +468,7 @@ impl AssetTransferControlStoreV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     #[derive(Encode)]
     struct ForgedAssetTransferLimit {

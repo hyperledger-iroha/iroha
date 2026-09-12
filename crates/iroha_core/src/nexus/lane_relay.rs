@@ -6,10 +6,9 @@
 use crate::{IrohaNetwork, NetworkMessage, sumeragi::status};
 use iroha_data_model::{
     block::consensus::LaneBlockCommitment,
-    nexus::{
-        DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError, LaneRelayFastpqMaterialStatus,
-    },
+    nexus::{LaneRelayEnvelope, LaneRelayError, LaneRelayFastpqMaterialStatus},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_p2p::{
     Broadcast, Priority,
     network::{
@@ -320,10 +319,11 @@ mod tests {
             consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
         nexus::{
-            DataSpaceId, LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneId,
-            LaneRelayEnvelope, compute_settlement_hash,
+            LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneRelayEnvelope,
+            compute_settlement_hash,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_p2p::network::RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY;
     use std::{
         num::NonZeroU64,

@@ -322,10 +322,10 @@ fn same_block_configuration_cannot_be_used_as_committed_enrollment_anchor() {
         instruction(
             tx,
             f.provider,
-            Action::Revoke {
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                 signer: true,
                 attester: false,
-            },
+            }),
         )
         .execute(&f.authority, tx)
         .expect("same-block revoke");

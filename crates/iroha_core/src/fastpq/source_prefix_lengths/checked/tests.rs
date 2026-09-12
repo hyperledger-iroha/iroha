@@ -7,10 +7,10 @@ use crate::fastpq::{
 };
 use fastpq_prover::gadgets::public_transfer_statement::PublicTransferLimits;
 use iroha_data_model::{
-    DomainId,
     asset::AssetDefinitionId,
     fastpq::{TransferSmtWitness, TransferTranscript},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 

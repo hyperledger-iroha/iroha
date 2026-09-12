@@ -15,9 +15,10 @@ use iroha_data_model::{
     block::BlockHeader,
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::system::SumeragiConsensusMode,
-    prelude::{AccountId, ChainId, NetworkId},
+    prelude::{AccountId, NetworkId},
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_model_base::chain::ChainId;
 #[cfg(any(test, feature = "test"))]
 use izanami::genesis_support::sign_prepared_genesis_from_config;
 use izanami::genesis_support::{ManagedNodeConfig, validate_prepared_genesis_for_startup};

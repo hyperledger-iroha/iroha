@@ -28,12 +28,13 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
     isi::transfer::TransferAssetBatch,
-    nexus::{AxtPolicySnapshot, AxtPolicySnapshotValidationError, DataSpaceId},
+    nexus::{AxtPolicySnapshot, AxtPolicySnapshotValidationError},
     nft::NftId,
     zk::{OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{name::Name, state_path::StatePath};
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};

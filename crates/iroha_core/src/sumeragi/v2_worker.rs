@@ -110,9 +110,9 @@ use iroha_data_model::{
         consensus_v2 as wire, decode_framed_signed_block,
     },
     merge::MergeCommitteeSignature,
-    nexus::LaneId,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 #[cfg(test)]
 use iroha_p2p::network::{
     NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
@@ -3613,6 +3613,7 @@ include!("v2_worker_services_impl.rs");
 /// Unit tests and production-service fixtures shared with the runner tests.
 #[cfg(test)]
 pub(super) mod tests {
+    use iroha_model_base::peer::PeerId;
     use norito::codec::Encode as _;
 
     include!("tests/v2_worker_main_00.rs");

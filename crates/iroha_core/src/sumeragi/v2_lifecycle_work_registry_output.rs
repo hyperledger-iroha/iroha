@@ -382,6 +382,17 @@ fn terminal_direct_output_matches_record(
     };
     let expected_slot = PhysicalSlotId::for_capacity(expected_class.capacity_class(), 0);
     let expected_digest = digest_from_hash(pending.exact_effect_identity());
+    // LedgerV1 retains the complete signed replay authority, not process-local
+    // physical slots. A reopened terminal row therefore has no physical episode;
+    // a live terminal row still has its one fully consumed exact slot. Reject
+    // mixed or malformed geometry while deriving identity from the durable source.
+    let terminal_geometry_is_exact = if record.physical_slots.is_empty() {
+        record.episode.slot_universe.is_empty() && record.episode.consumed_slots.is_empty()
+    } else {
+        record.physical_slots == BTreeMap::from([(expected_slot, expected_digest)])
+            && record.episode.slot_universe == std::collections::BTreeSet::from([expected_slot])
+            && record.episode.consumed_slots == record.episode.slot_universe
+    };
     coordinator.fault.is_none()
         && coordinator.active_context.id() == record.key.context()
         && coordinator.active_context.height() == record.key.round().height()
@@ -393,9 +404,7 @@ fn terminal_direct_output_matches_record(
             .work_class
             .accepts_stage(record.key.phase(), record.stage)
         && record.state == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
-        && record.physical_slots == BTreeMap::from([(expected_slot, expected_digest)])
-        && record.episode.slot_universe == std::collections::BTreeSet::from([expected_slot])
-        && record.episode.consumed_slots == record.episode.slot_universe
+        && terminal_geometry_is_exact
         && metadata.reconstruction_source == record.owner.causal_root().digest()
         && metadata.payload == DurablePayloadReference::None
         && metadata.continuation == super::schema::DurableContinuation::None

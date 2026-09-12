@@ -1440,7 +1440,7 @@ enum VkSubmissionOperation {
 }
 fn signed_vk_register_transaction(
     client: &BlockingClient,
-    metadata: iroha::data_model::prelude::Metadata,
+    metadata: iroha_model_base::metadata::Metadata,
     prepared: PreparedVkSubmission,
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
@@ -1458,7 +1458,7 @@ fn signed_vk_register_transaction(
 }
 fn signed_vk_update_transaction(
     client: &BlockingClient,
-    metadata: iroha::data_model::prelude::Metadata,
+    metadata: iroha_model_base::metadata::Metadata,
     prepared: PreparedVkSubmission,
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {

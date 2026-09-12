@@ -7,7 +7,6 @@
 //! decisions pure makes policy rotation, foreign-chain rejection, restart
 //! recovery, and idempotent semantic reconciliation byte-for-byte testable.
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     sorafs::reserve::{
         ReserveAppealRecordV1, ReserveAppealStatusV1, ReserveAuthorityPolicyRecordV1,
@@ -15,6 +14,7 @@ use iroha_data_model::{
         ReserveProviderAccountV1,
     },
 };
+use iroha_model_base::chain::ChainId;
 use sorafs_node::reserve_transaction_forwarder::{
     ReserveOperationV1, ReserveTransactionDeliveryStateV1, ReserveTransactionPendingV1,
     ReserveTransactionProjectionV1, ReserveTransactionReconciliationV1,
@@ -676,10 +676,8 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         asset::AssetDefinitionId,
-        domain::DomainId,
         isi::sorafs::{
             AdvanceSorafsReserveLifecycle, ChargeSorafsReserveRent, DecideSorafsReserveAppeal,
             DecideSorafsReserveMovement, DrawSorafsReserveCredit, RegisterSorafsReserveAccount,
@@ -697,6 +695,8 @@ mod tests {
             },
         },
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
     use sorafs_manifest::deal::XorQuantity;
     use sorafs_node::reserve_transaction_forwarder::{
         ReserveOperationV1, ReserveTransactionContextV1, ReserveTransactionDeliveryStateV1,

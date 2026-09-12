@@ -7,11 +7,12 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     nexus::{
         Allowance, AllowanceWindow, AmxRole, AssetPermissionManifest, CapabilityRequest,
-        CapabilityScope, DataSpaceId, DenyDirective, DenyReason, ManifestEffect, ManifestEntry,
-        ManifestVerdict, ManifestVersion, SmartContractId, UniversalAccountId,
+        CapabilityScope, DenyDirective, DenyReason, ManifestEffect, ManifestEntry, ManifestVerdict,
+        ManifestVersion, SmartContractId, UniversalAccountId,
     },
 };
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::{decode_from_bytes, json::Value, to_bytes};
 use std::{

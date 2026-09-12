@@ -379,7 +379,7 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
             "centralbank".parse::<Name>().expect("domain id"),
         )),
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
     let authority_keypair = checked_torii_test_ed25519_keypair(
@@ -451,7 +451,7 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
             "centralbank".parse::<Name>().expect("domain id"),
         )),
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let authority_keypair = checked_torii_test_ed25519_keypair(
         0xac,
@@ -1054,9 +1054,8 @@ async fn identifier_policies_enforce_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens([
-            "token-identifier",
-        ]));
+        state.api_token_digests =
+            Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-identifier"]));
     }
     let missing = handler_identifier_policies(
         State(app.clone()),
@@ -1712,8 +1711,7 @@ async fn identifier_claim_receipt_enforces_token_policy() {
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
-        state.api_token_digests =
-            Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-claim"]));
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["token-claim"]));
     }
     let missing = handler_identifier_claim_receipt(
         State(app),

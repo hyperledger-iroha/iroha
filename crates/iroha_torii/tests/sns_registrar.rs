@@ -11,12 +11,12 @@ use iroha_core::state::World;
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::{AccountAddress, AccountId},
-    metadata::Metadata,
     sns::{
         DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameFrozenStateV1, NameRecordV1, NameSelectorV1,
         NameStatus,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_torii::test_utils;
 use norito::codec::Encode as _;
 #[path = "fixtures.rs"]

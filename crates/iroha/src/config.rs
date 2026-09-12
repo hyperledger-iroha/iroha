@@ -1,13 +1,14 @@
 //! Module for client-related configuration and structs
 use crate::{
     crypto::KeyPair,
-    data_model::{ChainId, NetworkId, prelude::*},
+    data_model::{NetworkId, prelude::*},
 };
 use core::str::FromStr;
 use derive_more::Display;
 use error_stack::{Report, ResultExt};
 use eyre::Result;
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
+use iroha_model_base::chain::ChainId;
 use iroha_primitives::small::SmallStr;
 use iroha_service_model::soranet::AnonymityPolicy;
 use iroha_service_model::soranet::RolloutPhase;

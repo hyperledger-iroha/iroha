@@ -6,9 +6,10 @@
 //! verification) lives in the host runtime and the `iroha_zkp_halo2` crate.
 use super::Digest32;
 
+use crate::account::AccountId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, metadata::Metadata};
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
+use iroha_model_base::metadata::Metadata;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 const LEAF_TAG_BLINDED_CID: &[u8] = b"soranet.ticket.body.blinded_cid.v1";
@@ -34,17 +35,28 @@ pub enum TicketCommitmentError {
     },
 }
 /// Errors raised during ticket signature verification.
+/// Detailed causes are owned out of line to keep the error compact on all targets.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TicketSignatureError {
     /// The embedded ticket commitment does not match the body.
     #[error(transparent)]
-    Commitment(#[from] TicketCommitmentError),
+    Commitment(Box<TicketCommitmentError>),
     /// Ticket issuer account is not single-signatory, so the embedded signature has no verifier.
     #[error("ticket issuer account has no single signatory")]
     MissingIssuerSignatory,
     /// The issuer signature is malformed or does not verify.
     #[error("ticket signature verification failed: {0}")]
-    Signature(#[from] iroha_crypto::Error),
+    Signature(#[source] Box<iroha_crypto::Error>),
+}
+impl From<TicketCommitmentError> for TicketSignatureError {
+    fn from(error: TicketCommitmentError) -> Self {
+        Self::Commitment(Box::new(error))
+    }
+}
+impl From<iroha_crypto::Error> for TicketSignatureError {
+    fn from(error: iroha_crypto::Error) -> Self {
+        Self::Signature(Box::new(error))
+    }
 }
 /// Ticket capability scope.
 #[derive(
@@ -287,7 +299,7 @@ impl TicketEnvelopeV1 {
             super::signature_for_public_key_algorithm(issuer_public_key, &self.signature)?;
         SignatureOf::<TicketSignaturePayloadV1>::from_signature(signature)
             .verify(issuer_public_key, &self.signature_payload())
-            .map_err(TicketSignatureError::Signature)
+            .map_err(TicketSignatureError::from)
     }
     fn signature_payload(&self) -> TicketSignaturePayloadV1 {
         TicketSignaturePayloadV1 {
@@ -357,8 +369,9 @@ fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{account::AccountId, domain::DomainId};
+    use crate::account::AccountId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use norito::codec::{Decode, Encode};
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -478,11 +491,12 @@ mod tests {
     fn ticket_signature_rejects_stale_commitment() {
         let mut ticket = signed_sample_envelope();
         ticket.body.max_uses += 1;
+        let expected = ticket.body.compute_commitment();
+        let actual = ticket.commitment;
         assert!(matches!(
             ticket.verify_signature(),
-            Err(TicketSignatureError::Commitment(
-                TicketCommitmentError::Mismatch { .. }
-            ))
+            Err(TicketSignatureError::Commitment(error))
+                if *error == (TicketCommitmentError::Mismatch { expected, actual })
         ));
     }
     #[test]
@@ -519,9 +533,8 @@ mod tests {
             assert!(
                 matches!(
                     ticket.verify_signature(),
-                    Err(TicketSignatureError::Signature(
-                        iroha_crypto::Error::BadSignature
-                    ))
+                    Err(TicketSignatureError::Signature(error))
+                        if *error == iroha_crypto::Error::BadSignature
                 ),
                 "{label} ticket signature R must fail Ed25519 admission"
             );

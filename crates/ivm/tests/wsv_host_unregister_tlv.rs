@@ -1,10 +1,9 @@
 use iroha_crypto::{Hash, PublicKey};
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
-    },
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -58,8 +57,9 @@ fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
 #[test]
 fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let alice_domain: DomainId =
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
-    let bob_domain: DomainId = iroha_data_model::DomainId::try_new("wonder", "universal").unwrap();
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
+    let bob_domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
@@ -72,7 +72,7 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let bob = test_account(bob_domain, bob_pk);
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::new();

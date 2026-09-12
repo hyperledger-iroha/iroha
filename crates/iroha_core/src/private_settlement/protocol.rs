@@ -16,8 +16,8 @@ use iroha_data_model::{
         PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
         PrivateSettlementReceiptV1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -504,11 +504,8 @@ pub(crate) enum PrivateSettlementProtocolErrorV1 {
 mod tests {
     use super::*;
     use iroha_crypto::{HashOf, KeyPair};
-    use iroha_data_model::{
-        NetworkId,
-        block::BlockHeader,
-        nexus::{DataSpaceId, LaneId, PrivateSettlementRouteV1},
-    };
+    use iroha_data_model::{NetworkId, block::BlockHeader, nexus::PrivateSettlementRouteV1};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
     fn fixture() -> (
         PrivateSettlementCommitteeAuthorityV1,

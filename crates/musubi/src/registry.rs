@@ -44,7 +44,6 @@ use iroha_data_model::{
     NetworkId,
     account::address::ChainDiscriminantGuard,
     isi::InstructionBox,
-    metadata::Metadata,
     musubi::{
         MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiAliasHistoryPageV1,
         MusubiAliasQueryV1, MusubiAliasRecordV1, MusubiArchiveCommitmentV1,
@@ -62,6 +61,7 @@ use iroha_data_model::{
     sorafs::capacity::ProviderId,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_musubi_service::MusubiSeedIngressCarPlanV1;
 #[cfg(test)]
 use std::fs;
@@ -2331,12 +2331,12 @@ mod tests {
             MusubiSemanticReleaseDigestV1, MusubiStorageAvailabilityV1, MusubiVerificationLockV1,
             MusubiVersionV1,
         },
-        nexus::DataSpaceId,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, ReplicationOrderId,
         },
         transaction::{Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::{cell::Cell, io::Write as _, net::TcpListener, time::Duration};
     use tempfile::tempdir;
     fn test_network_id(byte: u8) -> NetworkId {

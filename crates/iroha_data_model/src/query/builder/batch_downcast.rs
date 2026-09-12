@@ -2,17 +2,15 @@ use crate::{
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId, definition::AssetDefinition, value::Asset},
     block::{BlockHeader, SignedBlock},
-    domain::{Domain, DomainId},
+    domain::Domain,
     escrow::AssetEscrowRecord,
     events::data::oracle::FeedEventRecord,
-    metadata::Metadata,
     nft::{Nft, NftId},
     oracle::{
         FeedConfig, OracleChangeProposal, OracleDispute, OracleProviderStatsRecord,
         TwitterBindingRecord,
     },
     parameter::Parameter,
-    peer::PeerId,
     permission::Permission,
     proof::ProofRecord,
     query::{CommittedTransaction, QueryOutputBatchBox, QueryOutputBatchBoxTuple},
@@ -23,7 +21,10 @@ use crate::{
     trigger::{Trigger, TriggerId, action::Action},
 };
 use iroha_crypto::{HashOf, PublicKey};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{json::Json, numeric::Numeric};
 use std::vec::{self, Vec};
 #[derive(Debug)]

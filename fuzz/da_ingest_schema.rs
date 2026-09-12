@@ -5,9 +5,8 @@ use flate2::{
     write::{DeflateEncoder, GzEncoder},
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-use iroha_data_model::{
-    NetworkId, account::AccountId, block::BlockHeader, da::prelude::*, nexus::LaneId,
-};
+use iroha_data_model::{NetworkId, account::AccountId, block::BlockHeader, da::prelude::*};
+use iroha_model_base::topology::LaneId;
 use libfuzzer_sys::fuzz_target;
 use norito::{decode_from_bytes, to_bytes};
 use std::io::Write;

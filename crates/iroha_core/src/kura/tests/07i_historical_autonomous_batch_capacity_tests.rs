@@ -91,8 +91,19 @@ fn historical_capacity_lifecycle_context(payload: &LaneExecutablePayloadV1) -> H
         ]),
     ))
 }
+/// Bind fixture reservations to the signed lifecycle context used for durable custody.
+pub(crate) fn historical_capacity_bound_payload_for_fixture(
+    payload: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+) -> LaneExecutablePayloadV1 {
+    lifecycle_terminal_bound_payload_for_test(
+        payload,
+        historical_capacity_lifecycle_context(payload),
+        signer,
+    )
+}
 /// Install payload dependencies through a signed Queue bootstrap before injecting storage faults.
-fn persist_historical_capacity_payload_fixture(
+pub(crate) fn persist_historical_capacity_payload_fixture(
     kura: &Kura,
     payload_template: &LaneExecutablePayloadV1,
     signer: &KeyPair,
@@ -104,8 +115,8 @@ fn persist_historical_capacity_payload_fixture(
     signed_lifecycle_attempt_fixture!(
         "historical capacity signed custody";
         network_id, epoch, height_context_id, payload_template, local_peer, signer;
-        payload, reservation_group, binding, activated, activate, prepared_activate,
-        live_activate, authentication_facts, sign_cursor
+        payload, reservation_group, binding, activated, activate, _fixture_prepared_activate,
+        _fixture_live_activate, authentication_facts, sign_cursor
     );
     assert_eq!(
         &payload, payload_template,
@@ -116,10 +127,17 @@ fn persist_historical_capacity_payload_fixture(
     let generation = kura
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim historical fixture signing generation");
-    assert_eq!(
-        generation.generation(),
+    let prepared_activate = sign_cursor(
         1,
-        "fixture setup precedes the first restart"
+        None,
+        AutonomousLifecycleCursorPhaseV1::prepared(generation.generation(), activate)
+            .expect("prepare payload custody in the current process generation"),
+    );
+    let live_activate = sign_cursor(
+        2,
+        Some(prepared_activate.cursor_hash()),
+        AutonomousLifecycleCursorPhaseV1::live(generation.generation(), activated)
+            .expect("activate payload custody in the current process generation"),
     );
     let preimage = kura
         .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(

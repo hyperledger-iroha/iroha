@@ -103,7 +103,15 @@ function resolveLoadedBinding(runtime, loadBinding) {
     cache.set(cacheKey, Object.freeze({ ok: true, binding }));
     return binding;
   } catch (error) {
-    cache.set(cacheKey, Object.freeze({ ok: false, error }));
+    // Browser initialization is asynchronous. An early synchronous call must
+    // not poison a context that can later resolve the verified codec. Native
+    // integrity/load failures keep their existing immutable cached outcome.
+    const code = error && typeof error === "object"
+      ? Object.getOwnPropertyDescriptor(error, "code")?.value
+      : undefined;
+    if (code !== "ERR_IROHA_CODEC_NOT_READY") {
+      cache.set(cacheKey, Object.freeze({ ok: false, error }));
+    }
     throw error;
   }
 }

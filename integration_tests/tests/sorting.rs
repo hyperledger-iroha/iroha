@@ -7,6 +7,8 @@ use iroha::{
     crypto::{KeyPair, PublicKey},
     data_model::{account::Account, prelude::*, query::parameters::SortOrder},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;

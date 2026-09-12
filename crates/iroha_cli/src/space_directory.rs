@@ -9,7 +9,7 @@ use iroha::data_model::{
             RevokeSpaceDirectoryManifest,
         },
     },
-    nexus::{AssetPermissionManifest, DataSpaceId},
+    nexus::AssetPermissionManifest,
 };
 use iroha::{config::Config, data_model::Decode};
 use iroha_data_model::{
@@ -20,6 +20,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue};
 use reqwest::{
@@ -1407,15 +1408,17 @@ mod tests {
         config::Config,
         crypto::{Algorithm, Hash as CryptoHash, KeyPair},
         data_model::{
-            metadata::Metadata,
             nexus::{
-                Allowance, AllowanceWindow, AmxRole, CapabilityScope, DataSpaceId, ManifestEffect,
+                Allowance, AllowanceWindow, AmxRole, CapabilityScope, ManifestEffect,
                 ManifestEntry, ManifestVersion, UniversalAccountId,
             },
             prelude::*,
         },
     };
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use norito::json::JsonSerialize;
     use std::path::Path;
     use tempfile::tempdir;
@@ -1500,7 +1503,7 @@ mod tests {
             method: Some("transfer".to_owned()),
             asset: Some(
                 AssetDefinitionId::derive_from_components(
-                    iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+                    iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
                         .expect("domain"),
                     "cbdc".parse().expect("name"),
                 )

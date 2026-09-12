@@ -7,11 +7,9 @@
 //! here, while provider credit deposits, settlement, and slashing remain separate authority-checked
 //! ledger flows.
 
+use crate::sorafs::{capacity::ProviderId, pin_registry::StorageClass};
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{
-    metadata::Metadata,
-    sorafs::{capacity::ProviderId, pin_registry::StorageClass},
-};
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

@@ -6,12 +6,12 @@
 use crate::{
     Identifiable,
     asset::prelude::{AssetDefinitionId, AssetId},
-    metadata::Metadata,
     prelude::AccountId,
 };
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -327,7 +327,7 @@ impl JsonKeyCodec for RepoAgreementId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
     #[derive(Encode)]

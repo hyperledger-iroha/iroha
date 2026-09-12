@@ -14,7 +14,11 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::*;
 use iroha_data_model::transaction::signed::TransactionSignatureError;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
@@ -551,12 +555,9 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .chain(0, None)
         .sign(alice_kp.private_key())
         .unpack(|_| {});
-    let setup_block_signed: SignedBlock = setup_block.clone().into();
+    // Provision the sponsor in an explicit world fixture before validating the
+    // first block, so setup transfers cannot become unowned finalized sources.
     let mut setup_state_block = state.block(setup_block.header());
-    let setup_valid =
-        ValidBlock::validate_unchecked(setup_block.into(), &mut setup_state_block).unpack(|_| {});
-    let setup_committed = setup_valid.commit_unchecked().unpack(|_| {});
-    let _ = setup_state_block.apply_without_execution(&setup_committed, Vec::new());
     {
         let mut setup_state_tx = setup_state_block.transaction();
 
@@ -572,9 +573,32 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         );
         setup_state_tx.apply();
     }
+    let policy_entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
+        dsid: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        policy: iroha_data_model::nexus::AxtPolicyEntry {
+            manifest_root: iroha_crypto::Hash::new(b"sponsor-overlay-lane-manifest").into(),
+            target_lane: iroha_model_base::topology::LaneId::SINGLE,
+            active_handle_era: 0,
+            next_handle_counter: 0,
+            current_slot: 0,
+        },
+    }];
     setup_state_block
-        .commit()
-        .expect("commit setup permission block");
+        .install_axt_policy_snapshot(&iroha_data_model::nexus::AxtPolicySnapshot {
+            version: iroha_data_model::nexus::AxtPolicySnapshot::compute_version(&policy_entries),
+            entries: policy_entries,
+        })
+        .expect("bind sponsored settlement to the current lane manifest");
+    setup_state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit sponsor world fixture");
+    let mut genesis_state_block = state.block(setup_block.header());
+    let setup_valid =
+        ValidBlock::validate_unchecked(setup_block.into(), &mut genesis_state_block).unpack(|_| {});
+    let setup_committed = setup_valid.commit_unchecked().unpack(|_| {});
+    let setup_block_signed = setup_committed.as_ref().clone();
+    let _ = genesis_state_block.apply_without_execution(&setup_committed, Vec::new());
+    genesis_state_block.commit().expect("commit setup block");
     {
         let check_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut check_block = state.block(check_header);
@@ -945,7 +969,7 @@ fn ivm_syscall_charges_fees() {
     let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-    let contract_route = iroha_data_model::nexus::DataSpaceId::new(10);
+    let contract_route = iroha_model_base::topology::DataSpaceId::new(10);
     state_tx.current_dataspace_id = Some(contract_route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor

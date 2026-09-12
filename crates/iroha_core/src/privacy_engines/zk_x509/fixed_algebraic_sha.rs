@@ -16,6 +16,7 @@ use super::{
         ZK_X509_CA_SPKI_DER_BYTES_V1, ZK_X509_CRL_COMMITMENT_MAX_DER_BYTES_V1,
         crl_commitment_preimage_v1, crl_issuer_spki_preimage_v1,
     },
+    profile::ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
     rfc5280_stark::ZkX509Rfc5280OutputRoleV1,
     sha_call_bus_stark::{
         ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, ZK_X509_SHA_CA_CALL_COUNT_V1,
@@ -2674,6 +2675,9 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
         shape: ZkX509ShaCallPublicShapeV1,
         children: [ZkX509FixedAlgebraicScheduleV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
     ) -> Result<Self, ZkX509ShaFixedAlgebraicErrorV1> {
+        if shape.disclosed_attributes > 4 {
+            return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+        }
         let domain = children
             .first()
             .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?
@@ -2947,7 +2951,11 @@ fn compile_sha_fixed_algebraic_children_v1(
     if shape.disclosed_attributes > 4 {
         return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
     }
-    let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))?;
+    let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+        19,
+        ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+        F(GOLDILOCKS_GENERATOR_V1),
+    )?;
     let schedule = ZkX509ShaCallScheduleV1::new(shape)
         .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
     let mut calls = schedule.calls().to_vec();
@@ -3384,7 +3392,12 @@ mod tests {
                     .native_row_v1(ZK_X509_SHA_SEGMENT_ROWS_V1 as u64, &mut row)
                     .is_err()
             );
-            for query in [&[1_u64 << 25][..], &[][..], &[7, 7][..], &[8, 7][..]] {
+            for query in [
+                &[1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1][..],
+                &[][..],
+                &[7, 7][..],
+                &[8, 7][..],
+            ] {
                 assert!(schedule.evaluate_query_indices_v1(query).is_err());
             }
             for child in schedule.children_v1() {
@@ -3396,7 +3409,12 @@ mod tests {
                         .native_row_v1(ZK_X509_SHA_SEGMENT_ROWS_V1 as u64, &mut child_row)
                         .is_err()
                 );
-                for query in [&[1_u64 << 25][..], &[][..], &[7, 7][..], &[8, 7][..]] {
+                for query in [
+                    &[1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1][..],
+                    &[][..],
+                    &[7, 7][..],
+                    &[8, 7][..],
+                ] {
                     assert!(child.evaluate_query_indices_v1(query).is_err());
                 }
             }
@@ -3567,8 +3585,12 @@ mod tests {
     }
     #[test]
     fn boolean_round_axis_is_exact_and_uses_32_atoms_per_block() {
-        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
-            .expect("release SHA domain");
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+            19,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("release SHA domain");
         let mut builder = StructuralBuilderV1::new_v1(domain, 0).expect("structural builder");
         let compute_start = 101;
         let block_count = 2;
@@ -3630,8 +3652,12 @@ mod tests {
     }
     #[test]
     fn boolean_block_gap_axis_is_exact_and_cancels_every_gap_row() {
-        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
-            .expect("release SHA domain");
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+            19,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("release SHA domain");
         let mut builder = StructuralBuilderV1::new_v1(domain, 0).expect("structural builder");
         let compute_start = 101;
         let block_count = 14;
@@ -3719,8 +3745,12 @@ mod tests {
         let execution =
             interleaved_execution_memory_v1(&circuit).expect("authoritative execution order");
         let digest_start = execution.len() - DIGEST_LOCAL_ROWS_PER_CALL_V1;
-        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
-            .expect("release SHA domain");
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+            19,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("release SHA domain");
         let memory_start = 1_234;
         let mut builder = StructuralBuilderV1::new_v1(domain, 0).expect("structural builder");
         emit_operation_read_axis_atoms_v1(&mut builder, 0, memory_start, block_count, &execution)
@@ -3775,8 +3805,12 @@ mod tests {
         let sorted = &circuit.stark_memory_v1().sorted;
         assert!(sorted[..7].iter().all(|access| access.address == F::ZERO));
         assert_eq!(sorted[7].address, F::ONE);
-        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
-            .expect("release SHA domain");
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+            19,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("release SHA domain");
         let memory_start = 4_321;
         let mut builder = StructuralBuilderV1::new_v1(domain, 0).expect("structural builder");
         emit_sorted_memory_phase_axis_atoms_v1(
@@ -3930,11 +3964,19 @@ mod tests {
             Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
         );
         let other_shape = schedule(1);
+        let changed_child = primary
+            .children
+            .iter()
+            .zip(&other_shape.children)
+            .position(|(left, right)| left.descriptor_digest_v1() != right.descriptor_digest_v1())
+            .expect("disclosure shape changes a child schedule");
         let mut cross_shape = primary.children.clone();
-        cross_shape[0] = other_shape.children[0].clone();
+        cross_shape[changed_child] = other_shape.children[changed_child].clone();
+        let cross_shape = ZkX509ShaFixedAlgebraicScheduleV1::new_v1(shape, cross_shape)
+            .expect("the substituted child retains the same bounded geometry");
         assert_eq!(
-            ZkX509ShaFixedAlgebraicScheduleV1::new_v1(shape, cross_shape),
-            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+            cross_shape.verify_descriptor_digest_v1(&primary.descriptor_digest_v1()),
+            Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch)
         );
         let mut wrong_width = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
             primary.domain_v1(),

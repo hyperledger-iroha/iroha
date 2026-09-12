@@ -23,17 +23,18 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    DataSpaceId, NetworkId,
+    NetworkId,
     account::AccountId,
     isi::InstructionBox,
-    nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
-    peer::PeerId,
+    nexus::{DataSpaceCatalog, LaneCatalog, LaneVisibility},
     transaction::{
         SignedTransaction,
         signed::{TransactionAdmissionIntent, TransactionEntrypoint},
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
@@ -143,7 +144,7 @@ fn validate_queue_plan_gossip_certificate(
         PendingQueuePlanAdmissionDisposition::Applied => {
             QueuePlanGossipCertificateDisposition::Applied
         }
-        PendingQueuePlanAdmissionDisposition::Future
+        PendingQueuePlanAdmissionDisposition::Future { .. }
         | PendingQueuePlanAdmissionDisposition::DeferredCarrier
         | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
         | PendingQueuePlanAdmissionDisposition::Stale => {
@@ -2030,7 +2031,7 @@ impl TransactionGossiper {
                     }
                     Ok(validated) => Some(validated),
                     Err(error) => {
-                        iroha_logger::warn!(%entrypoint_hash, %error, "dropping unauthenticated QueuePlan transaction gossip");
+                        iroha_logger::warn!(%entrypoint_hash, %error, "rejecting QueuePlan transaction gossip");
                         continue;
                     }
                 },
@@ -2601,7 +2602,7 @@ impl TransactionGossiper {
                         iroha_logger::warn!(
                             %entrypoint_hash,
                             %error,
-                            "dropping unauthenticated QueuePlan transaction gossip"
+                            "rejecting QueuePlan transaction gossip"
                         );
                         continue;
                     }
@@ -3809,14 +3810,12 @@ mod tests {
         ram_lfe_bfv_parameters_v1, try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
-        DataSpaceId, Level,
+        Level,
         account::{AccountDetails, AccountId, AccountValue},
-        domain::{Domain, DomainId},
+        domain::Domain,
         identifier::IdentifierPolicyId,
         isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
-        nexus::{
-            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId, LaneVisibility,
-        },
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
         ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
         transaction::{
             TransactionBuilder,
@@ -3826,6 +3825,8 @@ mod tests {
             },
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{addr::socket_addr, numeric::Quantity, time::TimeSource};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
@@ -4721,7 +4722,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -5455,7 +5456,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -5464,7 +5465,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             gossip_period: Duration::from_millis(50),
-            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_size: NonZeroU32::new(2).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             gossip_tick: 0,
             gossip_deferred: vec![
@@ -6186,7 +6187,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),

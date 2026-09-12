@@ -80,11 +80,10 @@ mod tests {
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{
-            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
-        },
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile},
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{collections::BTreeSet, num::NonZeroU32};
     fn lane_config(key_version: Option<NonZeroU32>) -> ConfigLaneConfig {
         let catalog = LaneCatalog::new(

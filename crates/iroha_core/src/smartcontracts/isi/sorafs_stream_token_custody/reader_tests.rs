@@ -66,10 +66,10 @@ fn reader_rejects_missing_height_key_replaced_active_pointer_and_missing_key_tom
         instruction(
             tx,
             f.provider,
-            Action::Revoke {
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                 signer: true,
                 attester: false,
-            },
+            }),
         )
         .execute(&f.authority, tx)
         .expect("revoke");
@@ -278,10 +278,10 @@ fn provider_removal_preserves_historical_reads_but_rejects_mutation_and_exact_re
             instruction(
                 tx,
                 f.provider,
-                Action::Revoke {
+                Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
                     signer: true,
                     attester: true
-                }
+                })
             )
             .execute(&f.authority, tx)
             .is_err()

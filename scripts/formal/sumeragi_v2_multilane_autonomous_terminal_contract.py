@@ -728,7 +728,8 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         (
             "let initial_queue_quarantine = queue.lane_reservation_startup_reconciliation_pending();",
             "let initial_snapshot = queue",
-            "non-empty Queue startup snapshot was published before terminal-outcome pre-sweep",
+            "if !initial_queue_quarantine",
+            "Queue startup snapshot was published before terminal-outcome pre-sweep",
             "active_lifecycle_routes(state, context)",
             "pending_autonomous_lifecycle_terminal_outcome_inventory",
             "pending_terminal_recovery_observations(&recovery, network_id, &active_routes)?",
@@ -798,7 +799,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         (
             "let initial_queue_quarantine",
             "let snapshot = queue",
-            "if !snapshot.is_empty() && !initial_queue_quarantine",
+            "if !initial_queue_quarantine",
             "bind_lane_reservation_startup_reconciliation_receipt(&snapshot)",
             "let mut seen_pending_identities = BTreeSet::new();",
             "for unit in &deferred_terminal_recovery.units",
@@ -1087,12 +1088,13 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
     (
         "crates/iroha_core/src/queue/lane_reservation_tests.rs",
         "fn",
-        "empty_startup_reconciliation_receipt_publishes_with_gate_already_open",
+        "empty_startup_reconciliation_receipt_opens_gate_only_after_completion",
         (
             "assert!(receipt.initial_snapshot.is_empty());",
+            "an initially empty durable replay still requires exact startup completion",
             "!queue.lane_reservation_startup_reconciliation_pending()",
             "complete_lane_reservation_startup_reconciliation(receipt)",
-            "an exact empty replay receipt publishes the initial open gate once",
+            "an exact empty replay receipt opens the startup gate once",
             "observe_completed_lane_reservation_startup_reconciliation(&snapshot)",
             "revalidate_completed_lane_reservation_startup_reconciliation(&observation)",
             "queue.complete_lane_reservation_startup_reconciliation(stale_receipt)",
@@ -1490,7 +1492,8 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
         (
             "let initial_queue_quarantine",
             "let initial_snapshot = queue",
-            "non-empty Queue startup snapshot was published before terminal-outcome pre-sweep",
+            "if !initial_queue_quarantine",
+            "Queue startup snapshot was published before terminal-outcome pre-sweep",
             "let active_routes = active_lifecycle_routes(state, context)",
             "let network_id = context.network_id;",
             "let recoveries = kura",
@@ -1539,7 +1542,7 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
         (
             "let initial_queue_quarantine",
             "let snapshot = queue",
-            "if !snapshot.is_empty() && !initial_queue_quarantine",
+            "if !initial_queue_quarantine",
             "bind_lane_reservation_startup_reconciliation_receipt(&snapshot)",
             "let mut seen_pending_identities = BTreeSet::new();",
             "for unit in &deferred_terminal_recovery.units",

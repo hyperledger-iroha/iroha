@@ -139,7 +139,6 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     }
     // Reject an impossible signed execution plan before source/artifact scans or custody reads.
     validate_timeout_policy(inventory)?;
-    let operator_key = host::pin_validator_operator_key(&inputs.validator_operator_key, inventory)?;
     let (source, source_bytes) = read_json::<SourceManifestV1>(
         Path::new(&inventory.revision.source_manifest_path),
         "source manifest",
@@ -194,6 +193,7 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     inventory.edge.systemd_unit_sha256 = unit_hash(&inputs.edge_unit)?;
     derive_validator_identities(inventory, build_identity)?;
     derive_runtime_stage(inventory, inputs)?;
+    let operator_key = host::pin_validator_operator_key(&inputs.validator_operator_key, inventory)?;
     inventory.artifact_closure_sha256 = artifact_closure_sha256(inventory);
     validate_inventory(inventory)?;
     validate_shared_validator_closure(inventory)?;
@@ -247,7 +247,7 @@ fn derive_validator_identities(
             file,
             snapshot,
         };
-        let bytes = pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?;
+        let bytes = Zeroizing::new(pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?);
         validate_validator_genesis_config(
             &bytes,
             Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
@@ -264,6 +264,10 @@ fn derive_validator_identities(
             crate::soracloud::zeroize_taira_toml_table,
         ))
         .map_err(|_| eyre!("validator config failed current typed admission"))?;
+        validate_validator_pin_fee_asset(
+            &config.gov.sorafs_pin_fee_asset_id,
+            &inventory.faucet_policy.asset_definition_id,
+        )?;
         revalidate_pinned(&input, "validator config")?;
         host::stopped_runtime::validate_config_slot(
             &validator.slug,
@@ -307,6 +311,21 @@ fn derive_validator_identities(
     Ok(())
 }
 
+fn validate_validator_pin_fee_asset(
+    configured: &iroha::data_model::asset::AssetDefinitionId,
+    faucet_asset: &str,
+) -> Result<()> {
+    let expected = faucet_asset
+        .parse::<iroha::data_model::asset::AssetDefinitionId>()
+        .map_err(|_| eyre!("inventory faucet asset is not a valid asset definition identity"))?;
+    if configured != &expected {
+        return Err(eyre!(
+            "validator SoraFS pin fee asset differs from the inventory faucet asset"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn derive_validator_identities(
     _: &mut InventoryV1,
@@ -324,7 +343,8 @@ fn derive_runtime_stage(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Re
         .map(|p| pin_owner_private_file(p, "validator client config"))
         .collect::<Result<Vec<_>>>()?;
     host::validate_validator_client_inputs(&clients, inventory)?;
-    let config = host::load_client_config_from_pinned(&runtime, "runtime client config")?;
+    let config =
+        host::load_client_config_for_inventory(&runtime, "runtime client config", inventory)?;
     if config.torii_api_url.as_str() != format!("{PUBLIC_ROOT}/")
         || config.account.to_string() != inventory.canary_onboarding_request.account_id
     {
@@ -431,6 +451,7 @@ fn sign_inventory(
     }
     let claims = AuthorizationClaimsV1 {
         action: "reset_and_deploy".to_owned(),
+        qualification_scope: inventory.qualification_scope,
         deployment_id: inventory.deployment_id.clone(),
         inventory_sha256: sha256_hex(bytes),
         artifact_closure_sha256: inventory.artifact_closure_sha256.clone(),

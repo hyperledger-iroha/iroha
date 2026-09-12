@@ -7,8 +7,7 @@ use iroha::{
     client::Client,
     data_model::{
         asset::AssetBalanceScope,
-        metadata::Metadata,
-        prelude::{AssetDefinitionId, DomainId, QueryBuilderExt},
+        prelude::{AssetDefinitionId, QueryBuilderExt},
         privacy::{
             PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyCompiledProfileResultV1,
             PrivacyCompiledProfileUnavailableReasonV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
@@ -22,6 +21,8 @@ use iroha_core::privacy_profiles::{
     CompiledPrivacyProfileErrorV1, compiled_privacy_profile_snapshot_result_v1,
     compiled_privacy_profile_v1,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 use std::{

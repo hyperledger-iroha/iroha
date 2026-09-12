@@ -239,7 +239,7 @@ mod tests {
     }
     #[test]
     fn handshake_gate_rejects_same_name_same_config_different_genesis() {
-        let display_name = iroha_data_model::ChainId::from("shared-display-name");
+        let display_name = iroha_model_base::chain::ChainId::from("shared-display-name");
         let chain = test_network_id("iroha:test:genesis-a");
         let fp = [9u8; 32];
         let gate = HandshakeGate::local(chain.clone(), fp, PERMISSIONED_TAG);

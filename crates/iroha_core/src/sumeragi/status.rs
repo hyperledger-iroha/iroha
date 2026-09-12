@@ -59,8 +59,9 @@ use iroha_data_model::{
         },
     },
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
+    nexus::{LaneRelayEnvelope, LaneRelayError},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
 #[cfg(test)]
@@ -2046,7 +2047,7 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2VoteQuorumStatus, Vote,
         },
     };
-    use iroha_data_model::peer::PeerId;
+    use iroha_model_base::peer::PeerId;
     use std::{
         sync::{Arc, Mutex, mpsc},
         thread,
@@ -5447,8 +5448,8 @@ fn lane_relay_envelopes_slot() -> &'static Mutex<Vec<LaneRelayEnvelope>> {
     LANE_RELAY_ENVELOPES.get_or_init(|| Mutex::new(Vec::new()))
 }
 type LaneRelayKey = (
-    iroha_data_model::nexus::LaneId,
-    iroha_data_model::nexus::DataSpaceId,
+    iroha_model_base::topology::LaneId,
+    iroha_model_base::topology::DataSpaceId,
     Hash,
     u64,
 );

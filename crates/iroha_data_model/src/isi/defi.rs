@@ -373,6 +373,7 @@ impl DeFiInstructionBox {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use norito::codec::{Decode, Encode};
     #[derive(Encode)]
     struct ForgedSubmitDefiIntent {

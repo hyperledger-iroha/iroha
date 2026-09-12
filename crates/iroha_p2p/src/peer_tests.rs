@@ -73,7 +73,7 @@ mod tests {
         assert_eq!(super::PRE_VERSION, 5);
         let network_id = test_network_id("v5-canonical");
         let node = delegation_test_key(0x11, Algorithm::BlsNormal);
-        let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
+        let node_id = iroha_model_base::peer::PeerId::from(node.public_key().clone());
         let transport = Arc::new(delegation_test_key(0x22, Algorithm::Ed25519));
         let relay_authentication = Arc::new(delegation_test_key(0x23, Algorithm::MlDsa));
         let certificate =
@@ -152,7 +152,7 @@ mod tests {
 
         let network_id = test_network_id("v5-oversized");
         let node = delegation_test_key(0x38, Algorithm::BlsNormal);
-        let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
+        let node_id = iroha_model_base::peer::PeerId::from(node.public_key().clone());
         let challenge = delegation_test_challenge(0x39);
         let oversized_len = u16::try_from(
             super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES
@@ -187,8 +187,8 @@ mod tests {
         let network_id = test_network_id("v5-attacks");
         let node = delegation_test_key(0x41, Algorithm::BlsNormal);
         let other_node = delegation_test_key(0x42, Algorithm::BlsNormal);
-        let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
-        let other_id = iroha_data_model::peer::PeerId::from(other_node.public_key().clone());
+        let node_id = iroha_model_base::peer::PeerId::from(node.public_key().clone());
+        let other_id = iroha_model_base::peer::PeerId::from(other_node.public_key().clone());
         let transport = Arc::new(delegation_test_key(0x43, Algorithm::Ed25519));
         let relay_authentication = Arc::new(delegation_test_key(0x46, Algorithm::MlDsa));
         let challenge = delegation_test_challenge(0x44);
@@ -465,7 +465,7 @@ mod tests {
         let outbound_addr: SocketAddr = "127.0.0.1:10011".parse().unwrap();
         let inbound_addr: SocketAddr = "127.0.0.1:10012".parse().unwrap();
         let expected_inbound_id =
-            iroha_data_model::prelude::PeerId::from(inbound_keys.public_key().clone());
+            iroha_model_base::peer::PeerId::from(inbound_keys.public_key().clone());
         let (outbound_stream, inbound_stream) = tokio::io::duplex(64 * 1024);
         let (outbound_read, outbound_write) = tokio::io::split(outbound_stream);
         let (inbound_read, inbound_write) = tokio::io::split(inbound_stream);
@@ -524,7 +524,7 @@ mod tests {
             &network_id,
         );
         let expected_inbound_id =
-            iroha_data_model::peer::PeerId::from(inbound_keys.public_key().clone());
+            iroha_model_base::peer::PeerId::from(inbound_keys.public_key().clone());
         let (outbound_stream, inbound_stream) = tokio::io::duplex(4096);
         let (outbound_read, outbound_write) = tokio::io::split(outbound_stream);
         let (inbound_read, inbound_write) = tokio::io::split(inbound_stream);
@@ -746,7 +746,7 @@ mod tests {
         let mut hello_a = unsigned_handshake_hello(&random_node_key_pair(), addr);
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x5A; 32])
             .expect("valid key length");
-        let display_name = iroha_data_model::ChainId::from("shared-display-name");
+        let display_name = iroha_model_base::chain::ChainId::from("shared-display-name");
         let network_a = test_network_id("handshake-genesis-a");
         let network_b = test_network_id("handshake-genesis-b");
         hello_a.network_id = network_a;
@@ -902,7 +902,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_same_name_peer_from_a_different_genesis() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let display_name = iroha_data_model::ChainId::from("shared-display-name");
+        let display_name = iroha_model_base::chain::ChainId::from("shared-display-name");
         let key_pair = random_node_key_pair();
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x7C; 32])
             .expect("valid key length");
@@ -1714,7 +1714,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:1445".parse().unwrap();
         let actual_key_pair = random_node_key_pair();
         let expected_peer_id =
-            iroha_data_model::prelude::PeerId::from(random_node_key_pair().public_key().clone());
+            iroha_model_base::peer::PeerId::from(random_node_key_pair().public_key().clone());
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[8u8; 32]).unwrap();
         let (stream_a, stream_b) = tokio::io::duplex(256);
@@ -1827,7 +1827,7 @@ mod tests {
         use crate::frame_identity_tests::{preimage, shapes};
         let network_id = test_network_id("v5-canonical");
         let node = delegation_test_key(0x11, Algorithm::BlsNormal);
-        let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
+        let node_id = iroha_model_base::peer::PeerId::from(node.public_key().clone());
         let transport = Arc::new(delegation_test_key(0x22, Algorithm::Ed25519));
         let relay_authentication = Arc::new(delegation_test_key(0x23, Algorithm::MlDsa));
         let certificate =

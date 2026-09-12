@@ -192,7 +192,7 @@ fn external_crate_can_name_standard_broker_executable_shell() {
 #[test]
 fn external_crate_can_name_standalone_governance_view_projection() {
     let projection: fn(
-        &iroha_data_model::ChainId,
+        &iroha_model_base::chain::ChainId,
         iroha_data_model::NetworkId,
         &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
     ) -> Result<

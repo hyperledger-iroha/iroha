@@ -17,13 +17,11 @@ use iroha::{
             Grant, InstructionBox,
             space_directory::{PublishSpaceDirectoryManifest, RevokeSpaceDirectoryManifest},
         },
-        metadata::Metadata,
         nexus::{
-            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
-            LaneConfig, LaneId, LaneLifecyclePlan, LaneVisibility, ManifestEffect, ManifestEntry,
-            ManifestVersion, UniversalAccountId,
+            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, LaneConfig,
+            LaneLifecyclePlan, LaneVisibility, ManifestEffect, ManifestEntry, ManifestVersion,
+            UniversalAccountId,
         },
-        peer::PeerId,
         permission::Permission,
         prelude::Quantity,
         query::builder::prelude::QueryBuilderExt,
@@ -32,6 +30,9 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
@@ -1258,11 +1259,11 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
 mod tests {
     use super::{
         ALICE_ID, Algorithm, BENCH_MANIFEST_DATASPACE, BENCH_MANIFEST_DATASPACE_HASH, KeyPair,
-        NEXUS_ALIAS, PeerId, benchmark_lane_manifest_peer_bindings,
-        benchmark_lane_manifest_peer_seed, duration_min_avg_max, format_duration,
-        parse_positive_usize_override,
+        NEXUS_ALIAS, benchmark_lane_manifest_peer_bindings, benchmark_lane_manifest_peer_seed,
+        duration_min_avg_max, format_duration, parse_positive_usize_override,
     };
-    use iroha::data_model::nexus::DataSpaceId;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::DataSpaceId;
     use std::time::Duration;
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);

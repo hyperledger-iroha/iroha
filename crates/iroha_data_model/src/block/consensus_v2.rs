@@ -13,14 +13,15 @@ use crate::{
     block::consensus::NativeAmxParticipantSettlement,
     consensus::GlobalThresholdBeaconPartialSignatureV1,
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
-    peer::PeerId,
+    nexus::{LaneFinalityStatement, PublicLaneValidatorRecord},
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use core::fmt;
 #[cfg(test)]
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
@@ -82,7 +83,7 @@ const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 16 * 1024;
 /// Reserved envelope kind for one KAGEMUSHA V1 Commit-vote seal share.
 pub const KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1: u8 = 1;
-/// Reserved envelope kind for an KAGEMUSHA V1 CommitQC seal bundle.
+/// Reserved envelope kind for an KAGEMUSHA V1 `CommitQC` seal bundle.
 pub const KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1: u8 = 2;
 const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1: [u8; 16] = *b"iroha-kgm-sig-v1";
 const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1: usize = 16 + 1 + 2 + 4;
@@ -712,9 +713,11 @@ impl HeightContext {
         }
         let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
         if mint_roster.validate().is_err()
-            || mint_roster.network_id != self.network_id
-            || mint_roster.epoch != self.epoch
-            || mint_roster.validators.len() != self.roster.len()
+            || (
+                mint_roster.network_id,
+                mint_roster.epoch,
+                mint_roster.validators.len(),
+            ) != (self.network_id, self.epoch, self.roster.len())
             || mint_roster
                 .validators
                 .iter()
@@ -1512,7 +1515,7 @@ impl ExecutionCommitment {
 /// the KAGEMUSHA verifier separately checks the paired Pasta payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaConsensusSignatureEnvelopePartsV1<'a> {
-    /// Whether the auxiliary payload is a Commit-vote share or CommitQC bundle.
+    /// Whether the auxiliary payload is a Commit-vote share or `CommitQC` bundle.
     pub kind: u8,
     /// Ordinary BLS signature or aggregate signature.
     pub bls_signature: &'a [u8],
@@ -4750,7 +4753,9 @@ pub(crate) fn test_kagemusha_mint_finality_genesis_parameters()
         next_epoch_roster: None,
     }
 }
-include!("consensus_v2_tests.rs");
+#[cfg(test)]
+#[path = "consensus_v2_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod terminal_height_context_tests {

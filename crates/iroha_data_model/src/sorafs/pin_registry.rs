@@ -1,7 +1,8 @@
 use super::capacity::ProviderId;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata, musubi::ArchiveId};
+use crate::{account::AccountId, asset::AssetDefinitionId, musubi::ArchiveId};
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 
@@ -1431,7 +1432,8 @@ mod tests {
         let forged = ForgedPinFeePayment {
             paid_by: fixture_account(),
             fee_asset_id: AssetDefinitionId::derive_from_components(
-                crate::domain::DomainId::try_new("sora", "universal").expect("domain id"),
+                iroha_model_base::domain::DomainId::try_new("sora", "universal")
+                    .expect("domain id"),
                 "xor".parse().expect("asset name"),
             ),
             treasury_account_id: fixture_account(),

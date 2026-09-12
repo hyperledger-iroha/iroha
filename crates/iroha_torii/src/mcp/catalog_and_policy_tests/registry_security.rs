@@ -629,7 +629,12 @@ async fn tools_list_list_changed_tracks_toolset_version() {
     let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
     let version = compute_toolset_version(&visible_tools);
     let same_version = norito::json!({ "toolsetVersion": version });
-    let same_response = handle_tools_list(None, &app, same_version.as_object().expect("map"));
+    let same_response = handle_tools_list(
+        None,
+        &app,
+        same_version.as_object().expect("map"),
+        ProtocolEra::Legacy,
+    );
     assert_eq!(
         same_response
             .get("result")
@@ -640,8 +645,12 @@ async fn tools_list_list_changed_tracks_toolset_version() {
         Some(false)
     );
     let different_version = norito::json!({ "toolset_version": "different" });
-    let different_response =
-        handle_tools_list(None, &app, different_version.as_object().expect("map"));
+    let different_response = handle_tools_list(
+        None,
+        &app,
+        different_version.as_object().expect("map"),
+        ProtocolEra::Legacy,
+    );
     assert_eq!(
         different_response
             .get("result")
@@ -651,15 +660,27 @@ async fn tools_list_list_changed_tracks_toolset_version() {
             .and_then(Value::as_bool),
         Some(true)
     );
+    let terminal = norito::json!({ "cursor": (visible_tools_for_app(&app).len().to_string()) });
+    let terminal_response = handle_tools_list(
+        None,
+        &app,
+        terminal.as_object().expect("map"),
+        ProtocolEra::Legacy,
+    );
     assert!(
-        same_response
+        terminal_response
             .get("result")
             .is_some_and(|result| result.get("nextCursor").is_none()),
         "the terminal page must omit the optional nextCursor"
     );
 
     let invalid = norito::json!({ "cursor": "not-a-cursor" });
-    let invalid_response = handle_tools_list(None, &app, invalid.as_object().expect("map"));
+    let invalid_response = handle_tools_list(
+        None,
+        &app,
+        invalid.as_object().expect("map"),
+        ProtocolEra::Legacy,
+    );
     assert_eq!(
         invalid_response
             .get("error")
@@ -929,6 +950,13 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
             .get("inputSchema")
             .cloned()
             .expect("tool inputSchema");
+        let input_schema = expand_advertised_schema_refs(&input_schema);
+        assert_eq!(
+            input_schema,
+            sanitize_tool_input_schema(&matching[0].input_schema),
+            "{} advertised references must preserve every request constraint",
+            definition.name
+        );
         let root = input_schema.as_object().expect("tool inputSchema object");
         assert!(!root.contains_key(MCP_STRICT_BODY_SCHEMA_EXTENSION));
         assert_eq!(

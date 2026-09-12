@@ -259,7 +259,7 @@ fn all_axt_advertisements_must_match_independent_caller_context() {
                 "compact_artifact_da_bytes"
             }
             7 => {
-                altered.mirrors.dsid = iroha_data_model::nexus::DataSpaceId::new(u64::MAX);
+                altered.mirrors.dsid = iroha_model_base::topology::DataSpaceId::new(u64::MAX);
                 "compact_artifact_mirror_dsid"
             }
             8 => {

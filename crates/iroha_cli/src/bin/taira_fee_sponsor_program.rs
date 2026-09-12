@@ -7,7 +7,7 @@ use iroha::{
     config::{self, Config},
     crypto::{ExposedPrivateKey, HashOf, KeyPair},
     data_model::{
-        ChainId, NetworkId,
+        NetworkId,
         account::{AccountAddress, AccountId},
         block::BlockHeader,
         isi::{
@@ -17,11 +17,12 @@ use iroha::{
                 EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
             },
         },
-        metadata::Metadata,
         nexus::{FeeSponsorProgram, FeeSponsorProgramRevision},
         transaction::FeePaymentIntent,
     },
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
 use std::{
@@ -320,13 +321,13 @@ mod tests {
         crypto::{Algorithm, KeyPair},
         data_model::{
             asset::AssetDefinitionId,
-            domain::DomainId,
             nexus::{
                 FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorNativeInstructionSelector,
                 FeeSponsorProgramId, FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector,
             },
         },
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use std::{fs, num::NonZeroU64, str::FromStr};
     const CANONICAL_NETWORK_ID_LITERAL: &str =

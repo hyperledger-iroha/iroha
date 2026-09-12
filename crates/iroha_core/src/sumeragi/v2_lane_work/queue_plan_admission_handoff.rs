@@ -257,7 +257,7 @@ impl V2LaneWorkAdapter {
                         ));
                     }
                 }
-                PendingQueuePlanAdmissionDisposition::Future
+                PendingQueuePlanAdmissionDisposition::Future { .. }
                 | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
             }
         }

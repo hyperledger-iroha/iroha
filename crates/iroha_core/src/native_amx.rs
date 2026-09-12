@@ -9,10 +9,10 @@ use iroha_data_model::{
     },
     block::consensus_v2::{ConsensusRound, HeightContextId},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::TransactionEntrypoint,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 use std::{
@@ -3663,8 +3663,8 @@ impl NativeAmxSessionCache {
     #[must_use]
     pub(crate) fn has_pending_votes_for_lane(
         &self,
-        lane_id: iroha_data_model::nexus::LaneId,
-        dataspace_id: iroha_data_model::nexus::DataSpaceId,
+        lane_id: iroha_model_base::topology::LaneId,
+        dataspace_id: iroha_model_base::topology::DataSpaceId,
         lane_incarnation: Hash,
     ) -> bool {
         self.sessions.values().any(|session| {

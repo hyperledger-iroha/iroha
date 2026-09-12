@@ -48,6 +48,7 @@ class TairaPrepareTests(unittest.TestCase):
             tool.chmod(0o755)
         self.args = argparse.Namespace(
             repo_root=SCRIPT.parent.parent, target_dir=self.target,
+            native_check_scope="basic",
             output_dir=self.out, expected_commit="a" * 40, expected_signer="A" * 40, zig=self.zig,
             zig_sha256=hashlib.sha256(self.zig.read_bytes()).hexdigest(),
             cargo_zigbuild=self.zigbuild,
@@ -68,13 +69,13 @@ class TairaPrepareTests(unittest.TestCase):
             path.write_bytes(elf(machine))
             path.chmod(0o755)
 
-    def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None):
+    def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
         def wrapped_build(*args, **kwargs):
             return (build or default_build)(*args)
-        with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, 88))), \
+        with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, source_lane_fd))), \
              patch.object(release, "verify_checkout", return_value="b" * 40), \
              patch.object(release, "source_snapshot", return_value=[]), \
              patch.object(release, "verify_signed_source", return_value="b" * 40), \
@@ -96,8 +97,12 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_prepare_orders_gate_build_capture_and_publishes_read_only_files(self):
         events = []
-        def check(_root, *, environment, source_commit, lock_fds):
+        def check(_root, *, environment, source_commit, lock_fds,
+                  completed_independent_checks, update_independent_checks, qualification_scope):
             events.append("gate")
+            self.assertEqual(qualification_scope, "basic")
+            self.assertIsNone(completed_independent_checks)
+            self.assertTrue(callable(update_independent_checks))
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
             self.assertEqual(len(lock_fds), 3)
             self.assertEqual(lock_fds[1], 88)  # Existing source-custody fixture descriptor.
@@ -377,8 +382,10 @@ class TairaPrepareTests(unittest.TestCase):
             with self.subTest(preference=preference):
                 self.out = self.root / ("prepared-incremental-" + preference)
                 self.args.output_dir = self.out
-                def check(_root, *, environment, source_commit, lock_fds):
+                def check(_root, *, environment, source_commit, lock_fds,
+                          completed_independent_checks, update_independent_checks, qualification_scope):
                     self.assertEqual(environment["CARGO_INCREMENTAL"], preference)
+                    self.assertEqual(qualification_scope, "basic")
                     self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
                     self.assertEqual(source_commit, self.args.expected_commit)
                 def build(_root, command, environment, log):
@@ -407,6 +414,21 @@ class TairaPrepareTests(unittest.TestCase):
                 with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1" if preference == "0" else "0"}):
                     with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
                         self.prepare()
+
+    def test_native_scope_is_bound_to_gate_result_and_resume(self):
+        self.args.native_check_scope = "basic"
+        result, gate, _ = self.prepare()
+        self.assertEqual(result["native_check_scope"], "basic")
+        self.assertEqual(gate.call_args.kwargs["qualification_scope"], "basic")
+        self.assertEqual(release.read_record(self.out / "request.json")["native_check_scope"], "basic")
+        self.args.native_check_scope = "full"
+        with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+            self.prepare()
+        self.out = self.root / "prepared-full"
+        self.args.output_dir = self.out
+        result, gate, _ = self.prepare()
+        self.assertEqual(result["native_check_scope"], "full")
+        self.assertEqual(gate.call_args.kwargs["qualification_scope"], "full")
 
     def test_build_command_uses_four_fixed_binaries_six_jobs_and_warm_lane(self):
         command = release.build_command(Path("/frozen"), self.target, "/fixed/cargo")
@@ -588,7 +610,87 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertEqual(source, original)
             self.assertEqual((source / "same.rs").stat().st_mtime_ns, unchanged_mtime)
             self.assertEqual((source / "edit.rs").read_bytes(), b"new")
-            self.assertEqual(len(list(source.parent.glob("source.retained-*"))), 1)
+            self.assertEqual(list(source.parent.glob("source.retained-*")), [])
+
+    def test_successful_refresh_retires_only_its_previous_source_and_keeps_warm_target(self):
+        entries = self.source_entries({"nested/source.rs": ("100644", b"old"),
+                                       "source-link": ("120000", b"nested/source.rs"),
+                                       "iroha-docs": ("160000", b"")})
+        warm = self.target / "warm-artifact"
+        warm.write_bytes(b"preserve compiler cache")
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            interrupted = source.parent / ("source.retained-" + "f" * 32)
+            interrupted.mkdir()
+            (interrupted / "unknown").write_bytes(b"preserve failed attempt")
+            pending = source.parent / "source.pending-unfinished"
+            pending.mkdir()
+            (pending / "unknown").write_bytes(b"preserve partial capture")
+            previous = entries
+            for revision, payload in (("b", b"second"), ("c", b"third")):
+                updated = self.source_entries({"nested/source.rs": ("100644", payload),
+                                               "source-link": ("120000", b"nested/source.rs"),
+                                               "iroha-docs": ("160000", b"")})
+                with patch.object(release, "commit_entries", return_value=previous):
+                    release.capture_source(self.root, source, self.target, revision * 40, updated)
+                self.assertEqual(list(source.parent.glob("source.retained-*")), [interrupted])
+                self.assertEqual((source / "source-link").read_bytes(), payload)
+                self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                 {"commit": revision * 40})
+                previous = updated
+            self.assertEqual(warm.read_bytes(), b"preserve compiler cache")
+            self.assertEqual((interrupted / "unknown").read_bytes(), b"preserve failed attempt")
+            self.assertEqual((pending / "unknown").read_bytes(), b"preserve partial capture")
+
+    def test_retirement_rejects_unknown_inputs_without_deleting_them(self):
+        entries = self.source_entries({"source.rs": ("100644", b"old")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            updated = self.source_entries({"source.rs": ("100644", b"new")})
+            retire = release.retire_source_capture
+            def inject_unknown(retained, old_entries, target):
+                self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                 {"commit": "b" * 40})
+                retained.chmod(0o700)
+                (retained / "unknown").write_bytes(b"must survive")
+                retained.chmod(0o500)
+                retire(retained, old_entries, target)
+            with patch.object(release, "commit_entries", return_value=entries), \
+                 patch.object(release, "retire_source_capture", side_effect=inject_unknown):
+                with self.assertRaisesRegex(release.PrepareError, "extra inputs"):
+                    release.capture_source(self.root, source, self.target, "b" * 40, updated)
+            retained, = source.parent.glob("source.retained-*")
+            self.assertEqual((retained / "unknown").read_bytes(), b"must survive")
+            self.assertEqual((retained / "source.rs").read_bytes(), b"old")
+            self.assertEqual((source / "source.rs").read_bytes(), b"new")
+
+    def test_checkpoint_publication_failure_retains_previous_source_for_recovery(self):
+        entries = self.source_entries({"source.rs": ("100644", b"old")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            updated = self.source_entries({"source.rs": ("100644", b"new")})
+            with patch.object(release, "commit_entries", return_value=entries), \
+                 patch.object(release.os, "replace", side_effect=OSError("fixture checkpoint failure")), \
+                 patch.object(release, "retire_source_capture") as retire:
+                with self.assertRaisesRegex(OSError, "checkpoint failure"):
+                    release.capture_source(self.root, source, self.target, "b" * 40, updated)
+                retire.assert_not_called()
+            retained, = source.parent.glob("source.retained-*")
+            self.assertEqual((retained / "source.rs").read_bytes(), b"old")
+            self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                             {"commit": "a" * 40})
+            release.capture_source(self.root, source, self.target, "b" * 40, updated)
+            self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                             {"commit": "b" * 40})
+            self.assertTrue(retained.is_dir())
+
+    def test_retirement_cannot_select_current_source(self):
+        entries = self.source_entries({"source.rs": ("100644", b"current")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            with self.assertRaisesRegex(release.PrepareError, "superseded source"):
+                release.retire_source_capture(source, entries, self.target)
+            self.assertEqual((source / "source.rs").read_bytes(), b"current")
 
     def test_captured_source_tampering_or_extra_files_cannot_resume(self):
         entries = self.source_entries({"source.rs": ("100644", b"signed")})
@@ -820,8 +922,9 @@ class TairaPrepareTests(unittest.TestCase):
         repo, routine = self.development_paths()
         target_mode = stat.S_IMODE(routine.stat().st_mode)
         descriptors = []
-        def run(root, *, environment, lock_fds):
+        def run(root, *, environment, lock_fds, qualification_scope):
             self.assertEqual(root, repo)
+            self.assertEqual(qualification_scope, "basic")
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
             self.assertNotIn("PRIVATE_KEY", environment)
             self.assertEqual(environment["CARGO_INCREMENTAL"], "0")

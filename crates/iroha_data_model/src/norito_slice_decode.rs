@@ -26,8 +26,6 @@ macro_rules! impl_canonical_slice_decode {
 impl_canonical_slice_decode! {
     crate::ipfs::IpfsPath,
     crate::sorafs_uri::SorafsUri,
-    crate::peer::PeerId,
-    crate::domain::DomainId,
     crate::asset::id::AssetId,
     crate::asset::id::AssetDefinitionId,
     crate::asset::alias::AssetDefinitionAlias,

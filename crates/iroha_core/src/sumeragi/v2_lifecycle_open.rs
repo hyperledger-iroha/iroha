@@ -184,7 +184,7 @@ impl TerminalValidateNoSuccessorClaim {
             && self.key.proposal_round()
                 == Some(super::LifecycleRound::new(round.height, round.view))
             && self.key.subject() == Some(super::projection::block_subject(subject))
-            && self.key.phase() == super::LifecyclePhase::Validate
+            && self.key.phase().is_validate()
             && self.reconstruction_source == self.owner.causal_root().digest()
             && self.stage.kind() == LifecycleStageKind::ValidateBody
             && self.stage.predecessor_scope() == PredecessorScope::Independent
@@ -3895,9 +3895,7 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             }
         }
         RecoveredWalStartupProjectionV1::DecisionApply(projection) => {
-            if !projection
-                .lineage()
-                .owns_spliced_apply_candidate(&candidates)
+            if !projection.owns_spliced_apply_candidate(&candidates)
                 || !recovered_decision_apply_chain_is_exact(ledger, projection)
             {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
@@ -4038,7 +4036,10 @@ fn recovered_decision_apply_chain_is_exact(
     ledger: &LifecycleLedgerV1,
     projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
 ) -> bool {
-    recovered_decision_apply_chain_records(ledger, projection).is_some()
+    match projection.retained_body_lineage() {
+        Some(retained) => retained.matches_ledger(ledger),
+        None => recovered_decision_apply_chain_records(ledger, projection).is_some(),
+    }
 }
 fn recovered_released_decision_apply_chain_is_exact(
     ledger: &LifecycleLedgerV1,
@@ -4054,6 +4055,11 @@ fn splice_recovered_decision_apply_candidate(
     current: &LifecycleLedgerRecordV1,
     candidates: &mut BTreeMap<LifecycleKey, CandidateAdmission>,
 ) -> bool {
+    if let Some(retained) = projection.retained_body_lineage() {
+        return retained.matches_ledger(ledger)
+            && retained.apply_ordinal() == current.ordinal()
+            && retained.splice_apply_candidate(candidates);
+    }
     let Some([_fetch, store, validate, apply]) =
         recovered_decision_apply_chain_records(ledger, projection)
     else {

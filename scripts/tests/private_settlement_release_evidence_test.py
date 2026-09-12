@@ -126,6 +126,31 @@ FIXTURE_JAVA_RUNTIME = {
 }
 
 
+def fixture_hardware_description() -> dict[str, Any]:
+    """Return the same public hardware fixture for release and accounting controls."""
+
+    return {
+        "version": 1,
+        "protocol": MODULE.PROTOCOL,
+        "commit": RELEASE_COMMIT,
+        "collected_at_utc": "2026-08-29T00:00:00Z",
+        "host_id": "bck26-lab-host-01",
+        "operating_system": "macOS 15.6",
+        "kernel": "Darwin 24.6.0",
+        "architecture": "arm64",
+        "cpu_model": "Apple M4 Max",
+        "physical_cores": 16,
+        "logical_cores": 16,
+        "memory_bytes": 137_438_953_472,
+        "storage_model": "pinned local NVMe",
+        "network_description": "isolated 10 GbE laboratory fabric",
+        "clock_policy": "performance cores pinned; synchronized monotonic clocks",
+        "power_profile": "AC power; high-performance mode",
+        "virtualized": False,
+        "passed": True,
+    }
+
+
 def fixture_source_seal(
     payload: bytes, source_overrides: dict[str, bytes] | None = None
 ) -> bytes:
@@ -187,9 +212,9 @@ def fixture_formal_transcript() -> bytes:
         status = MODULE._FORMAL_TLC_STATUS_BY_OUTCOME[outcome]
         if outcome == "pass":
             result_body = (
+                "Model checking completed. No error has been found.\n"
                 "1 states generated, 1 distinct states found, 0 states left on queue.\n"
                 "The depth of the complete state graph search is 1.\n"
-                "Model checking completed. No error has been found.\n"
             )
         elif outcome == "safety_violation":
             result_body = (
@@ -221,6 +246,42 @@ def fixture_formal_transcript() -> bytes:
 
 class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
     """Exercise exact qualification, audit, inventory, and digest gates."""
+
+    def test_fixture_formal_transcript_matches_strict_result_order(self) -> None:
+        """Replay every synthetic TLC outcome without constructing a bundle."""
+
+        arguments = {
+            "commit": RELEASE_COMMIT,
+            "model_sha256": FIXTURE_FORMAL_PACKAGE_SHA256,
+            "evidence_code_sha256": FIXTURE_FORMAL_EVIDENCE_CODE_SHA256,
+            "java_runtime": FIXTURE_JAVA_RUNTIME,
+            "configurations": [
+                {
+                    "name": name,
+                    "model": model,
+                    "expected_outcome": outcome,
+                    "observed_outcome": outcome,
+                    "generated_states": 1,
+                    "distinct_states": 1,
+                    "depth": 1,
+                }
+                for name, outcome, model in MODULE.REQUIRED_FORMAL_CONFIGURATION_MODELS
+            ],
+        }
+        payload = fixture_formal_transcript()
+        MODULE._validate_formal_tlc_transcript(payload, **arguments)
+        success = b"Model checking completed. No error has been found.\n"
+        statistics = (
+            b"1 states generated, 1 distinct states found, 0 states left on queue.\n"
+            b"The depth of the complete state graph search is 1.\n"
+        )
+        self.assertEqual(
+            payload.count(success + statistics),
+            sum(outcome == "pass" for _, outcome, _ in MODULE.REQUIRED_FORMAL_CONFIGURATION_MODELS),
+        )
+        old_order = payload.replace(success + statistics, statistics + success, 1)
+        with self.assertRaisesRegex(MODULE.EvidenceError, "passing TLC result markers are out of order"):
+            MODULE._validate_formal_tlc_transcript(old_order, **arguments)
 
     def make_bundle(self, root: Path) -> Path:
         """Copy complete fixture bytes into an independent mutable directory.
@@ -275,6 +336,9 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 raise ValueError("fixture template file was replaced by a link")
             destination = root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
+            # Recreate private transport directories even though the cached
+            # template is deliberately immutable (mode 0500).
+            destination.parent.chmod(0o700)
             # copyfile copies contents into a new inode; unlike copy2 it does
             # not inherit the template's read-only mode. Never use hardlinks.
             shutil.copyfile(source, destination)
@@ -304,26 +368,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         audit_report_payload = b"independent cryptographic audit report\n"
         audit_report_digest = hashlib.sha256(audit_report_payload).hexdigest()
         hardware_description_path = Path("evidence") / "hardware_description.json"
-        hardware_description = {
-            "version": 1,
-            "protocol": MODULE.PROTOCOL,
-            "commit": RELEASE_COMMIT,
-            "collected_at_utc": "2026-08-29T00:00:00Z",
-            "host_id": "bck26-lab-host-01",
-            "operating_system": "macOS 15.6",
-            "kernel": "Darwin 24.6.0",
-            "architecture": "arm64",
-            "cpu_model": "Apple M4 Max",
-            "physical_cores": 16,
-            "logical_cores": 16,
-            "memory_bytes": 137_438_953_472,
-            "storage_model": "pinned local NVMe",
-            "network_description": "isolated 10 GbE laboratory fabric",
-            "clock_policy": "performance cores pinned; synchronized monotonic clocks",
-            "power_profile": "AC power; high-performance mode",
-            "virtualized": False,
-            "passed": True,
-        }
+        hardware_description = fixture_hardware_description()
         hardware_description_payload = (
             json.dumps(hardware_description, sort_keys=True)
             + "\n"
@@ -334,75 +379,24 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         hardware_profile_digest = MODULE._hardware_profile_sha256(
             hardware_description
         )
-        configuration_paths = {
-            participants: Path("evidence")
-            / "configurations"
-            / f"private-settlement-n{participants}.json"
-            for participants in MODULE.REQUIRED_PARTICIPANTS
-        }
-        configuration_payloads = {
-            participants: (
-                json.dumps(
-                    {
-                        "version": 1,
-                        "protocol": MODULE.PROTOCOL,
-                        "participants": participants,
-                        "participant_visibilities": ["public"]
-                        + ["restricted"] * (participants - 1),
-                        "primary_paper_configuration": participants == 3,
-                        "topology": {
-                            "global_validators": 4,
-                            "participant_dataspaces": list(range(participants)),
-                            "validators_per_dataspace": 4,
-                            "total_validator_processes": (participants + 1) * 4,
-                            "quorum": "3-of-4",
-                        },
-                        "consensus": {
-                            "mandatory_signed_rs16_da_rbc": True,
-                            "minimum_signed_rs16_da_observations_per_run": (
-                                participants + 1
-                            )
-                            * 4,
-                            "authenticated_message_control": True,
-                            "maximum_simultaneously_unavailable_per_committee": 1,
-                            "legacy_rbc_bypass_permitted": False,
-                        },
-                    },
-                    sort_keys=True,
-                )
-                + "\n"
-            ).encode()
-            for participants in MODULE.REQUIRED_PARTICIPANTS
-        }
+        from scripts.tests.private_settlement_registered_accounting_fixture import (
+            build_registered_accounting_fixture, canonical_configuration_inputs,
+        )
+        configuration_paths, configuration_payloads, configuration_manifest_path, configuration_manifest_payload = (
+            canonical_configuration_inputs(RELEASE_COMMIT)
+        )
         configuration_digests = {
             participants: hashlib.sha256(payload).hexdigest()
             for participants, payload in configuration_payloads.items()
         }
-        configuration_manifest_path = Path("evidence") / "configuration_manifest.json"
-        configuration_manifest_payload = (
-            json.dumps(
-                {
-                    "version": 1,
-                    "protocol": MODULE.PROTOCOL,
-                    "commit": RELEASE_COMMIT,
-                    "configurations": [
-                        {
-                            "participants": participants,
-                            "validators_per_dataspace": 4,
-                            "quorum": "3-of-4",
-                            "mandatory_signed_rs16_da_rbc": True,
-                            "path": configuration_paths[participants].as_posix(),
-                            "sha256": configuration_digests[participants],
-                            "bytes": len(configuration_payloads[participants]),
-                        }
-                        for participants in MODULE.REQUIRED_PARTICIPANTS
-                    ],
-                    "passed": True,
-                },
-                sort_keys=True,
-            )
-            + "\n"
-        ).encode()
+        accounting_artifacts, benchmark_rows, accounting_collected = build_registered_accounting_fixture(
+            root, commit=RELEASE_COMMIT, hardware_path=hardware_description_path,
+            hardware_payload=hardware_description_payload,
+            configuration_manifest_path=configuration_manifest_path,
+            configuration_manifest_payload=configuration_manifest_payload,
+            configuration_payloads={configuration_paths[n]: payload for n, payload in configuration_payloads.items()},
+            validator_sha256=release_binary_digest,
+        )
 
         fault_transcript_entries: list[dict[str, Any]] = []
         fault_capture_entries: list[dict[str, Any]] = []
@@ -526,7 +520,10 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     "bytes": len(payload),
                 }
             )
+        artifacts.extend(accounting_artifacts)
         for kind in MODULE.REQUIRED_ARTIFACT_KINDS:
+            if kind in {"benchmark_scope", "benchmark_accounting_record", "benchmark_accounting_report"}:
+                continue
             path = Path("evidence") / f"{kind}.txt"
             if kind == "audit_attestation":
                 path = Path("evidence") / "audit_attestation.json"
@@ -936,48 +933,14 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 ).encode()
             elif kind == "benchmark_raw":
                 path = Path("evidence") / "benchmark_raw.jsonl"
-                rows = []
-                for profile in MODULE._BENCHMARK_PROFILES:
-                    for participants in MODULE.REQUIRED_PARTICIPANTS:
-                        for warmup, count in ((True, 5), (False, 30)):
-                            for run in range(count):
-                                stages = {
-                                    stage: float(run + 1)
-                                    for stage in (
-                                        MODULE._BENCHMARK_PRIVATE_STAGES
-                                        if profile == "private"
-                                        else ("global_finality", "end_to_end")
-                                    )
-                                }
-                                rows.append(
-                                    {
-                                        "version": 1,
-                                        "protocol": MODULE.PROTOCOL,
-                                        "commit": RELEASE_COMMIT,
-                                        "hardware_sha256": hardware_description_digest,
-                                        "hardware_profile_sha256": hardware_profile_digest,
-                                        "configuration_sha256": configuration_digests[
-                                            participants
-                                        ],
-                                        "profile": profile,
-                                        "participants": participants,
-                                        "seed": run % 2,
-                                        "run": run,
-                                        "warmup": warmup,
-                                        "stages_ms": stages,
-                                        **{
-                                            field: float(run + 1)
-                                            for field in MODULE._BENCHMARK_RESOURCE_FIELDS
-                                        },
-                                    }
-                                )
                 payload = (
-                    "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n"
+                    "\n".join(json.dumps(row, sort_keys=True) for row in benchmark_rows) + "\n"
                 ).encode()
             elif kind == "benchmark_report":
                 path = Path("evidence") / "benchmark_report.json"
                 report = MODULE._regenerate_benchmark_report(
-                    [root / "evidence" / "benchmark_raw.jsonl"], 100
+                    [root / "evidence" / "benchmark_raw.jsonl"], 100,
+                    scope_raw=accounting_collected[0], campaigns=accounting_collected[1],
                 )
                 report["regressions"] = []
                 report["passed"] = True
@@ -1475,7 +1438,10 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 + 7
                 + 4
                 + 2 * len(MODULE.REQUIRED_DIFFERENTIAL_ARTIFACT_KINDS)
-                + 3,
+                + 3
+                # One required accounting-record kind now expands to the full
+                # two-campaign controlled inventory; the other two kinds remain singletons.
+                + 3494 - 1,
             )
             self.assertRegex(report["bundle_binding_sha256"], r"^[0-9a-f]{64}$")
 

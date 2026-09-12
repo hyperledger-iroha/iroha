@@ -41,7 +41,7 @@ pub struct RegisterDomainCommittee {
 #[norito_schema(name = "iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy")]
 pub struct SetDomainEndorsementPolicy {
     /// Domain requiring endorsements.
-    pub domain: crate::domain::DomainId,
+    pub domain: iroha_model_base::domain::DomainId,
     /// Policy to apply.
     pub policy: crate::nexus::DomainEndorsementPolicy,
 }
@@ -98,7 +98,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetDomainEndorsementPolicy {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
         let mut offset = 0usize;
-        let domain = super::decode_aos_canonical_field::<crate::domain::DomainId>(
+        let domain = super::decode_aos_canonical_field::<iroha_model_base::domain::DomainId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -135,15 +135,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDomainEndorsement {
 mod tests {
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use crate::{
-        domain::DomainId,
-        metadata::Metadata,
-        nexus::{
-            DOMAIN_ENDORSEMENT_VERSION_V1, DomainCommittee, DomainEndorsement,
-            DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
-        },
+    use crate::nexus::{
+        DOMAIN_ENDORSEMENT_VERSION_V1, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
+        DomainEndorsementScope, DomainEndorsementSignature,
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked endorsement ISI fixture keypair")

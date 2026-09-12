@@ -3,6 +3,10 @@
 //! Citizen bonds are deliberately not proof of personhood. They make parallel
 //! identities economically costly while keeping the bond serial and
 //! authorization material hidden behind commitments.
+//!
+//! These are offline record and snapshot schemas. They do not establish consensus
+//! custody or authorize asset movement; production bond registration, rotation,
+//! and exit require a qualified native lifecycle and are not exposed as instructions.
 
 use crate::asset::AssetDefinitionId;
 
@@ -140,7 +144,7 @@ impl SorafsCitizenBondV1 {
             self.locked_value_commitment,
             self.frozen_policy_root,
         ];
-        if commitments.iter().any(|value| *value == [0; 32]) {
+        if commitments.contains(&[0; 32]) {
             return Err(SorafsCitizenBondErrorV1::InertCommitment);
         }
         for (index, commitment) in commitments.iter().enumerate() {
@@ -159,15 +163,13 @@ impl SorafsCitizenBondV1 {
             requested_at_height,
             unlock_height,
         }) = self.state
-        {
-            if requested_at_height < self.bonded_at_height
+            && (requested_at_height < self.bonded_at_height
                 || unlock_height
                     != requested_at_height
                         .checked_add(self.exit_delay_blocks)
-                        .ok_or(SorafsCitizenBondErrorV1::HeightOverflow)?
-            {
-                return Err(SorafsCitizenBondErrorV1::InvalidExitWindow);
-            }
+                        .ok_or(SorafsCitizenBondErrorV1::HeightOverflow)?)
+        {
+            return Err(SorafsCitizenBondErrorV1::InvalidExitWindow);
         }
         Ok(())
     }

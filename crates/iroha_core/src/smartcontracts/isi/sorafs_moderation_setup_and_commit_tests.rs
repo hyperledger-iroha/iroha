@@ -1229,7 +1229,7 @@ fn pre_activation_appeal_retains_accounts_and_immutable_policy_asset() {
                 &initial_signer,
                 MultisigInstructionBox::Register(MultisigRegister::with_account(
                     registration_seed,
-                    None::<iroha_data_model::domain::DomainId>,
+                    None::<iroha_model_base::domain::DomainId>,
                     multisig_spec,
                 )),
             )
@@ -1256,7 +1256,7 @@ fn pre_activation_appeal_retains_accounts_and_immutable_policy_asset() {
     let old_custody = immutable_policy.challenge_escrow_account.clone();
     let old_definition = immutable_policy.challenge_voting_asset_id.clone();
     let replacement_definition = AssetDefinitionId::derive_from_components(
-        iroha_data_model::domain::DomainId::try_new("replacement", "preactivation")
+        iroha_model_base::domain::DomainId::try_new("replacement", "preactivation")
             .expect("replacement moderation domain"),
         "bond".parse().expect("replacement moderation asset name"),
     );
@@ -1505,11 +1505,11 @@ fn moderation_initial_executor_preserves_governance_and_signed_participant_gates
         ),
         (
             outsider.clone(),
-            ExpireSorafsModerationChallenge::new(
-                "absent".to_owned(),
-                "round-1".to_owned(),
-                "challenge-1".to_owned(),
-            )
+            ExpireSorafsModerationChallenge {
+                case_id: "absent".to_owned(),
+                round_id: "round-1".to_owned(),
+                challenge_id: "challenge-1".to_owned(),
+            }
             .into(),
             "does not exist",
         ),
@@ -2308,7 +2308,7 @@ fn pending_bond_liability_blocks_transfer_and_burn_but_allows_exact_excess() {
         })
         .expect("finalize the case before rotating the active policy reference");
     let replacement_definition = AssetDefinitionId::derive_from_components(
-        iroha_data_model::domain::DomainId::try_new("replacement", "moderation")
+        iroha_model_base::domain::DomainId::try_new("replacement", "moderation")
             .expect("replacement domain"),
         "bond".parse().expect("replacement asset name"),
     );

@@ -1802,6 +1802,12 @@ impl SoraAgentApartmentAuditEventV1 {
                 "must be greater than zero when provided",
             ));
         }
+        self.validate_wallet_spend_attribution()?;
+        self.validate_autonomy_execution_attribution()?;
+        Ok(())
+    }
+
+    fn validate_wallet_spend_attribution(&self) -> Result<(), SoracloudManifestError> {
         if matches!(
             self.action,
             SoraAgentApartmentActionV1::WalletSpendRequested
@@ -1840,6 +1846,10 @@ impl SoraAgentApartmentAuditEventV1 {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn validate_autonomy_execution_attribution(&self) -> Result<(), SoracloudManifestError> {
         if self.action == SoraAgentApartmentActionV1::AutonomyRunExecuted {
             if self.run_id.is_none()
                 || self.request_id.as_deref() != self.run_id.as_deref()
@@ -2095,10 +2105,47 @@ fn validate_public_url(
             "must start with exact lowercase http:// or https://",
         ));
     };
-    let authority_end = remainder
-        .find(|character| matches!(character, '/' | '?' | '#'))
-        .unwrap_or(remainder.len());
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
     let authority = &remainder[..authority_end];
+    validate_public_url_authority(manifest, field, authority, default_port)?;
+    let suffix = &remainder[authority_end..];
+    if suffix.contains('#') || suffix.contains('\\') || suffix.contains('%') || !suffix.is_ascii() {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "URL path and query must be exact ASCII without fragments, escapes, or backslashes",
+        ));
+    }
+    let (path, query) = suffix
+        .split_once('?')
+        .map_or((suffix, None), |(path, query)| (path, Some(query)));
+    if let Some(query) = query {
+        if query.is_empty() || path.is_empty() {
+            return Err(invalid_field(
+                manifest,
+                field,
+                "URL queries require a nonempty query and explicit canonical path",
+            ));
+        }
+    } else if path == "/" {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "root URLs must omit the trailing slash",
+        ));
+    }
+    if !path.is_empty() {
+        validate_absolute_path(manifest, field, path)?;
+    }
+    Ok(())
+}
+// Validate the exact DNS/IP host and nondefault TCP port before any path/query checks.
+fn validate_public_url_authority(
+    manifest: &'static str,
+    field: &'static str,
+    authority: &str,
+    default_port: u16,
+) -> Result<(), SoracloudManifestError> {
     if authority.is_empty() || authority.contains('@') {
         return Err(invalid_field(
             manifest,
@@ -2174,37 +2221,9 @@ fn validate_public_url(
             ));
         }
     }
-    let suffix = &remainder[authority_end..];
-    if suffix.contains('#') || suffix.contains('\\') || suffix.contains('%') || !suffix.is_ascii() {
-        return Err(invalid_field(
-            manifest,
-            field,
-            "URL path and query must be exact ASCII without fragments, escapes, or backslashes",
-        ));
-    }
-    let (path, query) = suffix
-        .split_once('?')
-        .map_or((suffix, None), |(path, query)| (path, Some(query)));
-    if let Some(query) = query {
-        if query.is_empty() || path.is_empty() {
-            return Err(invalid_field(
-                manifest,
-                field,
-                "URL queries require a nonempty query and explicit canonical path",
-            ));
-        }
-    } else if path == "/" {
-        return Err(invalid_field(
-            manifest,
-            field,
-            "root URLs must omit the trailing slash",
-        ));
-    }
-    if !path.is_empty() {
-        validate_absolute_path(manifest, field, path)?;
-    }
     Ok(())
 }
+
 fn validate_absolute_path(
     manifest: &'static str,
     field: &'static str,
@@ -2223,18 +2242,17 @@ fn validate_absolute_path(
             "must be an exact absolute URL path without whitespace, query, fragment, or backslash",
         ));
     }
-    if value != "/" {
-        if value.ends_with('/')
+    if value != "/"
+        && (value.ends_with('/')
             || value[1..]
                 .split('/')
-                .any(|component| component.is_empty() || matches!(component, "." | ".."))
-        {
-            return Err(invalid_field(
-                manifest,
-                field,
-                "must not contain empty, `.` or `..` components or a trailing slash",
-            ));
-        }
+                .any(|component| component.is_empty() || matches!(component, "." | "..")))
+    {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must not contain empty, `.` or `..` components or a trailing slash",
+        ));
     }
     Ok(())
 }
@@ -2853,6 +2871,12 @@ pub struct SoraServiceAuditEventV1 {
     /// Provenance signer that authorized the lifecycle action.
     pub signer: PublicKey,
 }
+// Closed attribution inventory for one persisted lifecycle capability.
+struct ServiceAuditActionFields {
+    required: &'static [&'static str],
+    allowed: &'static [&'static str],
+}
+
 impl SoraServiceAuditEventV1 {
     /// Validate Soracloud lifecycle audit records.
     ///
@@ -2985,6 +3009,16 @@ impl SoraServiceAuditEventV1 {
         Ok(())
     }
     fn validate_action_fields(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_action_field_presence()?;
+        self.validate_action_material_deltas()?;
+        self.validate_action_version_transition()?;
+        self.validate_rollback_attribution()?;
+        self.validate_rollout_attribution()?;
+        Ok(())
+    }
+
+    // Required and permitted persisted attribution for this lifecycle capability.
+    fn action_field_policy(&self) -> Result<ServiceAuditActionFields, SoracloudManifestError> {
         use SoraServiceLifecycleActionV1 as Action;
 
         let (required, allowed): (&[&str], &[&str]) = match self.action {
@@ -3064,6 +3098,11 @@ impl SoraServiceAuditEventV1 {
                 ));
             }
         };
+        Ok(ServiceAuditActionFields { required, allowed })
+    }
+
+    fn validate_action_field_presence(&self) -> Result<(), SoracloudManifestError> {
+        let ServiceAuditActionFields { required, allowed } = self.action_field_policy()?;
         let presence = [
             ("governance_tx_hash", self.governance_tx_hash.is_some()),
             ("binding_name", self.binding_name.is_some()),
@@ -3101,6 +3140,12 @@ impl SoraServiceAuditEventV1 {
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_action_material_deltas(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
+
         let material_shape_valid = match self.action {
             Action::Deploy | Action::Upgrade => {
                 self.config_mutations
@@ -3126,6 +3171,12 @@ impl SoraServiceAuditEventV1 {
                 "material deltas must be exact for the lifecycle action and admissions may only upsert",
             ));
         }
+
+        Ok(())
+    }
+
+    fn validate_action_version_transition(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
 
         match self.action {
             Action::Deploy
@@ -3181,6 +3232,12 @@ impl SoraServiceAuditEventV1 {
             }
             Action::CiphertextQuery => {}
         }
+        Ok(())
+    }
+
+    fn validate_rollback_attribution(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
+
         if self.action == Action::Rollback
             && (self.governance_tx_hash.is_some() != self.rollout_state.is_some())
         {
@@ -3200,6 +3257,12 @@ impl SoraServiceAuditEventV1 {
                 "automatic rollout rollback must preserve rather than replace lease state",
             ));
         }
+        Ok(())
+    }
+
+    fn validate_rollout_attribution(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
+
         if let Some(rollout) = self.rollout_state.as_ref() {
             let handle = rollout.rollout_handle.as_str();
             let expected_prefix = format!("{}:rollout:", self.service_name);
@@ -3268,6 +3331,7 @@ impl SoraServiceAuditEventV1 {
         }
         Ok(())
     }
+
     fn validate_break_glass_fields(&self) -> Result<(), SoracloudManifestError> {
         if self
             .break_glass_reason
@@ -3666,6 +3730,13 @@ impl SoraServiceMailboxMessageV1 {
     /// Validate a mailbox message prepared for ledger submission.
     ///
     /// Submission messages carry zero sentinels for all ledger-owned schedule fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version, a message identifier differing
+    /// from the zero prehash sentinel, nonzero schedule fields, nonempty ledger-owned
+    /// service versions, or a payload commitment that is the zero prehash sentinel or does
+    /// not match the payload bytes.
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         self.validate_with_sequence_state(false)
     }
@@ -3798,6 +3869,12 @@ impl SoraRuntimeDeterministicValidatorHostV1 {
     /// Validate structural deterministic-validator attribution.
     ///
     /// Active membership and selection eligibility are validated by ledger execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the peer text is blank, contains surrounding whitespace/control
+    /// characters, or is not the exact canonical peer public-key spelling, or if the
+    /// validator account has no single signatory.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_validator_account_peer_id(
             "sora runtime deterministic validator host",
@@ -3838,6 +3915,11 @@ pub struct SoraOrderedMailboxStateMutationV1 {
 }
 impl SoraOrderedMailboxStateMutationV1 {
     /// Validate the structural mutation envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version, a blank/non-absolute state key,
+    /// an upsert without a nonempty payload, or a delete carrying any payload.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora ordered mailbox state mutation",
@@ -3914,6 +3996,13 @@ pub struct SoraOrderedMailboxResultV1 {
 }
 impl SoraOrderedMailboxResultV1 {
     /// Validate the submission envelope before ledger-specific authorization and OCC checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version, zero observed height/sequence,
+    /// or blank content type. Propagates invalid state mutations, outbound submission
+    /// messages, optional runtime states or submission receipt, and rejects a receipt
+    /// without a consumed mailbox identity or deterministic-validator attribution.
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora ordered mailbox result",

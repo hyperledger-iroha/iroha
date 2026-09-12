@@ -32,7 +32,75 @@ fn onboarding_readiness_is_pending_while_joining_state_is_empty() {
         iroha_data_model::alias_setup::AliasSetupStatusV1::Pending,
         "{report:?}"
     );
-    assert!(!report.diagnostics.is_empty());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "alias.onboarding.payment_asset_missing" })
+    );
+}
+#[test]
+fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is_empty() {
+    let key_pair = checked_torii_test_ed25519_keypair(
+        0xA9,
+        "derive joining payment-asset mismatch fixture key",
+    );
+    let app = mk_app_state_for_tests();
+    let mut policy = iroha_core::sns::policy_by_id(
+        &app.state.world_view(),
+        iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+    )
+    .expect("read seeded account-alias policy")
+    .expect("State initialization seeds the account-alias policy");
+    let other_asset = recipient_lookup_aed_definition_for_test().to_string();
+    assert_ne!(policy.payment_asset_id, other_asset);
+    policy.payment_asset_id = other_asset.clone();
+    for tier in &mut policy.pricing {
+        tier.base_price.asset_id = other_asset.clone();
+    }
+    let header = BlockHeader::new(
+        NonZeroU64::new(1).expect("height>0"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut stx = block.transaction();
+    stx.world_mut_for_testing()
+        .smart_contract_state_mut_for_testing()
+        .insert(
+            iroha_core::sns::policy_storage_key(iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID),
+            norito::codec::Encode::encode(&policy),
+        );
+    stx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("install mismatched policy without finalizing a block");
+    assert!(app.state.view().latest_block().is_none());
+    assert!(app.state.world_view().accounts().iter().next().is_none());
+    assert!(matches!(
+        iroha_core::sns::ensure_namespace_policy_payment_asset_matches_configured(
+            &app.state.world_view(),
+            iroha_core::sns::SnsNamespace::AccountAlias,
+            &app.state.nexus_snapshot().fees.fee_asset_id,
+        ),
+        Err(iroha_core::sns::SnsError::Conflict(_))
+    ));
+    let signer = onboarding_alias_signer_for_test(&key_pair);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
+        "{report:?}"
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "alias.onboarding.payment_asset_mismatch" })
+    );
 }
 #[test]
 fn onboarding_alias_credential_domain_rejects_missing_exact_manage_authority() {
@@ -72,6 +140,144 @@ fn onboarding_readiness_rejects_unknown_additional_permission() {
         report.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "alias.onboarding.additional_permission_unknown"
         })
+    );
+}
+fn declare_onboarding_dpn_permissions_for_test(app: &SharedAppState) {
+    let height = next_block_height(app);
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).expect("height>0"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut stx = block.transaction();
+    let world = stx.world_mut_for_testing();
+    let current = world.executor_data_model();
+    let mut permissions = current.permissions().clone();
+    permissions.extend(["DpnUser".to_owned(), "DpnAdmin".to_owned()]);
+    let model = iroha_data_model::executor::ExecutorDataModel::new(
+        current.parameters().clone(),
+        current.instructions().clone(),
+        permissions,
+        current.schema().clone(),
+    );
+    world.apply_executor_data_model(model);
+    stx.apply();
+    block.transactions.insert_block(
+        HashSet::new(),
+        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+    );
+    block.commit().expect("declare onboarding DPN permissions");
+}
+#[test]
+fn onboarding_readiness_dpn_user_requires_exact_direct_admin() {
+    use iroha_executor_data_model::permission::dpn::DpnAdmin;
+
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0xA3, "derive DPN onboarding authority fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let scoped_admin = Permission::new(
+        "DpnAdmin".to_owned(),
+        iroha_primitives::json::Json::new(norito::json!({ "scope": 0 })),
+    );
+    for (label, permission, ready) in [
+        ("missing", None, false),
+        ("scoped", Some(scoped_admin), false),
+        ("direct", Some(Permission::from(DpnAdmin)), true),
+    ] {
+        let app = onboarding_alias_test_app(&authority, &authority);
+        declare_onboarding_dpn_permissions_for_test(&app);
+        grant_account_permissions_for_test(&app, &authority, permission);
+        let mut signer = onboarding_alias_signer_for_test(&key_pair);
+        signer.allowed_permissions.insert("DpnUser".to_owned());
+        let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+        if ready {
+            assert_onboarding_readiness_ready(&app, &signer);
+        } else {
+            assert_eq!(
+                report.status,
+                iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
+                "{label}: {report:?}"
+            );
+            assert_eq!(report.diagnostics.len(), 1, "{label}: {report:?}");
+            assert_eq!(
+                report.diagnostics[0].code, "alias.onboarding.dpn_user_grant_authority_missing",
+                "{label}: {report:?}"
+            );
+        }
+    }
+}
+#[test]
+fn onboarding_readiness_dpn_user_rejects_role_derived_admin() {
+    use iroha_executor_data_model::permission::dpn::DpnAdmin;
+
+    let key_pair = checked_torii_test_ed25519_keypair(
+        0xA4,
+        "derive role DPN onboarding authority fixture key",
+    );
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let admin = Permission::from(DpnAdmin);
+    let app =
+        onboarding_alias_test_app_with_role_permissions(&authority, &authority, [admin.clone()]);
+    declare_onboarding_dpn_permissions_for_test(&app);
+    assert!(torii_account_has_permission(
+        &app.state.world_view(),
+        &authority,
+        &admin,
+    ));
+    assert!(
+        !app.state
+            .world_view()
+            .account_contains_inherent_permission(&authority, &admin)
+    );
+    let mut signer = onboarding_alias_signer_for_test(&key_pair);
+    signer.allowed_permissions.insert("DpnUser".to_owned());
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
+        "{report:?}"
+    );
+    assert_eq!(report.diagnostics.len(), 1, "{report:?}");
+    assert_eq!(
+        report.diagnostics[0].code,
+        "alias.onboarding.dpn_user_grant_authority_missing"
+    );
+}
+#[test]
+fn onboarding_readiness_default_permissions_do_not_require_dpn_admin() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0xA7, "derive default onboarding authority fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    let signer = onboarding_alias_signer_for_test(&key_pair);
+    assert!(signer.allowed_permissions.is_empty());
+    assert_onboarding_readiness_ready(&app, &signer);
+}
+#[test]
+fn onboarding_readiness_dpn_user_is_pending_while_joining_state_is_empty() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0xA8, "derive joining DPN onboarding fixture key");
+    let app = mk_app_state_for_tests();
+    let mut signer = onboarding_alias_signer_for_test(&key_pair);
+    signer.allowed_permissions.insert("DpnUser".to_owned());
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Pending,
+        "{report:?}"
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "alias.onboarding.dpn_user_grant_authority_missing"
+    }));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "alias.onboarding.payment_asset_missing" })
     );
 }
 #[test]
@@ -1203,9 +1409,227 @@ fn alias_setup_parent_and_size_diagnostics_are_deterministic() {
     let blocker = alias_setup_transaction_size_blocker(65, 64).expect("oversized payload blocker");
     assert_eq!(blocker.code, "alias.plan.transaction_oversized");
     assert_eq!(blocker.severity, AliasSetupSeverityV1::Error);
-    assert_eq!(alias_setup_plan_deadline(1_000, None), 61_000);
-    assert_eq!(alias_setup_plan_deadline(1_000, Some(30_000)), 30_000);
-    assert_eq!(alias_setup_plan_deadline(u64::MAX - 10, None), u64::MAX);
+    let request_time = UNIX_EPOCH + Duration::from_millis(1_000);
+    assert_eq!(alias_plan_deadline(request_time, None).unwrap(), 61_000);
+    assert_eq!(
+        alias_plan_deadline(request_time, Some(30_000)).unwrap(),
+        30_000
+    );
+    assert_eq!(alias_plan_deadline(request_time, Some(999)).unwrap(), 999);
+    assert!(alias_plan_deadline(UNIX_EPOCH - Duration::from_millis(1), None).is_err());
+}
+#[tokio::test]
+async fn alias_setup_plan_after_idle_keeps_ledger_quote_and_fresh_request_deadline() {
+    use iroha_data_model::{
+        alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, AliasSetupPlanRequestV1,
+            AliasTransactionPlanV1, ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::EnsureAlias,
+    };
+
+    let key_pair = checked_torii_test_ed25519_keypair(0xA8, "derive idle alias planner authority");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    let ledger_time_ms = 1_000;
+    record_latest_committed_header_for_test(&app, 1, ledger_time_ms);
+    let alias = ResolvedAccountAliasV1::new(
+        "payee@hbl.sbp".parse().expect("canonical alias"),
+        recipient_lookup_sbp_dataspace_for_test(),
+    );
+    let (anchor_hash, policy, expected_quote) = {
+        let view = app.state.view();
+        let policy = iroha_core::sns::policy_by_id(
+            view.world(),
+            iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+        )
+        .expect("read fixture policy")
+        .expect("installed fixture policy");
+        let quote = iroha_core::sns::quote_account_alias_registration(
+            view.world(),
+            &view.nexus().dataspace_catalog,
+            &alias.account_alias(),
+            &authority,
+            1,
+            None,
+            ledger_time_ms,
+        )
+        .expect("quote against the actual committed ledger time");
+        (Hash::from(view.latest_block_hash().unwrap()), policy, quote)
+    };
+    let before_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .expect("current time fits u64");
+    assert!(before_ms > ledger_time_ms + ALIAS_PLAN_TTL_MS);
+    for guard_deadline_ms in [before_ms + 2 * ALIAS_PLAN_TTL_MS, before_ms + 30_000] {
+        let request = AliasSetupPlanRequestV1::new(vec![EnsureAlias::new(
+            AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: alias.clone(),
+                target_account: authority.clone(),
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Primary,
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: policy.policy_version,
+                expected_payment_asset: expected_quote.payment_asset_definition_id.clone(),
+                max_amount: expected_quote.charge_amount.clone(),
+                valid_until_ms: guard_deadline_ms,
+            },
+        )]);
+        let body = norito::json::to_vec(&request).expect("encode setup request");
+        let method = Method::POST;
+        let uri = "/v1/aliases/setup/plan".parse().expect("setup URI");
+        let headers = signed_app_headers(&authority, &key_pair, &method, &uri, &body);
+        let response = handler_alias_setup_plan(
+            State(app.clone()),
+            method,
+            uri,
+            headers,
+            crate::loopback_connect_info(),
+            body.into(),
+        )
+        .await
+        .expect("signed setup planner response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let plan: AliasTransactionPlanV1 = norito::json::from_slice(&body).expect("setup plan");
+        let after_ms = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .expect("current time fits u64");
+        assert!(
+            plan.body.valid_until_ms >= after_ms,
+            "new plan must pass SDK wall-clock expiry"
+        );
+        assert!(plan.body.valid_until_ms >= (before_ms + ALIAS_PLAN_TTL_MS).min(guard_deadline_ms));
+        assert!(plan.body.valid_until_ms <= (after_ms + ALIAS_PLAN_TTL_MS).min(guard_deadline_ms));
+        assert_eq!(plan.body.anchor.block_height, 1);
+        assert_eq!(plan.body.anchor.block_hash, anchor_hash);
+        let quote = plan.body.resources[0]
+            .quote
+            .as_ref()
+            .expect("creation lease quote");
+        assert_eq!(quote.exact_amount, expected_quote.charge_amount);
+        assert_eq!(quote.expires_at_ms, expected_quote.expires_at_ms);
+        assert_eq!(
+            quote.grace_expires_at_ms,
+            expected_quote.grace_expires_at_ms
+        );
+        assert_eq!(
+            quote.redemption_expires_at_ms,
+            expected_quote.redemption_expires_at_ms
+        );
+        assert_eq!(quote.guard.valid_until_ms, guard_deadline_ms);
+        iroha::client::decode_and_verify_alias_setup_plan_for_request(&request, &plan)
+            .expect("native SDK accepts the exact unchanged request and frames");
+    }
+    assert_eq!(
+        app.state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            .as_millis(),
+        u128::from(ledger_time_ms)
+    );
+}
+
+#[tokio::test]
+async fn alias_auto_renew_plan_after_idle_keeps_anchor_and_fresh_request_deadline() {
+    use iroha_data_model::{
+        alias_setup::{
+            AliasAutoRenewPlanRequestV1, AliasLifecycleTransactionPlanV1, AliasTargetV1,
+            ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::ConfigureAliasAutoRenew,
+    };
+    let key_pair = checked_torii_test_ed25519_keypair(0xA9, "derive idle auto-renew authority");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
+    record_latest_committed_header_for_test(&app, 1, 1_000);
+    let anchor_hash = Hash::from(app.state.view().latest_block_hash().unwrap());
+    let request = AliasAutoRenewPlanRequestV1::new(ConfigureAliasAutoRenew::new(
+        AliasTargetV1::AccountAlias(ResolvedAccountAliasV1::new(
+            "payee@hbl.sbp".parse().expect("canonical alias"),
+            recipient_lookup_sbp_dataspace_for_test(),
+        )),
+        0,
+        None,
+    ));
+    let body = norito::json::to_vec(&request).expect("encode auto-renew request");
+    let method = Method::POST;
+    let uri = "/v1/aliases/auto-renew/plan"
+        .parse()
+        .expect("auto-renew URI");
+    let headers = signed_app_headers(&authority, &key_pair, &method, &uri, &body);
+    let before_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let response = handler_alias_auto_renew_plan(
+        State(app.clone()),
+        method,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        body.into(),
+    )
+    .await
+    .expect("signed auto-renew planner response");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 65_536)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let plan: AliasLifecycleTransactionPlanV1 =
+        norito::json::from_slice(&body).expect("auto-renew plan");
+    let after_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    assert!(
+        plan.body.valid_until_ms >= after_ms,
+        "new plan must pass SDK wall-clock expiry"
+    );
+    assert!(plan.body.valid_until_ms >= before_ms + ALIAS_PLAN_TTL_MS);
+    assert!(plan.body.valid_until_ms <= after_ms + ALIAS_PLAN_TTL_MS);
+    assert_eq!(plan.body.anchor.block_height, 1);
+    assert_eq!(plan.body.anchor.block_hash, anchor_hash);
+    assert!(
+        iroha::client::decode_and_verify_alias_auto_renew_plan_for_request(&request, &plan)
+            .expect("native SDK verifies exact no-op plan")
+            .is_none()
+    );
+    assert_eq!(
+        app.state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            .as_millis(),
+        1_000
+    );
 }
 #[tokio::test]
 async fn alias_planner_and_recipient_reads_authenticate_before_parsing() {

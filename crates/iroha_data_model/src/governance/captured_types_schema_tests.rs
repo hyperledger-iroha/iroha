@@ -1,205 +1,211 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
 
-#[test]
-fn captured_codec_schema_identities() {
-    crate::captured_schema_tests::assert_bidirectional::<super::VotingMode>(
+const CASES: &[crate::captured_schema_tests::Case] = &[
+    crate::captured_schema_tests::Case::bidirectional::<super::VotingMode>(
         "iroha_data_model::parliament_types::VotingMode",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::HashWire32>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::HashWire32>(
         "iroha_data_model::parliament_types::HashWire32",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::AbiVersion>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::AbiVersion>(
         "iroha_data_model::parliament_types::AbiVersion",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ProposalKind>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ProposalKind>(
         "iroha_data_model::parliament_types::ProposalKind",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::DeployContractProposal>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::DeployContractProposal>(
         "iroha_data_model::parliament_types::DeployContractProposal",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ActivateContractGovernanceActionV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ActivateContractGovernanceActionV1>(
         "iroha_data_model::parliament_types::ActivateContractGovernanceActionV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::DeactivateContractGovernanceActionV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::DeactivateContractGovernanceActionV1>(
         "iroha_data_model::parliament_types::DeactivateContractGovernanceActionV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<
         super::OfferContractOwnershipGovernanceActionV1,
-    >("iroha_data_model::parliament_types::OfferContractOwnershipGovernanceActionV1");
-    crate::captured_schema_tests::assert_bidirectional::<
+    >("iroha_data_model::parliament_types::OfferContractOwnershipGovernanceActionV1"),
+    crate::captured_schema_tests::Case::bidirectional::<
         super::CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
     >(
         "iroha_data_model::parliament_types::CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ContractLifecycleGovernanceActionV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ContractLifecycleGovernanceActionV1>(
         "iroha_data_model::parliament_types::ContractLifecycleGovernanceActionV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<
-        super::ContractLifecycleGovernanceProposalV1,
-    >("iroha_data_model::parliament_types::ContractLifecycleGovernanceProposalV1");
-    crate::captured_schema_tests::assert_bidirectional::<super::ContractEmergencyHoldProposalV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ContractLifecycleGovernanceProposalV1>(
+        "iroha_data_model::parliament_types::ContractLifecycleGovernanceProposalV1",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ContractEmergencyHoldProposalV1>(
         "iroha_data_model::parliament_types::ContractEmergencyHoldProposalV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<
         super::GlobalDataTriggerPermissionGovernanceActionV1,
-    >("iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceActionV1");
-    crate::captured_schema_tests::assert_bidirectional::<
+    >("iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceActionV1"),
+    crate::captured_schema_tests::Case::bidirectional::<
         super::GlobalDataTriggerPermissionGovernanceProposalV1,
-    >("iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceProposalV1");
-    crate::captured_schema_tests::assert_bidirectional::<super::RuntimeUpgradeProposal>(
+    >("iroha_data_model::parliament_types::GlobalDataTriggerPermissionGovernanceProposalV1"),
+    crate::captured_schema_tests::Case::bidirectional::<super::RuntimeUpgradeProposal>(
         "iroha_data_model::parliament_types::RuntimeUpgradeProposal",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::SccpRouteGovernanceProposal>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::SccpRouteGovernanceProposal>(
         "iroha_data_model::parliament_types::SccpRouteGovernanceProposal",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::SorafsProviderGovernanceProposal>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::SorafsProviderGovernanceProposal>(
         "iroha_data_model::parliament_types::SorafsProviderGovernanceProposal",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ValidationFeePolicyProposal>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ValidationFeePolicyProposal>(
         "iroha_data_model::parliament_types::ValidationFeePolicyProposal",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ValidationFeePayoutLifecycleProposal>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ValidationFeePayoutLifecycleProposal>(
         "iroha_data_model::parliament_types::ValidationFeePayoutLifecycleProposal",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::AtWindow>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::AtWindow>(
         "iroha_data_model::parliament_types::AtWindow",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceParameters>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceParameters>(
         "iroha_data_model::parliament_types::GovernanceParameters",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ReferendumStatus>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ReferendumStatus>(
         "iroha_data_model::parliament_types::ReferendumStatus",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::Referendum>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::Referendum>(
         "iroha_data_model::parliament_types::Referendum",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::VoteChoice>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::VoteChoice>(
         "iroha_data_model::parliament_types::VoteChoice",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::Vote>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::Vote>(
         "iroha_data_model::parliament_types::Vote",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentBody>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentBody>(
         "iroha_data_model::parliament_types::ParliamentBody",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::RiskTierV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::RiskTierV1>(
         "iroha_data_model::parliament_types::RiskTierV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceStageV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceStageV1>(
         "iroha_data_model::parliament_types::GovernanceStageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceAttemptStatusV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceAttemptStatusV1>(
         "iroha_data_model::parliament_types::GovernanceAttemptStatusV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceAttemptV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceAttemptV1>(
         "iroha_data_model::parliament_types::GovernanceAttemptV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::GovernanceAttemptIdPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::GovernanceAttemptIdPreimageV1>(
         "iroha_data_model::parliament_types::GovernanceAttemptIdPreimageV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::ParliamentCandidateRootPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::ParliamentCandidateRootPreimageV1>(
         "iroha_data_model::parliament_types::ParliamentCandidateRootPreimageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::SortitionRequestV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::SortitionRequestV1>(
         "iroha_data_model::parliament_types::SortitionRequestV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::SortitionRequestIdPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::SortitionRequestIdPreimageV1>(
         "iroha_data_model::parliament_types::SortitionRequestIdPreimageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::BodyElectionAttemptStatusV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::BodyElectionAttemptStatusV1>(
         "iroha_data_model::parliament_types::BodyElectionAttemptStatusV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::BodyElectionAttemptV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::BodyElectionAttemptV1>(
         "iroha_data_model::parliament_types::BodyElectionAttemptV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::BodyElectionAttemptIdPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::BodyElectionAttemptIdPreimageV1>(
         "iroha_data_model::parliament_types::BodyElectionAttemptIdPreimageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::DeliberationPhaseV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::DeliberationPhaseV1>(
         "iroha_data_model::parliament_types::DeliberationPhaseV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::BodyInstanceStatusV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::BodyInstanceStatusV1>(
         "iroha_data_model::parliament_types::BodyInstanceStatusV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentBodyInstanceV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentBodyInstanceV1>(
         "iroha_data_model::parliament_types::ParliamentBodyInstanceV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::BodyInstanceIdPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::BodyInstanceIdPreimageV1>(
         "iroha_data_model::parliament_types::BodyInstanceIdPreimageV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::AssignmentIdPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::AssignmentIdPreimageV1>(
         "iroha_data_model::parliament_types::AssignmentIdPreimageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentSeatAssignmentV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentSeatAssignmentV1>(
         "iroha_data_model::parliament_types::ParliamentSeatAssignmentV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::ParliamentAssignmentPlanRootPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::ParliamentAssignmentPlanRootPreimageV1>(
         "iroha_data_model::parliament_types::ParliamentAssignmentPlanRootPreimageV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::ParliamentRosterRootPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::ParliamentRosterRootPreimageV1>(
         "iroha_data_model::parliament_types::ParliamentRosterRootPreimageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::BallotAttemptStatusV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::BallotAttemptStatusV1>(
         "iroha_data_model::parliament_types::BallotAttemptStatusV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentBallotFailureKindV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentBallotFailureKindV1>(
         "iroha_data_model::parliament_types::ParliamentBallotFailureKindV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentNoResultKindV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentNoResultKindV1>(
         "iroha_data_model::parliament_types::ParliamentNoResultKindV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::ParliamentBallotFailureRootPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::ParliamentBallotFailureRootPreimageV1>(
         "iroha_data_model::parliament_types::ParliamentBallotFailureRootPreimageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentBallotAttemptV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentBallotAttemptV1>(
         "iroha_data_model::parliament_types::ParliamentBallotAttemptV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::BallotAttemptIdPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::BallotAttemptIdPreimageV1>(
         "iroha_data_model::parliament_types::BallotAttemptIdPreimageV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<
-        super::ParliamentBallotParticipantHashPreimageV1,
-    >("iroha_data_model::parliament_types::ParliamentBallotParticipantHashPreimageV1");
-    crate::captured_schema_tests::assert_serialize::<super::TleSessionIdPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::ParliamentBallotParticipantHashPreimageV1>(
+        "iroha_data_model::parliament_types::ParliamentBallotParticipantHashPreimageV1",
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::TleSessionIdPreimageV1>(
         "iroha_data_model::parliament_types::TleSessionIdPreimageV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentAggregateOutcomeV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentAggregateOutcomeV1>(
         "iroha_data_model::parliament_types::ParliamentAggregateOutcomeV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentAggregateTallyV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentAggregateTallyV1>(
         "iroha_data_model::parliament_types::ParliamentAggregateTallyV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::ParliamentBallotResultRootPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::ParliamentBallotResultRootPreimageV1>(
         "iroha_data_model::parliament_types::ParliamentBallotResultRootPreimageV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<
+    ),
+    crate::captured_schema_tests::Case::serialize::<
         super::ParliamentPublicFindingEndorsementRootPreimageV1,
-    >("iroha_data_model::parliament_types::ParliamentPublicFindingEndorsementRootPreimageV1");
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceExpectedHeadAbsentV1>(
+    >("iroha_data_model::parliament_types::ParliamentPublicFindingEndorsementRootPreimageV1"),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceExpectedHeadAbsentV1>(
         "iroha_data_model::parliament_types::GovernanceExpectedHeadAbsentV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceExpectedHeadPresentV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceExpectedHeadPresentV1>(
         "iroha_data_model::parliament_types::GovernanceExpectedHeadPresentV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceExpectedHeadV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceExpectedHeadV1>(
         "iroha_data_model::parliament_types::GovernanceExpectedHeadV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentBallotCertificateBindingV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentBallotCertificateBindingV1>(
         "iroha_data_model::parliament_types::ParliamentBallotCertificateBindingV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<
         super::ParliamentPublicFindingCertificateBindingV1,
-    >("iroha_data_model::parliament_types::ParliamentPublicFindingCertificateBindingV1");
-    crate::captured_schema_tests::assert_bidirectional::<super::ParliamentBodyCertificateBindingV1>(
+    >("iroha_data_model::parliament_types::ParliamentPublicFindingCertificateBindingV1"),
+    crate::captured_schema_tests::Case::bidirectional::<super::ParliamentBodyCertificateBindingV1>(
         "iroha_data_model::parliament_types::ParliamentBodyCertificateBindingV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::GovernanceCertificateV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::GovernanceCertificateV1>(
         "iroha_data_model::parliament_types::GovernanceCertificateV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::ParliamentExecutionFailureRootPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::ParliamentExecutionFailureRootPreimageV1>(
         "iroha_data_model::parliament_types::ParliamentExecutionFailureRootPreimageV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::GovernanceSubjectPreimageV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::GovernanceSubjectPreimageV1>(
         "iroha_data_model::parliament_types::GovernanceSubjectPreimageV1",
-    );
+    ),
+];
+
+#[test]
+fn captured_codec_schema_identities() {
+    for case in CASES {
+        case.check();
+    }
 }

@@ -10,8 +10,9 @@ use iroha::data_model::{
         InstructionBox,
         space_directory::{ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest},
     },
-    nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+    nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
 };
+use iroha_model_base::topology::DataSpaceId;
 fn publish_and_expire(client: &Client) -> Result<()> {
     // Replace with the UAID/dataspace you are managing.
     let uaid = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11"

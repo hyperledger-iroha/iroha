@@ -27,7 +27,7 @@ use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolu
 #[cfg(test)]
 use iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1;
 use iroha_data_model::{
-    DataSpaceId, NetworkId, ValidationFail,
+    NetworkId, ValidationFail,
     account::rekey::AccountAlias,
     asset::{AssetBalancePolicy, AssetBalanceScope},
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
@@ -89,6 +89,11 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     bigint::BigInt,
@@ -4235,7 +4240,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
     /// Set the human-readable chain label returned by the chain-id sysvar.
-    pub fn set_chain_id(&mut self, chain: &iroha_data_model::ChainId) {
+    pub fn set_chain_id(&mut self, chain: &iroha_model_base::chain::ChainId) {
         self.default
             .set_chain_id_bytes(chain.to_string().into_bytes());
         self.chain_id_bytes = chain.to_string().into_bytes();
@@ -11006,7 +11011,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_SM4_CCM_OPEN
         ) {
             return if self.crypto.sm_helpers_enabled() {
-                self.default.prepare_syscall(number, vm)
+                let quote = self.default.prepare_syscall(number, vm);
+                // A malformed request rejected during quoting never reaches syscall dispatch.
+                #[cfg(feature = "telemetry")]
+                if quote.is_err()
+                    && let Some(telemetry) = self.telemetry.as_ref()
+                {
+                    Self::record_sm_syscall(telemetry, number, &quote);
+                }
+                quote
             } else {
                 Ok(0)
             };
@@ -15837,7 +15850,7 @@ seiyaku PrivilegedBinding {
                 .expect("canonical test network id"),
             &host.authority,
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::ActivateContractInstance {
@@ -15868,7 +15881,7 @@ seiyaku PrivilegedBinding {
                 .expect("canonical test network id"),
             &host.authority,
             1,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::DeactivateContractInstance {
@@ -17187,6 +17200,7 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
@@ -19715,8 +19729,14 @@ seiyaku OpaqueInstructionSubmission {
             .syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("batch entry");
         for _ in 0..10_000 {
-            host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
-                .expect("over-limit batch entry remains metered");
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm),
+                Err(ivm::VMError::HostOutputBudgetExceeded {
+                    resource: ivm::HostOutputResource::Items,
+                    attempted: 2,
+                    limit: 1,
+                }),
+            );
         }
         let asset_id = AssetId::of(asset_def, from.clone());
         let isi = Transfer::asset_quantity(asset_id, amount, to);
@@ -23847,10 +23867,10 @@ seiyaku Callee {
 
         artifacts
             .apply_to_transaction(&mut transaction, &authority)
-            .expect_err("missing verifying key must reject the queued proof");
+            .expect_err("restricted initial executor must reject the queued proof");
 
-        assert_eq!(transaction.zk_confidential_ops_in_tx, 1);
-        assert_eq!(transaction.zk_verify_calls_in_tx, 1);
+        assert_eq!(transaction.zk_confidential_ops_in_tx, 0);
+        assert_eq!(transaction.zk_verify_calls_in_tx, 0);
         assert_eq!(
             transaction.confidential_gas_used_in_tx, confidential_gas_delta,
             "host-artifact gas must be retained before queued execution can reject"
@@ -23862,9 +23882,9 @@ seiyaku Callee {
         let mut mutable_host_transaction = block.transaction();
         mutable_host
             .apply_queued(&mut mutable_host_transaction, &authority)
-            .expect_err("missing verifying key must reject the mutable host queue");
-        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 1);
-        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 1);
+            .expect_err("restricted initial executor must reject the mutable host queue");
+        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 0);
+        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 0);
         assert_eq!(
             mutable_host_transaction.confidential_gas_used_in_tx, confidential_gas_delta,
             "mutable-host gas must be retained before queued execution can reject"
@@ -24016,7 +24036,7 @@ seiyaku DurableOwner {
         let commitment = [0x77; 32];
         let mut rec = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -24037,7 +24057,7 @@ seiyaku DurableOwner {
         let commitment = [0x78; 32];
         let mut rec = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -24065,7 +24085,7 @@ seiyaku DurableOwner {
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -24100,7 +24120,12 @@ seiyaku DurableOwner {
         let vk_bytes = norito::encode_canonical(&payload).expect("encode weak STARK key");
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
-            commitment, [0x43; 32], backend, circuit_id, "core", vk_bytes,
+            commitment,
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            backend,
+            circuit_id,
+            "core",
+            vk_bytes,
         );
         let mut host = CoreHost::new(fixture_account("alice"));
         assert!(
@@ -24124,7 +24149,7 @@ seiyaku DurableOwner {
         let id = VerifyingKeyId::new(backend, "cached-vk");
         let rec = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -24158,7 +24183,7 @@ seiyaku DurableOwner {
         let id = VerifyingKeyId::new(backend, "original");
         let original = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24169,7 +24194,7 @@ seiyaku DurableOwner {
         let original_record = Arc::clone(host.verifying_keys.get(&id).expect("original record"));
         let mut missing_schedule = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24190,14 +24215,19 @@ seiyaku DurableOwner {
         assert_eq!(host.prepared_verifying_keys.len(), 1);
         let first = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
             vk_bytes.clone(),
         );
         let second = active_vk_record(
-            commitment, [0x43; 32], backend, circuit_id, "core", vk_bytes,
+            commitment,
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            backend,
+            circuit_id,
+            "core",
+            vk_bytes,
         );
         assert!(
             host.set_verifying_keys(BTreeMap::from([
@@ -26349,7 +26379,7 @@ seiyaku DurableOwner {
         let backend = "halo2/ipa";
         let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
         let commitment = [0x61; 32];
-        let schema_hash = [5u8; 32];
+        let schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
         let mut rec = active_vk_record(
             commitment,
             schema_hash,
@@ -26523,7 +26553,7 @@ seiyaku DurableOwner {
 
         let mut prior_vk = active_vk_record(
             [0x71; 32],
-            [0x72; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",

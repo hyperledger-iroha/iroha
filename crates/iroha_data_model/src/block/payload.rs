@@ -99,7 +99,7 @@ mod model {
         ///
         /// This sticky set authenticates transient same-block rotations that the
         /// final policy snapshot alone cannot reconstruct during Kura replay.
-        pub axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+        pub axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
         /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
         ///
         /// Every V1 result field is required; this field stays last to make truncated layouts fail
@@ -637,7 +637,9 @@ impl SignedBlock {
     }
     /// Sticky AXT authorization transitions captured during execution, when results are present.
     #[inline]
-    pub fn axt_transitioned_dataspaces(&self) -> Option<&BTreeSet<crate::nexus::DataSpaceId>> {
+    pub fn axt_transitioned_dataspaces(
+        &self,
+    ) -> Option<&BTreeSet<iroha_model_base::topology::DataSpaceId>> {
         self.result
             .as_ref()
             .map(|result| &result.axt_transitioned_dataspaces)

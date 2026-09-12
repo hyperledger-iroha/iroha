@@ -12,7 +12,6 @@ use iroha_core::{
     state::{State, ValidatedSccpRegistryV1, World},
 };
 use iroha_data_model::{
-    ChainId,
     block::BlockHeader,
     bridge::{
         SccpDestinationDeploymentV1, SccpGovernedLaneV1, SccpGovernedRouteV1, SccpLaneIdV1,
@@ -20,6 +19,7 @@ use iroha_data_model::{
         SccpSourceIdentityV1, SccpTronDestinationDeploymentV1, SccpTronSourceEmitterV1,
     },
 };
+use iroha_model_base::chain::ChainId;
 
 fn test_state() -> State {
     State::new_for_testing(

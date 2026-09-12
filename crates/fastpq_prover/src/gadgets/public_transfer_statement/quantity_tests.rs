@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::gadgets::transfer;
-use iroha_data_model::{DomainId, fastpq::TransferSmtWitness};
+use iroha_data_model::fastpq::TransferSmtWitness;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::{bigint::BigInt, numeric::Numeric};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 

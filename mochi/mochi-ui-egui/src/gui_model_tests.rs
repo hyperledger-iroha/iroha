@@ -28,10 +28,11 @@ use iroha_data_model::{
         EventBox,
         time::{TimeEvent, TimeInterval},
     },
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
+    nexus::{LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
     prelude::{Hash, HashOf},
     role::RoleId,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii_shared::status::{
     GovernanceStatus, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
@@ -159,7 +160,8 @@ fn render_overview_bar_smoke() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("ui-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -197,7 +199,7 @@ fn explicit_app_contexts_keep_independent_roots_and_chains() {
         data_root: Some(root.to_path_buf()),
         chain_id: Some(chain.to_owned()),
         config_path: Some(config_path.clone()),
-        binaries: super::BinaryOverrides {
+        binaries: super::config::BinaryOverrides {
             irohad: Some(irohad_stub.clone()),
             kagami: Some(kagami_stub.clone()),
         },
@@ -441,7 +443,8 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("snapshot-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -523,7 +526,8 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("reset-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -615,7 +619,8 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("restore-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -1850,7 +1855,8 @@ fn composer_template_prefills_mint_inputs() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -1905,7 +1911,8 @@ fn composer_template_prefills_burn_inputs() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -1960,7 +1967,8 @@ fn composer_template_prefills_transfer_inputs() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",

@@ -21,7 +21,8 @@ use iroha_data_model::{
         capacity::ProviderId,
         stream_token_custody::{
             STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1, STREAM_TOKEN_CUSTODY_NORMAL_REVISIONS_V1,
-            SorafsStreamTokenCustodyActionV1 as Action, StreamTokenCustodyControlRecordV1,
+            SorafsStreamTokenCustodyActionV1 as Action, SorafsStreamTokenCustodyRevocationV1,
+            StreamTokenCustodyControlRecordV1,
         },
     },
 };
@@ -246,7 +247,7 @@ fn apply_control(
         .expected_revision
         .checked_add(1)
         .ok_or(Error::Capacity)?;
-    let emergency = matches!(instruction.action, Action::Revoke { .. });
+    let emergency = matches!(instruction.action, Action::Revoke(_));
     if revision > STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1
         || (!emergency && revision > STREAM_TOKEN_CUSTODY_NORMAL_REVISIONS_V1)
     {
@@ -326,7 +327,7 @@ fn apply_control(
             });
             next
         }
-        Action::Revoke { signer, attester } => {
+        Action::Revoke(SorafsStreamTokenCustodyRevocationV1 { signer, attester }) => {
             let mut next = current.as_ref().ok_or(Error::Conflict)?.state.clone();
             if !(signer && !next.signer_revoked || attester && !next.attester_revoked) {
                 return Err(Error::Conflict);

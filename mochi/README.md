@@ -14,6 +14,16 @@ bash -n scripts/mochi_local_sandbox.sh
 
 The `mochi-integration` crate provides lightweight Torii mocks and supervisor smoke tests so we can validate local workflows without compiling the full Iroha binary set.
 
+The desktop shell's `gui/navigation.rs` owns the pure view choices, labels and
+exact persisted identities. Rendering and storage integration remain in the shell.
+
+The desktop shell's `gui/cli_options.rs` owns command selection, validated
+startup overrides and profile parsing. Its `tests.rs` covers argument validation
+and precedence; `gui/cli_tests.rs` covers integration with startup, readiness and
+the supervisor. Both GUI and headless sandbox workflows consume these same
+options. Runtime stream ownership, persistence and rendering stay in their
+respective modules.
+
 ## Ledger stream ownership
 
 Mochi uses the Rust SDK's `AccountClient` event and block capabilities. The

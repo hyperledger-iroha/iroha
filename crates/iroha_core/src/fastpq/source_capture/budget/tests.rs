@@ -20,11 +20,12 @@ use fastpq_prover::{
 };
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    DomainId, NetworkId,
+    NetworkId,
     asset::AssetDefinitionId,
     fastpq::{FastpqPublicTransferTranscriptV1, TransferDeltaTranscript, TransferSmtWitness},
-    nexus::DataSpaceId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, Quantity},

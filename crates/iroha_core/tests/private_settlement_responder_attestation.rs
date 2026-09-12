@@ -10,14 +10,14 @@ use iroha_data_model::{
     NetworkId,
     block::BlockHeader,
     nexus::{
-        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, LaneId,
-        PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_LIFECYCLE_COLLECTING_V1,
         PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
         PrivateSettlementAuditorViewAttestationBodyV1, PrivateSettlementCommitteeAuthorityV1,
         PrivateSettlementRouteV1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
 struct ResponderAttestationFixture {
     authority: PrivateSettlementCommitteeAuthorityV1,

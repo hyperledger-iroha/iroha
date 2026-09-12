@@ -10,11 +10,11 @@ use crate::{
         BlobClass, BlobCodec, BlobDigest, Compression, DaRentQuote, ErasureProfile, ExtraMetadata,
         FecScheme, MetadataEncryption, MetadataVisibility, RetentionPolicy, StorageTicketId,
     },
-    nexus::LaneId,
     parameter::CustomParameterId,
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_model_base::topology::LaneId;
 
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
@@ -321,7 +321,6 @@ impl DaIngestAdmissionPolicyV1 {
     }
 
     /// Convert this policy into the reserved custom parameter.
-
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(Self::parameter_id(), Json::new(self))
@@ -335,7 +334,6 @@ impl DaIngestAdmissionPolicyV1 {
     ///
     /// Returns [`norito::json::Error`] for malformed, unsupported, unbounded,
     /// or non-canonical payloads.
-
     pub fn from_custom_parameter(
         custom: &CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {

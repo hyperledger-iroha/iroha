@@ -34,10 +34,7 @@ use iroha_data_model::{
         ingest::{DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1, DaStripeLayout},
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },
-    nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig as ModelLaneConfig, LaneId,
-    },
+    nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig as ModelLaneConfig},
     parameter::{Parameter, custom::CustomParameter},
     sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     taikai::{
@@ -50,6 +47,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{json::Json, numeric::XorQuantity};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};

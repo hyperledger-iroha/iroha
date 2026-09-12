@@ -10,12 +10,13 @@ use iroha_data_model::{
     Registrable,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::governance::{RegisterCitizen, UnregisterCitizen},
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
@@ -50,6 +51,8 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
 }
 #[test]
 fn register_and_revoke_citizenship_moves_bond() {
+    // Typed citizenship movements record transcripts even without a transaction call hash.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -107,6 +110,8 @@ fn register_and_revoke_citizenship_moves_bond() {
 
 #[test]
 fn citizenship_gate_blocks_and_allows_governance() {
+    // Typed citizenship movements record transcripts even without a transaction call hash.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -184,6 +189,8 @@ fn citizenship_gate_blocks_and_allows_governance() {
 }
 #[test]
 fn citizenship_records_persist_across_transactions() {
+    // Typed citizenship movements record transcripts even without a transaction call hash.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -234,6 +241,8 @@ fn citizenship_records_persist_across_transactions() {
 }
 #[test]
 fn citizenship_top_up_preserves_the_original_bond_interval() {
+    // Typed citizenship movements record transcripts even without a transaction call hash.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("asset name"),

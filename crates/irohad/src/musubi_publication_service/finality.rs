@@ -272,7 +272,7 @@ mod tests {
         Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
     };
     use iroha_data_model::{
-        ChainId, Registrable as _, ValidationFail,
+        Registrable as _, ValidationFail,
         account::{Account, AccountId},
         asset::AssetDefinition,
         block::{
@@ -295,7 +295,6 @@ mod tests {
             MusubiSeedIngressReceiptPayloadV1, MusubiSeedIngressReceiptV1,
             MusubiSemanticReleaseDigestV1,
         },
-        peer::PeerId,
         sorafs::{
             capacity::ProviderId,
             pin_registry::{ChunkerProfileHandle, ManifestRootCid},
@@ -305,6 +304,8 @@ mod tests {
             TransactionResultInner, error::TransactionRejectionReason,
         },
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::time::TimeSource;
     use std::{borrow::Cow, num::NonZeroU64, sync::Arc, time::Duration};
     struct RegistrationMaterial {

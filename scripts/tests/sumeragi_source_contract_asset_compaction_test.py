@@ -14,65 +14,11 @@ ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
 SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
-MINIMUM_NET_REDUCTION = 2_161
-# The 54th case inspects eight sources outside the historical migration and
-# adds exactly 31 hash-pinned runner lines to resolve them. Count that broader
-# semantic surface on both sides of the historical comparison; this preserves
-# the original reduction floor while conservatively crediting the hypothetical
-# uncompacted tests with only the same 31-line growth.
-ORIGINAL_PREIMAGE_RUST_LINES = 5_779
-ORIGINAL_POSTIMAGE_RUST_LINES = 3_618
-# The actual WAL consumer now lives in its own already-existing source module.
-# Its closed source-provider enum, parser and resolver add exactly three Rust
-# lines. Credit those same three lines to both compared forms; retain the
-# original historical measurements and net-reduction floor unchanged.
-MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
-WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES = 3
-# The merged owner fixes add a 22-line inline-storage regression and 20 lines
-# for the complete adapter source projection plus bounded fixture runner.
-# Account for that independent coverage equally in both compared forms.
-OWNER_FIX_COVERAGE_GROWTH_RUST_LINES = 42
-# The 55th retirement case adds three source mappings, two include expansions,
-# and one macro test (20 lines), independently of the owner-fix coverage.
-SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES = 20
-CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = (
-    MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES
-    + WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES
-    + OWNER_FIX_COVERAGE_GROWTH_RUST_LINES
-    + SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES
-)
-BASELINE_RUST_LINES = (
-    ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
-)
-MAX_POSTIMAGE_RUST_LINES = (
-    ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
-)
-EXPECTED_ASSET_LENGTH = 654_913
-EXPECTED_ASSET_SHA256 = "8c96275f4277d2bedec207d7d162e6ac38e298f2ae827e2391843a9d183dec2c"
+# Pin the reviewed semantic asset. Historical compaction byte counts and host
+# hashes belong to Git history: current Rust hosts may add independent tests.
+EXPECTED_ASSET_LENGTH = 665_821
+EXPECTED_ASSET_SHA256 = "bffbff496554337fb43a7b5b6729a96814268dab76e53ef16811024a154720b3"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
-
-HOST_PREIMAGE_SHA256 = {
-    "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "dd5da4ddcbba6cc3aff8faa86f6366ae0bab3bfa06189350e13e2f08db321a58",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "1b3cebc4dd29a624e970ca90f7fa8a2677eb650af9cdd05c48f498a5fd2e1a10",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "5af2c411d6d1c7d5579004760e8c9ae0b48f2335e1468f456f72e0d614dede6b",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "0afc9993189c5d118e5da3e9d1b37376687bfd316c66512b1605913b1a1908f4",
-}
-COMPACTED_HOST_POSTIMAGE_SHA256 = {
-    "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d380501e4efd09374acdfc2b7729bd095c7499a4d0dfdde355ef2296fa8de23d",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d83e903bd0d2307896a2cc53ffb8c36aaf01cce3cb9178f88221009f44fe284c",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "41b23f0be77e4bcf5dda8374b27013a7daee201edccf043504ce7217a4fdab45",
-}
-
-# Preserve the original compacted host hashes as historical evidence. Pin the
-# current source provider, bounded runner and inline-storage regression separately.
-HOST_POSTIMAGE_SHA256 = {
-    **COMPACTED_HOST_POSTIMAGE_SHA256,
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "a99c34af832a7407a1e704fff6f9302550988685ad5c166727bf29dba73c5f2e",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "0b1e3fae6fcf6a915b75013b880f952aba8034d3d938585d24c2952431fd8fcc",
-}
 
 MIGRATED_TESTS = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": (
@@ -100,24 +46,24 @@ MIGRATED_TESTS = {
 # The FIFO case retains the authenticated physical ordering checks from both
 # branches. Pin the combined cases; the 55th case still owns body retirement.
 NEW_CASE_CONTRACT_COUNTS = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 174,
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 181,
     "registry_remains_inert_and_scheduler_free": 89,
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 308,
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 312,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 92,
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 95,
 }
 MIGRATED_CASE_SHA256 = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "f68343bea21598a841c338813841e7f43b578a6593b3920f66a74767a212b7ce",
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "a64fc75b6813b66d8616225b7c45c9c54b6104c2bea774f0037900ea978e71a9",
     "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "ea89f570cc169554587f4c5b0750f1f1b39a617b81b55b560f2283108ee9f66b",
-    "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "8f3f95091ffa52b95610e093ccd34c68bc48895034c13d4cad0ab6eaafc9330c",
+    "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "a56c319557fc0fd0eda26924c60de29940a77cb38cbd11ba551a1ec15c131ad5",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "b6afba431c1205460d1601e0dd68f6688a9ca93bce808b88d9ab30733cb81f13",
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "5891975b056d42f20e2b6b6721c3c8cf7bafd3f70535cb24062ce1e7cb7db159",
 }
 
 
@@ -125,6 +71,27 @@ def sha256(data: bytes) -> str:
     """Return a lowercase SHA-256 digest."""
 
     return hashlib.sha256(data).hexdigest()
+
+
+def validate_region_row(line: str) -> None:
+    """Reject region edges that the Rust source-contract parser cannot accept."""
+
+    fields = line.split("|")
+    if len(fields) != 7:
+        raise AssertionError("region must have exactly seven fields")
+    _, region, source, start_kind, start_token, end_kind, end_token = fields
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", region) or not source:
+        raise AssertionError("region requires an identifier and source provider")
+    start_valid = (
+        start_kind == "begin" and start_token == "-"
+        or start_kind in {"after", "at", "last"} and start_token not in {"", "-"}
+    )
+    end_valid = (
+        end_kind == "end" and end_token == "-"
+        or end_kind == "before" and end_token not in {"", "-"}
+    )
+    if not start_valid or not end_valid:
+        raise AssertionError(f"invalid region edge: {start_kind}/{end_kind}")
 
 
 def parse_cases(asset: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -159,10 +126,41 @@ def parse_cases(asset: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
             tag = line.split("|", 1)[0]
             if tag not in {"region", "required", "forbidden", "count", "order"}:
                 raise AssertionError(f"unsupported contract tag {tag!r}")
+            if tag == "region":
+                validate_region_row(line)
             current_rows.append(line)
     if current_id is not None:
         raise AssertionError(f"unclosed case {current_id}")
     return tuple(cases)
+
+
+def macro_inventory_failures(
+    sources: dict[str, str], expected_case_ids: set[str]
+) -> list[str]:
+    """Require one macro per case and preserve each migrated test's host."""
+
+    pattern = re.compile(
+        r"source_contract_test!\(\s*"
+        r"(?:#\[allow\(clippy::too_many_lines\)\]\s*)?"
+        r"([a-z_][a-z0-9_]*)\s*\)"
+    )
+    invocations = {
+        path: pattern.findall(source) for path, source in sources.items()
+    }
+    actual = [name for names in invocations.values() for name in names]
+    failures: list[str] = []
+    for name in sorted(expected_case_ids | set(actual)):
+        count = actual.count(name)
+        if name not in expected_case_ids or count != 1:
+            failures.append(f"{name}: expected one known macro, found {count}")
+    for path, names in MIGRATED_TESTS.items():
+        source = sources.get(path, "")
+        for name in names:
+            if invocations.get(path, []).count(name) != 1:
+                failures.append(f"{path}: missing unique migrated macro {name}")
+            if re.search(rf"\bfn\s+{re.escape(name)}\s*\(", source):
+                failures.append(f"{path}: re-inlined migrated test {name}")
+    return failures
 
 
 # These are the narrow production regions whose guards moved during the current
@@ -172,6 +170,8 @@ BOUNDARY_CASE_REGIONS = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": (
         "leader_wire_replay_lock_authority",
         "actual_consumer_factory",
+        "consumer_frozen_context",
+        "consumer_adapter_constructor",
         "actual_consumer_publication",
         "leader_wire_live_runtime_cut",
         "leader_wire_live_lock_authority",
@@ -197,6 +197,24 @@ BOUNDARY_SOURCE_PATHS = {
     "queue": "crates/iroha_core/src/queue.rs",
 }
 BOUNDARY_MUTATIONS = (
+    (
+        "actual consumer rejects a foreign context",
+        "leader_wire_consumer",
+        "context_id: adapter.frozen_wire_context_id()",
+        "context_id: foreign_context.id()",
+    ),
+    (
+        "registry construction retains the verified context",
+        "adapter",
+        "let mut registry = WireRegistry::new(&wire_context)?;",
+        "let mut registry = WireRegistry::new(&foreign_context)?;",
+    ),
+    (
+        "frozen consumer identity retains the actual registry",
+        "adapter",
+        'self.registry\n            .context_id\n            .expect("adapter registry retains its verified height context")',
+        'foreign_registry.context_id.expect("foreign context")',
+    ),
     (
         "physical global FIFO inversion",
         "queue",
@@ -348,7 +366,7 @@ def boundary_contract_failures(
 
 
 class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
-    """Pin the semantic asset, migrated inventory, and honest Rust reduction."""
+    """Pin the semantic asset and migration inventory without freezing hosts."""
 
     def test_asset_bytes_case_inventory_and_new_contract_counts_are_exact(self) -> None:
         asset_bytes = ASSET_PATH.read_bytes()
@@ -366,40 +384,77 @@ class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
             self.assertEqual(len(contracts), expected_count)
             self.assertEqual(sha256(("\n".join(rows) + "\n").encode()), MIGRATED_CASE_SHA256[case_id])
 
-    def test_migrated_test_names_remain_exact_macro_tests(self) -> None:
-        for relative_path, names in MIGRATED_TESTS.items():
-            source = (ROOT / relative_path).read_text(encoding="utf-8")
-            for name in names:
-                self.assertNotRegex(source, rf"\bfn\s+{re.escape(name)}\s*\(")
-                invocations = re.findall(
-                    rf"source_contract_test!\(\s*{re.escape(name)}\s*\)", source
+    def test_region_parser_rejects_unknown_modes_and_invalid_boundary_tokens(self) -> None:
+        for start_kind, start_token, end_kind, end_token in (
+            ("from", "fn boundary(", "before", "next boundary"),
+            ("at", "fn boundary(", "through", "next boundary"),
+            ("begin", "unexpected", "end", "-"),
+            ("at", "-", "end", "-"),
+            ("after", "", "end", "-"),
+            ("last", "fn boundary(", "before", "-"),
+            ("begin", "-", "end", "unexpected"),
+        ):
+            with self.subTest(start=start_kind, end=end_kind):
+                asset = (
+                    "sumeragi-source-contracts-v1\ncase|edge_fixture\n"
+                    f"region|region|ledger|{start_kind}|{start_token}|{end_kind}|{end_token}\n"
+                    "required|region|token|diagnostic\nend\n"
                 )
-                self.assertEqual(len(invocations), 1)
+                with self.assertRaisesRegex(AssertionError, "invalid region edge"):
+                    parse_cases(asset)
+        for start_kind, start_token in (
+            ("begin", "-"), ("at", "token"), ("after", "token"), ("last", "token")
+        ):
+            for end_kind, end_token in (("end", "-"), ("before", "token")):
+                validate_region_row(
+                    f"region|region|ledger|{start_kind}|{start_token}|{end_kind}|{end_token}"
+                )
 
-    def test_every_asset_case_has_one_rust_macro_test(self) -> None:
+    @staticmethod
+    def source_inventory() -> tuple[dict[str, str], set[str]]:
+        """Load only Sumeragi Rust source and the reviewed case identifiers."""
+
+        sources = {
+            str(path.relative_to(ROOT)): path.read_text(encoding="utf-8")
+            for path in sorted(SUMERAGI_PATH.rglob("*.rs"))
+        }
         cases = parse_cases(ASSET_PATH.read_text(encoding="utf-8"))
-        expected = {case_id for case_id, _ in cases}
-        pattern = re.compile(
-            r"source_contract_test!\(\s*"
-            r"(?:#\[allow\(clippy::too_many_lines\)\]\s*)?"
-            r"([a-z_][a-z0-9_]*)\s*\)"
-        )
-        actual: list[str] = []
-        for source_path in sorted(SUMERAGI_PATH.rglob("*.rs")):
-            actual.extend(pattern.findall(source_path.read_text(encoding="utf-8")))
-        self.assertEqual(len(actual), EXPECTED_CASE_COUNT)
-        self.assertEqual(len(set(actual)), EXPECTED_CASE_COUNT)
-        self.assertEqual(set(actual), expected)
+        return sources, {case_id for case_id, _ in cases}
 
-    def test_postimages_and_line_reduction_are_frozen(self) -> None:
-        postimage_lines = 0
-        for relative_path, expected_hash in HOST_POSTIMAGE_SHA256.items():
-            data = (ROOT / relative_path).read_bytes()
-            self.assertEqual(sha256(data), expected_hash)
-            postimage_lines += len(data.decode("utf-8").splitlines())
-        self.assertLessEqual(postimage_lines, MAX_POSTIMAGE_RUST_LINES)
-        self.assertGreaterEqual(BASELINE_RUST_LINES - postimage_lines, MINIMUM_NET_REDUCTION)
-        self.assertTrue(all(len(value) == 64 for value in HOST_PREIMAGE_SHA256.values()))
+    def test_every_asset_case_has_one_rust_macro_test_in_its_host(self) -> None:
+        sources, expected = self.source_inventory()
+        self.assertEqual(macro_inventory_failures(sources, expected), [])
+
+    def test_macro_inventory_rejects_missing_duplicate_and_reinlined_tests(self) -> None:
+        sources, expected = self.source_inventory()
+        path = next(iter(MIGRATED_TESTS))
+        name = MIGRATED_TESTS[path][0]
+        match = re.search(
+            rf"source_contract_test!\(\s*{re.escape(name)}\s*\)", sources[path]
+        )
+        self.assertIsNotNone(match)
+        invocation = match.group()
+        mutations = {
+            "missing": sources[path].replace(invocation, "", 1),
+            "duplicate": sources[path] + "\n" + invocation + ";\n",
+            "re-inlined": sources[path] + f"\n#[test]\nfn {name}() {{}}\n",
+        }
+        for label, source in mutations.items():
+            with self.subTest(mutation=label):
+                mutated = dict(sources)
+                mutated[path] = source
+                failures = macro_inventory_failures(mutated, expected)
+                self.assertTrue(failures, f"inventory accepted {label} migrated test")
+                self.assertTrue(any(name in failure for failure in failures))
+
+    def test_macro_inventory_accepts_unrelated_test_addition(self) -> None:
+        sources, expected = self.source_inventory()
+        path = next(iter(MIGRATED_TESTS))
+        sources[path] += (
+            "\n#[test]\nfn unrelated_regression() {\n"
+            "    assert_eq!(2 + 2, 4);\n}\n"
+        )
+        self.assertEqual(macro_inventory_failures(sources, expected), [])
 
     def test_rust_runner_pins_the_same_closed_inventory(self) -> None:
         support = SUPPORT_PATH.read_text(encoding="utf-8")

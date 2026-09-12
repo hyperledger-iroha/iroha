@@ -21,7 +21,7 @@ use iroha_config::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
 use iroha_data_model::{
-    ChainId, Level, Registrable,
+    Level, Registrable,
     account::{
         AccountAlias, AccountAliasDomain, AccountDetails, AccountId, AccountRekeyRecord,
         AccountValue,
@@ -34,17 +34,19 @@ use iroha_data_model::{
         },
         consensus_v2 as wire_v2,
     },
-    domain::DomainId,
     isi::{Log, space_directory::PublishSpaceDirectoryManifest},
-    metadata::Metadata,
     nexus::{
-        AssetPermissionManifest, DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig,
-        ManifestVersion, UniversalAccountId,
+        AssetPermissionManifest, LaneCatalog, LaneConfig as ModelLaneConfig, ManifestVersion,
+        UniversalAccountId,
     },
-    peer::PeerId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::TransactionBuilder,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use std::{
@@ -802,12 +804,23 @@ async fn snapshot_bootstrap_policy_requires_exact_canonical_digest_and_height() 
 }
 fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
     let query_handle = LiveQueryStore::start_test();
-    State::new_with_chain(
+    let state = State::new_with_chain(
         crate::queue::tests::world_with_test_domains(),
-        kura,
+        Arc::clone(&kura),
         query_handle,
         chain_id,
-    )
+    );
+    let (baseline, _, _) = kura.lane_geometry_journal_state_for_test()
+        .expect("snapshot fixture has readable geometry custody");
+    if let Some(baseline) = baseline {
+        let lanes = state.nexus_snapshot().lane_config;
+        let incarnation = state.lane_incarnation(lanes.primary().lane_id)
+            .expect("snapshot primary has a canonical incarnation");
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            lanes.primary(), incarnation, baseline,
+        ).expect("snapshot fixture anchors its configured primary geometry");
+    }
+    state
 }
 fn state_factory_with_kura(kura: Arc<Kura>) -> State {
     state_factory_with_kura_and_chain(kura, ChainId::from(TEST_CHAIN_ID))
@@ -949,6 +962,7 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
         ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     );
     state.push_block_hash_for_testing(block.hash());
+    seed_snapshot_genesis_resolver_checkpoint(&state);
     let (_, source_identity, trust_anchor) =
         iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
     assert_eq!(
@@ -1394,6 +1408,60 @@ fn signed_block_after_transaction(
             .into(),
     )
 }
+/// Apply hostile fixture changes without changing unrelated signed schema ordering.
+fn snapshot_json_with_mutation(original: &str, mutated: &json::Value) -> String {
+    let baseline: json::Value = json::from_str(original).expect("valid snapshot JSON template");
+    if &baseline == mutated {
+        return original.to_owned();
+    }
+    match (&baseline, mutated) {
+        (json::Value::Object(_), json::Value::Object(changes)) => {
+            let members = borrowed_json_object_members(original).expect("snapshot object members");
+            let mut fields = Vec::new();
+            for member in &members {
+                if let Some(value) = changes.get(&member.key) {
+                    fields.push(format!(
+                        "{}:{}",
+                        member.encoded_key,
+                        snapshot_json_with_mutation(member.value, value)
+                    ));
+                }
+            }
+            for (key, value) in changes {
+                if !members.iter().any(|member| &member.key == key) {
+                    fields.push(format!(
+                        "{}:{}",
+                        json::to_json(key).expect("JSON field name"),
+                        json::to_json(value).expect("new JSON fixture field")
+                    ));
+                }
+            }
+            format!("{{{}}}", fields.join(","))
+        }
+        (json::Value::Array(_), json::Value::Array(changes)) => {
+            let items = borrowed_json_array_items(original).expect("snapshot array items");
+            let items: Vec<_> = changes
+                .iter()
+                .enumerate()
+                .map(|(index, value)| match items.get(index) {
+                    Some(original) => snapshot_json_with_mutation(original, value),
+                    None => json::to_json(value).expect("new JSON fixture item"),
+                })
+                .collect();
+            format!("[{}]", items.join(","))
+        }
+        _ => json::to_json(mutated).expect("mutated JSON fixture value"),
+    }
+}
+#[test]
+fn snapshot_mutation_preserves_schema_order_and_changes_only_requested_fields() {
+    let original = r#"{"z":{"later":1,"earlier":2},"a":[{"y":3,"b":4}]}"#;
+    let mut value: json::Value = json::from_str(original).expect("ordered JSON fixture");
+    value.as_object_mut().unwrap().get_mut("z").unwrap()
+        .as_object_mut().unwrap().insert("later".to_owned(), json::Value::from(5_u64));
+    assert_eq!(snapshot_json_with_mutation(original, &value),
+        r#"{"z":{"later":5,"earlier":2},"a":[{"y":3,"b":4}]}"#);
+}
 fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
     serialize_state_snapshot(state, &mut payload);
@@ -1493,4 +1561,25 @@ pub(super) fn write_snapshot_bundle_from_bytes(
 fn store_block_and_mark_state_height(state: &mut State, kura: &Arc<Kura>, block: Arc<SignedBlock>) {
     kura.store_block(Arc::clone(&block)).expect("store block");
     state.push_block_hash_for_testing(block.hash());
+    seed_snapshot_genesis_resolver_checkpoint(&state);
+}
+
+/// Direct block fixtures retain the resolver anchor required of every committed state.
+fn seed_snapshot_genesis_resolver_checkpoint(state: &State) {
+    let genesis_hash = state.block_hashes.view().iter().next().copied()
+        .expect("committed snapshot fixture has a genesis hash");
+    let revision = crate::state::MusubiResolverIndexRevisionV1::default();
+    let checkpoint = iroha_data_model::musubi::MusubiRegistrySnapshotV1 {
+        finalized_height: 1,
+        finalized_block_hash: *genesis_hash.as_ref(),
+        index_revision: revision.get(),
+    };
+    checkpoint.validate().expect("canonical resolver genesis checkpoint");
+    let mut world = state.world.block();
+    if let Some(existing) = world.musubi_resolver_index_checkpoints.get(&revision) {
+        assert_eq!(existing, &checkpoint);
+    } else {
+        world.musubi_resolver_index_checkpoints.insert(revision, checkpoint);
+    }
+    world.commit();
 }

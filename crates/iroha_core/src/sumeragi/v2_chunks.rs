@@ -467,7 +467,8 @@ pub(crate) enum V2ChunkError {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
+    use iroha_data_model::{NetworkId, block::BlockHeader};
+    use iroha_model_base::peer::PeerId;
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x92; Hash::LENGTH]),

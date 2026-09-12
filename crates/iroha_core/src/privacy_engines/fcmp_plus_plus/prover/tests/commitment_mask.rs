@@ -899,12 +899,21 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
             .count(),
         2
     );
-    assert_eq!(
-        blind_consumers
-            .matches("coordinates.component_pair_ref()")
-            .count(),
-        2
+    let blind_claims = between(
+        blind_consumers,
+        "let mut c1_blind_claims = Vec::with_capacity(helios_blinds.len())",
+        "let mut c2_blind_claims = Vec::with_capacity(selene_blinds.len())",
     );
+    let second_blind_claims = blind_consumers
+        .split_once("let mut c2_blind_claims = Vec::with_capacity(selene_blinds.len())")
+        .expect("Selene branch blind claims")
+        .1;
+    for claims in [blind_claims, second_blind_claims] {
+        assert_eq!(
+            claims.matches("coordinates.component_pair_ref()").count(),
+            1
+        );
+    }
     assert!(!blind_consumers.contains("blind.scalar.neg_ref()"));
     assert!(!blind_consumers.contains("blind.scalar.expose_ref().neg_ref()"));
     assert!(!blind_consumers.contains("blind.scalar.expose_ref()"));

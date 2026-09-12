@@ -2088,6 +2088,24 @@ fn work_shape_is_valid(
 ) -> bool {
     work_class.accepts_stage(key.phase(), stage)
 }
+/// The first-release wire inventory has one distinct code for every authority phase.
+#[cfg(test)]
+#[test]
+fn lifecycle_phase_codes_round_trip_without_aliases() {
+    let mut codes = BTreeSet::new();
+    for phase in LifecyclePhase::ALL {
+        let code = phase_code(phase);
+        assert!(
+            codes.insert(code),
+            "lifecycle phases must not share persisted identity"
+        );
+        assert_eq!(decode_phase(code), Some(phase));
+    }
+    assert_eq!(codes, BTreeSet::from_iter(1..=25));
+    for invalid in [0, 26, u16::MAX] {
+        assert_eq!(decode_phase(invalid), None);
+    }
+}
 fn phase_code(phase: LifecyclePhase) -> u16 {
     match phase {
         LifecyclePhase::Proposal => 1,
@@ -2095,23 +2113,26 @@ fn phase_code(phase: LifecyclePhase) -> u16 {
         LifecyclePhase::Commit => 3,
         LifecyclePhase::Timeout => 4,
         LifecyclePhase::Fetch => 5,
-        LifecyclePhase::Store => 6,
-        LifecyclePhase::Validate => 7,
-        LifecyclePhase::Apply => 8,
-        LifecyclePhase::BroadcastProposal => 9,
-        LifecyclePhase::BroadcastPrepareVote => 10,
-        LifecyclePhase::BroadcastCommitVote => 11,
-        LifecyclePhase::BroadcastPrepareQc => 12,
-        LifecyclePhase::BroadcastCommitQc => 13,
-        LifecyclePhase::BroadcastTimeoutVote => 14,
-        LifecyclePhase::BroadcastTc => 15,
-        LifecyclePhase::EnterView => 16,
-        LifecyclePhase::DiagnosticProposalEquivocation => 17,
-        LifecyclePhase::DiagnosticVoteEquivocation => 18,
-        LifecyclePhase::DiagnosticTimeoutEquivocation => 19,
-        LifecyclePhase::DiagnosticInvalidBody => 20,
-        LifecyclePhase::Serve => 21,
-        LifecyclePhase::ProducerTurn => 22,
+        LifecyclePhase::FetchDecision => 6,
+        LifecyclePhase::Store => 7,
+        LifecyclePhase::StoreDecision => 8,
+        LifecyclePhase::Validate => 9,
+        LifecyclePhase::ValidateDecision => 10,
+        LifecyclePhase::Apply => 11,
+        LifecyclePhase::BroadcastProposal => 12,
+        LifecyclePhase::BroadcastPrepareVote => 13,
+        LifecyclePhase::BroadcastCommitVote => 14,
+        LifecyclePhase::BroadcastPrepareQc => 15,
+        LifecyclePhase::BroadcastCommitQc => 16,
+        LifecyclePhase::BroadcastTimeoutVote => 17,
+        LifecyclePhase::BroadcastTc => 18,
+        LifecyclePhase::EnterView => 19,
+        LifecyclePhase::DiagnosticProposalEquivocation => 20,
+        LifecyclePhase::DiagnosticVoteEquivocation => 21,
+        LifecyclePhase::DiagnosticTimeoutEquivocation => 22,
+        LifecyclePhase::DiagnosticInvalidBody => 23,
+        LifecyclePhase::Serve => 24,
+        LifecyclePhase::ProducerTurn => 25,
     }
 }
 fn decode_phase(code: u16) -> Option<LifecyclePhase> {
@@ -2121,23 +2142,26 @@ fn decode_phase(code: u16) -> Option<LifecyclePhase> {
         3 => LifecyclePhase::Commit,
         4 => LifecyclePhase::Timeout,
         5 => LifecyclePhase::Fetch,
-        6 => LifecyclePhase::Store,
-        7 => LifecyclePhase::Validate,
-        8 => LifecyclePhase::Apply,
-        9 => LifecyclePhase::BroadcastProposal,
-        10 => LifecyclePhase::BroadcastPrepareVote,
-        11 => LifecyclePhase::BroadcastCommitVote,
-        12 => LifecyclePhase::BroadcastPrepareQc,
-        13 => LifecyclePhase::BroadcastCommitQc,
-        14 => LifecyclePhase::BroadcastTimeoutVote,
-        15 => LifecyclePhase::BroadcastTc,
-        16 => LifecyclePhase::EnterView,
-        17 => LifecyclePhase::DiagnosticProposalEquivocation,
-        18 => LifecyclePhase::DiagnosticVoteEquivocation,
-        19 => LifecyclePhase::DiagnosticTimeoutEquivocation,
-        20 => LifecyclePhase::DiagnosticInvalidBody,
-        21 => LifecyclePhase::Serve,
-        22 => LifecyclePhase::ProducerTurn,
+        6 => LifecyclePhase::FetchDecision,
+        7 => LifecyclePhase::Store,
+        8 => LifecyclePhase::StoreDecision,
+        9 => LifecyclePhase::Validate,
+        10 => LifecyclePhase::ValidateDecision,
+        11 => LifecyclePhase::Apply,
+        12 => LifecyclePhase::BroadcastProposal,
+        13 => LifecyclePhase::BroadcastPrepareVote,
+        14 => LifecyclePhase::BroadcastCommitVote,
+        15 => LifecyclePhase::BroadcastPrepareQc,
+        16 => LifecyclePhase::BroadcastCommitQc,
+        17 => LifecyclePhase::BroadcastTimeoutVote,
+        18 => LifecyclePhase::BroadcastTc,
+        19 => LifecyclePhase::EnterView,
+        20 => LifecyclePhase::DiagnosticProposalEquivocation,
+        21 => LifecyclePhase::DiagnosticVoteEquivocation,
+        22 => LifecyclePhase::DiagnosticTimeoutEquivocation,
+        23 => LifecyclePhase::DiagnosticInvalidBody,
+        24 => LifecyclePhase::Serve,
+        25 => LifecyclePhase::ProducerTurn,
         _ => return None,
     })
 }

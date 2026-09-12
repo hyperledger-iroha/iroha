@@ -1,5 +1,25 @@
 use super::*;
 
+#[test]
+fn validator_pin_fee_asset_must_match_the_typed_faucet_funding_asset() {
+    let inventory = sample_inventory_fixture();
+    let faucet = inventory.faucet_policy.asset_definition_id.parse().unwrap();
+    validate_validator_pin_fee_asset(&faucet, &inventory.faucet_policy.asset_definition_id)
+        .expect("faucet funds the exact validator pin-fee asset");
+    let other = iroha::data_model::asset::AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("feetest", "universal").unwrap(),
+        "other".parse().unwrap(),
+    );
+    assert_ne!(faucet, other);
+    assert!(
+        validate_validator_pin_fee_asset(&other, &inventory.faucet_policy.asset_definition_id)
+            .is_err()
+    );
+    let error =
+        validate_validator_pin_fee_asset(&faucet, "fixture-secret-not-runtime").unwrap_err();
+    assert!(!format!("{error:#}").contains("fixture-secret"));
+}
+
 fn owner() -> (KeyPair, TrustedKeyV1) {
     let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("test owner");
     let trusted = TrustedKeyV1 {
@@ -178,9 +198,15 @@ fn authorization_cannot_extend_the_bounded_plan() {
     .unwrap();
     envelope.signature_hex = hex::encode(signature.payload());
     assert_eq!(
-        verify_authorization(&inventory, &sha256_hex(&bytes), &envelope, &trusted, issued_at)
-            .expect_err("even the trusted owner cannot sign a longer execution lease")
-            .to_string(),
+        verify_authorization(
+            &inventory,
+            &sha256_hex(&bytes),
+            &envelope,
+            &trusted,
+            issued_at
+        )
+        .expect_err("even the trusted owner cannot sign a longer execution lease")
+        .to_string(),
         "authorization execution lease does not exactly cover the bounded execution plan",
     );
 
@@ -210,15 +236,9 @@ fn authorization_cannot_overflow_admission_or_execution_expiry() {
         .expect("the last representable execution expiry is signable");
     assert_eq!(envelope.claims.execution_expires_at_unix_ms, u64::MAX);
     assert_eq!(
-        sign_inventory(
-            &inventory,
-            &bytes,
-            &trusted,
-            &key,
-            last_issued_at + 1,
-        )
-        .expect_err("one millisecond later overflows the execution expiry")
-        .to_string(),
+        sign_inventory(&inventory, &bytes, &trusted, &key, last_issued_at + 1,)
+            .expect_err("one millisecond later overflows the execution expiry")
+            .to_string(),
         "execution expiry overflow",
     );
     assert_eq!(

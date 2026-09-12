@@ -56,6 +56,11 @@ immutable history retains the executing height, deterministic ordinal and author
 This history excludes token bodies, signatures, reservations and the operation
 journal. Those remain with their existing durable owners.
 
+The action uses one tagged JSON form, `{"action":"revoke","value":{"signer":true,
+"attester":false}}`, and a typed revocation payload carrying both flags. Configure
+and enroll carry their exact Manifest-owned frames; the native DTO does not
+redefine those signed payloads.
+
 Enrollment verifies the complete canonical hardware attestation against the
 previous committed control snapshot and that block's actual identity and time.
 A policy change in the current block cannot be presented as already committed

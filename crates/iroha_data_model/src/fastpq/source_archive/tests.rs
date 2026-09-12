@@ -5,9 +5,9 @@ use crate::{
     NetworkId,
     execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
     fastpq::{FastpqSourceExecutionKindV1, FastpqSourceLaneV1, FastpqSourceRouteV1},
-    nexus::{DataSpaceId, LaneId},
 };
 use iroha_crypto::HashOf;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
 // The transport cases share this independently defined five-entry source
 // projection. Dedicated entry-binding tests call the public APIs with altered
@@ -88,7 +88,7 @@ fn fixture(count: u32) -> FastpqOrdinarySourceStatementArchiveV1 {
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Unrouted,
             dataspace_id: DataSpaceId::new(4),
-            statement_digest: [index as u8 + 9; 32],
+            statement_digest: [u8::try_from(index).expect("fixture value fits u8") + 9; 32],
         })
         .collect::<Vec<_>>();
     let manifest = build_fastpq_ordinary_source_statement_manifest_v1(

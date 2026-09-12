@@ -56,7 +56,7 @@ fn role_vs_direct_permission_for_mint() {
     );
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::new();

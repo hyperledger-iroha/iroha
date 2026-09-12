@@ -16,6 +16,10 @@ use iroha_core::{
 use iroha_crypto::Signature;
 use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+#[cfg(all(feature = "bls", feature = "telemetry"))]
+use iroha_model_base::topology::LaneId;
 use nonzero_ext::nonzero;
 use std::{sync::Arc, time::SystemTime};
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
@@ -164,9 +168,9 @@ fn build_block_with_txs(
     presigned_block_with_creation_after_txs(leader_kp, txs)
 }
 #[cfg(feature = "bls")]
-fn bls_pop_metadata(kp: &KeyPair) -> iroha_data_model::Metadata {
+fn bls_pop_metadata(kp: &KeyPair) -> iroha_model_base::metadata::Metadata {
     let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("BLS PoP");
-    let mut metadata = iroha_data_model::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         "bls_pop".parse().expect("valid BLS PoP metadata key"),
         iroha_primitives::json::Json::new(hex::encode_upper(pop)),

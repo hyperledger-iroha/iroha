@@ -21,6 +21,13 @@ source manifest, signer and immutable artifact closure. Valid syntax alone does
 not establish provenance. Runtime environment variables and node configuration
 cannot replace the compiled identity.
 
+Workspace source capture discovers effective ignore policies before hashing the
+canonical Git source inventory. It skips nested policy discovery only beneath
+root directories excluded by the tracked root `.gitignore`, whose bytes remain
+bound across discovery. Local Git excludes cannot authorize this shortcut.
+Force-tracked files inside ignored directories remain in the source inventory;
+source contents are freshly hashed on every capture.
+
 Both Docker source-build definitions require matching full commits in the
 `IROHA_GIT_COMMIT_HASH` and `VERGEN_GIT_SHA` build arguments before invoking
 Cargo. `scripts/build_release_image.sh` supplies both from the already admitted
@@ -58,6 +65,28 @@ concurrent development, or an existing external development lane. It creates no
 replacement cache. Use explicit Cargo command names; aliases can hide target
 selectors and are rejected. Direct Cargo remains outside this advisory wrapper
 guard, so authenticated preparation still owns its locks and immutable captures.
+
+Native release checks isolate executables with descriptor-bound APFS clones on
+macOS. Each clone has an independent inode and is verified and frozen before
+execution; later Cargo writes cannot change its contents. Unsupported clone
+filesystems use the streamed copy only when all remaining bytes fit above the
+working-space reserve. Cloning avoids allocating a second full set of native
+test binaries while preserving the same source and destination checks. Warm
+Cargo targets and completed attempt receipts remain retained.
+
+Authenticated preparation keeps one current Git-object source materialization per
+locked build lane. A successful refresh retains its verified predecessor until
+the new source and commit checkpoint are durably published, then removes only
+that predecessor's authenticated entries. It unlinks the capture's `target`
+binding without following it, preserving the warm Cargo lane. Interrupted
+captures and unknown retained directories remain available for recovery; normal
+successful refreshes no longer accumulate a full source tree on every edit.
+
+Basic and full Taira checks compile the same native graph and consensus harness.
+Basic runs the universal default-route transaction sequence; full also runs the
+separate-dataspace sequence. Both retain four validators, the three-dataspace
+fixture, mandatory NPoS/DA, actual local/global Applied state and a signed-snapshot
+restart. Scope selection changes executed tests, not daemon features or artifacts.
 
 For PK2 release verification, the authenticated source/artifact corridor must
 supply its already validated source commit to both build-time variables. Run in

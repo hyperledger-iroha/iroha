@@ -3125,7 +3125,7 @@ mod ordinary_ingress_token_tests {
     };
 
     use iroha_crypto::KeyPair;
-    use iroha_data_model::peer::PeerId;
+    use iroha_model_base::peer::PeerId;
 
     use super::*;
 

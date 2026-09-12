@@ -32,9 +32,10 @@ use iroha_config::parameters::{
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
 use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
-    peer::PeerId,
-    prelude::{AccountId, ChainId, NetworkId},
+    prelude::{AccountId, NetworkId},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use izanami::genesis_support::{ManagedNodeConfig, UNRESOLVED_GENESIS_EXPECTED_HASH};
 use norito::json::{self, Map, Value};
 use once_cell::sync::OnceCell;

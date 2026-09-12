@@ -10,7 +10,6 @@ use crate::{
     asset::AssetDefinitionId,
     events::data::prelude::AssetBatchTransferOutcome,
     isi::{CustomInstruction, ExecuteTrigger, InstructionBox, privacy::SubmitPrivacyProofV1},
-    metadata::Metadata,
     nexus::FeeSponsorProgramId,
     privacy::{
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
@@ -23,6 +22,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use derive_more::{Deref, Display, From, TryInto};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_data_model_derive::model;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
@@ -1227,7 +1227,7 @@ fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1)
     if let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) =
         &mut normalized.envelope.statement
     {
-        statement.replay_nullifier = Default::default();
+        statement.replay_nullifier = crate::privacy::PrivacyZkAceReplayNullifierV1::default();
     }
     if let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) =
         &mut normalized.envelope.statement

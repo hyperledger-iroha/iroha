@@ -6,10 +6,8 @@ use iroha_crypto::HashOf;
 #[cfg(test)]
 use iroha_crypto::KeyPair;
 use iroha_crypto::PublicKey;
-use iroha_data_model::{
-    block::{BlockHeader, BlockSignature},
-    prelude::PeerId,
-};
+use iroha_data_model::block::{BlockHeader, BlockSignature};
+use iroha_model_base::peer::PeerId;
 /// The ordering of the peers which defines their roles in the current round of consensus.
 ///
 /// A  |       |              |>|                  |->|
@@ -622,7 +620,8 @@ mod prf_collectors_tests {
 /// Example
 /// ```ignore
 /// use iroha_core::sumeragi::network_topology::{rotated_for_prev_block_hash, ConsensusTopology};
-/// use iroha_data_model::{block::BlockHeader, prelude::PeerId};
+/// use iroha_data_model::block::BlockHeader;
+/// use iroha_model_base::peer::PeerId;
 /// use iroha_crypto::HashOf;
 ///
 /// // Application provides the current ordered peer list (e.g., from committed state)

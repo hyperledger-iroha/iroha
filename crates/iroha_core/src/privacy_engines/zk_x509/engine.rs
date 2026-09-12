@@ -82,12 +82,12 @@ const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+tru
 const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // Independently encoded and SHA-256 checked from the exact ordered 29-field
-// release manifest after the compact-CA descriptor and all six algebraic
-// schedules passed their release KATs. There is no provisional, root-bearing,
-// or certificate-bearing profile in the first-release protocol.
+// manifest, including the compact-CA descriptor and all six algebraic schedules.
+// This identifies the sole compiled geometry; activation additionally requires
+// the proof cap and the complete soundness and resource certificates.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x88, 0x1e, 0x56, 0x0d, 0xb8, 0x72, 0xf4, 0x7f, 0xdc, 0xd7, 0xdc, 0x29, 0x0e, 0xb6, 0xe2, 0x80,
-    0x8a, 0x09, 0x82, 0x2b, 0x41, 0xe6, 0x87, 0x94, 0x92, 0x41, 0x4b, 0x7e, 0x99, 0x30, 0x3b, 0x67,
+    0x9b, 0x44, 0x49, 0x51, 0x84, 0x18, 0xd7, 0x27, 0xa6, 0x1e, 0x98, 0xfa, 0x5e, 0x10, 0x4f, 0x37,
+    0xa9, 0xfd, 0x29, 0x46, 0xf7, 0x09, 0xf4, 0xf9, 0x6c, 0x8f, 0xc9, 0xf6, 0x64, 0x82, 0x21, 0x06,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -351,6 +351,7 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     construct_zk_x509_compiled_profile_v1()?;
     let consensus_public =
         compile_zk_x509_consensus_public_inputs_v1(statement, authoritative_state, genesis_hash)?;
+    super::stark::validate_zk_x509_main_proof_budget_v1()?;
     let prepared = prepare_zk_x509_prover_input_v1(
         statement,
         authoritative_state,
@@ -561,13 +562,13 @@ mod tests {
         );
         assert!(
             fields[17]
-                .windows(b"main-common-lde-log25".len())
-                .any(|window| window == b"main-common-lde-log25")
+                .windows(b"main-common-lde-log22".len())
+                .any(|window| window == b"main-common-lde-log22")
         );
         assert!(
             !fields[17]
-                .windows(b"common-lde-log22".len())
-                .any(|window| window == b"common-lde-log22")
+                .windows(b"common-lde-log25".len())
+                .any(|window| window == b"common-lde-log25")
         );
     }
     #[test]
@@ -697,11 +698,35 @@ mod tests {
     }
 
     #[test]
-    fn sole_profile_is_pinned_while_release_activation_stays_governance_gated() {
+    fn credential_prover_rejects_unsupported_main_wire_before_witness_or_entropy() {
+        let fixture = super::super::relation::release_fixture::build_zk_x509_reference_fixture_v1()
+            .expect("canonical reference fixture");
+        let mut rng = PreflightEntropyV1::default();
+        let error = prove_zk_x509_credential_proof_v1_with_rng(
+            &fixture.statement,
+            &fixture.authoritative_state,
+            fixture.statement.presentation_not_before_unix_seconds * 1_000,
+            &PrivacyConsensusLimitsV1::taira_default(),
+            *fixture.statement.context.network_id.as_bytes(),
+            &[],
+            &mut rng,
+        )
+        .expect_err("the mandatory MAIN opening payload exceeds the credential budget");
+        assert_eq!(
+            error,
+            ZkX509EngineErrorV1::MainProofConstruction(
+                super::super::stark::ZkX509StarkErrorV1::ProofTooLarge
+            )
+        );
+        assert_eq!(rng.requests, 0);
+    }
+
+    #[test]
+    fn sole_profile_is_pinned_while_release_activation_stays_unavailable() {
         assert!(ZK_X509_COMPILED_PROFILE_DIGEST_V1.is_some());
         assert!(
             String::from_utf8_lossy(ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1)
-                .ends_with("activation=governance-gated")
+                .ends_with("activation=unavailable-proof-cap")
         );
     }
     #[test]

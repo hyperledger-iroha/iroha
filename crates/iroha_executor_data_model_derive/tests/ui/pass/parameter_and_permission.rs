@@ -1,5 +1,6 @@
 //! Parameter and permission derives should compile with executor data model helpers.
 use iroha_executor_data_model_derive::{Parameter, Permission};
+use iroha_model_base::domain::DomainId;
 /// Custom executor parameter used for UI tests.
 #[derive(
     Default,
@@ -23,7 +24,7 @@ struct CustomLimit {
 )]
 struct CanEditDomainMetadata {
     /// Domain scoped by the permission.
-    domain: iroha_data_model::domain::DomainId,
+    domain: iroha_model_base::domain::DomainId,
 }
 fn main() {
     let param = CustomLimit::default();

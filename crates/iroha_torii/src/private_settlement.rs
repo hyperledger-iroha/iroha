@@ -228,13 +228,13 @@ mod governed_sidecar_store_config_tests {
         block::BlockHeader,
         isi::Log,
         nexus::{
-            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, LaneId,
-            PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1, PrivateSettlementAuditAadV1,
-            PrivateSettlementAuditCapsuleV1, PrivateSettlementCapsulePaddingV1,
-            PrivateSettlementRouteV1,
+            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1,
+            PrivateSettlementAuditAadV1, PrivateSettlementAuditCapsuleV1,
+            PrivateSettlementCapsulePaddingV1, PrivateSettlementRouteV1,
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
     use super::*;
 
@@ -642,7 +642,7 @@ fn private_settlement_test_network_peer_is_local_v1(
     authenticated: &crate::operator_signatures::AuthenticatedOperatorPublicKey,
 ) -> bool {
     app.local_peer_id.as_ref()
-        == Some(&iroha_data_model::peer::PeerId::from(
+        == Some(&iroha_model_base::peer::PeerId::from(
             authenticated.0.clone(),
         ))
 }
@@ -1561,7 +1561,7 @@ pub(crate) async fn handler_committee_proof(
         Ok(digest) => digest,
         Err(response) => return response,
     };
-    let validator = iroha_data_model::peer::PeerId::from(authenticated.0);
+    let validator = iroha_model_base::peer::PeerId::from(authenticated.0);
     let view = match store.fetch_for_committee(digest, &validator, height) {
         Ok(view) => view,
         Err(error) => return map_store_error(error),
@@ -2095,12 +2095,12 @@ mod tests {
         account::AccountId,
         block::BlockHeader,
         nexus::{
-            AtomicPrivateSettlementV1, DataSpaceId, LaneId, PrivateSettlementLegCommitmentV1,
-            PrivateSettlementRouteV1,
+            AtomicPrivateSettlementV1, PrivateSettlementLegCommitmentV1, PrivateSettlementRouteV1,
         },
         privacy::PrivacyPoolIdV1,
         transaction::FeePaymentIntent,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
     fn abort_carrier_manifest_fixture() -> AtomicPrivateSettlementV1 {
         let sponsor = KeyPair::from_seed(vec![0xD4; 32], Algorithm::Ed25519);

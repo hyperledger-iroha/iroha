@@ -19,9 +19,10 @@ use iroha_data_model::{
         commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
         types::{BlobDigest, StorageTicketId},
     },
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+#[cfg(feature = "bench")]
+use iroha_model_base::topology::LaneId;
 #[cfg(feature = "bench")]
 use std::{hint::black_box, time::Duration};
 #[cfg(feature = "bench")]

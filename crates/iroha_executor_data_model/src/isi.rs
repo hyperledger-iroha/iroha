@@ -51,6 +51,7 @@ pub mod multisig {
     };
     use core::num::{NonZeroU16, NonZeroU64};
     use iroha_crypto::{HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
     #[allow(unused_imports)]
     use std::eprintln;

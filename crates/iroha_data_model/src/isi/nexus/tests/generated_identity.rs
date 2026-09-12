@@ -9,8 +9,7 @@ use norito::{
 
 use super::*;
 
-#[path = "../../../../tests/support/fixture_json.rs"]
-mod fixture_json;
+use crate::fixture_json;
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;

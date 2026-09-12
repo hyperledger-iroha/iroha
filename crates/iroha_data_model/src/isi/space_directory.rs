@@ -1,5 +1,6 @@
 use super::*;
-use crate::nexus::{AssetPermissionManifest, DataSpaceId, UniversalAccountId};
+use crate::nexus::{AssetPermissionManifest, UniversalAccountId};
+use iroha_model_base::topology::DataSpaceId;
 isi! {
     /// Publish or replace a capability manifest in the Space Directory.
     #[norito_schema(name = "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest")]

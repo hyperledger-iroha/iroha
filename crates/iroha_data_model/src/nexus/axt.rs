@@ -5,13 +5,11 @@
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
-    NetworkId,
-    asset::id::AssetDefinitionId,
-    block::BlockHeader,
-    nexus::{DataSpaceId, LaneId, UniversalAccountId},
+    NetworkId, asset::id::AssetDefinitionId, block::BlockHeader, nexus::UniversalAccountId,
     transaction::signed::TransactionEntrypoint,
 };
 use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;
 use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
@@ -56,6 +54,8 @@ pub const MAX_AXT_FINALIZED_TRANSACTIONS_V1: usize = 65_536;
 /// The consensus executed-block hard ceiling also bounds its transaction wires.
 pub const MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1: u64 =
     crate::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES;
+// Every supported target must represent the same consensus-implied count cap.
+const _: () = assert!(MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1 <= usize::MAX as u64);
 
 /// Failure to commit a bounded ordered transaction-wire set.
 #[derive(Debug, Error)]
@@ -101,11 +101,16 @@ where
     I::Item: std::borrow::Borrow<TransactionEntrypoint>,
     I::IntoIter: Clone,
 {
+    // Every complete versioned wire contains at least its one-byte version.
+    // This count bound is therefore implied by the consensus wire ceiling.
+    let max_count = usize::try_from(MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1).map_err(|_| {
+        AxtOrderedTransactionSetErrorV1::Encoding(
+            "AXT consensus wire ceiling exceeds the target address space".to_owned(),
+        )
+    })?;
     axt_ordered_transaction_set_digest_with_limits(
         transactions,
-        // Every complete versioned wire contains at least its one-byte version.
-        // This count bound is therefore implied by the consensus wire ceiling.
-        MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1 as usize,
+        max_count,
         MAX_AXT_FINALIZED_TRANSACTION_WIRE_BYTES_V1,
     )
 }
@@ -138,7 +143,7 @@ where
         }
         let transaction: &TransactionEntrypoint = std::borrow::Borrow::borrow(&transaction);
         let start = counter.written;
-        let counted = counter
+        let encoding_result = counter
             .write_all(&[1])
             .map_err(norito::core::Error::from)
             .and_then(|()| {
@@ -149,7 +154,8 @@ where
                 maximum: max_wire_bytes,
             });
         }
-        counted.map_err(|error| AxtOrderedTransactionSetErrorV1::Encoding(error.to_string()))?;
+        encoding_result
+            .map_err(|error| AxtOrderedTransactionSetErrorV1::Encoding(error.to_string()))?;
         lengths.push(counter.written - start);
     }
     Hash::new_from_writer(|mut writer| {
@@ -2188,7 +2194,7 @@ pub struct AxtAnchoredSpendReplayKeyV1 {
 impl AxtAnchoredSpendDraftV1 {
     fn validate_binding_v1(
         &self,
-        anchor: AxtFinalizedSpendAnchorV1,
+        anchor: &AxtFinalizedSpendAnchorV1,
         expiry_slot: u64,
         nonce: AxtSpendNonceV1,
     ) -> Result<AxtAnchoredSpendIssuerPayloadV1, AxtAnchoredSpendValidationErrorV1> {
@@ -2248,7 +2254,7 @@ impl AxtAnchoredSpendDraftV1 {
             proof_digest: axt_framed_digest_v1(AXT_ANCHORED_SPEND_PROOF_DIGEST_DOMAIN_V1, proof),
             amount: self.amount.clone(),
             amount_commitment: self.amount_commitment,
-            anchor,
+            anchor: *anchor,
             expiry_slot,
             nonce,
         })
@@ -2267,7 +2273,7 @@ impl AxtAnchoredSpendDraftV1 {
         nonce: AxtSpendNonceV1,
         issuer: &PrivateKey,
     ) -> Result<AxtAnchoredSpendV1, AxtAnchoredSpendValidationErrorV1> {
-        let payload = self.validate_binding_v1(anchor, expiry_slot, nonce)?;
+        let payload = self.validate_binding_v1(&anchor, expiry_slot, nonce)?;
         let preimage = anchored_spend_signature_preimage_v1(&payload);
         let issuer_signature = Signature::try_new(issuer, &preimage)
             .map_err(|_| AxtAnchoredSpendValidationErrorV1::Cryptography)?;
@@ -2293,7 +2299,7 @@ impl AxtAnchoredSpendV1 {
         &self,
     ) -> Result<AxtAnchoredSpendIssuerPayloadV1, AxtAnchoredSpendValidationErrorV1> {
         self.draft.validate_binding_v1(
-            self.authorization.anchor,
+            &self.authorization.anchor,
             self.authorization.expiry_slot,
             self.authorization.nonce,
         )

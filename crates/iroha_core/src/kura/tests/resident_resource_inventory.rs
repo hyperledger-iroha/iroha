@@ -118,7 +118,7 @@ fn resident_transaction_counts_memberships_through_duplicate_replace_and_truncat
 #[test]
 fn resident_merge_projection_and_real_kaigi_candidate_insertion_match_recount() {
     use super::resident_inventory::ResidentOwner;
-    use iroha_data_model::metadata::Metadata;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::json::Json;
     let call = kaigi_signal_test_call("resident-real-signal");
     let mut metadata = Metadata::default();

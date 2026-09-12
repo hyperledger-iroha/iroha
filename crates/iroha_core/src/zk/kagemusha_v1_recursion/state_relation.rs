@@ -2206,9 +2206,9 @@ mod tests {
     use halo2_proofs::halo2curves::pasta::{Fp, Fq};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
-        NetworkId, asset::AssetDefinitionId, block::BlockHeader, domain::DomainId,
-        nexus::AxtAssetIncarnationV1,
+        NetworkId, asset::AssetDefinitionId, block::BlockHeader, nexus::AxtAssetIncarnationV1,
     };
+    use iroha_model_base::domain::DomainId;
 
     fn projection_digest(tag: u64) -> DigestV1 {
         let mut digest = [0; 32];

@@ -8532,9 +8532,8 @@ mod tests {
         Encode,
         account::{Account, AccountId},
         asset::AssetDefinitionId,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::Grant,
-        metadata::Metadata,
         permission::Permission,
         prelude::Register,
         sns::{NameControllerV1, NameRecordV1},
@@ -8564,6 +8563,8 @@ mod tests {
             StorageClass,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
@@ -9038,7 +9039,7 @@ mod tests {
                 .expect("fixture peer seed derives BLS keypair");
                 iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
                     validator_account_id: AccountId::new(validator_key_pair.public_key().clone()),
-                    peer_id: iroha_data_model::peer::PeerId::from(
+                    peer_id: iroha_model_base::peer::PeerId::from(
                         peer_key_pair.public_key().clone(),
                     )
                     .to_string(),
@@ -9561,7 +9562,7 @@ mod tests {
     fn seed_domain_name_lease(
         world: &mut iroha_core::state::World,
         owner: &AccountId,
-        domain_id: &iroha_data_model::domain::DomainId,
+        domain_id: &iroha_model_base::domain::DomainId,
     ) {
         let selector = iroha_core::sns::selector_for_domain(domain_id).expect("domain selector");
         let address =
@@ -10838,7 +10839,7 @@ mod tests {
         use iroha_data_model::block::BlockHeader;
         let runtime = test_runtime()?;
         runtime.block_on(async move {
-            let wonderland: iroha_data_model::domain::DomainId =
+            let wonderland: iroha_model_base::domain::DomainId =
                 DomainId::try_new("wonderland", "universal")?;
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &SAMPLE_GENESIS_ACCOUNT_ID, &wonderland);

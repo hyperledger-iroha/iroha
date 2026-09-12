@@ -394,6 +394,18 @@ Before preflight, use the same compiled CLI to create the inventory and owner
 signature locally. `assemble` accepts an existing `InventoryV1` draft with explicit
 approved endpoints and host pins, target occupancy, previous/next genesis anchors,
 source/artifact paths, onboarding request, faucet/fee intent, nonce and timeouts.
+The required `qualification_scope` is `core_testnet` for basic Taira/BPNG
+testing or `inrou` for the additional VM workload qualification. Core scope
+runs the onboarding, faucet and write canaries, four-validator convergence and
+one validator restart followed by the same three canaries, and public Torii/MCP
+checks. Inrou scope exercises all four restart waves and adds its four
+prepared mutations and live workload checks. Inventory, authorization, journal
+and report bind the same scope; recovery cannot change it. A core result does
+not establish Inrou workload readiness. Both scopes retain the installation
+stage/preseed barrier and the same host rollback plan.
+Render validator units using `scripts/taira_validator_unit.py`, then bind the
+generated unit bytes into the inventory. Type=exec waits for the inline signer
+custody launcher; native checks still require the actual daemon and readiness.
 It fills derived hashes, sizes, modes, source/stage identities and validator
 fingerprints from the actual files, then runs the existing admission checks.
 Generate its source manifest with `iroha taira public-reset source-manifest
@@ -557,10 +569,15 @@ target/release/iroha \
   taira doctor --public-root https://taira.sora.org --json
 ```
 
+The public doctor defaults to `--scope basic` for essential network and MCP
+connectivity. Valid local-clock fallback is reported as a warning; malformed
+time or MCP responses fail. `--scope full` adds advanced product readiness and
+synchronized-time requirements. Public-reset selects the doctor scope from its
+signed qualification scope.
 The public doctor remains non-mutating and does not impersonate an operator.
 It requires the exact two-field operator-signature `401` from
-`/v1/sumeragi/status` and the exact two-field canonical-account `401` from
-`/v1/soracloud/status`; arbitrary gateway challenges fail closed. Exact runtime
+`/v1/sumeragi/status` and, in full scope, the exact two-field canonical-account
+`401` from `/v1/soracloud/status`; arbitrary gateway challenges fail closed. Exact runtime
 topology and four-replica Inrou convergence belong to the signed Inrou canary,
 not the public route-posture probe.
 

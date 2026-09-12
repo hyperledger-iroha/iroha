@@ -70,6 +70,7 @@ iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 # request them locally so focused builds do not compile the broadest model.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
 iroha_model_base = { path = "crates/iroha_model_base", default-features = false }
+iroha_js_codec = { path = "crates/iroha_js_codec", default-features = false }
 iroha_service_model = { path = "crates/iroha_service_model" }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
@@ -182,6 +183,9 @@ concread = "=0.5.7"
 # [patch.crates-io] was temporarily disabled; keep the local overrides we still
 # rely on for Halo2 helpers and the CUDA helper.
 [patch.crates-io]
+pqcrypto-internals = { path = "vendor/pqcrypto-internals-0.2.11" }
+pqcrypto-mldsa = { path = "vendor/pqcrypto-mldsa-0.1.2" }
+pqcrypto-mlkem = { path = "vendor/pqcrypto-mlkem-0.1.1" }
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
@@ -461,9 +465,13 @@ codegen-units = 8
 [profile.test.package.iroha_model_base]
 codegen-units = 8
 
-# The six-lane native-STARK digest dominates FASTPQ's proof regression tests.
-# Optimize this small arithmetic crate while retaining the test profile's
-# overflow checks and debug assertions. This does not change release settings.
+# The six-lane native-STARK digest also runs on the live consensus path.
+# Match node and test-harness arithmetic: otherwise four-peer checks run an
+# unoptimized digest despite fast unit tests and need a second build artifact.
+# Both profiles retain overflow checks and debug assertions.
+[profile.dev.package.fastpq_isi]
+opt-level = 2
+
 [profile.test.package.fastpq_isi]
 opt-level = 2
 

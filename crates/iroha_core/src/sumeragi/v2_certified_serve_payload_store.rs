@@ -4421,9 +4421,10 @@ mod tests {
     #[cfg(feature = "bls")]
     use iroha_crypto::SignatureOf;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::block::BlockHeader;
     #[cfg(feature = "bls")]
     use iroha_data_model::block::{BlockSignature, SignedBlock};
-    use iroha_data_model::{block::BlockHeader, peer::PeerId};
+    use iroha_model_base::peer::PeerId;
     #[cfg(feature = "bls")]
     use std::num::NonZeroU64;
     use tempfile::TempDir;

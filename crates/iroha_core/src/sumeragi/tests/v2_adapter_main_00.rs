@@ -1488,6 +1488,14 @@ fn adapter_hot_context_projections_retain_the_verified_registry_identity() {
     assert!(startup.is_empty());
     let expected = adapter.wire_context().id();
     assert_eq!(adapter.frozen_wire_context_id(), expected);
+    let authority = adapter
+        .leader_wire_recovery_authority()
+        .expect("opened consumer authority");
+    assert!(authority.matches_geometry(
+        expected,
+        adapter.wire_context().height,
+        adapter.fingerprints.node.into(),
+    ));
     assert_eq!(
         adapter.status().expect("exact status").height_context_id,
         expected
@@ -1500,11 +1508,26 @@ fn adapter_hot_context_projections_retain_the_verified_registry_identity() {
         expected,
         "changing an external wire-context copy cannot alter the verified owner"
     );
+    assert!(!authority.matches_geometry(
+        independent_context.id(),
+        independent_context.height,
+        adapter.fingerprints.node.into(),
+    ));
     drop(adapter);
     let mut restarted = open_test(&directory)
         .expect("reopen the same frozen context")
         .0;
     assert_eq!(restarted.frozen_wire_context_id(), expected);
+    assert!(
+        restarted
+            .leader_wire_recovery_authority()
+            .expect("reopened consumer authority")
+            .matches_geometry(
+                expected,
+                restarted.wire_context().height,
+                restarted.fingerprints.node.into(),
+            )
+    );
     assert_eq!(
         restarted
             .status()

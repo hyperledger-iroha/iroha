@@ -623,7 +623,7 @@ pub fn derive_zk_ace_privacy_authorization_digest(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
 ) -> Result<GoldilocksDigest384V1, norito::Error> {
     let mut normalized = public_inputs.statement.clone();
-    normalized.replay_nullifier = Default::default();
+    normalized.replay_nullifier = PrivacyZkAceReplayNullifierV1::default();
     let statement_bytes = norito::encode_canonical(&normalized)?;
     Ok(zk_ace_digest384_v1(
         ZK_ACE_AUTHORIZATION_DIGEST_ROLE_V1,
@@ -766,8 +766,9 @@ pub enum ZkAceTransferDigestErrorV1 {
 mod tests {
     #![allow(clippy::type_complexity)]
     use super::*;
-    use crate::{account::address::ChainDiscriminantGuard, block::BlockHeader, domain::DomainId};
+    use crate::{account::address::ChainDiscriminantGuard, block::BlockHeader};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use std::{
         collections::BTreeSet,

@@ -28,7 +28,6 @@ use iroha_data_model::{
             UpsertProviderCredit,
         },
     },
-    metadata::Metadata,
     musubi::{
         ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
         MusubiArchiveLocationIdV1, MusubiArchiveRecordV1, MusubiContentDigestV1,
@@ -60,7 +59,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
-use iroha_model_base::name::Name;
+use iroha_model_base::{domain::DomainId, metadata::Metadata, name::Name};
 use iroha_primitives::{bigint::BigInt, json::Json};
 use nonzero_ext::nonzero;
 use norito::{json, to_bytes};
@@ -943,7 +942,7 @@ fn sample_alias_binding() -> ManifestAliasBinding {
 fn register_pin_manifest_allows_public_submission() {
     let mut state = make_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(block_header());
+    let mut block = state.block(initial_sorafs_block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx);
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
@@ -971,7 +970,7 @@ fn register_pin_manifest_allows_public_submission() {
         )
         .expect("default public pin fee");
     register
-        .execute(&alice(), &mut stx)
+        .execute_initial(&alice(), &mut stx)
         .expect("public register must succeed");
     let record = stx
         .world
@@ -1381,7 +1380,7 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
 fn public_pin_cannot_reserve_alias_without_alias_permission() {
     let mut state = make_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(block_header());
+    let mut block = state.block(initial_sorafs_block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx);
     remove_permission(&mut stx, "CanBindSorafsAlias");
@@ -1394,7 +1393,7 @@ fn public_pin_cannot_reserve_alias_without_alias_permission() {
         alias: Some(alias.clone()),
         successor_of: None,
     }
-    .execute(&alice(), &mut stx)
+    .execute_initial(&alice(), &mut stx)
     .expect_err("permissionless public pins must not reserve governed aliases");
     assert!(matches!(
         error,
@@ -1421,7 +1420,7 @@ fn public_pin_cannot_reserve_alias_without_alias_permission() {
 fn register_pin_manifest_rejects_unfunded_public_submission_without_side_effects() {
     let mut state = make_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(block_header());
+    let mut block = state.block(initial_sorafs_block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx);
     if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
@@ -1437,7 +1436,7 @@ fn register_pin_manifest_rejects_unfunded_public_submission_without_side_effects
         successor_of: None,
     };
     register
-        .execute(&alice(), &mut stx)
+        .execute_initial(&alice(), &mut stx)
         .expect_err("unfunded public pin registration must fail");
     assert!(
         stx.world.pin_manifests.get(&default_digest()).is_none(),
@@ -1490,7 +1489,7 @@ fn register_pin_manifest_rejects_insufficient_public_fee_without_side_effects() 
 fn threshold_approval_may_be_relayed_without_broad_permission() {
     let mut state = make_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(block_header());
+    let mut block = state.block(initial_sorafs_block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx);
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
@@ -1509,7 +1508,7 @@ fn threshold_approval_may_be_relayed_without_broad_permission() {
         council_envelope_digest: None,
     };
     approve
-        .execute(&bob(), &mut stx)
+        .execute_initial(&bob(), &mut stx)
         .expect("any authenticated account may relay a valid governed approval");
     assert!(matches!(
         stx.world
@@ -1524,7 +1523,7 @@ fn threshold_approval_may_be_relayed_without_broad_permission() {
 fn retire_pin_manifest_requires_exact_authenticated_submitter() {
     let mut state = make_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(block_header());
+    let mut block = state.block(initial_sorafs_block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx);
     seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
@@ -1533,7 +1532,7 @@ fn retire_pin_manifest_requires_exact_authenticated_submitter() {
         alias: None,
         successor_of: None,
     }
-    .execute(&alice(), &mut stx)
+    .execute_initial(&alice(), &mut stx)
     .expect("public submitter registers its paid pin");
     let retire = RetirePinManifest {
         digest: default_digest(),
@@ -1541,18 +1540,18 @@ fn retire_pin_manifest_requires_exact_authenticated_submitter() {
     };
     let error = retire
         .clone()
-        .execute(&bob(), &mut stx)
+        .execute_initial(&bob(), &mut stx)
         .expect_err("an unrelated account must not retire another account's pin");
     assert!(smart_contract_error_message(&error).contains("authenticated submitter"));
     retire
-        .execute(&alice(), &mut stx)
+        .execute_initial(&alice(), &mut stx)
         .expect("the exact submitter may retire without a broad permission token");
 }
 #[test]
 fn bind_manifest_alias_requires_permission() {
     let mut state = make_state();
     seed_sorafs_permissions(&mut state, &bob());
-    let mut block = state.block(block_header());
+    let mut block = state.block(initial_sorafs_block_header());
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx);
     remove_permission(&mut stx, "CanBindSorafsAlias");
@@ -1563,7 +1562,7 @@ fn bind_manifest_alias_requires_permission() {
         expiry_epoch: 12,
     };
     let error = bind
-        .execute(&alice(), &mut stx)
+        .execute_initial(&alice(), &mut stx)
         .expect_err("permissionless bind must fail");
     assert!(matches!(
         error,

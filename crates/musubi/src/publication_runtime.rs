@@ -2101,7 +2101,6 @@ mod tests {
             MusubiSeedIngressReceiptApprovalV1, MusubiSeedIngressReceiptPayloadV1,
             MusubiVerificationLockV1, MusubiVersionV1,
         },
-        nexus::DataSpaceId,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid,
             ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
@@ -2109,6 +2108,7 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::{
         fs,
         io::{self, Write as _},
@@ -2291,7 +2291,8 @@ private_key = "{}"
         clippy::too_many_lines,
         reason = "the fixture assembles one internally consistent publication rebase state"
     )]
-    fn rebase_fixture(torii_url: Url) -> RebaseFixture {
+    fn rebase_fixture() -> RebaseFixture {
+        let torii_url = "http://127.0.0.1:9/".parse().expect("dummy URL");
         let temporary = tempdir().expect("temporary directory");
         let config_path = temporary.path().join("client.toml");
         let (signing, publication_config) = write_client_config(&config_path, "");
@@ -2590,7 +2591,7 @@ private_key = "{}"
     }
     #[test]
     fn provider_attestation_checkpoint_decode_limits_admit_maximum_approval_set() {
-        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
         let expected_location_revision = fixture.page.archive.location_revision;
         let mut attestation = coordinator_provider_attestations(&fixture)[0].clone();
@@ -2675,7 +2676,7 @@ private_key = "{}"
     }
     #[test]
     fn provider_attestation_set_checkpoint_is_deterministic_and_rejects_substitution() {
-        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
         let attestations = coordinator_provider_attestations(&fixture);
         let checkpoint = PublicationProviderAttestationSetCheckpointV1::new(
@@ -2726,7 +2727,7 @@ private_key = "{}"
         reason = "the checkpoint substitution cases exercise one end-to-end signature binding contract"
     )]
     fn provider_attestation_transaction_checkpoint_binds_exact_instruction_and_signature() {
-        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
         let expected_location_revision = fixture.page.archive.location_revision;
         let attestation = coordinator_provider_attestations(&fixture)[0].clone();
@@ -2841,7 +2842,7 @@ private_key = "{}"
     }
     #[test]
     fn exact_provider_attestation_accepts_another_managers_original_audit_actor() {
-        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let fixture = rebase_fixture();
         let attestation = coordinator_provider_attestations(&fixture)[0].clone();
         let other_manager = KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519)
             .expect("other archive manager");
@@ -2872,7 +2873,7 @@ private_key = "{}"
     }
     #[test]
     fn provider_attestation_checkpoint_restart_loads_exact_attempt_and_rejects_substitution() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
         let expected_location_revision = fixture.page.archive.location_revision;
         let attestation = coordinator_provider_attestations(&fixture)[0].clone();
@@ -2956,7 +2957,7 @@ private_key = "{}"
     }
     #[test]
     fn anchored_provider_set_sidecar_deletion_is_permanent_on_reopen() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
         let checkpoint = PublicationProviderAttestationSetCheckpointV1::new(
             operation_id,
@@ -2977,7 +2978,7 @@ private_key = "{}"
             .runtime
             .persist_attestation_set_checkpoint(&checkpoint)
             .expect("install provider set sidecar");
-        let mut reopened = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut reopened = rebase_fixture();
         reopened
             .runtime
             .bind_publication_state_root(state.path())
@@ -2988,7 +2989,7 @@ private_key = "{}"
             .expect("reopened runtime validates the exact anchored set sidecar");
         let relative = provider_attestation_set_checkpoint_relative_path(operation_id, 1);
         fs::remove_file(state.path().join(relative)).expect("delete anchored set sidecar fixture");
-        let mut deleted_reopen = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut deleted_reopen = rebase_fixture();
         deleted_reopen
             .runtime
             .bind_publication_state_root(state.path())
@@ -3002,7 +3003,7 @@ private_key = "{}"
     }
     #[test]
     fn anchored_provider_transaction_sidecar_deletion_is_permanent_on_reopen() {
-        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
         let expected_location_revision = fixture.page.archive.location_revision;
         let attestation = coordinator_provider_attestations(&fixture)[0].clone();
@@ -3038,7 +3039,7 @@ private_key = "{}"
             .expect("bind checkpoint writer")
             .install_immutable(&relative, &encoded)
             .expect("install provider transaction sidecar");
-        let mut reopened = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut reopened = rebase_fixture();
         reopened
             .runtime
             .bind_publication_state_root(state.path())
@@ -3060,7 +3061,7 @@ private_key = "{}"
         );
         fs::remove_file(state.path().join(&relative))
             .expect("delete anchored transaction sidecar fixture");
-        let mut deleted_reopen = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut deleted_reopen = rebase_fixture();
         deleted_reopen
             .runtime
             .bind_publication_state_root(state.path())
@@ -3101,7 +3102,7 @@ private_key = "{}"
     }
     #[test]
     fn provider_attestation_rejection_rebases_only_from_a_covering_advanced_snapshot() {
-        let mut lagging = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut lagging = rebase_fixture();
         let rejection_height = lagging.page.snapshot.finalized_height + 1;
         let server = serve_rebase_fixture_page(&mut lagging);
         let error = lagging
@@ -3116,7 +3117,7 @@ private_key = "{}"
         assert_eq!(error.code(), "PROVIDER_ATTESTATION_FINALIZED_QUERY_PENDING");
         assert_eq!(error.class(), PublicationBackendFailureClass::Retryable);
         server.join().expect("lagging finalized query server");
-        let mut unchanged = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut unchanged = rebase_fixture();
         let signed_revision = unchanged.page.archive.location_revision;
         advance_rebase_page(&mut unchanged, signed_revision);
         let rejection_height = unchanged.page.snapshot.finalized_height;
@@ -3133,7 +3134,7 @@ private_key = "{}"
         assert_eq!(error.code(), "PROVIDER_ATTESTATION_REGISTRATION_TERMINAL");
         assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
         server.join().expect("unchanged finalized query server");
-        let mut advanced = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut advanced = rebase_fixture();
         let signed_revision = advanced.page.archive.location_revision;
         advance_rebase_page(&mut advanced, signed_revision + 1);
         let rejection_height = advanced.page.snapshot.finalized_height;
@@ -3151,7 +3152,7 @@ private_key = "{}"
             signed_revision + 1
         );
         server.join().expect("advanced finalized query server");
-        let missing_height = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let missing_height = rebase_fixture();
         let error = missing_height
             .runtime
             .provider_attestation_rejection_rebase_revision(
@@ -3169,7 +3170,7 @@ private_key = "{}"
     }
     #[test]
     fn provider_attestation_sidecar_paths_are_deterministic_and_disjoint() {
-        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let fixture = rebase_fixture();
         let operation_id = fixture.request.operation_id();
         let attestation = &coordinator_provider_attestations(&fixture)[0];
         let provider_id = attestation.key().provider_id;
@@ -3268,7 +3269,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_recovers_preexisting_exact_location_without_submission() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         let location = coordinator_location(&fixture);
         advance_rebase_page(&mut fixture, 2);
         fixture.page.archive.location_ids = vec![location.location_id];
@@ -3293,7 +3294,7 @@ private_key = "{}"
     }
     #[test]
     fn archive_location_page_rejects_future_height_and_revision_items() {
-        let fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let fixture = rebase_fixture();
         let mut page = fixture.page.clone();
         let mut location = coordinator_location(&fixture);
         page.archive.location_revision = 2;
@@ -3315,7 +3316,7 @@ private_key = "{}"
     }
     #[test]
     fn preparation_rejects_a_same_id_location_changed_after_coordination() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         let mut location = coordinator_location(&fixture);
         location.pin_manifest = ManifestDigest::new([0x88; 32]);
         location.renew_after_epoch = 20;
@@ -3335,7 +3336,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_rejects_same_id_with_another_attestation_set() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         let mut location = coordinator_location(&fixture);
         location.provider_attestation_set_digest =
             MusubiProviderBundleAttestationSetDigestV1::new([0xee; 32]);
@@ -3353,7 +3354,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_rejects_a_coordinator_location_retired_since_its_checkpoint() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         let historical_location = coordinator_location(&fixture);
         fixture.registered.archive.location_revision = 2;
         fixture.registered.archive.location_ids = vec![historical_location.location_id];
@@ -3372,7 +3373,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_uses_current_revision_instead_of_coordinator_cache() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         advance_rebase_page(&mut fixture, 7);
         let server = serve_rebase_fixture_page(&mut fixture);
         let state = fixture
@@ -3407,7 +3408,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_rejects_immutable_archive_conflict() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         advance_rebase_page(&mut fixture, 2);
         fixture.page.archive.registered_at_height += 1;
         let server = serve_rebase_fixture_page(&mut fixture);
@@ -3433,7 +3434,7 @@ private_key = "{}"
             ProjectionMutation::Receipt,
             ProjectionMutation::Registrant,
         ] {
-            let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+            let mut fixture = rebase_fixture();
             advance_rebase_page(&mut fixture, 2);
             match mutation {
                 ProjectionMutation::Network => {
@@ -3518,7 +3519,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_retries_a_snapshot_older_than_registration_evidence() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         fixture.page.snapshot.finalized_height -= 1;
         fixture.page.snapshot.finalized_block_hash = [0x89; 32];
         fixture.page.snapshot.index_revision -= 1;
@@ -3533,7 +3534,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_rejects_mutable_change_at_the_same_snapshot() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         fixture.page.archive.location_revision += 1;
         let server = serve_rebase_fixture_page(&mut fixture);
         let error = fixture
@@ -3546,7 +3547,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_retries_a_regressed_location_revision() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         fixture.registered.archive.location_revision = 3;
         fixture.response.archive.location_revision = 3;
         if let MusubiStorageLocationDispositionV1::NeedsRegistration {
@@ -3568,7 +3569,7 @@ private_key = "{}"
     }
     #[test]
     fn finalized_rebase_rejects_exhausted_location_revision() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         advance_rebase_page(&mut fixture, u64::MAX);
         let server = serve_rebase_fixture_page(&mut fixture);
         let error = fixture
@@ -3581,7 +3582,7 @@ private_key = "{}"
     }
     #[test]
     fn location_transaction_waits_for_its_finalized_anchor_and_fails_closed_without_rebase() {
-        let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut fixture = rebase_fixture();
         let intent = rebase_location_intent(&fixture);
         advance_rebase_page(&mut fixture, intent.expected_location_revision);
         let server = serve_rebase_fixture_page(&mut fixture);
@@ -3624,7 +3625,7 @@ private_key = "{}"
         reason = "the cases jointly cover every terminal archive-location rebase outcome"
     )]
     fn location_transaction_records_rebase_expiry_application_and_later_retirement() {
-        let mut rejected = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut rejected = rebase_fixture();
         let rejected_intent = rebase_location_intent(&rejected);
         advance_rebase_page(
             &mut rejected,
@@ -3656,7 +3657,7 @@ private_key = "{}"
             ) if block_height == rejected_height
         ));
         server.join().expect("finalized query server");
-        let mut expired = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut expired = rebase_fixture();
         let expired_intent = rebase_location_intent(&expired);
         advance_rebase_page(&mut expired, expired_intent.expected_location_revision);
         let server = serve_rebase_fixture_page(&mut expired);
@@ -3682,7 +3683,7 @@ private_key = "{}"
             })
         ));
         server.join().expect("finalized query server");
-        let mut applied = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut applied = rebase_fixture();
         let applied_intent = rebase_location_intent(&applied);
         let location = coordinator_location(&applied);
         advance_rebase_page(&mut applied, applied_intent.expected_location_revision + 1);
@@ -3711,7 +3712,7 @@ private_key = "{}"
             ) if observed == applied_height
         ));
         server.join().expect("finalized query server");
-        let mut retired = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
+        let mut retired = rebase_fixture();
         let retired_intent = rebase_location_intent(&retired);
         advance_rebase_page(&mut retired, retired_intent.expected_location_revision + 2);
         let applied_height = retired.page.snapshot.finalized_height;
@@ -3980,10 +3981,6 @@ private_key = "{}"
         );
     }
 }
-
-#[cfg(test)]
-#[path = "persistence_frame_fixture.rs"]
-mod persistence_frame_fixture;
 
 #[cfg(test)]
 #[path = "publication_runtime/frame_identity_tests.rs"]

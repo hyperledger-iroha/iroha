@@ -2847,9 +2847,9 @@ pub mod runtime_governance {
     /// Read bounded runtime metrics.
     pub const RUNTIME_METRICS: RouteDescriptor =
         account_compute_get("runtime.metrics", "/v1/runtime/metrics");
-    /// Read node capability metadata.
+    /// Read node-wide compatibility metadata before account registration or submission.
     pub const NODE_CAPABILITIES: RouteDescriptor =
-        signed_get("node.capabilities", "/v1/node/capabilities");
+        public_get("node.capabilities", "/v1/node/capabilities");
     /// Read the authoritative committed privacy capability snapshot.
     pub const PRIVACY_CAPABILITIES: RouteDescriptor =
         signed_get("privacy.capabilities", "/v1/privacy/capabilities");

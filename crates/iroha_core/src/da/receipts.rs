@@ -13,9 +13,9 @@ use iroha_data_model::{
         ingest::{DaIngestReceipt, StoredDaReceipt},
         types::StorageTicketId,
     },
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_model_base::topology::LaneId;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -1042,9 +1042,10 @@ mod tests {
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, StorageTicketId},
         },
-        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use norito::to_bytes;
     use std::{
         collections::{BTreeMap, BTreeSet},

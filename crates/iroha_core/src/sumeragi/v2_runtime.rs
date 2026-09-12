@@ -2880,9 +2880,9 @@ impl PendingRuntimeEffectBinding {
     /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
     ///
     /// The causal key is derived from the non-decodable post-fsync frame seal
-    /// and complete effect identity. `Apply` is deliberately excluded because
-    /// its pending owner must instead project from the retained Validate
-    /// predecessor after the durable body receipt joins the WAL source.
+    /// and complete effect identity. `Apply` uses the separate Decision body
+    /// join below; its payload-bound publication selects either the linked
+    /// Validate owner or the independently retained Decision-WAL owner.
     pub(super) fn from_exact_live_wal_append(
         wal_identity: &LiveWalFrameIdentity,
         effect: &AdapterEffect,
@@ -2901,6 +2901,90 @@ impl PendingRuntimeEffectBinding {
             return None;
         }
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+    /// Retain the canonical Decision owner for a later standalone Apply.
+    ///
+    /// Cold Decision recovery projects Fetch, Store, Validate, and Apply from
+    /// the exact Decision-Fetch WAL root. Derive that same root here from the
+    /// sealed append and frozen roster, without scheduling a synthetic Fetch
+    /// or borrowing a completed body's runtime owner. The body receipt still
+    /// has to join this source-only seal before lifecycle admission.
+    pub(super) fn from_exact_live_wal_decision_apply(
+        wal_identity: &LiveWalFrameIdentity,
+        effect: &AdapterEffect,
+        context: &wire::HeightContext,
+    ) -> Option<Self> {
+        let AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } = effect
+        else {
+            return None;
+        };
+        if !wal_identity.is_exact()
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.round.context_id != context.id()
+            || certificate.round.height != context.height
+            || certificate.proposal_round.context_id != context.id()
+            || certificate.proposal_round.height != context.height
+            || tag.height() != context.height
+            || certificate.subject != *subject
+        {
+            return None;
+        }
+        let fetch = AdapterEffect::FetchBody {
+            tag: *tag,
+            round: certificate.proposal_round,
+            subject: *subject,
+            manifest: None,
+            certified_sources: context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate.clone()),
+        };
+        let fetch_pending = Self::from_exact_wal_locator(wal_identity.persisted_locator(), &fetch)?;
+        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
+        let pending = Self::from_effect_candidate(
+            *fetch_pending.causal_lifecycle_key(),
+            effect,
+            Some(&candidate),
+        );
+        pending.validate_exact(effect).then_some(pending)
+    }
+    /// Project the Apply role of an already-authenticated Decision Fetch.
+    /// The source projection keeps its independent Fetch role; this inert
+    /// binding only becomes executable inside the sealed Apply handoff.
+    pub(in crate::sumeragi) fn project_decision_fetch_apply_source(
+        &self,
+        fetch: &AdapterEffect,
+        apply: &AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            certificate: Some(certificate),
+            ..
+        } = fetch
+        else {
+            return None;
+        };
+        if !self.validate_exact(fetch)
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.proposal_round != *round
+            || certificate.subject != *subject
+            || !matches!(apply, AdapterEffect::Apply { tag: apply_tag, subject: apply_subject, certificate: apply_certificate }
+                if apply_tag == tag && apply_subject == subject && apply_certificate == certificate)
+        {
+            return None;
+        }
+        let candidate = production_adapter_effect_candidate_binding(apply, None).ok()??;
+        let pending =
+            Self::from_effect_candidate(*self.causal_lifecycle_key(), apply, Some(&candidate));
+        pending.validate_exact(apply).then_some(pending)
     }
     /// Mint the unique pending owner of one recovered Proposal/Timeout control Sign.
     ///
@@ -11284,12 +11368,39 @@ impl RuntimeDriver for SumeragiV2Adapter {
         inherited: Option<&RuntimeCandidateSemanticStatement>,
     ) -> Result<Option<RuntimeEffectCandidateSemantic>, String> {
         let effective_inherited = match effect {
-            AdapterEffect::StoreBody { round, subject, .. }
-            | AdapterEffect::ValidateBody { round, subject, .. } => {
-                match self
-                    .replayed_body_authority_certificate()
+            AdapterEffect::StoreBody {
+                tag,
+                round,
+                subject,
+            }
+            | AdapterEffect::ValidateBody {
+                tag,
+                round,
+                subject,
+            } => {
+                // A current PrepareQC is durable before validation can promote
+                // it to the voting lock. Periodic Store/Validate carriers have
+                // no Fetch parent, so mint their statement from that exact QC
+                // here; otherwise they incorrectly appear to be ordinary
+                // Proposal work without its mandatory replay owner.
+                let current_prepare = self
+                    .current_prepare_authority_certificate()
                     .map_err(|error| error.to_string())?
-                {
+                    .filter(|certificate| {
+                        *tag == self.current_tag()
+                            && certificate.round.context_id == round.context_id
+                            && certificate.round.height == tag.height()
+                            && certificate.round.view == tag.view()
+                            && certificate.proposal_round == *round
+                            && certificate.subject == *subject
+                    });
+                let certificate = match current_prepare {
+                    Some(certificate) => Some(certificate),
+                    None => self
+                        .replayed_body_authority_certificate()
+                        .map_err(|error| error.to_string())?,
+                };
+                match certificate {
                     Some(certificate)
                         if *round == certificate.proposal_round
                             && *subject == certificate.subject =>
@@ -11696,7 +11807,7 @@ enum RuntimeTimeoutVoteOriginBinding {
     /// semantic protocol message.
     Mismatch {
         signer: u32,
-        semantic_origin: iroha_data_model::peer::PeerId,
+        semantic_origin: iroha_model_base::peer::PeerId,
     },
 }
 /// Immutable owner retained for one roster source in a timeout-recovery
@@ -18108,6 +18219,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         AdapterError,
     > {
         self.driver.replayed_decision_key()
+    }
+    /// Return the full durable current Prepare independently of the voting lock.
+    pub(crate) fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, AdapterError> {
+        self.driver.current_prepare_authority_certificate()
     }
     /// Return the complete durable Prepare/Commit authority for the retained body.
     pub(crate) fn replayed_body_authority_certificate(

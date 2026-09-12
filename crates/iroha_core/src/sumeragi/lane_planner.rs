@@ -14,9 +14,10 @@ use iroha_data_model::{
     },
     block::consensus_v2 as wire,
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayQuorumContext},
-    peer::PeerId,
+    nexus::{LaneRelayEnvelope, LaneRelayQuorumContext},
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::Encode;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 #[cfg(test)]

@@ -5,10 +5,10 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
-    domain::DomainId,
     fastpq::{FastpqSourceLaneV1, TransferDeltaTranscript, TransferSmtWitness},
-    nexus::LaneId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 

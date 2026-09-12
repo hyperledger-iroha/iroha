@@ -25,9 +25,7 @@ use iroha::{
         },
         isi::{Log, SetKeyValue},
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
-        metadata::Metadata,
-        nexus::{DataSpaceId, LaneCatalog, LaneId},
-        peer::PeerId,
+        nexus::LaneCatalog,
         prelude::{
             FindAccountById, HashOf, QueryBuilderExt, SignedTransaction, TransactionEntrypoint,
         },
@@ -55,7 +53,10 @@ use iroha_core::{
     queue::{LaneQueueReservationKeyV1, RoutingPlan},
     sumeragi::network_topology::commit_quorum_from_len,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
@@ -7743,20 +7744,18 @@ mod tests {
     use iroha::{
         client::TxConfirmationStatus,
         crypto::Hash,
-        data_model::{
-            block::consensus::{
-                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
-                COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
-                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-            },
-            nexus::{DataSpaceId, LaneId},
+        data_model::block::consensus::{
+            COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+            COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::codec::Encode;
     use std::{collections::BTreeSet, fs, time::Duration};
     use tempfile::tempdir;

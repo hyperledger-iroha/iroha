@@ -14,10 +14,10 @@ use iroha_data_model::{
             GovernanceTag, MetadataEntry, MetadataVisibility, RetentionPolicy,
         },
     },
-    nexus::LaneId,
     sorafs::pin_registry::StorageClass,
     taikai::TaikaiAvailabilityClass,
 };
+use iroha_model_base::topology::LaneId;
 use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::ALICE_KEYPAIR;
 use iroha_torii::{

@@ -3,6 +3,7 @@ pub use self::model::*;
 use super::*;
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
@@ -509,7 +510,7 @@ impl_json_via_norito_bytes!(
 pub mod bridge {
     //! Bridge events
     use super::*;
-    use crate::nexus::LaneId;
+    use iroha_model_base::topology::LaneId;
 
     /// Ledger event carrying one authenticated SCCP replay-forest transition.
     #[derive(
@@ -760,6 +761,7 @@ impl_json_via_norito_bytes!(
 mod peer {
     //! This module contains `PeerEvent` and its impls
     use super::*;
+    use iroha_model_base::peer::PeerId;
     data_event! {
         #[has_origin(origin = Peer)]
         /// Event emitted when peers join or leave the network view.
@@ -1357,12 +1359,12 @@ mod domain {
     mod model {
         use super::*;
         use crate::{
-            DataSpaceId, LaneId,
             account::AccountId,
             kaigi::{KaigiId, KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiStatus},
             soranet::ticket::TicketEnvelopeV1,
         };
         use iroha_crypto::Hash;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use norito::streaming::{
             Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, SoranetAccessKind,
             SoranetChannelId, SoranetRoute, SoranetStreamTag,
@@ -2660,8 +2662,8 @@ mod event_routing_tests {
         PublicKey,
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
-        domain::DomainId,
     };
+    use iroha_model_base::domain::DomainId;
     #[test]
     fn opaque_asset_definition_events_route_without_domain_wrapper() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").expect("domain");
@@ -2753,7 +2755,7 @@ mod event_routing_tests {
 #[cfg(test)]
 mod tests {
     use super::MetadataChanged;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     #[test]
     fn metadata_changed_json_roundtrip() {
@@ -2823,7 +2825,6 @@ pub mod prelude {
         },
         trigger::{TriggerEvent, TriggerEventSet, TriggerNumberOfExecutionsChanged},
     };
-    pub use crate::{DataSpaceId, LaneId};
 }
 
 #[cfg(test)]

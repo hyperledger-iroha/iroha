@@ -2661,7 +2661,7 @@ mod tests {
                 .active_policy_v1(policy_metadata_v1(1))
                 .expect("active native issuer policy");
             let context = statement_context_v1();
-            let genesis_hash = [0x32; 32];
+            let genesis_hash = *context.network_id.as_bytes();
             let store = BootleLanternInMemoryIssuanceStoreV1::new();
             let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
@@ -2853,7 +2853,7 @@ mod tests {
             Err(BootleLanternIssuanceStoreErrorV1::AuthorizationExists)
         );
         let mut substituted_context = fixture.context.clone();
-        substituted_context.action_index += 1;
+        substituted_context.parameter_digest = PrivacyParameterDigestV1::new(raw(0x87));
         assert_eq!(
             issuer_validate_prepared_blind_issuance_authorization_v1(
                 &substituted_context,
@@ -3477,11 +3477,12 @@ mod tests {
         manifest.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(0x85));
         contexts.push(manifest);
         for context in contexts {
+            let canonical_genesis_hash = *context.network_id.as_bytes();
             let store = fresh_store_v1(fixture);
             let error = issuer_blind_issue_once_with_rng_v1(
                 &fixture.issuer,
                 &context,
-                fixture.genesis_hash,
+                canonical_genesis_hash,
                 &fixture.policy,
                 &fixture.authorization,
                 &fixture.request,
@@ -3500,7 +3501,7 @@ mod tests {
                 fixture.credential.presentation_witness_v1(
                     &statement,
                     &fixture.policy,
-                    fixture.genesis_hash,
+                    canonical_genesis_hash,
                 ),
                 Err(BootleLanternIssuanceErrorV1::CredentialScopeMismatch)
             );
@@ -3519,10 +3520,7 @@ mod tests {
             &mut PanicRng,
         )
         .expect_err("genesis substitution must fail before issuer RNG");
-        assert_eq!(
-            error,
-            BootleLanternIssuanceErrorV1::AuthorizationBindingMismatch
-        );
+        assert_eq!(error, BootleLanternIssuanceErrorV1::CredentialScopeFailed);
         assert_store_remained_fresh_v1(fixture, &store);
         let statement = presentation_statement_v1(fixture.context.clone(), &fixture.policy);
         assert_eq!(

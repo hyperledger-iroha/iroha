@@ -24,7 +24,7 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
     taira_bootle_lantern_issuer_profile_contract_digest_v1,
 };
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     isi::{InstructionBox, privacy::RegisterPrivacyBootleLanternIssuerPolicyV1},
     privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
@@ -32,6 +32,7 @@ use iroha_data_model::{
         PrivacyStatementContextV1,
     },
 };
+use iroha_model_base::chain::ChainId;
 use iroha_torii::privacy_issuance_api::{
     BootleLanternIssuanceActionV1, BootleLanternIssuanceAuthenticatedPrincipalV1,
     BootleLanternIssuanceAuthenticationErrorV1, BootleLanternIssuanceRuntimeProviderBindingsV1,

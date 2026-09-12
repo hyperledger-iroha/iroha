@@ -11,6 +11,8 @@ use iroha_core::{
     state::{State, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
 use std::{borrow::Cow, sync::Arc};
@@ -27,7 +29,7 @@ fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
         "rose".to_owned(),
         NumericSpec::default(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(domain_id.clone()),
     )
     .build(&ALICE_ID);
     let stored_asset_definition_id = asset_definition.id().clone();

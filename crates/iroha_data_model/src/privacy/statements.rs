@@ -2460,7 +2460,7 @@ fn validate_public_balance_scope(
 ) -> Result<(), PrivacyStatementValidationError> {
     if matches!(
         scope,
-        AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+        AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
     ) {
         return Err(PrivacyStatementValidationError::UniversalPublicBalanceScope);
     }

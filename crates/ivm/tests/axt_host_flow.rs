@@ -1,11 +1,10 @@
 //! AXT host flow coverage for DefaultHost and WsvHost.
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    nexus::{
-        AxtFastpqBinding, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId,
-    },
+    nexus::{AxtFastpqBinding, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot},
     prelude::Quantity,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
     axt::{

@@ -10,7 +10,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId, Encode as _, NetworkId,
+    Encode as _, NetworkId,
     account::AccountId,
     block::{
         BlockHeader,
@@ -20,8 +20,9 @@ use iroha_data_model::{
         },
     },
     bridge::{BridgeFinalityAttestationV1, BridgeFinalityProof},
-    peer::PeerId,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use norito::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
 #[cfg(unix)]

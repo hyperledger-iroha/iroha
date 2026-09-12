@@ -1,14 +1,12 @@
 //! Subscription queries and explicit unsigned draft preparation.
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr};
-use iroha_model_base::name::Name;
 use iroha::{
     blocking,
-    data_model::{
-        account::AccountId, asset::AssetDefinitionId,  nft::NftId, trigger::TriggerId,
-    },
+    data_model::{account::AccountId, asset::AssetDefinitionId, nft::NftId, trigger::TriggerId},
     subscriptions::{SubscriptionCreate, SubscriptionUsage},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::subscriptions::{
     SubscriptionCancelMode, SubscriptionListParams, SubscriptionPlanListParams,

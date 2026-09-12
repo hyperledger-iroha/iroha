@@ -1672,12 +1672,11 @@ mod tests {
         account::Account,
         asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             InstructionBox,
             sorafs::{RequestSorafsReserveMovement, SetSorafsReservePolicy},
         },
-        metadata::Metadata,
         permission::{Permission, Permissions},
         sorafs::{
             capacity::ProviderId,
@@ -1688,6 +1687,8 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::json::Json;
     use sorafs_manifest::deal::XorQuantity;
     use std::{

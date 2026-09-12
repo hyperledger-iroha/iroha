@@ -4,8 +4,9 @@ use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::{
     isi::{InstructionBox, kaigi::JoinKaigi},
     kaigi::{KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier},
-    prelude::{AccountId, DomainId},
+    prelude::AccountId,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 #[test]
 fn join_kaigi_roundtrip_preserves_optional_fields() {

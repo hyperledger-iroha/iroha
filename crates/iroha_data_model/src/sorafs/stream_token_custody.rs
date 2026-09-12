@@ -21,7 +21,35 @@ pub const STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1: usize = 16 * 1024;
 pub const STREAM_TOKEN_CUSTODY_RECORD_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.stream-token.custody-control.v1\0";
 
+/// Current-generation signer and attester revocations committed by one custody mutation.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::stream_token_custody::SorafsStreamTokenCustodyRevocationV1"
+)]
+pub struct SorafsStreamTokenCustodyRevocationV1 {
+    /// Revoke the governed signer key generation.
+    pub signer: bool,
+    /// Revoke the governed independent attester key generation.
+    pub attester: bool,
+}
+
 /// One governed mutation with no caller-selected execution provenance.
+///
+/// JSON uses the `action` discriminator and `value` payload, with snake-case action names.
 #[derive(
     Clone,
     Debug,
@@ -39,6 +67,7 @@ pub const STREAM_TOKEN_CUSTODY_RECORD_DOMAIN_V1: &[u8] =
 #[norito_schema(
     name = "iroha_data_model::sorafs::stream_token_custody::SorafsStreamTokenCustodyActionV1"
 )]
+#[norito(tag = "action", content = "value", rename_all = "snake_case")]
 pub enum SorafsStreamTokenCustodyActionV1 {
     /// Exact canonical Manifest `StreamTokenCustodyPolicyV1` frame.
     #[codec(index = 0)]
@@ -48,12 +77,7 @@ pub enum SorafsStreamTokenCustodyActionV1 {
     Enroll(Vec<u8>),
     /// Strictly set one or both current-generation revocation flags; never clear a flag.
     #[codec(index = 2)]
-    Revoke {
-        /// Revoke the governed signer key generation.
-        signer: bool,
-        /// Revoke the governed independent attester key generation.
-        attester: bool,
-    },
+    Revoke(SorafsStreamTokenCustodyRevocationV1),
 }
 
 /// Immutable native control transition, hashed without a self-referential current block hash.
@@ -97,3 +121,6 @@ pub struct StreamTokenCustodyControlRecordV1 {
     #[norito(json = "crate::json_helpers::base64_vec")]
     pub control_state: Vec<u8>,
 }
+
+#[cfg(test)]
+mod tests;

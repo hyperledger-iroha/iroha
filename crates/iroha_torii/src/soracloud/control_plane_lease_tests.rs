@@ -4,7 +4,7 @@ fn fixture_control_plane_service_lease(
 ) -> SoraServiceLeaseStateV1 {
     let validator_public_key = checked_test_keypair(validator_seed).public_key().clone();
     let validator_account_id = AccountId::new(validator_public_key.clone());
-    let validator_peer_id = iroha_data_model::peer::PeerId::from(validator_public_key).to_string();
+    let validator_peer_id = iroha_model_base::peer::PeerId::from(validator_public_key).to_string();
     SoraServiceLeaseStateV1 {
         schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
         economic_clock:
@@ -135,7 +135,7 @@ fn control_plane_audit_event_projects_lease_reporting_epoch_rollover() {
     event.action = SoraServiceLifecycleActionV1::LeaseReportingEpochRollover;
     event.from_version = Some(event.to_version.clone());
     let reporter_account_id = AccountId::new(event.signer.clone());
-    let reporter_peer_id = iroha_data_model::peer::PeerId::from(event.signer.clone()).to_string();
+    let reporter_peer_id = iroha_model_base::peer::PeerId::from(event.signer.clone()).to_string();
     let placement_incarnation = Hash::new(b"control-plane-rollover-placement");
     event.lease_usage = Some(iroha_data_model::soracloud::SoraServiceLeaseUsageAuditV1 {
         schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,

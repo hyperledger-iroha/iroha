@@ -2728,7 +2728,7 @@ def preflight_cli_surfaces(
     surfaces = [*CLI_SURFACES, *INROU_CANARY_CLI_SURFACES]
     if full_doctor:
         surfaces.append(
-            ("iroha", ("taira", "doctor"), ("--public-root", "--json"))
+            ("iroha", ("taira", "doctor"), ("--scope", "--public-root", "--json"))
         )
     def validate_surface(
         surface_spec: tuple[str, tuple[str, ...], tuple[str, ...]],
@@ -3037,9 +3037,9 @@ def wait_for_cluster(
     timeout: float,
     request: Request,
     *,
-    above: int | None = None,
+    minimum_height: int | None = None,
 ) -> list[int]:
-    """Wait for four ready peers at one converged height, optionally advanced."""
+    """Wait for four ready peers at one height meeting the required committed floor."""
 
     deadline = time.monotonic() + timeout
     last = "not reachable"
@@ -3064,9 +3064,11 @@ def wait_for_cluster(
 
         try:
             heights = parallel_map(roots, ready_height)
-            if len(set(heights)) == 1 and (above is None or heights[0] > above):
+            if len(set(heights)) == 1 and (
+                minimum_height is None or heights[0] >= minimum_height
+            ):
                 return heights
-            last = f"heights={heights}, required_above={above}"
+            last = f"heights={heights}, minimum_height={minimum_height}"
         except DevnetError as error:
             last = str(error)
         time.sleep(0.5)
@@ -3161,6 +3163,8 @@ def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
             str(target / "client.toml"),
             "taira",
             "doctor",
+            "--scope",
+            "full",
             "--public-root",
             root.rstrip("/"),
             "--json",
@@ -5620,9 +5624,9 @@ def require_inrou_restart_proof(
         type(height_before) is not int
         or type(height_after) is not int
         or height_before <= 0
-        or height_after <= height_before
+        or height_after < height_before
     ):
-        fail("Inrou restart proof does not show a strictly advancing cluster height")
+        fail("Inrou restart proof does not preserve the committed cluster height")
     for field in ("start_script_sha256", "stop_script_sha256"):
         digest = value.get(field)
         if not isinstance(digest, str) or LOWER_32_BYTE_HEX_RE.fullmatch(digest) is None:
@@ -7875,7 +7879,9 @@ def qualify_inrou_host_restart(
         roots,
         timeout_seconds,
         request,
-        above=height_before,
+        # Restart submits no transaction; an idle chain produces no empty blocks.
+        # Preserve its committed floor and prove the exact workload below.
+        minimum_height=height_before,
     )
     require_cluster_build_identity(
         roots,
@@ -8129,7 +8135,7 @@ def up(
         # Health/readiness can become available before genesis is committed.
         # Do not quote or submit a signed transaction against the empty height-0
         # state, where the freshly generated authority is not registered yet.
-        baseline = wait_for_cluster(roots, args.timeout_seconds, request, above=0)
+        baseline = wait_for_cluster(roots, args.timeout_seconds, request, minimum_height=1)
         require_cluster_build_identity(
             roots,
             source_observation["git_head"],
@@ -8196,7 +8202,9 @@ def up(
         )
         require_applied_transaction(waited, transaction_hash)
         print("Signed smoke reached Applied; waiting for four-peer convergence...", flush=True)
-        final = wait_for_cluster(roots, args.timeout_seconds, request, above=max(baseline))
+        final = wait_for_cluster(
+            roots, args.timeout_seconds, request, minimum_height=max(baseline) + 1
+        )
         check_all_mcp(roots, request)
         inrou_canary_outcome = run_inrou_canary(
             target,
@@ -8215,7 +8223,7 @@ def up(
             roots,
             args.timeout_seconds,
             request,
-            above=max(final),
+            minimum_height=max(final) + 1,
         )
         restart_peer_index = peer_index_for_local_placement(
             target,

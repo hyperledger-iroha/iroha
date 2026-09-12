@@ -17,7 +17,6 @@ use iroha_data_model::{
     NetworkId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus::{ExecKv, ExecWitness},
-    domain::DomainId,
     execution_witness::{
         ExecutionWitnessKeyTagV1, FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
     },
@@ -30,8 +29,9 @@ use iroha_data_model::{
         decode_fastpq_ordinary_source_statement_archive_v1,
         verify_fastpq_ordinary_source_statement_archive_v1,
     },
-    nexus::DataSpaceId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 

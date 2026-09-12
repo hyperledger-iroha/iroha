@@ -3,6 +3,7 @@ use iroha_data_model::{
     isi::{BuiltInInstruction, register::RegisterPeerWithPop, rwa::*},
     prelude::*,
 };
+use iroha_model_base::domain::DomainId;
 use norito::codec::Encode;
 fn assert_instruction<T: Instruction + BuiltInInstruction + Clone + Encode + 'static>() {}
 #[test]

@@ -16,7 +16,6 @@ use fastpq_prover::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    DomainId,
     asset::AssetDefinitionId,
     fastpq::{
         FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
@@ -26,8 +25,10 @@ use iroha_data_model::{
         FastpqPublicInputs, FastpqPublicTransferDeltaV1, FastpqPublicTransferStatementV1,
         FastpqPublicTransferTranscriptV1, FastpqStateTransition,
     },
-    nexus::{AxtFastpqBinding, AxtProofEnvelope, DataSpaceId},
+    nexus::{AxtFastpqBinding, AxtProofEnvelope},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{NoritoSerialize, core::DecodeLimits};

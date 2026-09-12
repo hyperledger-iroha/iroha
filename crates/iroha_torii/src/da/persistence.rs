@@ -8,9 +8,9 @@ use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     da::{ingest::StoredDaReceipt, prelude::*},
-    nexus::LaneId,
 };
 use iroha_logger::{debug, warn};
+use iroha_model_base::topology::LaneId;
 use norito::{
     decode_from_bytes,
     json::{self, JsonDeserialize, JsonSerialize},

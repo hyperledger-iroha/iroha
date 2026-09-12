@@ -114,6 +114,28 @@ impl ProductionLifecycleOwnerV1 {
         assert!(self.coordinator.fault.is_none());
         assert!(self.coordinator.active_lease.is_none());
         assert_eq!(self.apply_ordinals_for_retry_test().len(), applies);
+        for apply_ordinal in self.apply_ordinals_for_retry_test() {
+            let apply = &self.coordinator.records[&apply_ordinal];
+            assert_ne!(
+                apply.owner.causal_root(),
+                snapshot.record.owner.causal_root(),
+                "a released Apply must retain its current Decision-WAL owner"
+            );
+            assert_eq!(
+                apply.owner.first_admission_ordinal(),
+                apply_ordinal,
+                "the standalone Apply must start its own admitted owner"
+            );
+            assert_eq!(
+                self.coordinator
+                    .records
+                    .values()
+                    .filter(|record| record.owner == apply.owner)
+                    .count(),
+                1,
+                "no historical body row may share the standalone Apply owner"
+            );
+        }
         let (_, ledger) =
             super::ledger::LifecycleLedgerStoreV1::open(root, self.coordinator.active_context)
                 .expect("cold-open the actual terminal and successor rows");
@@ -162,8 +184,8 @@ impl ProductionLifecycleOwnerV1 {
 }
 
 impl ProductionLifecycleOwnerV1 {
-    /// Prove the actual later Commit Validate addresses the retained terminal key.
-    pub(in crate::sumeragi) fn assert_resolved_validate_key_collision_for_test(
+    /// Prove Commit validation has its own canonical key beside the immutable Prepare result.
+    pub(in crate::sumeragi) fn assert_resolved_validate_decision_identity_for_test(
         &self,
         snapshot: &ResolvedValidateOwnerSnapshotForTest,
         tag: crate::sumeragi::v2_core::EventTag,
@@ -172,6 +194,11 @@ impl ProductionLifecycleOwnerV1 {
         use crate::sumeragi::v2_runtime::{
             RuntimeEffectOwnership, bind_adapter_effect_batch_ownership,
         };
+        assert_eq!(
+            certificate.phase,
+            iroha_data_model::block::consensus_v2::GlobalPhase::Commit
+        );
+        assert_eq!(snapshot.record.key.phase(), super::LifecyclePhase::Validate);
         let fetch = crate::sumeragi::v2::AdapterEffect::FetchBody {
             tag,
             round: certificate.proposal_round,
@@ -213,12 +240,24 @@ impl ProductionLifecycleOwnerV1 {
         )
         .expect("project the actual later Commit Validate");
         assert_eq!(
-            projected.key, snapshot.record.key,
-            "this regression must cross the real terminal-key collision, not a distinct Validate identity"
+            projected.key.phase(),
+            super::LifecyclePhase::ValidateDecision
         );
+        assert_eq!(projected.work_class, LifecycleWorkClass::Validate);
+        let mut decision_key = snapshot.record.key;
+        decision_key.phase = super::LifecyclePhase::ValidateDecision;
         assert_eq!(
-            self.coordinator.key_index.get(&projected.key),
+            projected.key, decision_key,
+            "the same certified body must differ only by its Prepare or Decision authority phase"
+        );
+        assert_ne!(projected.key, snapshot.record.key);
+        assert_eq!(
+            self.coordinator.key_index.get(&snapshot.record.key),
             Some(&snapshot.record.ordinal)
+        );
+        assert!(
+            !self.coordinator.key_index.contains_key(&projected.key),
+            "replaying the completed Prepare result must not admit a replacement Validate owner"
         );
     }
 }
@@ -397,6 +436,19 @@ impl ProductionLifecycleOwnerV1 {
             metadata: self.coordinator.durable_records[&ordinal].clone(),
             ledger_record,
         }
+    }
+
+    /// Prove a later reducer occurrence preserves the original live Report in full.
+    pub(in crate::sumeragi) fn assert_invalid_body_report_retained_for_retry_test(
+        &self,
+        snapshot: &InvalidBodyReportOwnerSnapshotForTest,
+        root: &std::path::Path,
+    ) {
+        let current =
+            self.invalid_body_report_snapshot_for_retry_test(snapshot.record.ordinal, root);
+        assert_eq!(current.record, snapshot.record);
+        assert_eq!(current.metadata, snapshot.metadata);
+        assert_eq!(current.ledger_record, snapshot.ledger_record);
     }
 
     /// Prove restart retains one executable cold output and no duplicate live carrier.
@@ -631,6 +683,120 @@ impl ProductionLifecycleOwnerV1 {
                 .expect("same persisted Sign ordinal")
                 .encode(),
             snapshot.ledger_record
+        );
+    }
+}
+
+/// Exact durable Apply identity captured before closing its live owner.
+pub(in crate::sumeragi) struct ReleasedApplyOwnerSnapshotForTest {
+    record: super::LifecycleRecord,
+    metadata: super::schema::DurableRecordMetadata,
+    ledger_record: Vec<u8>,
+    ledger_bytes: Vec<u8>,
+}
+
+impl ProductionLifecycleOwnerV1 {
+    /// Capture the one published Ready Apply and its complete durable ledger.
+    pub(in crate::sumeragi) fn released_apply_owner_snapshot_for_test(
+        &self,
+        root: &std::path::Path,
+    ) -> ReleasedApplyOwnerSnapshotForTest {
+        use norito::codec::Encode as _;
+        let applies = self.apply_ordinals_for_retry_test();
+        assert_eq!(applies.len(), 1, "one actual released Apply before restart");
+        let ordinal = applies[0];
+        let record = self.coordinator.records[&ordinal].clone();
+        assert_eq!(record.state, LifecycleState::Ready);
+        assert!(self.coordinator.ready_index.contains(&ordinal));
+        assert_eq!(record.owner.first_admission_ordinal(), ordinal);
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        let (_, ledger) =
+            super::ledger::LifecycleLedgerStoreV1::open(root, self.coordinator.active_context)
+                .expect("read the published released Apply ledger");
+        let ledger_record = ledger
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == ordinal)
+            .expect("the released Apply is durable before restart")
+            .encode();
+        ReleasedApplyOwnerSnapshotForTest {
+            record,
+            metadata: self.coordinator.durable_records[&ordinal].clone(),
+            ledger_record,
+            ledger_bytes: std::fs::read(root.join("lifecycle-ledger-v1.norito"))
+                .expect("read complete published ledger bytes"),
+        }
+    }
+
+    /// Require the actual cold consumer to retain the same row and install one
+    /// recovered Decision Apply carrier without changing its source or ledger.
+    pub(in crate::sumeragi) fn assert_released_apply_owner_cold_for_test(
+        &self,
+        snapshot: &ReleasedApplyOwnerSnapshotForTest,
+        root: &std::path::Path,
+    ) {
+        use norito::codec::Encode as _;
+        let ordinal = snapshot.record.ordinal;
+        let record = &self.coordinator.records[&ordinal];
+        assert_eq!(
+            (
+                record.key,
+                record.owner,
+                record.ordinal,
+                record.work_class,
+                record.stage,
+                record.state
+            ),
+            (
+                snapshot.record.key,
+                snapshot.record.owner,
+                snapshot.record.ordinal,
+                snapshot.record.work_class,
+                snapshot.record.stage,
+                snapshot.record.state
+            ),
+        );
+        assert_eq!(
+            self.coordinator.durable_records[&ordinal],
+            snapshot.metadata
+        );
+        assert_eq!(self.coordinator.key_index.get(&record.key), Some(&ordinal));
+        assert_eq!(
+            self.coordinator
+                .owner_index
+                .get(&record.owner.causal_root()),
+            Some(&record.owner)
+        );
+        assert!(self.coordinator.ready_index.contains(&ordinal));
+        assert_eq!(self.apply_ordinals_for_retry_test(), vec![ordinal]);
+        let carrier = self
+            .registry
+            .registry_for_test()
+            .finalization_entry_kind_census()
+            .1
+            .into_iter()
+            .filter(|(entry, _)| *entry == ordinal)
+            .collect::<Vec<_>>();
+        assert_eq!(carrier, vec![(ordinal, "DurableRecoveredDecisionApply")]);
+        self.assert_recovered_output_and_registry_census_for_retry_test();
+        assert!(self.coordinator.active_lease.is_none());
+        assert!(self.coordinator.fault.is_none());
+        let (_, ledger) =
+            super::ledger::LifecycleLedgerStoreV1::open(root, self.coordinator.active_context)
+                .expect("read the actual recovered Apply ledger");
+        assert_eq!(
+            ledger
+                .records()
+                .iter()
+                .find(|row| row.ordinal() == ordinal)
+                .expect("the same Apply remains durable")
+                .encode(),
+            snapshot.ledger_record
+        );
+        assert_eq!(
+            std::fs::read(root.join("lifecycle-ledger-v1.norito"))
+                .expect("read complete recovered ledger bytes"),
+            snapshot.ledger_bytes
         );
     }
 }

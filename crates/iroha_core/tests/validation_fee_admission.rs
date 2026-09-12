@@ -20,7 +20,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
-    domain::DomainId,
     events::{
         EventFilterBox,
         time::{ExecutionTime, TimeEventFilter},
@@ -39,7 +38,6 @@ use iroha_data_model::{
         SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
         governance::ParliamentSortitionRequestRegistrationV1,
     },
-    nexus::DataSpaceId,
     parameter::Parameter,
     prelude::*,
     smart_contract::{
@@ -62,6 +60,9 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::MultisigPropose;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
 use sha2::{Digest as _, Sha256};

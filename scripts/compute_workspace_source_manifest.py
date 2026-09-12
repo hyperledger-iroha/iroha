@@ -172,6 +172,44 @@ def _git_unmerged_paths(root: Path) -> list[str]:
     return sorted(paths, key=os.fsencode)
 
 
+def _root_excluded_policy_directories(root: Path) -> tuple[list[str], str | None]:
+    """Prune discovery only below directories excluded by the tracked root policy.
+
+    Git cannot reinclude a descendant of an excluded directory. Nested policies
+    there are ineffective; tracked source files remain included by the separate
+    unchanged source inventory. Bind root-policy bytes across this optimization.
+    """
+
+    if ".gitignore" not in _git_paths(root, "ls-files", "--cached", "--", ".gitignore"):
+        return [], None
+    policy_before = _manifest_for_paths(root, [".gitignore"])
+    with os.scandir(root) as entries:
+        directories = sorted(
+            (os.fsencode(entry.name + "/") for entry in entries
+             if entry.name != ".git" and entry.is_dir(follow_symlinks=False))
+        )
+    if not directories:
+        return [], policy_before
+    result = subprocess.run(
+        _git_command(root, "check-ignore", "--no-index", "--verbose", "-z", "--stdin"),
+        input=b"".join(path + b"\0" for path in directories), cwd=root,
+        env=_git_read_only_environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    fields = result.stdout.split(b"\0")
+    if fields.pop() != b"" or len(fields) % 4:
+        raise RuntimeError("git returned malformed root directory ignore rules")
+    excluded = []
+    for offset in range(0, len(fields), 4):
+        policy, _line, pattern, directory = fields[offset:offset + 4]
+        if directory not in directories:
+            raise RuntimeError("git returned an unexpected root directory")
+        if policy == b".gitignore" and pattern and not pattern.startswith(b"!"):
+            excluded.append(":(top,exclude,literal)" + os.fsdecode(directory[:-1]))
+    return excluded, policy_before
+
+
 def _git_source_paths(root: Path) -> list[str]:
     unmerged = _git_unmerged_paths(root)
     if unmerged:
@@ -180,6 +218,7 @@ def _git_source_paths(root: Path) -> list[str]:
             f"workspace contains unresolved merge entries: {rendered}"
         )
     _reject_active_git_operations(root)
+    excluded_policy_directories, root_policy_before = _root_excluded_policy_directories(root)
     untracked_ignore_policy = _git_paths(
         root,
         "ls-files",
@@ -187,7 +226,11 @@ def _git_source_paths(root: Path) -> list[str]:
         "--",
         ":(top).gitignore",
         ":(glob)**/.gitignore",
+        *excluded_policy_directories,
     )
+    if (root_policy_before is not None
+            and _manifest_for_paths(root, [".gitignore"]) != root_policy_before):
+        raise DirtyReleaseSourceError("root ignore policy changed during policy discovery")
     untracked_ignore_policy = _effective_untracked_ignore_policy(
         root, untracked_ignore_policy
     )

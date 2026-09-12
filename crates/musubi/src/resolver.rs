@@ -1415,9 +1415,9 @@ mod tests {
             MusubiReasonV1, MusubiReleaseDigestV1, MusubiReleaseSelectionStateV1,
             MusubiReleaseYankV1, MusubiStorageAvailabilityV1,
         },
-        nexus::DataSpaceId,
         prelude::{Algorithm, KeyPair},
     };
+    use iroha_model_base::topology::DataSpaceId;
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
@@ -3504,5 +3504,72 @@ mod tests {
             resolve(locked),
             Err(ResolverError::LockChangeRequired)
         ));
+    }
+    #[test]
+    fn production_depth_corridor_accepts_limit_and_rejects_next_edge() {
+        let snap = snapshot(36);
+        let depth = usize::from(MUSUBI_MAX_RESOLUTION_DEPTH_V1);
+        let packages = (0..=depth)
+            .map(|index| package(&format!("depth{index:03}")))
+            .collect::<Vec<_>>();
+        let roots = vec![root(vec![root_dependency(
+            "entry",
+            MusubiDependencyKindV1::Normal,
+            &packages[0],
+            "*",
+        )])];
+        let chain_rows = |count: usize| {
+            (0..count)
+                .map(|index| {
+                    let dependencies = if index + 1 < count {
+                        vec![dependency("next", &packages[index + 1], "*")]
+                    } else {
+                        Vec::new()
+                    };
+                    row(&packages[index], "1.0.0", dependencies, snap)
+                })
+                .collect::<Vec<_>>()
+        };
+        // Returning each result also destroys the search continuations and their
+        // shared conflict chains on this ordinary test worker's stack.
+        let exact_rows = chain_rows(depth);
+        let exact = resolve(request(roots.clone(), exact_rows.clone(), snap))
+            .expect("a chain at the production depth bound resolves");
+        assert_eq!(exact.lockfile.nodes.len(), depth);
+        assert_eq!(
+            root_selection(&exact.lockfile, "entry").package,
+            packages[0]
+        );
+        let mut reversed_exact_rows = exact_rows;
+        reversed_exact_rows.reverse();
+        let reversed_exact = resolve(request(roots.clone(), reversed_exact_rows, snap))
+            .expect("input order preserves the exact-bound solution");
+        assert_eq!(reversed_exact, exact);
+
+        let overflow_rows = chain_rows(depth + 1);
+        let overflow = resolve(request(roots.clone(), overflow_rows.clone(), snap))
+            .expect_err("the next dependency exceeds the production depth bound");
+        let mut reversed_overflow_rows = overflow_rows;
+        reversed_overflow_rows.reverse();
+        let reversed_overflow = resolve(request(roots, reversed_overflow_rows, snap))
+            .expect_err("input order preserves the depth conflict");
+        assert_eq!(reversed_overflow, overflow);
+        let ResolverError::Conflict(conflict) = overflow else {
+            panic!("expected depth-limit conflict");
+        };
+        assert_eq!(conflict.reason, ConflictReasonV1::DepthLimit);
+        assert_eq!(conflict.chain.len(), depth + 1);
+        assert_eq!(conflict.chain[0].alias.as_ref(), "entry");
+        assert_eq!(conflict.chain[0].package, packages[0]);
+        let terminal = conflict.chain.last().expect("terminal overflow edge");
+        assert_eq!(terminal.alias.as_ref(), "next");
+        assert_eq!(terminal.package, packages[depth]);
+        assert_eq!(
+            terminal.parent,
+            ConflictParentV1::Release(MusubiReleaseIdV1::new(
+                packages[depth - 1].clone(),
+                version("1.0.0"),
+            ))
+        );
     }
 }

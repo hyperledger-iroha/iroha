@@ -16,10 +16,10 @@ use iroha_data_model::{
         ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo,
         MaxCyclesExceedsUpperBoundInfo,
     },
-    metadata::Metadata,
     runtime::{RuntimeUpgradeManifest, RuntimeUpgradeStatus},
     smart_contract::manifest::ContractManifest,
 };
+use iroha_model_base::metadata::Metadata;
 use mv::storage::StorageReadOnly;
 use std::{collections::BTreeSet, num::NonZeroU64};
 /// Convert deterministic program preparation failures into public admission errors.
@@ -361,12 +361,12 @@ pub fn map_vm_error_with_context_to_validation(
 mod tests {
     use super::*;
     use iroha_data_model::{
-        metadata::Metadata,
         runtime::{
             RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
         },
         smart_contract::manifest::ContractManifest,
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     fn manifest_with_hashes(code_hash: Option<Hash>, abi_hash: Option<Hash>) -> ContractManifest {

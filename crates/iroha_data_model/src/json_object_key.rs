@@ -105,13 +105,6 @@ impl JsonObjectKeyOwned for crate::asset::AssetId {
     }
 }
 
-impl_display_object_key!(crate::domain::DomainId);
-impl JsonObjectKeyOwned for crate::domain::DomainId {
-    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
-        crate::domain::DomainId::parse_json_object_key(key)
-    }
-}
-
 impl_display_object_key!(crate::nft::NftId);
 impl JsonObjectKeyOwned for crate::nft::NftId {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
@@ -124,7 +117,8 @@ impl JsonObjectKeyOwned for crate::nft::NftId {
             ));
         }
         let name = <Name as JsonObjectKeyOwned>::from_json_key_text(name)?;
-        let domain = <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(domain)?;
+        let domain =
+            <iroha_model_base::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(domain)?;
         Ok(crate::nft::NftId::new(domain, name))
     }
 }
@@ -396,47 +390,5 @@ mod tests {
             json::to_json_bounded(&map, expected.len() - 1),
             Err(json::BoundedJsonError::BodyTooLarge)
         ));
-    }
-
-    #[test]
-    fn domain_key_accounts_canonicalization_before_owner_allocations() {
-        let key = "treasury.centralbank";
-        let component_bytes = key.len() - 1;
-        let expected_allocation = component_bytes * 2;
-        let (decoded, usage) = norito::core::with_decode_limits_measured(
-            allocation_limit(expected_allocation),
-            || <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(key),
-        );
-        assert_eq!(
-            decoded
-                .expect("domain key at exact allocation bound")
-                .to_string(),
-            key
-        );
-        assert_eq!(usage.total_allocated_bytes(), expected_allocation);
-
-        let (rejected, usage) = norito::core::with_decode_limits_measured(
-            allocation_limit(expected_allocation - 1),
-            || <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(key),
-        );
-        assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
-        assert_eq!(usage.total_allocated_bytes(), 0);
-
-        let (noncanonical, usage) =
-            norito::core::with_decode_limits_measured(allocation_limit(usize::MAX), || {
-                <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(
-                    "例え.centralbank",
-                )
-            });
-        assert!(noncanonical.is_err());
-        assert_eq!(usage.total_allocated_bytes(), 0);
-
-        let uppercase = "Treasury.centralbank";
-        let (noncanonical, usage) =
-            norito::core::with_decode_limits_measured(allocation_limit(usize::MAX), || {
-                <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(uppercase)
-            });
-        assert!(noncanonical.is_err());
-        assert_eq!(usage.total_allocated_bytes(), 0);
     }
 }

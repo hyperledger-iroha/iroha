@@ -3,9 +3,9 @@
 use super::*;
 use iroha_data_model::{
     asset::AssetDefinitionId,
-    domain::DomainId,
     fastpq::{TransferDeltaTranscript, TransferSmtWitness},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 

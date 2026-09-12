@@ -25,7 +25,6 @@ use iroha_crypto::{
 };
 #[allow(unused_imports)]
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     asset::prelude::AssetDefinitionId,
     block::BlockHeader,
@@ -42,16 +41,15 @@ use iroha_data_model::{
         prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, RetentionPolicy},
     },
-    domain::DomainId,
     jurisdiction::JdgSignatureScheme,
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
-        LaneConfig as LaneConfigMetadata, LaneId, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
-        LaneStorageProfile, LaneVisibility, ShardId, UniversalAccountId,
+        DataSpaceCatalog, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
+        LaneConfig as LaneConfigMetadata, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
+        LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
     oracle::KeyedHash,
-    peer::{Peer, PeerId},
+    peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     soracloud::SoraPublishedInrouGuestImageArtifactV1,
     sorafs::{
@@ -65,7 +63,15 @@ use iroha_data_model::{
     transaction::FeePaymentIntent,
 };
 #[allow(unused_imports)]
+use iroha_model_base::chain::ChainId;
+#[allow(unused_imports)]
+use iroha_model_base::domain::DomainId;
+#[allow(unused_imports)]
 use iroha_model_base::name::Name;
+#[allow(unused_imports)]
+use iroha_model_base::peer::PeerId;
+#[allow(unused_imports)]
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 use iroha_primitives::{
     addr::SocketAddr,
     numeric::{Numeric, Quantity, XorQuantity},

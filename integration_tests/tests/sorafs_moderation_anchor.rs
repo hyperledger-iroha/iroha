@@ -53,6 +53,8 @@ use iroha_executor_data_model::permission::{
     query::CanReadAllLedgerData,
     sorafs::{CanManageSorafsModeration, CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_network::read_on_dedicated_thread;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};

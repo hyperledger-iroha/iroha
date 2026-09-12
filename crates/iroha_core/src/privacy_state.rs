@@ -5,10 +5,9 @@
 //! ledger. Every map still participates in the same [`crate::state::StateTransaction`], so a
 //! rejected transaction cannot leave a partial replay marker, commitment, or root behind.
 use iroha_data_model::{
-    AssetDefinitionId, ChainId, NetworkId,
+    AssetDefinitionId, NetworkId,
     account::AccountId,
     asset::AssetBalanceScope,
-    peer::PeerId,
     privacy::{
         ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1,
         BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1,
@@ -47,6 +46,8 @@ use iroha_data_model::{
         validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
     },
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -5321,7 +5322,7 @@ impl PrivacyOrchardPoolStateV1 {
         }
         if matches!(
             self.public_balance_scope,
-            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
         ) {
             return Err("Orchard public balance scope cannot be the universal dataspace");
         }
@@ -9455,8 +9456,8 @@ mod tests {
     };
     use iroha_data_model::{
         NetworkId, account::AccountId, asset::AssetDefinitionId, block::BlockHeader,
-        domain::DomainId,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
@@ -11190,6 +11191,36 @@ mod tests {
                 let mut state = fixture.state();
                 state.bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x33));
                 fixture.set_state(state);
+            } => "fields do not match the governed bootstrap digest";
+            |fixture| {
+                let head = *fixture
+                    .root_heads
+                    .view()
+                    .get(&fixture.head_key)
+                    .expect("bootstrap head");
+                let substituted_origin = PrivacyRootProvenanceV1::orchard_pool_bootstrap(
+                    PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x33)),
+                    9,
+                )
+                .expect("locally valid substituted origin");
+                let root_key = PrivacyRootKeyV1::new(
+                    fixture.namespace,
+                    PrivacyRootRoleV1::NoteCommitmentAnchor,
+                    head.epoch(),
+                    head.root(),
+                )
+                .expect("same canonical root identity");
+                fixture.roots.insert(root_key, substituted_origin);
+                fixture.root_heads.insert(
+                    fixture.head_key,
+                    PrivacyRootHeadRecordV1::new(
+                        head.epoch(),
+                        head.root(),
+                        substituted_origin,
+                        None,
+                    )
+                    .expect("head and history agree on the substituted origin"),
+                );
             } => "origin differs from its pool state";
             |fixture| {
                 let snapshot = fixture
@@ -13232,8 +13263,8 @@ mod tests {
             record
         );
         let unknown_origin = encoded.replacen(
-            "\"zk_x509_verified_certificate_nullifier\"",
-            "\"zk_x509_verified_certificate_nullifier_legacy\"",
+            "\"ZkX509VerifiedCertificateNullifier\"",
+            "\"UnknownCertificateNullifierOrigin\"",
             1,
         );
         assert_ne!(

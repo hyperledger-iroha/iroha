@@ -22,14 +22,15 @@ use iroha_data_model::{
     block::SignedBlock,
     domain::Domain,
     isi::{InstructionBox, Register, alias_setup::EnsureAlias},
-    metadata::Metadata,
-    nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+    nexus::{DataSpaceCatalog, DataSpaceMetadata},
     sns::{
         NameControllerV1, NameFrozenStateV1, NameRecordV1, NameSelectorV1, NameStatus,
         NameTombstoneStateV1,
     },
     transaction::TransactionBuilder,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 include!("../sns_core_tests.rs");
 #[test]
 fn checked_keypair_preserves_default_algorithm() {
@@ -78,7 +79,7 @@ fn controller(owner: &AccountId) -> NameControllerV1 {
 }
 fn default_payment(_owner: &AccountId) -> LeasePayment {
     LeasePayment {
-        asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
+        asset_id: iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
         gross_amount: default_namespace_lease_price(),
         net_amount: default_namespace_lease_price(),
     }
@@ -699,6 +700,8 @@ fn active_dataspace_id_derives_from_dynamic_sns_alias() {
     );
 }
 mod active_dataspace_alias_tests {
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     include!("active_dataspace_alias_tests.rs");
 }
 #[test]
@@ -825,14 +828,17 @@ fn quote_account_alias_registration_uses_default_policy_price_and_term() {
     let quote = quote_account_alias_registration(&view, &catalog, &alias, &owner, 2, None, 100)
         .expect("registration quote");
     assert_eq!(quote.selector.label, "treasury@banking");
-    assert_eq!(quote.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
+    assert_eq!(
+        quote.payment_asset_id,
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+    );
     assert_eq!(quote.charge_amount, Quantity::one());
     assert_eq!(quote.expires_at_ms, 100 + years_to_ms(2));
 }
 #[test]
 fn current_namespace_policies_seed_directly_with_configured_asset() {
     let payment_asset_definition_id =
-        AssetDefinitionId::parse_address_literal("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
+        AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
             .expect("deployment XOR asset id");
     let payment_asset_literal = payment_asset_definition_id.to_string();
     let mut world = World::default();
@@ -861,7 +867,7 @@ fn current_namespace_policies_seed_directly_with_configured_asset() {
 }
 #[test]
 fn nexus_configuration_rejects_mismatched_policy_state_without_mutation() {
-    let configured_elsewhere = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+    let configured_elsewhere = "61CtjvNd9T3THAR65GsMVHr82Bjc";
     let mut world = World::default();
     seed_default_namespace_policies_for_payment_asset(&mut world, configured_elsewhere);
     let mut state = State::new_for_testing(
@@ -898,7 +904,7 @@ fn nexus_configuration_rejects_mismatched_policy_state_without_mutation() {
 #[test]
 fn configured_fee_asset_quote_rejects_stale_policy_without_retargeting_state() {
     let payment_asset_definition_id =
-        AssetDefinitionId::parse_address_literal("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
+        AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
             .expect("deployment XOR asset id");
     let payment_asset_literal = payment_asset_definition_id.to_string();
     let mut world = world_with_payment_asset(payment_asset_definition_id.clone());
@@ -1121,17 +1127,12 @@ fn sns_decoders_reject_trailing_bytes_and_embedded_identity_mismatches() {
     let active_owner_error = active_owner_by_selector(&world.view(), &selector, 0)
         .expect_err("active-owner lookup must surface malformed record state");
     assert!(
-        active_owner_error.to_string().contains("trailing bytes")
-            || active_owner_error.to_string().contains("length mismatch"),
-        "{active_owner_error}"
+        matches!(active_owner_error, SnsError::Internal(_)),
+        "malformed authoritative bytes must surface a storage failure: {active_owner_error}"
     );
     let err = record_or_not_found(&world.view(), &selector)
         .expect_err("trailing record bytes must fail closed");
-    let message = err.to_string();
-    assert!(
-        message.contains("trailing bytes") || message.contains("length mismatch"),
-        "{message}"
-    );
+    assert!(matches!(err, SnsError::Internal(_)), "{err}");
     let other_selector = selector_for_namespace_literal(
         SnsNamespace::Domain,
         "other.universal",
@@ -1164,7 +1165,7 @@ fn sns_decoders_reject_trailing_bytes_and_embedded_identity_mismatches() {
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
     )
     .expect_err("corrupt persisted policy must reject initialization");
-    assert!(error.to_string().contains("trailing bytes"), "{error}");
+    assert!(matches!(error, SnsError::Internal(_)), "{error}");
     assert_eq!(
         world.smart_contract_state.view().get(&policy_key),
         Some(&trailing_policy),

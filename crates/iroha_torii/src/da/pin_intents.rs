@@ -448,10 +448,11 @@ mod tests {
             types::{BlobDigest, StorageTicketId},
         },
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
-            LaneConfig as ModelLaneConfig, LaneId,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneCatalog,
+            LaneConfig as ModelLaneConfig,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{
         num::{NonZeroU32, NonZeroU64},
         sync::Arc,

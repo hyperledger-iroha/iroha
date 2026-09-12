@@ -18,8 +18,6 @@ use iroha_data_model::{
         Instruction, InstructionBox, InstructionRegistry, Register, RegisterPeerWithPop,
         decode_instruction_from_pair, framed_instruction_payload,
     },
-    metadata::Metadata,
-    peer::PeerId,
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
@@ -27,7 +25,9 @@ use iroha_data_model::{
         signed::TransactionPayload,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::json::Json;
 use norito::{
     codec::Encode,

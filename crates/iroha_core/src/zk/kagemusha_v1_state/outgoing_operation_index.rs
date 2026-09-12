@@ -1243,7 +1243,8 @@ pub(super) mod frame_identity_tests;
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::{block::BlockHeader, domain::DomainId, nexus::AxtAssetIncarnationV1};
+    use iroha_data_model::{block::BlockHeader, nexus::AxtAssetIncarnationV1};
+    use iroha_model_base::domain::DomainId;
 
     use super::*;
 

@@ -2,18 +2,19 @@
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
-    domain::DomainId,
     isi::{InstructionBox, endorsement as isi_endorsement},
-    metadata::Metadata,
     nexus::{
-        DOMAIN_ENDORSEMENT_VERSION_V1, DataSpaceId, DomainCommittee, DomainEndorsement,
-        DomainEndorsementPolicy, DomainEndorsementScope,
+        DOMAIN_ENDORSEMENT_VERSION_V1, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
+        DomainEndorsementScope,
     },
     query::endorsement::prelude::{
         FindDomainCommittee, FindDomainEndorsementPolicy, FindDomainEndorsements,
     },
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey, PublicKey, Signature};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use norito::json;
 use std::{fs, path::PathBuf, str::FromStr};
 fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {

@@ -35,7 +35,7 @@ use crate::{
 use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, Level, Registrable, ValidationFail,
+    Level, Registrable, ValidationFail,
     account::Account,
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -44,7 +44,7 @@ use iroha_data_model::{
         consensus_v2 as wire,
     },
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{
         InstructionBox, Log, Mint, SetParameter,
         sorafs::{
@@ -53,9 +53,7 @@ use iroha_data_model::{
         },
     },
     merge::{MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate},
-    nexus::{DataSpaceId, LaneId},
     parameter::{Parameter, system::SumeragiParameter},
-    peer::PeerId,
     permission::{Permission, Permissions},
     sorafs::{
         orderbook::{ORDERBOOK_ADMISSION_POLICY_VERSION_V1, OrderbookAdmissionPolicyV1},
@@ -75,6 +73,10 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::{
     CanManageSorafsReputationJournalPolicy, CanSetSorafsPricing, CanSetSorafsReservePolicy,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use sorafs_manifest::XorQuantity;
 use std::{
     borrow::Cow,
@@ -1290,10 +1292,9 @@ fn durable_application_evidence_rejects_identity_mutations_fixture_body() {
     altered.completion_work_id = EffectWorkId::for_test(2);
     assert!(!altered.is_exact());
     assert!(matches!(
-        fixture.service.finish_durable_apply_completion_against(
-            altered,
-            prospective_application,
-        ),
+        fixture
+            .service
+            .finish_durable_apply_completion_against(altered, prospective_application,),
         Err(V2ApplyError::CommittedRecoveryRequired {
             stage: "exact application evidence",
             ..
@@ -1791,6 +1792,9 @@ fn reserve_transaction_for_lane_test_with_identity(
     crate::queue::LaneQueueReservationKeyV1,
     TransactionEntrypoint,
 ) {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(state);
+    }
     // These fixtures exercise the strict global QueuePlan corridor, so their transaction must
     // carry the same signature-bound intent and network domain as a production submission. The
     // Apply fixture body itself is a genesis-domain Ordinary transaction and cannot be reused
@@ -2003,6 +2007,9 @@ fn reserve_autonomous_crash_batch(
     queue: &Arc<Queue>,
     producer: &KeyPair,
 ) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(fixture.state.as_ref());
+    }
     assert_eq!(
         &fixture.context.network_id,
         fixture.state.network_id_ref(),

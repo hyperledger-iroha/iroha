@@ -30,7 +30,7 @@ use iroha_crypto::{
     Algorithm, BlsNormal, Hash, HashOf, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
 };
 use iroha_data_model::{
-    ChainId, IntoKeyValue, NetworkId, Registrable,
+    IntoKeyValue, NetworkId, Registrable,
     account::AccountId,
     block::BlockHeader,
     isi::sorafs::RegisterPinManifest,
@@ -43,6 +43,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::Child;
+use iroha_model_base::chain::ChainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_torii::{

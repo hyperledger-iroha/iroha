@@ -4239,7 +4239,6 @@ mod soracloud_service_lease_replay_tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::AccountId,
-        peer::PeerId,
         soracloud::{
             SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
             SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
@@ -4251,6 +4250,7 @@ mod soracloud_service_lease_replay_tests {
             SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
         },
     };
+    use iroha_model_base::peer::PeerId;
 
     fn sample_assignment(service_version: &str) -> SoraServiceLeaseReporterAssignmentV1 {
         let key_pair = KeyPair::try_from_seed(vec![91; 32], Algorithm::Ed25519)
@@ -5814,8 +5814,8 @@ mod global_beacon_persistence_tests {
     use iroha_data_model::{
         block::BlockHeader,
         governance::types::{BodyElectionAttemptId, ParliamentBody},
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
 
     #[test]
     fn restore_rejects_pulse_after_sortition_slot_was_terminally_unavailable() {
@@ -8607,9 +8607,9 @@ mod asset_transfer_control_persistence_tests {
             ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy, AssetDefinition,
             AssetDefinitionId, AssetTransferControlRecord, AssetTransferControlStoreV1,
         },
-        domain::DomainId,
-        metadata::Metadata,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
 
@@ -8718,7 +8718,7 @@ struct BuildStateInputs {
     lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
     lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
     autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,
-    chain_id: iroha_data_model::ChainId,
+    chain_id: iroha_model_base::chain::ChainId,
     network_id: iroha_data_model::NetworkId,
     snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
     nexus_runtime_restored_from_snapshot: bool,
@@ -11096,7 +11096,7 @@ mod decode_tests {
         let decision_id = ProposalKind::MusubiRegistryGovernance(action.clone()).fingerprint();
         let mut world = World::default();
         world.musubi_registry_policy = Cell::new(successor.clone());
-        retain_musubi_consumption(&mut world, action.clone(), 10, 20, 20);
+        retain_musubi_consumption(&mut world, action.clone(), 110, 120, 120);
         validate_musubi_governance_provenance(&world)
             .expect("execution exactly at the boundary must pass");
         let mut consumption = world
@@ -11105,7 +11105,7 @@ mod decode_tests {
             .get(&decision_id)
             .copied()
             .expect("retained consumption");
-        consumption.consumed_at_height = 19;
+        consumption.consumed_at_height = 119;
         world
             .musubi_governance_decisions
             .insert(decision_id, consumption);
@@ -11119,7 +11119,7 @@ mod decode_tests {
         };
         let mut mismatched = World::default();
         mismatched.musubi_registry_policy = Cell::new(successor);
-        retain_musubi_consumption_as(&mut mismatched, wrong_id, action, 10, 20, 20);
+        retain_musubi_consumption_as(&mut mismatched, wrong_id, action, 110, 120, 120);
         let error = validate_musubi_governance_provenance(&mismatched)
             .expect_err("proposal fingerprint mismatch must fail");
         assert!(error.to_string().contains("fingerprint"), "{error}");
@@ -11129,13 +11129,13 @@ mod decode_tests {
         let mut world = World::default();
         let package = musubi_package("current-recovery");
         let owner = musubi_account(71);
-        let member = seed_current_musubi_package(&mut world, &package, &owner, 2, 20);
+        let member = seed_current_musubi_package(&mut world, &package, &owner, 2, 120);
         let action = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
             package: package.clone(),
             owners: vec![owner.clone()],
             expected_revision: 1,
         });
-        retain_musubi_consumption(&mut world, action, 10, 20, 20);
+        retain_musubi_consumption(&mut world, action, 110, 120, 120);
         validate_musubi_governance_provenance(&world).expect("exact current recovery projection");
         let canonical_package = world
             .musubi_packages
@@ -11203,7 +11203,7 @@ mod decode_tests {
                 .contains("owner-recovery projection")
         );
         let mut wrong_member = member;
-        wrong_member.accepted_at_height = 21;
+        wrong_member.accepted_at_height = 121;
         world.musubi_package_members.insert(key, wrong_member);
         assert!(
             validate_musubi_governance_provenance(&world)
@@ -11217,13 +11217,13 @@ mod decode_tests {
         let mut world = World::default();
         let package = musubi_package("recovery-history");
         let current_owner = musubi_account(80);
-        seed_current_musubi_package(&mut world, &package, &current_owner, 3, 30);
+        seed_current_musubi_package(&mut world, &package, &current_owner, 3, 130);
         let first = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
             package: package.clone(),
             owners: vec![musubi_account(81)],
             expected_revision: 1,
         });
-        retain_musubi_consumption(&mut world, first, 10, 20, 20);
+        retain_musubi_consumption(&mut world, first, 110, 120, 120);
         validate_musubi_governance_provenance(&world)
             .expect("later current revision need not reproduce historical owners");
         let duplicate =
@@ -11232,7 +11232,7 @@ mod decode_tests {
                 owners: vec![musubi_account(82)],
                 expected_revision: 1,
             });
-        retain_musubi_consumption(&mut world, duplicate, 11, 21, 21);
+        retain_musubi_consumption(&mut world, duplicate, 111, 121, 121);
         let error = validate_musubi_governance_provenance(&world)
             .expect_err("two recoveries cannot claim the same result revision");
         assert!(error.to_string().contains("result revision"), "{error}");
@@ -11255,8 +11255,8 @@ mod decode_tests {
             });
         let mut world = World::default();
         world.musubi_registry_policy = Cell::new(third);
-        retain_musubi_consumption(&mut world, first_action, 10, 20, 21);
-        retain_musubi_consumption(&mut world, second_action, 11, 21, 21);
+        retain_musubi_consumption(&mut world, first_action, 110, 120, 121);
+        retain_musubi_consumption(&mut world, second_action, 111, 121, 121);
         validate_musubi_governance_provenance(&world)
             .expect("equal same-block consumption heights are nondecreasing");
         let mut first = world
@@ -11265,7 +11265,7 @@ mod decode_tests {
             .get(&first_id)
             .copied()
             .expect("first policy consumption");
-        first.consumed_at_height = 22;
+        first.consumed_at_height = 122;
         first.validate().expect("still individually valid");
         world.musubi_governance_decisions.insert(first_id, first);
         let error = validate_musubi_governance_provenance(&world)
@@ -11277,26 +11277,26 @@ mod decode_tests {
         let mut world = World::default();
         let package = musubi_package("recovery-height-history");
         let current_owner = musubi_account(90);
-        seed_current_musubi_package(&mut world, &package, &current_owner, 3, 21);
+        seed_current_musubi_package(&mut world, &package, &current_owner, 3, 121);
         let first = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
             package: package.clone(),
             owners: vec![musubi_account(91)],
             expected_revision: 1,
         });
-        retain_musubi_consumption(&mut world, first, 10, 20, 22);
+        retain_musubi_consumption(&mut world, first, 110, 120, 122);
         let second = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
             package,
             owners: vec![current_owner],
             expected_revision: 2,
         });
-        retain_musubi_consumption(&mut world, second, 11, 21, 21);
+        retain_musubi_consumption(&mut world, second, 111, 121, 121);
         let error = validate_musubi_governance_provenance(&world)
             .expect_err("owner-recovery history cannot move backward in execution height");
         assert!(error.to_string().contains("consumption heights"), "{error}");
     }
     #[test]
     fn alias_retarget_history_binds_exact_decision_consumption_height() {
-        const CONSUMED_AT: u64 = 30;
+        const CONSUMED_AT: u64 = 130;
         let mut world = World::default();
         let alias: MusubiAliasNameV1 = "stable".parse().expect("alias");
         let previous_target = musubi_package("previous");
@@ -11306,7 +11306,7 @@ mod decode_tests {
             target: target.clone(),
             expected_revision: 1,
         });
-        let action_digest = retain_musubi_consumption(&mut world, action, 10, 20, CONSUMED_AT);
+        let action_digest = retain_musubi_consumption(&mut world, action, 110, 120, CONSUMED_AT);
         let mut history = MusubiAliasHistoryEntryV1 {
             alias,
             revision: 2,
@@ -11337,7 +11337,7 @@ mod decode_tests {
     }
     #[test]
     fn artifact_takedown_binds_exact_decision_consumption_height() {
-        const CONSUMED_AT: u64 = 30;
+        const CONSUMED_AT: u64 = 130;
         let mut world = World::default();
         let release = MusubiReleaseIdV1::new(
             musubi_package("withdrawn"),
@@ -11349,7 +11349,7 @@ mod decode_tests {
             reason: reason.clone(),
             expected_artifact_governance_revision: 1,
         });
-        let action_digest = retain_musubi_consumption(&mut world, action, 10, 20, CONSUMED_AT);
+        let action_digest = retain_musubi_consumption(&mut world, action, 110, 120, CONSUMED_AT);
         let record = musubi_release_record(
             release.clone(),
             MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {

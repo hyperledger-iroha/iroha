@@ -25,9 +25,9 @@ use iroha_data_model::{
             ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
-    nexus::LaneId,
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::XorQuantity;
 use norito::{
     decode_from_bytes,
@@ -396,10 +396,11 @@ mod tests {
                 FecScheme, GovernanceTag, RetentionPolicy, StorageTicketId,
             },
         },
-        nexus::LaneId,
-        prelude::{AccountId, DomainId},
+        prelude::AccountId,
         sorafs::pin_registry::StorageClass,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::LaneId;
     use sorafs_manifest::{ChunkingProfileV1, pdp::PdpMerkleTreeV1};
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

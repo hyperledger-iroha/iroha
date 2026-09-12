@@ -2,8 +2,9 @@
 use crate::{
     account::{AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionId, AssetId},
-    nexus::{DataSpaceId, UniversalAccountId},
+    nexus::UniversalAccountId,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

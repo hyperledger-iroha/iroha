@@ -208,12 +208,12 @@ mod tests {
     use iroha::config::Config;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
-        ChainId,
         account::AccountId,
-        metadata::Metadata,
         transaction::{Executable, IvmBytecode},
     };
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use norito::json::JsonSerialize;
     use url::Url;
     struct TestContext {

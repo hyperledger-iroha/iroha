@@ -1,8 +1,10 @@
 //! Asset identifiers.
 pub use self::model::*;
-use crate::{account::prelude::*, domain::prelude::*, nexus::DataSpaceId};
+use crate::account::prelude::*;
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{error::ParseError, name::Name};
 use iroha_schema::IntoSchema;
 use norito::{

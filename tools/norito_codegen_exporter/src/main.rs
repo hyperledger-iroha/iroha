@@ -47,7 +47,7 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::Burn<dm::Quantity, dm::Asset>);
         $macro!(iroha_data_model::isi::Burn<u32, dm::Trigger>);
         $macro!(iroha_data_model::isi::BurnBox);
-        $macro!(iroha_data_model::isi::Transfer<dm::Account, dm::DomainId, dm::Account>);
+        $macro!(iroha_data_model::isi::Transfer<dm::Account, iroha_model_base::domain::DomainId, dm::Account>);
         $macro!(iroha_data_model::isi::Transfer<dm::Account, dm::AssetDefinitionId, dm::Account>);
         $macro!(iroha_data_model::isi::Transfer<dm::Asset, dm::Quantity, dm::Account>);
         $macro!(iroha_data_model::isi::Transfer<dm::Account, dm::NftId, dm::Account>);

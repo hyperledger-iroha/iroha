@@ -6,6 +6,112 @@ use super::{
 };
 
 #[test]
+fn shared_capability_probe_preserves_typed_timeout_classification() {
+    let coordinator = CompatibilityProbeCoordinator::new();
+    let observed = coordinator.generation();
+    let cause: eyre::Report =
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "bounded request").into();
+    let immediate = coordinator.finish_failure(&cause.wrap_err("capability request"));
+    assert!(immediate.is_timeout());
+    let shared = coordinator.completion_after(observed).unwrap().unwrap_err();
+    assert!(shared.is_timeout());
+    assert!(CapabilityProbeError::from_report(&eyre::Report::new(shared)).is_timeout());
+    let unrelated = coordinator.finish_failure(&eyre!("a non-timeout error mentioning timeout"));
+    assert!(
+        !unrelated.is_timeout(),
+        "error text cannot authorize timeout recovery"
+    );
+}
+
+#[test]
+fn request_deadline_clones_context_and_survives_rebuilding() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let original = client_with_base_url(base_url()).with_test_http_transport(
+        DefaultHttpTransport::mock(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(http::Response::new(Vec::new()))
+        })),
+    );
+    let bounded = original.with_request_deadline(std::time::Instant::now());
+    assert!(Arc::ptr_eq(
+        &original.data_model_compatibility,
+        &bounded.data_model_compatibility
+    ));
+    assert!(Arc::ptr_eq(
+        &original.compatibility_probe,
+        &bounded.compatibility_probe
+    ));
+    assert!(
+        original
+            .http_transport
+            .shares_pools_with(&bounded.http_transport)
+    );
+    let rebuilt = bounded
+        .to_builder()
+        .build()
+        .expect("bounded rebuilt context")
+        .with_request_deadline(std::time::Instant::now() + Duration::from_secs(60));
+    for client in [&bounded, &rebuilt] {
+        let error = client
+            .default_request(HttpMethod::POST, base_url())
+            .build()
+            .unwrap()
+            .send_blocking()
+            .expect_err("no dispatch after original deadline");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    original
+        .default_request(HttpMethod::GET, base_url())
+        .build()
+        .unwrap()
+        .send_blocking()
+        .expect("original client remains usable");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn request_deadline_bounds_waiting_for_blocking_compatibility_probe() {
+    let client = client_with_base_url(base_url());
+    let _occupied = client.compatibility_probe.gate.blocking_lock();
+    let bounded =
+        client.with_request_deadline(std::time::Instant::now() + Duration::from_millis(30));
+    let started = std::time::Instant::now();
+    let error = bounded
+        .ensure_data_model_compatibility()
+        .expect_err("sibling probe must not extend deadline");
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn request_deadline_bounds_waiting_for_async_compatibility_probe() {
+    let client = client_with_base_url(base_url());
+    let _occupied = client.compatibility_probe.gate.lock().await;
+    let bounded =
+        client.with_request_deadline(std::time::Instant::now() + Duration::from_millis(30));
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        bounded.ensure_compatibility(CompatibilityRequirement::Submission, false),
+    )
+    .await
+    .expect("sibling probe must not extend deadline");
+    let error = result.expect_err("deadline ends compatibility wait");
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::TimedOut
+    );
+}
+
+#[test]
 fn rebuilding_never_inherits_compatibility_or_in_flight_probes() {
     let original = client_with_base_url(base_url());
     original.store_compatibility_outcome(DataModelCompatibility::SubmitCompatible);

@@ -310,7 +310,7 @@ impl ValidQueryRequest {
                         )
                     }
                     QueryItemKind::PeerId => run_query!(
-                        iroha_data_model::peer::PeerId,
+                        iroha_model_base::peer::PeerId,
                         iroha_data_model::query::peer::prelude::FindPeers
                     ),
                     QueryItemKind::TriggerId => run_query!(
@@ -713,7 +713,7 @@ impl ValidQueryRequest {
                         )
                     }
                     QueryItemKind::PeerId => run_query!(
-                        iroha_data_model::peer::PeerId,
+                        iroha_model_base::peer::PeerId,
                         iroha_data_model::query::peer::prelude::FindPeers
                     ),
                     QueryItemKind::TriggerId => run_query!(

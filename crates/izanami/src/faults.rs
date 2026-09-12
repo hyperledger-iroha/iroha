@@ -6,6 +6,7 @@ use color_eyre::{
 use iroha_config::base::toml::WriteExt;
 use iroha_data_model::prelude::*;
 use iroha_genesis::GenesisBlock;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_network::NetworkPeer;
 use iroha_test_samples::ALICE_ID;

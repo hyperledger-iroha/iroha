@@ -62,7 +62,7 @@ fn casting_tle_key(network_id: [u8; 32], tag: u8) -> ValidatedTleKeySessionV1 {
 pub(crate) struct EnactedParliamentRestoreFixtureV1 {
     pub(crate) attempt: ParliamentAttemptStateV1,
     pub(crate) tle_key_sessions: Vec<TleKeySessionPublicStateV1>,
-    pub(crate) tle_key_session_rosters: Vec<(TleKeySessionId, Vec<iroha_data_model::peer::PeerId>)>,
+    pub(crate) tle_key_session_rosters: Vec<(TleKeySessionId, Vec<iroha_model_base::peer::PeerId>)>,
     pub(crate) tle_key_session_lifecycles: Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
     pub(crate) timed_ovn_evidence: Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 }
@@ -73,7 +73,7 @@ fn complete_enacted_fixture_hidden_body_with_evidence(
     election_attempt_id: BodyElectionAttemptId,
     network_id: &NetworkId,
     tle_key_sessions: &mut Vec<TleKeySessionPublicStateV1>,
-    tle_key_session_rosters: &mut Vec<(TleKeySessionId, Vec<iroha_data_model::peer::PeerId>)>,
+    tle_key_session_rosters: &mut Vec<(TleKeySessionId, Vec<iroha_model_base::peer::PeerId>)>,
     tle_key_session_lifecycles: &mut Vec<(TleKeySessionId, TleKeySessionLifecycleV1)>,
     timed_ovn_evidence: &mut Vec<(BallotAttemptId, TimedOvnLifecycleStateV1)>,
 ) {
@@ -91,7 +91,7 @@ fn complete_enacted_fixture_hidden_body_with_evidence(
     let ordered_roster = (0_u8..4)
         .map(|index| {
             let keypair = KeyPair::from_seed(vec![0xE0 + index; 32], Algorithm::Ed25519);
-            iroha_data_model::peer::PeerId::new(keypair.public_key().clone())
+            iroha_model_base::peer::PeerId::new(keypair.public_key().clone())
         })
         .collect::<Vec<_>>();
     let threshold_session = ThresholdBlsSession::<TleReleasePurpose>::new(

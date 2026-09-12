@@ -4,6 +4,7 @@ use iroha_data_model::{
     ValidationFail, isi::error::MathError, prelude::*, query::error::FindError,
     transaction::error::prelude::TransactionRejectionReason,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 use std::sync::OnceLock;
@@ -1536,6 +1537,7 @@ mod tests {
         permission::Permission,
         role::{Role, RoleId},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -1715,7 +1717,7 @@ mod tests {
         let error = Register::trigger(trigger.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("genesis must not mint an uncredentialed global trigger");
-        assert!(error.to_string().contains("CanRegisterGlobalDataTrigger"));
+        assert_smart_contract_error_contains(&error, "CanRegisterGlobalDataTrigger");
 
         let capability: Permission =
             iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
@@ -2015,7 +2017,7 @@ mod tests {
     }
     fn new_dummy_block() -> crate::block::CommittedBlock {
         let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
-        let peer_id = crate::PeerId::new(leader_public_key);
+        let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
         let topology = Topology::new(vec![peer_id]);
         ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
             h.set_height(NonZeroU64::new(1).unwrap());
@@ -2548,9 +2550,9 @@ mod tests {
                 rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
             },
             events::execute_trigger::ExecuteTriggerEventFilter,
-            nexus::DataSpaceId,
             sns::{NameControllerV1, NameRecordV1},
         };
+        use iroha_model_base::topology::DataSpaceId;
 
         let domain_id = DomainId::try_new("aliasbank", "universal").expect("domain id");
         let world = World::with(

@@ -24,11 +24,11 @@ use iroha_data_model::{
         MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS,
         MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, lane_drain_empty_unresolved_evidence_root,
     },
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::{TransactionAdmissionIntent, signed::TransactionEntrypoint},
 };
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
@@ -5692,12 +5692,12 @@ mod tests {
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        nexus::{DataSpaceId, LaneId},
         transaction::{
             FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
             signed::TransactionEntrypoint,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{
         collections::{BTreeMap, BTreeSet},
         time::{Duration, Instant},
@@ -8264,7 +8264,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_rejects_conflicting_commit_vote_after_view_change() {
-        let (keys, validator_set) = lane_block_validator_fixture(3);
+        let (keys, validator_set) = lane_block_validator_fixture(4);
         let proposal_a = lane_block_proposal_at_height(&validator_set, 13);
         let proposal_b = conflicting_lane_block_proposal_next_view(proposal_a.clone(), 0x51);
         assert_eq!(
@@ -8286,17 +8286,23 @@ mod tests {
         let prepare_b_same_signer = signed_vote(&proposal_b.vote_body(CertPhase::Prepare), signer);
         let prepare_b_other_signer =
             signed_vote(&proposal_b.vote_body(CertPhase::Prepare), &keys[1]);
+        let prepare_a_third_signer =
+            signed_vote(&proposal_a.vote_body(CertPhase::Prepare), &keys[2]);
+        let prepare_b_third_signer =
+            signed_vote(&proposal_b.vote_body(CertPhase::Prepare), &keys[2]);
         let mut cache = LaneBlockSessionCache::new(4);
         assert_proposal_insert(&mut cache, proposal_a, Inserted);
         assert_proposal_insert(&mut cache, proposal_b.clone(), Inserted);
         assert_vote_insert(&mut cache, &prepare_a_same_signer, Inserted);
         assert_vote_insert(&mut cache, &prepare_a_other_signer, Inserted);
+        assert_vote_insert(&mut cache, &prepare_a_third_signer, Inserted);
         assert_eq!(
             cache.insert_vote(prepare_b_same_signer, Some(&commit_b_same_signer.signer)),
             Ok(LaneBlockSessionInsertOutcome::Inserted),
             "prepare votes may move to a later lane view before any commit lock is taken"
         );
         assert_vote_insert(&mut cache, &prepare_b_other_signer, Inserted);
+        assert_vote_insert(&mut cache, &prepare_b_third_signer, Inserted);
         assert_vote_insert(&mut cache, &commit_a, Inserted);
         let duplicate_snapshot = cache.clone();
         assert_vote_insert(&mut cache, &commit_a, Duplicate);
@@ -9396,7 +9402,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_recovered_proposal_preserves_commit_voted_conflicting_slot() {
-        let (keys, validator_set) = lane_block_validator_fixture(3);
+        let (keys, validator_set) = lane_block_validator_fixture(4);
         let recovered = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(recovered.clone(), 0xB0);
         let recovered_key = LaneBlockSessionKey::from_proposal(&recovered);
@@ -9404,6 +9410,7 @@ mod tests {
         let prepare_body = conflicting.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
         let prepare_vote_b = signed_vote(&prepare_body, &keys[1]);
+        let prepare_vote_c = signed_vote(&prepare_body, &keys[2]);
         let commit_body = conflicting.vote_body(CertPhase::Commit);
         let commit_vote = signed_vote(&commit_body, &keys[0]);
         let signer = commit_vote.signer.clone();
@@ -9411,6 +9418,7 @@ mod tests {
         assert_proposal_insert(&mut cache, conflicting.clone(), Inserted);
         assert_vote_insert(&mut cache, &prepare_vote_a, Inserted);
         assert_vote_insert(&mut cache, &prepare_vote_b, Inserted);
+        assert_vote_insert(&mut cache, &prepare_vote_c, Inserted);
         assert_eq!(
             cache.insert_vote(commit_vote, Some(&signer)),
             Ok(LaneBlockSessionInsertOutcome::Inserted)

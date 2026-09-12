@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::numeric::{Quantity, XorQuantity};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     escrow::{AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     isi::{
@@ -22,6 +22,7 @@ use iroha_data_model::{
     },
     transaction::{Executable, SignedTransaction},
 };
+use iroha_model_base::chain::ChainId;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use std::{
     collections::BTreeSet,
@@ -3157,7 +3158,7 @@ mod tests {
 
         // This frame is canonical and authorized; only the configured byte limit rejects it.
         let padding = "x".repeat(limited_policy.max_transaction_bytes);
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert("padding".parse().unwrap(), padding.as_str());
         let oversized = TransactionBuilder::new(
             test_network_id(),

@@ -17,7 +17,6 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
-    domain::DomainId,
     isi::{
         BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
@@ -56,11 +55,10 @@ use iroha_data_model::{
             ScheduleConfidentialPolicyTransition,
         },
     },
-    metadata::Metadata,
     musubi::MusubiPackageIdV1,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
+        AUTOSCALE_META_MANAGED, DataSpaceCatalog, LaneCatalog,
     },
     permission::Permission,
     smart_contract::ContractAddress,
@@ -88,7 +86,10 @@ use iroha_executor_data_model::permission::{
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use std::{
@@ -9014,16 +9015,14 @@ mod tests {
             },
         },
         merge::{LaneDrainIntentV1, LaneDrainStateV1},
-        metadata::Metadata,
         nexus::{
             AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
-            LaneId, LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
+            LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
             PrivateSettlementCommitBundleV1, PrivateSettlementPoolGovernanceLifecycleV1,
             PrivateSettlementPrepareBarrierV1, PrivateSettlementRouteV1, UniversalAccountId,
         },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
-        peer::PeerId,
         permission::Permission,
         prelude::*,
         sns::{NameControllerV1, NameRecordV1},
@@ -9041,6 +9040,9 @@ mod tests {
         },
         trigger::CanRegisterTrigger,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;

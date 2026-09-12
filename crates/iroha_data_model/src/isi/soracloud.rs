@@ -2434,26 +2434,25 @@ mod tests {
             .expect_err("omitted rollout promotion target must be rejected");
     }
 
+    fn assert_instruction_json_closed<T>(value: &T, label: &str)
+    where
+        T: norito::json::JsonSerialize + norito::json::JsonDeserialize + core::fmt::Debug,
+    {
+        let serialize_message = format!("serialize {label}");
+        let canonical_message = format!("canonical {label} must decode");
+        let object_message = format!("{label} JSON object");
+        let unknown_message = format!("{label} must reject unknown fields");
+        let mut value = norito::json::to_value(value).expect(&serialize_message);
+        norito::json::from_value::<T>(value.clone()).expect(&canonical_message);
+        value
+            .as_object_mut()
+            .expect(&object_message)
+            .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+        norito::json::from_value::<T>(value).expect_err(&unknown_message);
+    }
+
     #[test]
     fn soracloud_service_control_v1_is_closed_and_requires_explicit_state_nulls() {
-        macro_rules! assert_closed {
-            ($value:expr, $ty:ty, $label:literal) => {{
-                let mut value =
-                    norito::json::to_value(&$value).expect(concat!("serialize ", $label));
-                norito::json::from_value::<$ty>(value.clone()).expect(concat!(
-                    "canonical ",
-                    $label,
-                    " must decode"
-                ));
-                value
-                    .as_object_mut()
-                    .expect(concat!($label, " JSON object"))
-                    .insert("retired_v0".to_owned(), norito::json::Value::from(true));
-                norito::json::from_value::<$ty>(value)
-                    .expect_err(concat!($label, " must reject unknown fields"));
-            }};
-        }
-
         let secret = SecretEnvelopeV1 {
             schema_version: crate::soracloud::SECRET_ENVELOPE_VERSION_V1,
             encryption: crate::soracloud::SecretEnvelopeEncryptionV1::ClientCiphertext,
@@ -2464,43 +2463,39 @@ mod tests {
             commitment: hash("secret"),
             aad_digest: None,
         };
-        assert_closed!(
-            SetSoracloudServiceConfig {
+        assert_instruction_json_closed::<SetSoracloudServiceConfig>(
+            &SetSoracloudServiceConfig {
                 service_name: name("portal"),
                 config_name: "runtime".to_owned(),
                 value_json: Json::from(norito::json!({"workers": 2_u64})),
                 provenance: provenance(17),
             },
-            SetSoracloudServiceConfig,
-            "service config set instruction"
+            "service config set instruction",
         );
-        assert_closed!(
-            DeleteSoracloudServiceConfig {
+        assert_instruction_json_closed::<DeleteSoracloudServiceConfig>(
+            &DeleteSoracloudServiceConfig {
                 service_name: name("portal"),
                 config_name: "runtime".to_owned(),
                 provenance: provenance(18),
             },
-            DeleteSoracloudServiceConfig,
-            "service config delete instruction"
+            "service config delete instruction",
         );
-        assert_closed!(
-            SetSoracloudServiceSecret {
+        assert_instruction_json_closed::<SetSoracloudServiceSecret>(
+            &SetSoracloudServiceSecret {
                 service_name: name("portal"),
                 secret_name: "api_token".to_owned(),
                 secret,
                 provenance: provenance(19),
             },
-            SetSoracloudServiceSecret,
-            "service secret set instruction"
+            "service secret set instruction",
         );
-        assert_closed!(
-            DeleteSoracloudServiceSecret {
+        assert_instruction_json_closed::<DeleteSoracloudServiceSecret>(
+            &DeleteSoracloudServiceSecret {
                 service_name: name("portal"),
                 secret_name: "api_token".to_owned(),
                 provenance: provenance(20),
             },
-            DeleteSoracloudServiceSecret,
-            "service secret delete instruction"
+            "service secret delete instruction",
         );
 
         let mutation = MutateSoracloudState {
@@ -2515,10 +2510,9 @@ mod tests {
             fhe_input_admission_proof: None,
             provenance: provenance(21),
         };
-        assert_closed!(
-            mutation.clone(),
-            MutateSoracloudState,
-            "state mutation instruction"
+        assert_instruction_json_closed::<MutateSoracloudState>(
+            &mutation.clone(),
+            "state mutation instruction",
         );
         let canonical = norito::json::to_value(&mutation).expect("serialize state mutation");
         for field in [
@@ -2737,56 +2731,51 @@ mod tests {
         );
     }
 
-    #[test]
-    fn authenticated_soracloud_instruction_graph_requires_explicit_nullable_keys() {
-        macro_rules! assert_required_nulls {
-            ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
-                let canonical =
-                    norito::json::to_value(&$value).expect(concat!("serialize ", $label));
-                norito::json::from_value::<$ty>(canonical.clone())
-                    .expect(concat!("canonical ", $label, " must decode"));
-                $(
-                    assert!(
-                        canonical
-                            .get($field)
-                            .is_some_and(norito::json::Value::is_null),
-                        "{} must serialize `{}` as explicit null",
-                        $label,
-                        $field
-                    );
-                    let mut missing = canonical.clone();
-                    assert!(
-                        missing
-                            .as_object_mut()
-                            .expect(concat!($label, " JSON object"))
-                            .remove($field)
-                            .is_some()
-                    );
-                    norito::json::from_value::<$ty>(missing).expect_err(concat!(
-                        $label,
-                        " must reject an omitted nullable key"
-                    ));
+    fn assert_instruction_required_nulls<T>(value: &T, fields: &[&str], label: &str)
+    where
+        T: norito::json::JsonSerialize + norito::json::JsonDeserialize + core::fmt::Debug,
+    {
+        let serialize_message = format!("serialize {label}");
+        let canonical_message = format!("canonical {label} must decode");
+        let object_message = format!("{label} JSON object");
+        let omitted_message = format!("{label} must reject an omitted nullable key");
+        let null_message = format!("{label} must accept an explicit null key");
+        let canonical = norito::json::to_value(value).expect(&serialize_message);
+        norito::json::from_value::<T>(canonical.clone()).expect(&canonical_message);
+        for &field in fields {
+            assert!(
+                canonical
+                    .get(field)
+                    .is_some_and(norito::json::Value::is_null),
+                "{label} must serialize `{field}` as explicit null"
+            );
+            let mut missing = canonical.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect(&object_message)
+                    .remove(field)
+                    .is_some()
+            );
+            norito::json::from_value::<T>(missing).expect_err(&omitted_message);
 
-                    let mut explicit_null = canonical.clone();
-                    explicit_null
-                        .as_object_mut()
-                        .expect(concat!($label, " JSON object"))
-                        .insert($field.to_owned(), norito::json::Value::Null);
-                    norito::json::from_value::<$ty>(explicit_null).expect(concat!(
-                        $label,
-                        " must accept an explicit null key"
-                    ));
-                )+
-            }};
+            let mut explicit_null = canonical.clone();
+            explicit_null
+                .as_object_mut()
+                .expect(&object_message)
+                .insert(field.to_owned(), norito::json::Value::Null);
+            norito::json::from_value::<T>(explicit_null).expect(&null_message);
         }
+    }
 
+    fn assert_hf_lease_instruction_nulls() {
         let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
             0xF0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0xF2,
         ])
         .expect("fixed fixture asset identifier is canonical UUIDv4");
         let nominal_fee: Quantity = "1".parse().expect("valid nominal fee");
-        assert_required_nulls!(
-            JoinSoracloudHfSharedLease {
+        assert_instruction_required_nulls::<JoinSoracloudHfSharedLease>(
+            &JoinSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
                 service_name: name("portal"),
@@ -2797,12 +2786,11 @@ mod tests {
                 base_fee: nominal_fee.clone(),
                 provenance: provenance(24),
             },
-            JoinSoracloudHfSharedLease,
-            ["apartment_name"],
-            "HF lease join instruction"
+            &["apartment_name"],
+            "HF lease join instruction",
         );
-        assert_required_nulls!(
-            LeaveSoracloudHfSharedLease {
+        assert_instruction_required_nulls::<LeaveSoracloudHfSharedLease>(
+            &LeaveSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
                 storage_class: StorageClass::Warm,
@@ -2811,12 +2799,11 @@ mod tests {
                 apartment_name: None,
                 provenance: provenance(25),
             },
-            LeaveSoracloudHfSharedLease,
-            ["service_name", "apartment_name"],
-            "HF lease leave instruction"
+            &["service_name", "apartment_name"],
+            "HF lease leave instruction",
         );
-        assert_required_nulls!(
-            RenewSoracloudHfSharedLease {
+        assert_instruction_required_nulls::<RenewSoracloudHfSharedLease>(
+            &RenewSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
                 service_name: name("portal"),
@@ -2827,34 +2814,36 @@ mod tests {
                 base_fee: nominal_fee,
                 provenance: provenance(26),
             },
-            RenewSoracloudHfSharedLease,
-            ["apartment_name"],
-            "HF lease renew instruction"
+            &["apartment_name"],
+            "HF lease renew instruction",
         );
-        assert_required_nulls!(
-            RevokeSoracloudAgentPolicy {
+    }
+
+    #[test]
+    fn authenticated_soracloud_instruction_graph_requires_explicit_nullable_keys() {
+        assert_hf_lease_instruction_nulls();
+        assert_instruction_required_nulls::<RevokeSoracloudAgentPolicy>(
+            &RevokeSoracloudAgentPolicy {
                 apartment_name: name("agent_home"),
                 capability: "wallet.spend".to_owned(),
                 reason: None,
                 provenance: provenance(28),
             },
-            RevokeSoracloudAgentPolicy,
-            ["reason"],
-            "agent policy-revoke instruction"
+            &["reason"],
+            "agent policy-revoke instruction",
         );
-        assert_required_nulls!(
-            AllowSoracloudAgentAutonomyArtifact {
+        assert_instruction_required_nulls::<AllowSoracloudAgentAutonomyArtifact>(
+            &AllowSoracloudAgentAutonomyArtifact {
                 apartment_name: name("agent_home"),
                 artifact_hash: "artifact-v1".to_owned(),
                 provenance_hash: None,
                 provenance: provenance(29),
             },
-            AllowSoracloudAgentAutonomyArtifact,
-            ["provenance_hash"],
-            "agent artifact-allow instruction"
+            &["provenance_hash"],
+            "agent artifact-allow instruction",
         );
-        assert_required_nulls!(
-            RunSoracloudAgentAutonomy {
+        assert_instruction_required_nulls::<RunSoracloudAgentAutonomy>(
+            &RunSoracloudAgentAutonomy {
                 apartment_name: name("agent_home"),
                 artifact_hash: "artifact-v1".to_owned(),
                 provenance_hash: None,
@@ -2863,12 +2852,11 @@ mod tests {
                 workflow_input_json: None,
                 provenance: provenance(30),
             },
-            RunSoracloudAgentAutonomy,
-            ["provenance_hash", "workflow_input_json"],
-            "agent autonomy-run instruction"
+            &["provenance_hash", "workflow_input_json"],
+            "agent autonomy-run instruction",
         );
-        assert_required_nulls!(
-            RecordSoracloudAgentAutonomyExecution {
+        assert_instruction_required_nulls::<RecordSoracloudAgentAutonomyExecution>(
+            &RecordSoracloudAgentAutonomyExecution {
                 apartment_name: name("agent_home"),
                 run_id: "run-1".to_owned(),
                 process_generation: 1,
@@ -2882,8 +2870,7 @@ mod tests {
                 checkpoint_artifact_hash: None,
                 error: None,
             },
-            RecordSoracloudAgentAutonomyExecution,
-            [
+            &[
                 "service_name",
                 "service_version",
                 "handler_name",
@@ -2892,10 +2879,10 @@ mod tests {
                 "checkpoint_artifact_hash",
                 "error",
             ],
-            "agent autonomy-execution instruction"
+            "agent autonomy-execution instruction",
         );
-        assert_required_nulls!(
-            RegisterSoracloudModelWeight {
+        assert_instruction_required_nulls::<RegisterSoracloudModelWeight>(
+            &RegisterSoracloudModelWeight {
                 service_name: name("portal"),
                 model_name: "vision".to_owned(),
                 weight_version: "v2".to_owned(),
@@ -2908,9 +2895,8 @@ mod tests {
                 provenance_attestation_hash: hash("attestation"),
                 provenance: provenance(31),
             },
-            RegisterSoracloudModelWeight,
-            ["parent_version"],
-            "model-weight register instruction"
+            &["parent_version"],
+            "model-weight register instruction",
         );
     }
 
@@ -2931,7 +2917,8 @@ mod tests {
 
         let validator = account(11);
         let peer_id =
-            crate::peer::PeerId::from(validator.expect_single_signatory().clone()).to_string();
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone())
+                .to_string();
         assert_unknown_rejected!(
             AdvertiseSoracloudInrouHost {
                 capability: SoraInrouHostCapabilityRecordV1 {

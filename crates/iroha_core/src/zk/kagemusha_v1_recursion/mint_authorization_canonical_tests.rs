@@ -13,7 +13,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    domain::DomainId,
     kagemusha::{
         KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaHardwarePlatformClassV1,
         kagemusha_liability_pool_id_v1, kagemusha_mint_credit_opening_commitment_preimage_v1,
@@ -21,6 +20,7 @@ use iroha_data_model::{
     },
     nexus::AxtAssetIncarnationV1,
 };
+use iroha_model_base::domain::DomainId;
 use p256::ecdsa::SigningKey;
 
 use crate::zk::pasta_sha256::PastaSha256ConfigV1;

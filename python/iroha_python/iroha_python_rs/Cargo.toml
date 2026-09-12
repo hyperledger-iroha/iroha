@@ -13,6 +13,7 @@ name = "iroha_python_rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["node-crypto", "gost", "sm"], default-features = false }
 iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["application-model"], default-features = false }
 iroha_primitives = { path = "../../../crates/iroha_primitives" }

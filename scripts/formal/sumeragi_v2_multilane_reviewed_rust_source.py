@@ -22,10 +22,10 @@ REVIEWED_RUST_SOURCE_HELPER_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_multilane_reviewed_rust_source.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
-    "scripts/formal/sumeragi_v2_proof_ledger_source_seal_contracts.py"
+    "scripts/formal/sumeragi_v2_proof_ledger_source_inventory.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "a5f764a41155f2c79b8be6db79d3a21dc53c3e3630c20079070bd1740b609ed3"
+    "051c0774b6dd8e843a834d8ff99bd27b977f3d3d4de199f660d38d4e4e9f0cb2"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (

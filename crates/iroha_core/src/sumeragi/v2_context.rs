@@ -29,10 +29,10 @@ use iroha_data_model::{
     isi::RegisterBox,
     isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     parameter::system::ConsensusHandshakeMetadata,
-    peer::PeerId,
     transaction::Executable,
 };
 use iroha_genesis::GenesisBlock;
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use std::collections::BTreeMap;
@@ -1106,15 +1106,14 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId, NetworkId,
+        NetworkId,
         account::AccountId,
         block::{BlockHeader, SignedBlock},
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         isi::{RegisterCommitteePeerWithPop, RegisterPeerWithPop, SetParameter},
-        metadata::Metadata,
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneStakeShare,
-            PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+            DataSpaceCatalog, DataSpaceMetadata, PublicLaneStakeShare, PublicLaneValidatorRecord,
+            PublicLaneValidatorStatus,
         },
         parameter::{
             Parameter,
@@ -1125,10 +1124,13 @@ mod tests {
                 SumeragiNposParameters, consensus_metadata,
             },
         },
-        peer::PeerId,
         prelude::{InstructionBox, TransactionBuilder},
     };
     use iroha_genesis::GenesisBlock;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{json::Json, numeric::Quantity};
     use std::num::NonZeroU64;
     fn test_network_id(seed: u8) -> NetworkId {

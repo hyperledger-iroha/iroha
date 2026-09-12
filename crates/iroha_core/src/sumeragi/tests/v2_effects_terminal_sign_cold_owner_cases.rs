@@ -98,6 +98,10 @@ fn ordinary_view_one_validate_fixture() -> (ReadyBodyFixture, u128, FakeServices
         Arc::clone(&transport.executor.output_guard),
         1,
     );
+    crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
+        &mut services,
+        &transport.validator_keys[usize::try_from(local).expect("local validator index")],
+    );
     planner_io
         .install_output_guard_for_test(&mut services, Arc::clone(&transport.executor.output_guard));
     let mut fixture = ReadyBodyFixture {
@@ -369,7 +373,7 @@ fn same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_ow
             let sign = fixture.owner.resolved_commit_sign_snapshot_for_test(
                 &fixture.certificate, &ledger_root,
             );
-            let (mut reopened, _leader_wire_gate) = reopen_body_owner_fixture(fixture, BodyOwnerReopenValidationForTest::Validated);
+            let (mut reopened, _leader_wire_gate) = reopen_body_owner_fixture(fixture, FixtureValidationReplay::Validated);
             reopened.owner.resolved_validate_cold_snapshot_for_test(&terminal, &ledger_root);
             reopened.owner.assert_resolved_commit_sign_cold_for_test(&sign, &ledger_root);
             assert!(reopened.owner.apply_ordinals_for_retry_test().is_empty());

@@ -29,7 +29,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
   - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
 - Norito is the data serialization codec for Iroha
-- The entire workspace targets the Rust standard library (`std`). WASM/no-std builds are no longer supported and should not be considered when making changes.
+- The workspace targets the Rust standard library (`std`). The `iroha_js_codec_wasm` browser adapter and its shared codec dependencies additionally target `wasm32-unknown-unknown` with `std`, real WebCrypto entropy and serial execution. Use the SDK's explicit browser build and conformance workflow for that boundary; node/runtime WASM and general no-std builds remain unsupported.
 - Universal-account model:
   - `AccountId` is the canonical account identity and is always domainless.
   - Domain context for routing, aliasing, and ownership lives outside the canonical account identity in alias bindings and domain-owned entities.

@@ -2,7 +2,12 @@
 use super::*;
 use crate::{
     isi::sorafs::MutateSorafsStreamTokenCustody,
-    sorafs::{capacity::ProviderId, stream_token_custody::SorafsStreamTokenCustodyActionV1},
+    sorafs::{
+        capacity::ProviderId,
+        stream_token_custody::{
+            SorafsStreamTokenCustodyActionV1, SorafsStreamTokenCustodyRevocationV1,
+        },
+    },
 };
 
 #[test]
@@ -11,10 +16,10 @@ fn stream_token_custody_box_uses_one_canonical_wire_identity_and_roundtrips() {
         provider_id: ProviderId::new([3; 32]),
         expected_revision: 4,
         expected_digest: [5; 32],
-        action: SorafsStreamTokenCustodyActionV1::Revoke {
+        action: SorafsStreamTokenCustodyActionV1::Revoke(SorafsStreamTokenCustodyRevocationV1 {
             signer: true,
             attester: false,
-        },
+        }),
     };
     let boxed: InstructionBox = instruction.clone().into();
     let expected = "iroha.instruction.v1::sorafs::MutateSorafsStreamTokenCustody";

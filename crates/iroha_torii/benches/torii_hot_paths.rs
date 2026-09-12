@@ -32,6 +32,8 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox, executor::prelude::FindParameters},
 };
 use iroha_logger::Level;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::const_vec::ConstVec;
 use iroha_telemetry::metrics::Metrics;
@@ -139,7 +141,7 @@ fn query_load_account_alias(index: usize) -> AccountAlias {
         Some(AccountAliasDomain::new(
             Name::from_str(&format!("bank{}", index % 8)).expect("alias domain"),
         )),
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
 }
 fn query_load_account_id(index: usize) -> AccountId {
@@ -268,7 +270,7 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
         Some(AccountAliasDomain::new(
             Name::from_str("bench").expect("authority alias domain"),
         )),
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let mut domains = Vec::with_capacity(profile.dataset_accounts + 1);
     domains.push(Domain::new(domain_id.clone()).build(&authority));

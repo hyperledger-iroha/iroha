@@ -1,9 +1,7 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
 use iroha_crypto as _;
-use iroha_data_model::{
-    nexus::{DataSpaceId, LaneId},
-    prelude::Quantity,
-};
+use iroha_data_model::prelude::Quantity;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use ivm::{
     ProgramMetadata, axt, encoding, instruction,
     kotodama::{

@@ -1,37 +1,32 @@
 /// Immutable Queue boundary spanning Kura-only lane-evidence startup repair.
 ///
 /// The runner's one-shot reconciliation flag is independent of Queue's
-/// durable publication gate. An empty checked replay has no owners to
-/// quarantine, so Queue correctly publishes `false`; a non-empty replay must
-/// remain quarantined. Revalidation prevents evidence repair from racing or
-/// masking Queue ownership/gate drift before reservation planning.
+/// durable publication gate. Both empty and non-empty checked replays must
+/// remain quarantined until exact State/Kura-aware reconciliation publishes
+/// completion. Revalidation prevents evidence repair from racing or masking
+/// Queue ownership/gate drift before reservation planning.
 struct LaneApplicationEvidenceRepairQueueFence {
     snapshot: crate::queue::LaneQueueReservationReconciliationSnapshotV1,
-    quarantine: bool,
 }
 impl LaneApplicationEvidenceRepairQueueFence {
     fn capture(queue: &Queue) -> Result<Self, V2RunnerError> {
         let snapshot = queue
             .lane_reservation_reconciliation_snapshot()
             .map_err(V2ReservationLifecycleError::from)?;
-        let quarantine = queue.lane_reservation_startup_reconciliation_pending();
-        if quarantine != !snapshot.is_empty() {
+        if !queue.lane_reservation_startup_reconciliation_pending() {
             return Err(V2RunnerError::Service(
-                "lane application evidence repair reached startup with a Queue gate inconsistent with its exact replay snapshot"
+                "lane application evidence repair reached startup after the Queue publication gate opened"
                     .to_owned(),
             ));
         }
-        Ok(Self {
-            snapshot,
-            quarantine,
-        })
+        Ok(Self { snapshot })
     }
     fn revalidate(&self, queue: &Queue) -> Result<(), V2RunnerError> {
         let snapshot = queue
             .lane_reservation_reconciliation_snapshot()
             .map_err(V2ReservationLifecycleError::from)?;
         if snapshot != self.snapshot
-            || queue.lane_reservation_startup_reconciliation_pending() != self.quarantine
+            || !queue.lane_reservation_startup_reconciliation_pending()
         {
             return Err(V2RunnerError::Service(
                 "lane application evidence repair observed Queue ownership or publication-gate drift"

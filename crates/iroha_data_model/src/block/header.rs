@@ -773,8 +773,8 @@ mod tests {
             HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
                 [0xC7; Hash::LENGTH],
             )),
-            crate::nexus::LaneId::new(1),
-            crate::nexus::DataSpaceId::new(2),
+            iroha_model_base::topology::LaneId::new(1),
+            iroha_model_base::topology::DataSpaceId::new(2),
         )]);
         HashOf::new(&context)
     }

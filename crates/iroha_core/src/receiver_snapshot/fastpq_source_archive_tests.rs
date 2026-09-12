@@ -15,8 +15,8 @@ use iroha_data_model::{
         verify_fastpq_ordinary_source_statement_manifest_write_v1,
         verify_fastpq_ordinary_source_statement_opening_v1,
     },
-    nexus::DataSpaceId,
 };
+use iroha_model_base::topology::DataSpaceId;
 
 fn source() -> FastpqSourceStatementContextV1 {
     FastpqSourceStatementContextV1 {

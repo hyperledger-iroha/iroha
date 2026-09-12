@@ -17,7 +17,6 @@ use iroha_data_model::{
         AddSignatory, InstructionBox, RemoveSignatory, SetAccountQuorum,
         error::{InstructionExecutionError, InvalidParameterError},
     },
-    metadata::Metadata,
     permission::Permission,
     prelude::{Grant, Json, Level, Log, Register, Revoke},
     query::error::{FindError, QueryExecutionFail},
@@ -30,6 +29,7 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigProposalTerminalState, MultisigProposalTerminalStatus, MultisigProposalValue,
     MultisigPropose, MultisigRegister, MultisigSpec,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use mv::storage::StorageReadOnly;
 use std::{
@@ -375,7 +375,7 @@ fn account_role_suffix(account: &AccountId) -> String {
     HashOf::new(account).to_string()
 }
 fn multisig_role_for(
-    home_domain: Option<&iroha_data_model::domain::DomainId>,
+    home_domain: Option<&iroha_model_base::domain::DomainId>,
     account: &AccountId,
 ) -> RoleId {
     let suffix = account_role_suffix(account);
@@ -392,7 +392,7 @@ fn multisig_role_for(
 fn rekey_multisig_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     account: &AccountId,
-    home_domain: Option<&iroha_data_model::domain::DomainId>,
+    home_domain: Option<&iroha_model_base::domain::DomainId>,
     spec: &MultisigSpec,
 ) -> Result<AccountId, InstructionExecutionError> {
     ensure_signatories_are_single(spec).map_err(map_validation_fail)?;
@@ -443,7 +443,7 @@ fn rekey_account_id(
     state_transaction: &mut StateTransaction<'_, '_>,
     old_account: &AccountId,
     new_account: &AccountId,
-    home_domain: Option<&iroha_data_model::domain::DomainId>,
+    home_domain: Option<&iroha_model_base::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
     if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
         &state_transaction.world,
@@ -1117,7 +1117,7 @@ fn revoke_role_if_present(
 fn multisig_state_from_policy(
     state_transaction: &mut StateTransaction<'_, '_>,
     multisig_account: &AccountId,
-    home_domain: Option<iroha_data_model::domain::DomainId>,
+    home_domain: Option<iroha_model_base::domain::DomainId>,
     policy: &MultisigPolicy,
 ) -> Result<MultisigAccountState, ValidationFail> {
     let spec = multisig_spec_from_policy(multisig_account, policy)?;
@@ -2377,7 +2377,7 @@ fn resolve_account_for_instruction(
 }
 fn materialize_missing_signatory_accounts(
     state_transaction: &mut StateTransaction<'_, '_>,
-    home_domain: Option<&iroha_data_model::domain::DomainId>,
+    home_domain: Option<&iroha_model_base::domain::DomainId>,
     multisig_account: &AccountId,
     spec: &MultisigSpec,
 ) -> Result<(), ValidationFail> {
@@ -2398,7 +2398,7 @@ fn ensure_signatory_account_exists(
     state_transaction: &mut StateTransaction<'_, '_>,
     signatory: &AccountId,
     authority: &AccountId,
-    _home_domain: Option<&iroha_data_model::domain::DomainId>,
+    _home_domain: Option<&iroha_model_base::domain::DomainId>,
 ) -> Result<(), ValidationFail> {
     match resolve_signatory_account(state_transaction, signatory) {
         Ok(_) => Ok(()),
@@ -2492,7 +2492,7 @@ fn is_multisig(
 }
 fn domain_owner(
     state_transaction: &StateTransaction<'_, '_>,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
 ) -> Result<AccountId, ValidationFail> {
     state_transaction
         .world
@@ -2513,7 +2513,7 @@ fn account_exists(
 fn configure_roles(
     state_transaction: &mut StateTransaction<'_, '_>,
     role_owner: &AccountId,
-    home_domain: Option<&iroha_data_model::domain::DomainId>,
+    home_domain: Option<&iroha_model_base::domain::DomainId>,
     multisig_account: &AccountId,
     spec: &MultisigSpec,
 ) -> Result<(), ValidationFail> {
@@ -2562,7 +2562,7 @@ fn multisig_spec_strict(
 fn multisig_home_domain(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
-) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
+) -> Result<Option<iroha_model_base::domain::DomainId>, ValidationFail> {
     Ok(load_multisig_account_state(state_transaction, multisig_account)?.home_domain)
 }
 fn ensure_role_available(
@@ -2790,7 +2790,7 @@ fn load_multisig_account_state_optional(
     }
     if let Some(metadata_home_domain) = account.metadata().get(&home_domain_key()).cloned() {
         let metadata_home_domain = metadata_home_domain
-            .try_into_any_norito::<Option<iroha_data_model::domain::DomainId>>()
+            .try_into_any_norito::<Option<iroha_model_base::domain::DomainId>>()
             .map_err(|err| {
                 ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
                     "invalid multisig home-domain metadata for `{resolved_account}`: {err}"
@@ -3189,7 +3189,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        ChainId, IntoKeyValue, Registrable,
+        IntoKeyValue, Registrable,
         account::{
             Account, AccountController, AccountId, MultisigMember, MultisigPolicy,
             rekey::{AccountAlias, AccountAliasDomain, AccountRekeyTransitionProvenance},
@@ -3200,7 +3200,6 @@ mod tests {
         },
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
-        domain::DomainId,
         isi::{
             AddSignatory, ExecuteTrigger, Grant, Mint, RemoveSignatory, SetAccountQuorum,
             SetKeyValue,
@@ -3212,7 +3211,7 @@ mod tests {
             },
         },
         kaigi::{KaigiId, KaigiRecord, NewKaigi},
-        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, UniversalAccountId},
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
         prelude::{Domain, InstructionBox, Json, Quantity, Register},
@@ -3225,6 +3224,9 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use std::{
@@ -3482,7 +3484,7 @@ mod tests {
             World::new(),
             "multisig-register-refresh-ttl"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
@@ -3534,7 +3536,7 @@ mod tests {
             World::new(),
             "multisig-register-materialize"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
@@ -3571,7 +3573,7 @@ mod tests {
             World::new(),
             "multisig-register-authority-reject"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
@@ -3598,7 +3600,7 @@ mod tests {
             World::new(),
             "multisig-register-persists-metadata"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
@@ -3638,7 +3640,7 @@ mod tests {
             .get(&home_domain_key())
             .cloned()
             .expect("multisig home-domain metadata");
-        let stored_home_domain: Option<iroha_data_model::domain::DomainId> = stored_home_domain
+        let stored_home_domain: Option<iroha_model_base::domain::DomainId> = stored_home_domain
             .try_into_any_norito()
             .expect("home-domain should decode");
         assert_eq!(
@@ -3660,7 +3662,7 @@ mod tests {
             World::new(),
             "multisig-register-invalid-no-materialize"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
@@ -3700,7 +3702,7 @@ mod tests {
             World::new(),
             "multisig-register-existing-account-no-materialize"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
@@ -3737,7 +3739,7 @@ mod tests {
     #[test]
     fn add_signatory_updates_multisig_spec_and_roles() {
         tx!(state, block, tx, World::new(), "multisig-add-signatory");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -3810,7 +3812,7 @@ mod tests {
             World::new(),
             "multisig-add-signatory-alias-continuity"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -3974,7 +3976,7 @@ mod tests {
             World::new(),
             "multisig-add-signatory-materialize"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -4009,7 +4011,7 @@ mod tests {
     #[test]
     fn remove_signatory_updates_multisig_spec_and_revokes_roles() {
         tx!(state, block, tx, World::new(), "multisig-remove-signatory");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -4074,7 +4076,7 @@ mod tests {
             World::new(),
             "multisig-remove-signatory-alias-continuity"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -4167,7 +4169,7 @@ mod tests {
     #[test]
     fn set_account_quorum_updates_multisig_spec() {
         tx!(state, block, tx, World::new(), "multisig-set-quorum");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -4417,7 +4419,7 @@ mod tests {
             World::new(),
             "multisig-set-quorum-alias-continuity"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -4910,7 +4912,7 @@ mod tests {
     #[test]
     fn rekey_account_id_updates_subject_domain_indexes() {
         tx!(state, block, tx, World::new(), "multisig-rekey-indexes");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
         let old_key = checked_keypair();
         let old_account = new_account_id(&old_key);
@@ -5166,8 +5168,8 @@ mod tests {
         let old_account = new_account_id(&old_key);
         let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
-        let valid_lane = iroha_data_model::nexus::LaneId::new(8);
-        let malformed_lane = iroha_data_model::nexus::LaneId::new(9);
+        let valid_lane = iroha_model_base::topology::LaneId::new(8);
+        let malformed_lane = iroha_model_base::topology::LaneId::new(9);
         let active = iroha_data_model::nexus::PublicLaneValidatorStatus::Active;
         let reward_asset_definition =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -5187,7 +5189,7 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: valid_lane,
                 validator: old_account.clone(),
-                peer_id: iroha_data_model::peer::PeerId::from(
+                peer_id: iroha_model_base::peer::PeerId::from(
                     old_account.expect_single_signatory().clone(),
                 ),
                 stake_account: old_account.clone(),
@@ -5205,7 +5207,7 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: malformed_lane,
                 validator: old_account.clone(),
-                peer_id: iroha_data_model::peer::PeerId::from(
+                peer_id: iroha_model_base::peer::PeerId::from(
                     old_account.expect_single_signatory().clone(),
                 ),
                 stake_account: old_account.clone(),
@@ -5353,7 +5355,7 @@ mod tests {
             World::new(),
             "multisig-rekey-asset-holder-index"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
         let old_key = checked_keypair();
         let old_account = new_account_id(&old_key);
@@ -5425,7 +5427,7 @@ mod tests {
     }
     #[test]
     fn multisig_register_preserves_explicit_home_domain() {
-        let source_domain: iroha_data_model::domain::DomainId =
+        let source_domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
         let signer = new_account_id(&checked_keypair());
         let spec = spec(BTreeMap::from([(signer.clone(), 1)]), 1);
@@ -5581,7 +5583,7 @@ mod tests {
             &owner_id,
             MultisigRegister::with_account(
                 multisig_seed,
-                None::<iroha_data_model::domain::DomainId>,
+                None::<iroha_model_base::domain::DomainId>,
                 spec,
             ),
         )
@@ -5627,7 +5629,7 @@ mod tests {
             World::new(),
             "multisig-set-quorum-invalid"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -5663,7 +5665,7 @@ mod tests {
     #[test]
     fn multisig_propose_rejects_ttl_above_default() {
         tx!(state, block, tx, World::new(), "multisig-ttl-chain");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("ttl", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -5706,7 +5708,7 @@ mod tests {
     #[test]
     fn multisig_signatory_can_propose_without_roles() {
         tx!(state, block, tx, World::new(), "multisig-signatory-propose");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("signatory", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -5728,7 +5730,7 @@ mod tests {
     fn multisig_propose_repairs_missing_state_from_controller() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("repairable", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -5813,7 +5815,7 @@ mod tests {
             World::new(),
             "multisig-signatory-index-register"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("signatory-index", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -5846,7 +5848,7 @@ mod tests {
             World::new(),
             "multisig-signatory-index-rekey"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("signatory-rekey", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -5909,7 +5911,6 @@ mod tests {
             HasMetadata,
             events::execute_trigger::ExecuteTriggerEventFilter,
             isi::ExecuteTrigger,
-            metadata::Metadata,
             prelude::Json,
             transaction::Executable,
             trigger::{
@@ -5917,6 +5918,7 @@ mod tests {
                 action::{Action, Repeats},
             },
         };
+        use iroha_model_base::metadata::Metadata;
         use iroha_model_base::name::Name;
         use ivm::{
             KotodamaCompiler,
@@ -5958,7 +5960,7 @@ mod tests {
             &owner_id,
             MultisigRegister::with_account(
                 multisig_id.clone(),
-                None::<iroha_data_model::domain::DomainId>,
+                None::<iroha_model_base::domain::DomainId>,
                 spec.clone(),
             ),
         )
@@ -6072,7 +6074,7 @@ seiyaku TriggerDispatch {
     #[test]
     fn multisig_signatory_can_approve_without_roles() {
         tx!(state, block, tx, World::new(), "multisig-signatory-approve");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("signatory-approve", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -6297,7 +6299,7 @@ seiyaku TriggerDispatch {
     }
     #[test]
     fn deliberate_policy_change_invalidation_terminalizes_every_other_proposal_before_rekey() {
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("recover", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -6555,7 +6557,7 @@ seiyaku TriggerDispatch {
               }}
 
               kotoage fn run(Json ev) authorize("staged_mint_request_run") {{
-                require(run_impl(ev).is_some(), StagedMintError::MissingOrInvalidField);
+                require(run_impl(ev: ev).is_some(), StagedMintError::MissingOrInvalidField);
               }}
             }}
             "#,
@@ -6593,7 +6595,7 @@ seiyaku TriggerDispatch {
             .execute(&multisig_id, &mut tx)
             .expect("register event-argument-aware staged mint trigger");
         let args_json = format!(
-            r#"{{"ev":{{"action":"create","amount":"111","asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","created_at_ms":1779225455574,"expires_at_ms":1779311855574,"request_id":"mrtest","requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d","to_account_id":"{multisig_id}"}}}}"#,
+            r#"{{"ev":{{"action":"create","amount":"111","asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","created_at_ms":"1779225455574","expires_at_ms":"1779311855574","request_id":"mrtest","requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d","to_account_id":"{multisig_id}"}}}}"#,
             multisig_id = multisig_id,
         );
         let instructions = vec![InstructionBox::from(
@@ -6650,7 +6652,7 @@ seiyaku TriggerDispatch {
             query_handle,
             ChainId::from("multisig-expired-duplicate-replace"),
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("retryable", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -6712,9 +6714,9 @@ seiyaku TriggerDispatch {
             World::new(),
             "multisig-cross-domain-signatories"
         );
-        let multisig_domain: iroha_data_model::domain::DomainId =
+        let multisig_domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("multisig-home", "universal").unwrap();
-        let signer_domain: iroha_data_model::domain::DomainId =
+        let signer_domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("signatory-remote", "universal").unwrap();
         let owner = checked_keypair();
         let signer1 = checked_keypair();
@@ -6806,9 +6808,9 @@ seiyaku TriggerDispatch {
             World::new(),
             "multisig-unique-subject-approvals"
         );
-        let home_domain: iroha_data_model::domain::DomainId =
+        let home_domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("subject-home", "universal").unwrap();
-        let alt_domain: iroha_data_model::domain::DomainId =
+        let alt_domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("subject-alt", "universal").unwrap();
         let owner = checked_keypair();
         let shared_subject = checked_keypair();
@@ -6919,7 +6921,7 @@ seiyaku TriggerDispatch {
             World::new(),
             "multisig-signatories-single"
         );
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("signatory-single", "universal").unwrap();
         let (owner, leaf_a, leaf_b) = (checked_keypair(), checked_keypair(), checked_keypair());
         let owner_id = new_account_id(&owner);
@@ -7205,7 +7207,7 @@ seiyaku TriggerDispatch {
     #[test]
     fn multisig_spec_missing_metadata_returns_error() {
         tx!(state, block, tx, World::new(), "multisig-missing-spec");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("missing", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -7219,7 +7221,7 @@ seiyaku TriggerDispatch {
     }
     #[test]
     fn multisig_role_for_large_policy_uses_hash_suffix() {
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("weights", "universal").unwrap();
         let member_count = (u8::MAX as usize) + 1;
         let mut members = Vec::with_capacity(member_count);
@@ -7248,7 +7250,7 @@ seiyaku TriggerDispatch {
     #[test]
     fn multisig_approval_weight_sum_does_not_overflow() {
         tx!(state, block, tx, World::new(), "multisig-weight-overflow");
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("weights", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -7308,7 +7310,7 @@ seiyaku TriggerDispatch {
     }
     #[test]
     fn replace_account_controller_single_to_multisig_materializes_members_and_preserves_alias() {
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("replace", "universal").unwrap();
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
@@ -7372,7 +7374,7 @@ seiyaku TriggerDispatch {
     }
     #[test]
     fn replace_account_controller_multisig_to_single_clears_memberships() {
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("single", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -7436,7 +7438,7 @@ seiyaku TriggerDispatch {
     #[test]
     fn replace_account_controller_multisig_to_multisig_repoints_memberships_and_preserves_outstanding_proposals()
      {
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("repoint", "universal").unwrap();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();

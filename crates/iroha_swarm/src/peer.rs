@@ -110,8 +110,8 @@ pub fn network(
         })
         .collect()
 }
-pub fn chain() -> iroha_data_model::ChainId {
-    iroha_data_model::ChainId::from(crate::CHAIN_ID)
+pub fn chain() -> iroha_model_base::chain::ChainId {
+    iroha_model_base::chain::ChainId::from(crate::CHAIN_ID)
 }
 pub fn peer(
     name: &str,

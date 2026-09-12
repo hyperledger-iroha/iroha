@@ -767,16 +767,14 @@ fn value_from_u32(value: u32) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        da::{
-            manifest::{ChunkCommitment, ChunkRole},
-            types::{
-                BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-                ExtraMetadata, FecScheme, RetentionPolicy, StorageTicketId,
-            },
+    use iroha_data_model::da::{
+        manifest::{ChunkCommitment, ChunkRole},
+        types::{
+            BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
+            ExtraMetadata, FecScheme, RetentionPolicy, StorageTicketId,
         },
-        nexus::LaneId,
     };
+    use iroha_model_base::topology::LaneId;
     use std::fs;
     use tempfile::tempdir;
 

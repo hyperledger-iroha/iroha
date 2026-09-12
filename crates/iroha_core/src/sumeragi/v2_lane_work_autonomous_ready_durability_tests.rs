@@ -103,6 +103,18 @@ fn install_autonomous_test_queue(
     queue
         .replay_plan_journal(adapter.state.as_ref())
         .expect("replay autonomous queue plan journal");
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture autonomous fixture startup ownership");
+    if snapshot.is_empty() {
+        let receipt = queue
+            .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+            .expect("bind exact empty autonomous fixture startup receipt")
+            .expect("empty autonomous fixture replay remains unchanged");
+        queue
+            .complete_lane_reservation_startup_reconciliation(receipt)
+            .expect("complete empty autonomous fixture startup before admission");
+    }
     adapter
         .install_lane_drain_queue(Arc::clone(&queue))
         .expect("install autonomous production queue");
@@ -115,6 +127,29 @@ fn enqueue_autonomous_test_transactions(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
     count: usize,
+) -> Vec<TransactionEntrypoint> {
+    enqueue_autonomous_test_transactions_with_builder(
+        adapter,
+        queue,
+        lane_id,
+        dataspace_id,
+        count,
+        |builder, index| {
+            builder.with_instructions([Log::new(
+                Level::INFO,
+                format!("autonomous lane fixture {index}"),
+            )])
+        },
+    )
+}
+
+fn enqueue_autonomous_test_transactions_with_builder(
+    adapter: &V2LaneWorkAdapter,
+    queue: &Queue,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    count: usize,
+    build: impl Fn(TransactionBuilder, usize) -> TransactionBuilder,
 ) -> Vec<TransactionEntrypoint> {
     (0..count)
         .map(|index| {
@@ -139,22 +174,16 @@ fn enqueue_autonomous_test_transactions(
                 );
                 world.commit();
             }
-            let transaction = TransactionBuilder::new(
+            let builder = TransactionBuilder::new(
                 adapter.context.network_id,
                 AccountId::new(key.public_key().clone()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
-            .with_instructions([Log::new(
-                Level::INFO,
-                format!("autonomous lane fixture {index}"),
-            )])
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
-            .sign(key.private_key());
+            );
+            let transaction = build(builder, index)
+                .with_admission_intent(
+                    iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+                )
+                .sign(key.private_key());
             let accepted =
                 crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
             let entrypoint = accepted.entrypoint().clone();
@@ -189,6 +218,72 @@ fn enqueue_autonomous_test_transactions(
             entrypoint
         })
         .collect()
+}
+
+#[test]
+fn autonomous_full_block_gas_call_reserves_with_idle_catalog_route() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    assert_eq!(
+        adapter
+            .state
+            .consensus_lane_routes_at_height(adapter.context.height)
+            .len(),
+        2,
+        "the idle catalog route previously halved the only busy lane's gas budget"
+    );
+    let journal_dir = tempfile::tempdir().expect("gas-bound reservation journal");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &journal_dir.path().join("lane-reservations.norito"),
+    );
+    let block_gas = {
+        let world = adapter.state.world_view();
+        crate::state::gas_limit_from_parameters(world.parameters())
+    };
+    let entrypoints = enqueue_autonomous_test_transactions_with_builder(
+        &adapter,
+        &queue,
+        lane_id,
+        dataspace_id,
+        1,
+        |builder, _| {
+            builder
+                .with_fee_payment_intent(
+                    iroha_data_model::transaction::FeePaymentIntent::authority(
+                        Vec::new(),
+                        NonZeroU64::new(block_gas),
+                    ),
+                )
+                .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                    iroha_data_model::transaction::executable::ContractInvocation {
+                        contract_address:
+                            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+                                .parse()
+                                .expect("contract address"),
+                        expected_code_hash: Hash::new(b"full-block-gas-source"),
+                        entrypoint: "configure".to_owned(),
+                        arguments: None,
+                    },
+                ))
+        },
+    );
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("full-cap source production");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .next()
+        .expect("the busy lane publishes despite the idle second route");
+    assert_eq!(payload.entrypoints, entrypoints);
+    assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+    assert!(queue.fifo_snapshot_for_test().is_empty());
 }
 
 fn install_autonomous_fixture_queue_plan_registry_value(
@@ -5793,7 +5888,7 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     assert!(!adapter.output_guard.restart_required());
 }
 #[test]
-fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
+fn repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligible() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
@@ -5804,6 +5899,9 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         adapter.context.network_id,
         AccountId::new(transaction_key.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
     )
     .sign(transaction_key.private_key());
     let accepted =
@@ -5823,13 +5921,12 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),
-            "waiting for deterministic autonomous lane authors to publish durable FIFO reservations"
+            "QueuePlanSynced work requires its globally admitted autonomous reservation"
         );
     }
 
     // QueuePlan-synchronized ownership remains autonomous even when the
-    // topology exposes only one route and the broader multi-lane exclusion is
-    // therefore disabled.
+    // topology exposes only one route.
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
     let transaction_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
@@ -5856,7 +5953,280 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),
-            "waiting for deterministic autonomous lane authors to publish durable FIFO reservations"
+            "QueuePlanSynced work requires its globally admitted autonomous reservation"
         );
     }
+}
+
+#[test]
+fn autonomous_producer_skips_idle_routes_with_an_occupied_queue() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    let directory = tempfile::tempdir().expect("route prefilter queue journals");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &directory.path().join("reservations.norito"),
+    );
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    let fifo = queue.fifo_snapshot_for_test();
+    // A previously attempted occupied route still leaves the idle catalog route
+    // in the scheduler. Its storage must not be needed for a new reservation.
+    adapter
+        .autonomous_production_attempted_routes
+        .insert((lane_id, dataspace_id));
+    let idle_routes = adapter
+        .state
+        .consensus_lane_routes_at_height(adapter.context.height)
+        .into_keys()
+        .filter(|route| *route != (lane_id, dataspace_id))
+        .collect::<Vec<_>>();
+    assert!(!idle_routes.is_empty());
+    let mut damaged_paths = Vec::new();
+    for (idle_lane, idle_dataspace) in &idle_routes {
+        let incarnation = adapter
+            .state
+            .lane_incarnation_at_height(*idle_lane, adapter.context.height)
+            .expect("idle catalog lane incarnation");
+        assert!(!queue.lane_has_pending_work(*idle_lane, *idle_dataspace, incarnation));
+        let path = adapter
+            .state
+            .nexus_snapshot()
+            .lane_config
+            .entry(*idle_lane)
+            .expect("idle catalog storage entry")
+            .blocks_dir(adapter.kura.store_root())
+            .join("lane_artifacts/ownerships.norito");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"unused idle route input").unwrap();
+        damaged_paths.push(path);
+    }
+    let attempted = adapter.autonomous_production_attempted_routes.clone();
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("occupied queue does not imply work on every route");
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo);
+    assert_eq!(adapter.autonomous_production_attempted_routes, attempted);
+    assert!(queue.live_lane_reservations().is_empty());
+    assert!(!adapter.output_guard.restart_required());
+    for path in damaged_paths {
+        assert_eq!(std::fs::read(path).unwrap(), b"unused idle route input");
+    }
+}
+
+#[test]
+fn autonomous_producer_outside_lane_committee_skips_storage_planning() {
+    let (mut observer, global_keys) = fixture_at_height_inner_with_kura_and_local_index(
+        wire::ConsensusMode::Permissioned,
+        9,
+        true,
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+        Some(3),
+        false,
+    );
+    let extra_key = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::BlsNormal)
+        .expect("deterministic lane-only validator");
+    let id = ConsensusKeyId::new(
+        ConsensusKeyRole::Validator,
+        "producer-prefilter-lane-validator",
+    );
+    let record = ConsensusKeyRecord {
+        id: id.clone(),
+        public_key: extra_key.public_key().clone(),
+        pop: Some(iroha_crypto::bls_normal_pop_prove(extra_key.private_key()).unwrap()),
+        activation_height: 0,
+        expiry_height: None,
+        replaces: None,
+        status: ConsensusKeyStatus::Active,
+    };
+    {
+        let mut world = observer.state.world.block();
+        world.consensus_keys.insert(id.clone(), record.clone());
+        world
+            .consensus_keys_by_pk
+            .insert(record.public_key.to_string(), vec![id]);
+        world.commit();
+    }
+    let mut lane_keys = global_keys
+        .iter()
+        .filter(|key| key.public_key() != observer.local_peer.public_key())
+        .cloned()
+        .collect::<Vec<_>>();
+    lane_keys.push(extra_key);
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut observer, &lane_keys, lane_id, dataspace_id);
+    let context = observer.context.clone();
+    let restart = LaneAdapterRestartParts::capture(&observer);
+    drop(observer);
+    let mut adapter = restart
+        .reopen_isolated(context, true)
+        .expect("open producer journals after the complete four-validator lane context");
+    let committee = adapter
+        .state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+            adapter.context.height,
+        )
+        .expect("valid occupied-lane committee");
+    assert_eq!(committee.validators().len(), 4);
+    assert!(!committee.validators().contains(&adapter.local_peer));
+    let directory = tempfile::tempdir().expect("non-member queue journals");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &directory.path().join("reservations.norito"),
+    );
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    let fifo = queue.fifo_snapshot_for_test();
+    let incarnation = adapter
+        .state
+        .lane_incarnation_at_height(lane_id, adapter.context.height)
+        .unwrap();
+    assert!(queue.lane_has_pending_work(lane_id, dataspace_id, incarnation));
+    let path = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(lane_id)
+        .unwrap()
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts/ownerships.norito");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"unneeded non-member planning input").unwrap();
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("a non-member cannot be the lane author");
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo);
+    assert!(adapter.autonomous_production_attempted_routes.is_empty());
+    assert!(queue.live_lane_reservations().is_empty());
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+    assert!(!adapter.output_guard.restart_required());
+    assert_eq!(
+        std::fs::read(path).unwrap(),
+        b"unneeded non-member planning input"
+    );
+}
+
+#[test]
+fn empty_autonomous_queue_skips_unneeded_lane_storage_probes() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    let directory = tempfile::tempdir().expect("idle producer queue journals");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &directory.path().join("reservations.norito"),
+    );
+    assert_eq!(queue.active_len(), 0);
+    assert!(adapter.pending_autonomous_reservation_batches.is_empty());
+    let ownerships = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(lane_id)
+        .expect("exact idle lane")
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts/ownerships.norito");
+    std::fs::create_dir_all(ownerships.parent().unwrap())
+        .expect("prepare owned idle test directory");
+    let damaged = b"invalid idle lane ownership bytes";
+    std::fs::write(&ownerships, damaged).expect("plant unreadable unused planning input");
+    let attempted = adapter.autonomous_production_attempted_routes.clone();
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("an empty queue does not request a new reservation plan");
+    assert_eq!(queue.active_len(), 0);
+    assert_eq!(adapter.autonomous_production_attempted_routes, attempted);
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+    assert!(adapter.pending_autonomous_reservation_batches.is_empty());
+    assert!(!adapter.output_guard.restart_required());
+    assert_eq!(std::fs::read(ownerships).unwrap(), damaged);
+}
+
+#[test]
+fn autonomous_producer_resumes_after_an_empty_queue_tick() {
+    for mode in [wire::ConsensusMode::Permissioned, wire::ConsensusMode::Npos] {
+        let (mut adapter, keys) = autonomous_test_fixture(mode, true);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+        let directory = tempfile::tempdir().expect("resuming producer queue journals");
+        let queue = install_autonomous_test_queue(
+            &mut adapter,
+            lane_id,
+            dataspace_id,
+            &directory.path().join("reservations.norito"),
+        );
+        adapter.next_autonomous_producer_tick = Instant::now();
+        adapter
+            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+            .expect("idle producer pass");
+        assert!(adapter.autonomous_production_attempted_routes.is_empty());
+        let entries =
+            enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+        assert_eq!(queue.active_len(), 1);
+        adapter.next_autonomous_producer_tick = Instant::now();
+        adapter
+            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+            .expect("next eligible tick produces newly admitted work");
+        let payload = adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .next()
+            .expect("new queue work produces an authenticated payload");
+        assert_eq!(payload.entrypoints, entries);
+        assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+        assert!(!adapter.output_guard.restart_required());
+    }
+}
+
+#[test]
+fn active_autonomous_queue_still_rejects_corrupt_lane_planning_input() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    let directory = tempfile::tempdir().expect("active producer queue journals");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &directory.path().join("reservations.norito"),
+    );
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    let fifo = queue.fifo_snapshot_for_test();
+    let ownerships = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(lane_id)
+        .expect("exact active lane")
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts/ownerships.norito");
+    std::fs::create_dir_all(ownerships.parent().unwrap())
+        .expect("prepare owned active test directory");
+    std::fs::write(&ownerships, b"invalid active lane ownership bytes")
+        .expect("plant unreadable occupied planning input");
+    adapter.next_autonomous_producer_tick = Instant::now();
+    assert!(matches!(
+        adapter.schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2)),
+        Err(V2LaneWorkError::Persistence(_))
+    ));
+    assert!(adapter.output_guard.restart_required());
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo);
+    assert!(queue.live_lane_reservations().is_empty());
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
 }

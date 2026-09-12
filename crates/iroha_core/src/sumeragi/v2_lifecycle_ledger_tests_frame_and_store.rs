@@ -1214,6 +1214,21 @@ fn combined_pair_classifier_requires_exact_fresh_owner_histories() {
     missing_validate
         .records
         .retain(|record| record.ordinal != 1);
+    assert!(
+        missing_validate
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .is_err(),
+        "removing Validate must leave its inherited owner invalid"
+    );
+    assert!(
+        missing_validate
+            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+            .is_err(),
+        "classification must reject the missing immutable owner history"
+    );
+    // Rewriting the first ordinal changes this into a standalone owner shape.
+    // Frame classification cannot grant it the missing Validate lineage; the
+    // executable recovery corridor must still authenticate its own WAL root.
     for record in missing_validate
         .records
         .iter_mut()
@@ -1224,12 +1239,17 @@ fn combined_pair_classifier_requires_exact_fresh_owner_histories() {
     missing_validate
         .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
         .expect("a standalone Prepare-to-Broadcast owner remains generically valid");
-    assert!(
-        missing_validate
-            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
-            .expect("classify missing Validate lineage")
-            .is_empty()
+    let standalone_pairs = missing_validate
+        .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+        .expect("classify rewritten standalone owner shape");
+    let [standalone_pair] = standalone_pairs.as_slice() else {
+        panic!("rewritten fresh owner has one standalone pair shape");
+    };
+    assert_eq!(
+        standalone_pair.parent(),
+        RecoveredLifecycleSignedBroadcastAndSignParentV1::StandalonePrepare
     );
+    assert!(!standalone_pair.exactly_matches_ledger(&committed_prepare_broadcast_and_sign_ledger()));
     let mut extra_parent_history = committed_prepare_broadcast_and_sign_ledger();
     let parent_owner = extra_parent_history.records[0].owner();
     let later = extra_parent_history

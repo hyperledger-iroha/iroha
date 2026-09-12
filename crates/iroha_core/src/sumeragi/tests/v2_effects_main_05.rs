@@ -2588,6 +2588,133 @@ fn current_protected_validate_retry_fixture(
 }
 
 #[test]
+fn current_prepare_body_replay_requires_exact_current_durable_authority() {
+    let fixture = Fixture::new();
+    let certificate = fixture.qc(wire::GlobalPhase::Prepare);
+    let current = tag(certificate.round.view);
+    let reference = wire::QuorumCertificateRef {
+        round: certificate.round,
+        proposal_round: certificate.proposal_round,
+        phase: certificate.phase,
+        subject: certificate.subject,
+        execution_commitment: certificate.execution_commitment,
+    };
+    let frontier = RuntimeReconciliationFrontier {
+        tag: Some(current),
+        locked_body: None,
+        highest_prepare: Some(reference),
+        lock_is_authoritative: true,
+        decision: None,
+    };
+    for effect in [
+        AdapterEffect::ValidateBody {
+            tag: current,
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+        },
+        AdapterEffect::StoreBody {
+            tag: current,
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+        },
+    ] {
+        let fetch = AdapterEffect::FetchBody {
+            tag: current,
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: certified_sources(&fixture, &certificate),
+            certificate: Some(certificate.clone()),
+        };
+        let ownership = bound_test_effect_ownership(&fetch, current, 41_030)
+            .rebind_as_inherited_adapter_effect(&effect)
+            .expect("carry exact certified Fetch into its body stage");
+        assert!(
+            current_protected_body_occurrence(&effect, &ownership, frontier)
+                .expect("the current observed Prepare precedes its voting lock")
+        );
+        let mut different = reference;
+        different.subject.payload_hash = Hash::new(b"different current Prepare body");
+        assert!(
+            current_protected_body_occurrence(
+                &effect,
+                &ownership,
+                RuntimeReconciliationFrontier {
+                    locked_body: Some((different.proposal_round, different.subject)),
+                    ..frontier
+                }
+            )
+            .expect("an older different voting lock cannot suppress the newer observed Prepare")
+        );
+        let mut changed_commitment = reference;
+        changed_commitment.execution_commitment.post_state_root = Hash::new(b"different execution");
+        for invalid in [
+            RuntimeReconciliationFrontier {
+                highest_prepare: None,
+                ..frontier
+            },
+            RuntimeReconciliationFrontier {
+                highest_prepare: Some(different),
+                ..frontier
+            },
+            RuntimeReconciliationFrontier {
+                highest_prepare: Some(changed_commitment),
+                ..frontier
+            },
+            RuntimeReconciliationFrontier {
+                tag: Some(tag(current.view() + 1)),
+                ..frontier
+            },
+            RuntimeReconciliationFrontier {
+                lock_is_authoritative: false,
+                ..frontier
+            },
+            RuntimeReconciliationFrontier {
+                decision: Some((
+                    certificate.round,
+                    certificate.proposal_round,
+                    certificate.subject,
+                    certificate.execution_commitment,
+                )),
+                ..frontier
+            },
+        ] {
+            assert!(
+                !current_protected_body_occurrence(&effect, &ownership, invalid)
+                    .expect("mismatched authority remains inert")
+            );
+        }
+        let ordinary = prepared_remote_proposal_fetch_replay(&fixture, current, 41_031)
+            .1
+            .rebind_as_inherited_adapter_effect(&effect)
+            .expect("carry exact ordinary Proposal into its body stage");
+        assert!(
+            !current_protected_body_occurrence(&effect, &ordinary, frontier)
+                .expect("durable evidence never upgrades an ordinary incoming occurrence")
+        );
+    }
+    let later = tag(current.view() + 1);
+    let historical = AdapterEffect::ValidateBody {
+        tag: later,
+        round: certificate.proposal_round,
+        subject: certificate.subject,
+    };
+    let historical_owner =
+        recovered_validate_retry_ownership(&fixture, &historical, Some(certificate), 41_032);
+    assert!(
+        !current_protected_body_occurrence(
+            &historical,
+            &historical_owner,
+            RuntimeReconciliationFrontier {
+                tag: Some(later),
+                ..frontier
+            }
+        )
+        .expect("an exactly bound historical high without the voting lock remains inert")
+    );
+}
+
+#[test]
 fn active_validate_retry_owners_preserve_single_admission() {
     let fixture = Fixture::new();
     for kind in [

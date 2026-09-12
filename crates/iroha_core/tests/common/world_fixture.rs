@@ -5,8 +5,8 @@ use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 /// Build a minimal world with the standard test accounts.
 pub(crate) fn world_with_test_accounts() -> World {
-    let domain_id: iroha_data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
+    let domain_id: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&BOB_ID);

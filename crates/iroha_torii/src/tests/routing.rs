@@ -22,9 +22,9 @@ mod tests {
             EventBox,
             pipeline::{BlockEvent, BlockStatus},
         },
-        metadata::Metadata,
         sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_telemetry::metrics::Metrics;
     use std::{
         io::Cursor,
@@ -45,9 +45,9 @@ mod tests {
                 },
             },
             consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            nexus::{DataSpaceId, LaneId},
-            peer::PeerId,
         };
+        use iroha_model_base::peer::PeerId;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         let block_signer = checked_routing_fixture_keypair(
             0xe2,
             Algorithm::Ed25519,
@@ -922,9 +922,9 @@ mod event_stream_tests {
             },
             stream::{EventMessage, EventSubscriptionRequest},
         },
-        nexus::{DataSpaceId, LaneId},
         transaction::SignedTransaction,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::{decode_from_bytes, to_bytes};
     use std::{io::ErrorKind, sync::Arc};
     use tokio::{net::TcpListener, sync::Mutex};

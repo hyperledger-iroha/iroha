@@ -4,8 +4,8 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     block::consensus::{CertPhase, LaneBlockVoteBodyV1},
     merge::LaneDrainCertificateBodyV1,
-    nexus::{DataSpaceId, LaneId},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 #[cfg(unix)]
@@ -671,8 +671,8 @@ mod tests {
     use iroha_data_model::{
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         merge::{LaneDrainFrontierV1, LaneDrainIntentV1},
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
     fn incarnation() -> Hash {
         Hash::new(b"lane-drain-signing-guard-incarnation")
     }

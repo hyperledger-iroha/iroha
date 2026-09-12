@@ -350,7 +350,7 @@ mod stock_registry_tests {
     use super::*;
     #[test]
     fn standalone_registry_retains_exact_network_identity() {
-        let chain_id = iroha_data_model::ChainId::from("standalone-governance-test");
+        let chain_id = iroha_model_base::chain::ChainId::from("standalone-governance-test");
         let network_id = crate::runtime_provider_registry::runtime_provider_test_network_id();
         let registry =
             StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id.clone(), network_id);
@@ -394,14 +394,14 @@ mod stock_registry_tests {
 /// the broker handshake. Construction performs no I/O and stores no secret.
 #[derive(Clone, Debug)]
 pub struct StockGovernanceDagServiceRuntimeProviderRegistryV1 {
-    chain_id: iroha_data_model::ChainId,
+    chain_id: iroha_model_base::chain::ChainId,
     network_id: iroha_data_model::NetworkId,
 }
 impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     /// Construct a standalone-service registry for one exact network.
     #[must_use]
     pub const fn new(
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         network_id: iroha_data_model::NetworkId,
     ) -> Self {
         Self {

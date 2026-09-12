@@ -8,10 +8,11 @@ mod tests {
     use iroha_data_model::{
         block::consensus::SumeragiLanePayloadOwnership,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-            LaneCatalog, LaneConfig, LaneId,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, LaneCatalog,
+            LaneConfig,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{collections::BTreeMap, num::NonZeroU32};
     fn routing_for_lanes(lanes: &[u32]) -> Vec<RoutingDecision> {
         lanes

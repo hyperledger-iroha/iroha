@@ -11,7 +11,8 @@ use crate::{
         transfer,
     },
 };
-use iroha_data_model::{DomainId, asset::id::AssetDefinitionId, fastpq::TransferTranscript};
+use iroha_data_model::{asset::id::AssetDefinitionId, fastpq::TransferTranscript};
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 

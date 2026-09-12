@@ -25,8 +25,8 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
     merge::MergeQuorumCertificate,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use std::{
     collections::{BTreeMap, VecDeque},
     num::NonZeroU64,
@@ -1695,7 +1695,9 @@ impl ProductionTransportFixture {
             directory.path().join("transport-regression-safety.wal"),
             verified,
             local_validator,
-            Generation::new(1),
+            // The real WAL must start with the same canonical seed used by
+            // production cold open. Durable lifecycle tags are never retagged.
+            Generation::INITIAL,
             [0x63; 32],
             AdapterFingerprints {
                 node: Hash::new(b"production transport node"),

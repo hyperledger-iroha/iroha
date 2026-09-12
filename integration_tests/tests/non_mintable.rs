@@ -6,6 +6,8 @@ use iroha::{
     blocking::Client,
     data_model::{isi::InstructionBox, prelude::*},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::{Duration, Instant};

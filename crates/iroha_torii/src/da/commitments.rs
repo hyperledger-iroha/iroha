@@ -494,8 +494,9 @@ mod tests {
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm, context: &str) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {

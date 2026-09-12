@@ -8,7 +8,7 @@ use super::{StoredDaReceipt, stored_receipt_frame_tests::fixture};
 const FIXTURE: &str =
     include_str!("../../../../../fixtures/da/stored_receipt_original_frames.v1.json");
 
-fn check_frame<T>(row: &norito::json::Value, value: T)
+fn check_frame<T>(row: &norito::json::Value, value: &T)
 where
     T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + std::fmt::Debug + Eq,
 {
@@ -22,8 +22,8 @@ where
     let _ambient = norito::core::DecodeFlagsGuard::enter(
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
     );
-    assert_eq!(norito::encode_canonical(&value).unwrap(), captured);
-    assert_eq!(norito::decode_canonical::<T>(&captured).unwrap(), value);
+    assert_eq!(norito::encode_canonical(value).unwrap(), captured);
+    assert_eq!(&norito::decode_canonical::<T>(&captured).unwrap(), value);
     for length in [0, captured.len() / 2, captured.len() - 1] {
         assert!(norito::decode_canonical::<T>(&captured[..length]).is_err());
     }
@@ -54,10 +54,10 @@ fn original_producer_root_and_container_frames_are_exact() {
             assert_eq!(row["shape"].as_str(), Some(shape));
         }
         let stored = fixture(pdp);
-        check_frame(&group[0], stored.clone());
-        check_frame(&group[1], Option::<StoredDaReceipt>::None);
-        check_frame(&group[2], Some(stored.clone()));
-        check_frame(&group[3], Vec::<StoredDaReceipt>::new());
-        check_frame(&group[4], vec![stored.clone(), stored]);
+        check_frame(&group[0], &stored);
+        check_frame(&group[1], &Option::<StoredDaReceipt>::None);
+        check_frame(&group[2], &Some(stored.clone()));
+        check_frame(&group[3], &Vec::<StoredDaReceipt>::new());
+        check_frame(&group[4], &vec![stored.clone(), stored]);
     }
 }

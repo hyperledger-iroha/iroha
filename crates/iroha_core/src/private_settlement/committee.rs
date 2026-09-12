@@ -23,9 +23,9 @@ use crate::state::{StateView, WorldView};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{PrivateSettlementPhaseBodyV1, PrivateSettlementPhaseV1},
-    peer::PeerId,
     privacy::{PrivacyCommitmentV1, PrivacyNullifierV1},
 };
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly as _;
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -199,7 +199,8 @@ mod tests {
         state::World,
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{peer::PeerId, privacy::PrivacyCommitmentV1};
+    use iroha_data_model::privacy::PrivacyCommitmentV1;
+    use iroha_model_base::peer::PeerId;
 
     struct CommitteeFixtureV1 {
         restricted: SidecarFixtureV1,

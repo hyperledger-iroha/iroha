@@ -36,7 +36,25 @@ pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::{Numeric, Quantity};
+    #[test]
+    fn citizen_bond_operations_are_not_production_instructions() {
+        // Commitment-only bond records do not establish native custody or authorization.
+        // Production admission requires a complete, qualified native lifecycle first.
+        let registry = default();
+        for operation in [
+            "RegisterSorafsCitizenBond",
+            "RotateSorafsCitizenBondAuthorization",
+            "RequestSorafsCitizenBondExit",
+        ] {
+            let wire_id = format!("iroha.instruction.v1::sorafs::{operation}");
+            assert!(!registry.contains(&wire_id));
+            assert!(registry.decode(&wire_id, &[]).is_none());
+        }
+    }
+
     fn xor_quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(
             value,
@@ -330,11 +348,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 368;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 366;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 368;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 366;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 351;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 349;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -384,9 +402,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "7dfb5ba44d3b09b3dea02b96a2650461ad2a9610151ff08e3c3a7e68f6232a24";
+            "9791fab68c24c43014e13a13a9d62ac2b56b05da156228b48e041820816c96a9";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "5f3a4523d2445fc7d54d2182a0c7a1130b5f76220100fac082fa7222166a038c";
+            "1cd545c2a683beaf712c4d8a2b75a547af4a221635de16a0da85ea5d9629cc42";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1349,7 +1367,7 @@ mod tests {
             ),
         ));
         assert_default_registry_decodes(crate::isi::staking::ClaimPublicLaneRewards {
-            lane_id: crate::nexus::LaneId::SINGLE,
+            lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
             upto_epoch: Some(9),
         });

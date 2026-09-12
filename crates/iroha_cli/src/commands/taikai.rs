@@ -18,7 +18,6 @@ use iroha::{
             BlobCodec, BlobDigest, ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy,
             StorageTicketId,
         },
-        nexus::LaneId,
         taikai::{
             CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1,
             REPLICATION_PROOF_TOKEN_VERSION_V1, ReplicationProofTokenV1, TaikaiAudioLayout,
@@ -28,6 +27,7 @@ use iroha::{
     },
 };
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::LaneId;
 use norito::{
     NoritoSerialize,
     json::{self, JsonSerialize, Map, Value},

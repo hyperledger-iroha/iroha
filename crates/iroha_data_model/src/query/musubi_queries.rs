@@ -334,10 +334,10 @@ pub mod musubi {
                 MusubiReleaseIdV1, MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1,
                 MusubiVersionPageV1, MusubiVersionV1,
             },
-            nexus::DataSpaceId,
             query::{SingularQuery, SingularQueryBox, SingularQueryOutputBox},
             sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
         };
+        use iroha_model_base::topology::DataSpaceId;
         use norito::codec::{Decode, Encode};
         fn package() -> MusubiPackageIdV1 {
             MusubiPackageIdV1::new(

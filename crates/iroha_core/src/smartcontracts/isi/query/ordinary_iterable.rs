@@ -14,12 +14,12 @@ use crate::{
 };
 use iroha_data_model::{
     account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
-    peer::PeerId,
     query::{
         QueryOutputBatchBox, QueryOutputBatchBoxTuple, dsl::CompoundPredicate,
         error::QueryExecutionFail as Error, parameters::QueryParams,
     },
 };
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly as _;
 use norito::{
     core::NoritoSerialize,

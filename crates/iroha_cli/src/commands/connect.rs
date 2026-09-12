@@ -467,7 +467,7 @@ pub mod queue {
             fn config(&self) -> &iroha::config::Config {
                 &self.config
             }
-            fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
+            fn transaction_metadata(&self) -> Option<&iroha_model_base::metadata::Metadata> {
                 None
             }
             fn input_instructions(&self) -> bool {

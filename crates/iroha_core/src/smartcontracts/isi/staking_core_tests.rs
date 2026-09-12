@@ -57,10 +57,7 @@ fn new_block_with_height_and_time(
     .commit_unchecked()
     .unpack(|_| {})
 }
-fn record_block_commit(state_block: &mut StateBlock<'_>, block: &crate::block::CommittedBlock) {
-    let topology = state_block.commit_topology.get().clone();
-    let _ = state_block.apply_without_execution(block, topology);
-}
+
 fn setup_state() -> State {
     let mut nexus = iroha_config::parameters::actual::Nexus {
         ..Default::default()
@@ -84,7 +81,7 @@ fn setup_state() -> State {
             .collect(),
     )
     .expect("staking test dataspace catalog should match its lanes");
-    let world = World::default();
+    let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
     let mut parameters = world.parameters.block();
     parameters.set_parameter(Parameter::Custom(
         SumeragiNposParameters::default().into_custom_parameter(),
@@ -93,26 +90,34 @@ fn setup_state() -> State {
     State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test())
 }
 fn staking_test_lane_catalog() -> LaneCatalog {
-    let lane_count = NonZeroU32::new(256).expect("non-zero lane count");
-    let lanes = (0..lane_count.get())
-        .map(|id| {
-            let lane_id = LaneId::new(id);
-            LaneConfig {
-                id: lane_id,
-                dataspace_id: if lane_id == LaneId::SINGLE {
-                    DataSpaceId::UNIVERSAL
-                } else {
-                    DataSpaceId::new(u64::from(id))
-                },
-                alias: if lane_id == LaneId::SINGLE {
-                    "default".to_string()
-                } else {
-                    format!("staking-test-lane-{id}")
-                },
-                ..LaneConfig::default()
-            }
-        })
-        .collect();
+    // Each fixture lane represents a distinct staking authority. Provision only
+    // the identities exercised below; unused lane storage adds no coverage.
+    let lane_count = nonzero!(213_u32);
+    let lanes = [
+        0, 1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 22, 23, 24, 31, 32, 34, 35, 42, 43,
+        44, 45, 46, 47, 48, 49, 50, 51, 52, 59, 60, 81, 82, 83, 84, 99, 144, 145, 147, 148, 149,
+        150, 151, 152, 153, 154, 155, 156, 157, 158, 161, 162, 163, 164, 165, 166, 167, 168, 169,
+        170, 171, 172, 173, 174, 175, 210, 211, 212,
+    ]
+    .into_iter()
+    .map(|id| {
+        let lane_id = LaneId::new(id);
+        LaneConfig {
+            id: lane_id,
+            dataspace_id: if lane_id == LaneId::SINGLE {
+                DataSpaceId::UNIVERSAL
+            } else {
+                DataSpaceId::new(u64::from(id))
+            },
+            alias: if lane_id == LaneId::SINGLE {
+                "default".to_string()
+            } else {
+                format!("staking-test-lane-{id}")
+            },
+            ..LaneConfig::default()
+        }
+    })
+    .collect();
     LaneCatalog::new(lane_count, lanes).expect("valid staking test lane catalog")
 }
 fn set_transaction_lane_catalog(stx: &mut StateTransaction<'_, '_>, lane_catalog: LaneCatalog) {
@@ -123,14 +128,14 @@ fn set_transaction_lane_catalog(stx: &mut StateTransaction<'_, '_>, lane_catalog
 fn register_peer_for_account(
     stx: &mut StateTransaction<'_, '_>,
     account: &AccountId,
-) -> crate::PeerId {
+) -> iroha_model_base::peer::PeerId {
     let peer = validator_peer_id(account);
     let _ = stx.world.peers.push(peer.clone());
     seed_validator_consensus_key(stx, &peer, ConsensusKeyStatus::Active);
     peer
 }
-fn validator_peer_id(account: &AccountId) -> crate::PeerId {
-    crate::PeerId::from(
+fn validator_peer_id(account: &AccountId) -> iroha_model_base::peer::PeerId {
+    iroha_model_base::peer::PeerId::from(
         account
             .try_signatory()
             .expect("test accounts are single-signatory")
@@ -139,7 +144,7 @@ fn validator_peer_id(account: &AccountId) -> crate::PeerId {
 }
 fn seed_validator_consensus_key(
     stx: &mut StateTransaction<'_, '_>,
-    peer: &crate::PeerId,
+    peer: &iroha_model_base::peer::PeerId,
     status: ConsensusKeyStatus,
 ) {
     let activation_height = stx.block_height();
@@ -149,7 +154,7 @@ fn seed_validator_consensus_key(
 }
 fn seed_validator_consensus_key_with_heights(
     stx: &mut StateTransaction<'_, '_>,
-    peer: &crate::PeerId,
+    peer: &iroha_model_base::peer::PeerId,
     status: ConsensusKeyStatus,
     activation_height: u64,
     expiry_height: Option<u64>,
@@ -167,7 +172,7 @@ fn seed_validator_consensus_key_with_heights(
 }
 fn seed_consensus_key_for_role_with_heights(
     stx: &mut StateTransaction<'_, '_>,
-    peer: &crate::PeerId,
+    peer: &iroha_model_base::peer::PeerId,
     role: ConsensusKeyRole,
     status: ConsensusKeyStatus,
     activation_height: u64,
@@ -207,7 +212,10 @@ fn seed_consensus_key_for_role_with_heights(
         stx.world.consensus_keys_by_pk.insert(key_label, by_pk);
     }
 }
-fn clear_consensus_keys_for_peer(stx: &mut StateTransaction<'_, '_>, peer: &crate::PeerId) {
+fn clear_consensus_keys_for_peer(
+    stx: &mut StateTransaction<'_, '_>,
+    peer: &iroha_model_base::peer::PeerId,
+) {
     let label = peer.public_key().to_string();
     if let Some(ids) = stx.world.consensus_keys_by_pk.remove(label.clone()) {
         for id in ids {
@@ -315,8 +323,7 @@ fn configure_reward_fixture(
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
     stx.nexus.staking.stake_escrow_account_id = sink.to_string();
     stx.nexus.staking.slash_sink_account_id = sink.to_string();
-    let peer = register_peer_for_account(stx, &validator);
-    stx.commit_topology.get_mut().push(peer);
+    register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {
         lane_id,
         peer_id: validator_peer_id(&validator),
@@ -337,17 +344,14 @@ fn prepare_accounts(
         domain_id.clone(),
         Domain::new(domain_id.clone()).build(&ALICE_ID),
     );
-    // Ensure the authority account exists in the test ledger so subsequent instructions
-    // can execute under Alice's identity.
+    // The universal authority account is seeded by setup_state; domain ownership
+    // is separate from the canonical account identity.
     let alice_domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain id");
     stx.world.domains.insert(
         alice_domain_id.clone(),
         Domain::new(alice_domain_id.clone()).build(&ALICE_ID),
     );
-    Register::account(Account::new(ALICE_ID.clone()))
-        .execute(&ALICE_ID, stx)
-        .unwrap();
     let (validator, _kp) = gen_account_in("nexus");
     let (delegator, _kp) = gen_account_in("nexus");
     let (escrow, _kp) = gen_account_in("nexus");
@@ -390,12 +394,43 @@ fn prepare_accounts(
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
     stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
     stx.nexus.staking.slash_sink_account_id = escrow.to_string();
-    stx.commit_topology.get_mut().clear();
-    stx.commit_topology
-        .get_mut()
-        .extend(stx.world.peers.iter().cloned());
     (validator, delegator, escrow, asset_def_id)
 }
+fn complete_staking_committee(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
+    let asset_definition: AssetDefinitionId = stx
+        .nexus
+        .staking
+        .stake_asset_id
+        .parse()
+        .expect("fixture stake asset");
+    for _ in 0..3 {
+        let (validator, _) = gen_account_in("nexus");
+        Register::account(Account::new(validator.clone()))
+            .execute(&ALICE_ID, stx)
+            .expect("register committee account");
+        let peer_id = register_peer_for_account(stx, &validator);
+        Mint::asset_quantity(
+            1_000_u32,
+            AssetId::new(asset_definition.clone(), validator.clone()),
+        )
+        .execute(&ALICE_ID, stx)
+        .expect("fund committee stake");
+        RegisterPublicLaneValidator {
+            lane_id,
+            peer_id,
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Quantity::from(1_000_u64),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, stx)
+        .expect("register committee validator");
+        ActivatePublicLaneValidator { lane_id, validator }
+            .execute(&ALICE_ID, stx)
+            .expect("activate committee validator");
+    }
+}
+
 fn insert_validator_record_for_key(
     stx: &mut StateTransaction<'_, '_>,
     key_lane: LaneId,

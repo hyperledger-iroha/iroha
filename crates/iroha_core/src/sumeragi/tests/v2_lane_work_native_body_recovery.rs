@@ -318,7 +318,27 @@ fn complete_applied_ordinary_lane_sessions(
     for ownership in &bundle.lane_payload_ownerships {
         let proposal = proposal_from_ownership(ownership, block.hash())
             .expect("exact applied ordinary ownership");
-        assert_shared_lane_predecessor_is_applied(&adapter.state, &proposal, true);
+        assert!(
+            adapter
+                .state
+                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored(&proposal)
+                .expect("authenticate the ordinary certificate's historical predecessor")
+        );
+        assert!(
+            adapter
+                .state
+                .certified_autonomous_lane_block_is_globally_applied(&proposal)
+                .expect("Apply published this exact shared lane frontier")
+        );
+        if proposal.descriptor.previous_lane_block_height != 0 {
+            assert!(
+                !adapter
+                    .state
+                    .certified_autonomous_lane_block_predecessor_is_globally_applied(&proposal)
+                    .expect("fresh autonomous admission uses the current frontier"),
+                "an already applied slot cannot reopen admission from its historical predecessor"
+            );
+        }
         adapter
             .pending_committed_lanes
             .push_back(committed_lane_session(&proposal, keys));
@@ -3219,6 +3239,18 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
             .install_plan_journal(&journals.path().join("plans.norito"), 1024 * 1024, true)
             .unwrap();
         queue.replay_plan_journal(adapter.state.as_ref()).unwrap();
+        let snapshot = queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture the fresh Native retry queue's startup ownership");
+        assert!(snapshot.is_empty());
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+        let receipt = queue
+            .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+            .expect("bind the exact empty Native retry queue startup receipt")
+            .expect("the fresh replay snapshot remains unchanged");
+        queue
+            .complete_lane_reservation_startup_reconciliation(receipt)
+            .expect("complete Native retry queue startup before admission");
         adapter
             .install_lane_drain_queue(Arc::clone(&queue))
             .unwrap();

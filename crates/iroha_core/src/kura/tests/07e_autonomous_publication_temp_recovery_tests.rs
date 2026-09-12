@@ -15,31 +15,66 @@ fn open_authenticated_temp_recovery_kura(
     Kura::new_with_configured_lane_catalog(config, lane_config, catalog)
 }
 fn publish_temp_recovery_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
-    let lane_config = RuntimeLaneConfig::from_catalog(catalog);
-    let mut incarnations = BTreeMap::new();
-    let mut activation_heights = BTreeMap::new();
-    for entry in lane_config.entries() {
-        let (incarnation, activation_height) = kura
-            .active_lane_incarnation_marker(entry)
-            .expect("read configured temp-recovery lane marker");
-        incarnations.insert(entry.lane_id, incarnation);
-        activation_heights.insert(entry.lane_id, activation_height);
-    }
-    let baseline = LaneLifecycleParameterV1::catalog_hash(catalog);
-    kura.establish_or_verify_configured_primary_geometry_anchor(
-        lane_config.primary(),
-        incarnations[&LaneId::SINGLE],
-        baseline,
-    )
-    .expect("anchor temp-recovery configured primary");
-    kura.mark_lane_geometry_catalog_published(
-        &lane_config,
-        &incarnations,
-        &activation_heights,
-        Some(baseline),
-    )
-    .expect("publish temp-recovery configured catalog baseline");
+    publish_initial_configured_lane_geometry_for_test(
+        kura,
+        &RuntimeLaneConfig::from_catalog(catalog),
+        &BTreeMap::new(),
+    );
 }
+
+#[test]
+fn autonomous_atomic_sidecar_cleanup_preflights_before_discard_and_is_idempotent() {
+    let temp_dir = TempDir::new().expect("atomic sidecar cleanup directory");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let catalog = autonomous_temp_recovery_catalog();
+    let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+    let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+        .expect("open configured Kura");
+    publish_temp_recovery_catalog_baseline(&kura, &catalog);
+    let lane = lane_config.entry(LaneId::new(1)).expect("secondary lane");
+    let directory = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
+    let residue = directory.join(".kura-sidecar-unpublished");
+    let oversized = directory.join(".kura-sidecar-oversized");
+    let bytes = b"unpublished current atomic writer residue";
+    fs::write(&residue, bytes).expect("write bounded residue");
+    fs::File::create(&oversized)
+        .expect("create oversized residue")
+        .set_len(MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES as u64 + 1)
+        .expect("set sparse oversized residue length");
+    assert!(
+        kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()
+            .is_err()
+    );
+    assert_eq!(fs::read(&residue).expect("bounded residue retained"), bytes);
+    assert!(
+        oversized.exists(),
+        "failed preflight must not discard either file"
+    );
+    fs::remove_file(&oversized).expect("remove injected oversize fault");
+    let alias = temp_dir.path().join("linked-atomic-sidecar");
+    fs::hard_link(&residue, &alias).expect("inject multiply linked residue");
+    assert!(
+        kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()
+            .is_err()
+    );
+    assert_eq!(fs::read(&residue).expect("linked residue retained"), bytes);
+    fs::remove_file(&alias).expect("remove injected link fault");
+    {
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        assert!(
+            kura.autonomous_lane_attempt_inventory_counts_locked(lane, 1)
+                .is_err(),
+            "live capacity inventory must not silently accept crash residue",
+        );
+    }
+    kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()
+        .expect("discard bounded unpublished sidecar after complete preflight");
+    assert!(!residue.exists());
+    kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()
+        .expect("cleanup is idempotent");
+}
+
 fn assert_retained_publication_quarantine(path: &Path, expected: &[u8]) {
     let metadata =
         crate::secure_file_metadata::from_path(path).expect("stat retained publication quarantine");
@@ -335,7 +370,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         Hash::new(&residue_bytes)
     ));
     drop(crashing);
-    assert!(Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err());
+    assert!(Kura::new_fresh_single_lane(&config, &RuntimeLaneConfig::default()).is_err());
     assert!(
         atomic_temps[0].exists(),
         "unauthenticated startup must retain the process-generation residue",
@@ -528,12 +563,12 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
     let retained_bytes = retained_record
         .encode_framed()
         .expect("encode retained generation-one authority");
-    let quarantine_path = temp_dir.path().join(format!(
+    let (initialized, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+        .expect("initialize Kura root without a stable process generation");
+    let quarantine_path = initialized.store_root().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}quarantine-{}",
         Hash::new(&retained_bytes),
     ));
-    let (initialized, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
-        .expect("initialize Kura root without a stable process generation");
     publish_temp_recovery_catalog_baseline(&initialized, &catalog);
     drop(initialized);
     fs::write(&quarantine_path, &retained_bytes)

@@ -15,14 +15,14 @@ use iroha_data_model::{
     account::NewAccount,
     asset::{AssetDefinition, AssetId},
     block::BlockHeader,
-    domain::DomainId,
     isi::{Mint, Register},
-    metadata::Metadata,
     nexus::UniversalAccountId,
-    peer::PeerId,
     prelude::*,
     sns::{NameControllerV1, NameRecordV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};

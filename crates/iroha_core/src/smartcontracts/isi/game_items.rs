@@ -302,6 +302,7 @@ mod tests {
         isi::Register,
         nft::{Nft, NftId},
     };
+    use iroha_model_base::metadata::Metadata;
 
     fn reserve_fixture_item(
         st: &mut StateTransaction<'_, '_>,
@@ -337,30 +338,24 @@ mod tests {
         *session = get(st, &session.session_id).unwrap();
     }
     #[test]
-    fn oversized_native_nft_cannot_be_reserved_into_an_unsettleable_admission() {
-        use iroha_data_model::domain::{Domain, DomainId};
+    fn maximum_canonical_native_nft_fits_a_settleable_admission() {
+        use iroha_data_model::domain::Domain;
+        use iroha_model_base::domain::DomainId;
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
         let mut st = block.transaction();
         fund_payout_fixture(&mut st, &mut session);
         let owner = session.participants[0].account.clone();
-        let domain_label = format!(
-            "{}.{}.{}.{}",
-            "a".repeat(63),
-            "b".repeat(63),
-            "c".repeat(63),
-            "d".repeat(61)
-        );
-        let domain_id = DomainId::try_new(&domain_label, &domain_label).unwrap();
+        let domain_id = DomainId::try_new(&"a".repeat(63), &"b".repeat(63)).unwrap();
         let domain = Domain::new(domain_id.clone()).build(&owner);
         st.world.domains.insert(domain_id.clone(), domain);
         let nft_id = NftId::new(domain_id, "n".repeat(255).parse().unwrap());
-        assert!(nft_id.to_string().len() > GAME_RESOURCE_MAX_NFT_ID_BYTES_V1);
+        assert!(nft_id.to_string().len() <= GAME_RESOURCE_MAX_NFT_ID_BYTES_V1);
         Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
             .execute(&owner, &mut st)
             .unwrap();
-        assert!(prepare_item_reservation(&st, &session, &owner, 0, &nft_id).is_err());
+        assert!(prepare_item_reservation(&st, &session, &owner, 0, &nft_id).is_ok());
         assert_eq!(st.world.nft(&nft_id).unwrap().value().owned_by, owner);
         assert!(st.world.nft_custody_records.iter().next().is_none());
         assert!(st.world.nft_custody_owner_refs.iter().next().is_none());
@@ -368,25 +363,15 @@ mod tests {
         assert_eq!(get(&st, &session.session_id).unwrap(), session);
     }
     #[test]
-    fn ambiguous_short_native_nfts_cannot_move_into_wager_custody() {
-        use iroha_data_model::domain::{Domain, DomainId};
+    fn multi_label_domains_cannot_create_ambiguous_native_nft_ids() {
+        use iroha_model_base::domain::DomainId;
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
         let mut st = block.transaction();
         fund_payout_fixture(&mut st, &mut session);
-        let owner = session.participants[0].account.clone();
         for (label, dataspace) in [("art.gallery", "universal"), ("art", "gallery.universal")] {
-            let domain_id = DomainId::try_new(label, dataspace).unwrap();
-            let domain = Domain::new(domain_id.clone()).build(&owner);
-            st.world.domains.insert(domain_id.clone(), domain);
-            let nft_id = NftId::new(domain_id, "kit".parse().unwrap());
-            assert!(nft_id.to_string().len() < GAME_RESOURCE_MAX_NFT_ID_BYTES_V1);
-            Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
-                .execute(&owner, &mut st)
-                .unwrap();
-            assert!(prepare_item_reservation(&st, &session, &owner, 0, &nft_id).is_err());
-            assert_eq!(st.world.nft(&nft_id).unwrap().value().owned_by, owner);
+            assert!(DomainId::try_new(label, dataspace).is_err());
             assert!(st.world.nft_custody_records.iter().next().is_none());
             assert!(st.world.nft_custody_owner_refs.iter().next().is_none());
             assert!(st.world.nft_custody_domain_refs.iter().next().is_none());

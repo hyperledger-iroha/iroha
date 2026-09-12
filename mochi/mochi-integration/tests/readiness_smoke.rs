@@ -9,8 +9,8 @@ use iroha_data_model::{
         pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
         stream::EventMessage,
     },
-    nexus::{DataSpaceId, LaneId},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use mochi_core::{
     ReadinessOptions, ReadinessSmokePlan, SmokeCommitOptions, ToriiClient, ToriiError,
     development_signing_authorities,
