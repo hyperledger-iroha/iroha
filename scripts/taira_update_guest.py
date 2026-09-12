@@ -531,21 +531,58 @@ def compare_retained_identity(old, new):
         need(old[key] == new[key], 'retained identity changed: ' + key)
 
 
-def wait_for_cohort(rows, before, *, after, commit, timeout=180):
+def cohort_retained_tip(checkpoints):
+    """Freeze the existing cohort's highest committed prefix before startup."""
+    need(tuple(row['role'] for row in checkpoints) == ROLES,
+         'retained Kura checkpoint cohort differs')
+    tips = [row['kura_tip'] for row in checkpoints]
+    need(all(type(tip['height']) is int and tip['height'] >= REPLAY_BARRIER
+             and re.fullmatch('[0-9a-f]{64}', tip['hash']) for tip in tips),
+         'retained cohort Kura tip is invalid')
+    height = max(tip['height'] for tip in tips)
+    hashes = {tip['hash'] for tip in tips if tip['height'] == height}
+    need(len(hashes) == 1, 'highest retained Kura tips disagree')
+    return {'height': height, 'hash': hashes.pop()}
+
+
+def verify_cohort_processes(observations, expected=None):
+    """Reject exits/restarts during the complete cohort observation window."""
+    for observed, original in zip(observations, expected or observations, strict=True):
+        role = observed['role']
+        props = observed['systemd']
+        need(role == original['role']
+             and props['ActiveState'] == 'active' and props['SubState'] == 'running'
+             and props['ControlPID'] == '0' and int(props['MainPID']) > 0
+             and re.fullmatch('[0-9a-f]{32}', props['InvocationID'])
+             and all(props[key] == original['systemd'][key]
+                     for key in ('MainPID', 'InvocationID'))
+             and systemd(f'iroha3d-{role}.service') == props,
+             'validator process changed across cohort verification: ' + role)
+
+
+def observe_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
+    observations = [observe(row, after=after) for row in rows]
+    for old, new in zip(before, observations, strict=True):
+        compare_retained_identity(old, new)
+        need(new['public']['commit'] == commit
+             and new['public']['height'] >= max(old['public']['height'], retained_tip['height']),
+             'revision or common retained cohort height is not ready: ' + new['role'])
+        require_retained_tip(new['role'], retained_tip)
+    for row in rows:
+        index = ROLES.index(row['role'])
+        command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
+                 '-H', 'Accept: text/plain', f'http://127.0.0.1:{PORTS[index]}/readyz'], timeout=10)
+    verify_cohort_processes(observations, expected_processes)
+    return observations
+
+
+def wait_for_cohort(rows, before, *, after, commit, retained_tip, timeout=180):
     deadline = time.monotonic() + timeout
     latest = None
     while time.monotonic() < deadline:
         try:
-            observations = [observe(row, after=after) for row in rows]
-            for old, new in zip(before, observations, strict=True):
-                compare_retained_identity(old, new)
-                need(new['public']['commit'] == commit
-                     and new['public']['height'] >= old['public']['height'],
-                     'revision or retained height is not ready')
-            for index in range(len(rows)):
-                command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                         '-H', 'Accept: text/plain', f'http://127.0.0.1:{PORTS[index]}/readyz'], timeout=10)
-            return observations
+            return observe_cohort(rows, before, after=after, commit=commit,
+                                  retained_tip=retained_tip)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
             latest = str(error)
             remaining = deadline - time.monotonic()
@@ -617,7 +654,11 @@ def retained_attempt(plan):
              'failed-start operation differs')
         failed_directory = BASE / attempt
         stamp(failed_directory, True)
-        for name in ('after.json', 'checkpoint-restored.json', 'result.json', 'rollback.json'):
+        # Startup observations may precede a later failed health check. They
+        # are diagnostic only and never replace the five digest-bound recovery
+        # records or completed predecessor's health. Only terminal outcomes
+        # exclude this explicitly failed installation from the recovery path.
+        for name in ('result.json', 'rollback.json'):
             need(not os.path.lexists(failed_directory / name),
                  'failed-start attempt has a success or rollback marker: ' + name)
         for ref in (reference['plan'], *reference['records'].values()):
@@ -715,6 +756,8 @@ def apply(plan):
         checkpoints = [checkpoint_barrier(row, stopped=True, prior=prior)
                        for row, prior in zip(before, retained[1], strict=True)]
         record('checkpoint-stopped.json', checkpoints)
+        retained_tip = cohort_retained_tip(checkpoints)
+        record('cohort-retained-tip.json', retained_tip)
         for row, original in zip(plan['units'], before, strict=True):
             path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
             install_unit(path, base64.b64decode(row['after']), base64.b64decode(row['before']),
@@ -729,7 +772,8 @@ def apply(plan):
                  'stopped Kura tip changed before new runtime startup')
         new_start_attempted = True
         command(['/usr/bin/systemctl', 'start', *UNITS], timeout=150, name='start')
-        after = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'])
+        after = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'],
+                                retained_tip=retained_tip)
         record('after.json', after)
         restored = [verify_restored_checkpoint(row, checkpoint)
                     for row, checkpoint in zip(after, checkpoints, strict=True)]
@@ -745,10 +789,16 @@ def apply(plan):
              and report.get('scope') == 'basic' and report.get('failures') == []
              and len(report.get('checks', [])) == 10
              and all(row.get('ok') is True for row in report['checks']), 'public basic doctor failed')
+        final = observe_cohort(plan['units'], before, after=True, commit=plan['commit'],
+                               retained_tip=retained_tip, expected_processes=after)
+        record('cohort-ready.json', {'retained_tip': retained_tip, 'observations': final,
+                                     'startup_processes_unchanged': True})
         result = {'schema': 'taira.daemon-update.result.v1', 'runtime_update_complete': True,
                   'commit': plan['commit'], 'network_id': NETWORK, 'state_preserved': True,
                   'canary_applied_verified': False, 'application_ready': False,
                   'retained_native_snapshot_verified': True,
+                  'cohort_retained_tip_verified': retained_tip,
+                  'cohort_processes_verified_after_public_doctor': True,
                   'historical_genesis_replay_supported': False,
                   'historical_replay_limitation': 'Preserve the authenticated current snapshot at or after the deployment replay floor. No historical blocks were rewritten.',
                   'next_action': 'prove a fresh signed transaction Applied under the new runtime'}

@@ -219,6 +219,10 @@ network and directory identities, and the exact completed predecessor receipt.
 Keep it outside Git. The updater transfers the prepared daemon and matching CLI,
 preserves configuration, signer custody and ledger state, and verifies native
 Strict snapshot restoration and public basic health. It does not invoke Cargo.
+Every validator must reach the stopped cohort's highest committed block and agree
+on that block's hash. After the public health check, the updater repeats cohort
+readiness and verifies that the same processes are still running. An idle chain
+does not need to create another block to pass.
 `--plan-only` writes the concrete plan locally without contacting the host.
 
 Local and guest locks serialize updates. Each operation retains its own staging
@@ -242,6 +246,8 @@ completed health observation, stops the cohort, and retains the exact checkpoint
 and Kura prefix before installing the corrective candidate. Successful, rolled
 back, partial-install, or nested failed-recovery attempts are rejected by this
 specific recovery path. No failed deployment becomes accepted health evidence.
+Partial startup observations such as `after.json` remain diagnostic when a later
+check fails; only completion or rollback records exclude failed-start recovery.
 
 Validate this controller without Cargo or network:
 

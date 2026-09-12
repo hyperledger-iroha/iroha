@@ -545,23 +545,96 @@ class CoordinatorTests(unittest.TestCase):
                     guest.stop_all()
 
     def test_cohort_retry_waits_for_process_http_and_readiness_under_one_deadline(self):
-        old = {'config_stamp': [1], 'config_sha256': 'same', 'state_root_identity': [2],
-               'current_target': 'same', 'public': {'height': 221, 'commit': guest.OLD}}
+        props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
+                 'MainPID': '42', 'InvocationID': 'a' * 32}
+        old = {'role': guest.ROLES[0], 'config_stamp': [1], 'config_sha256': 'same',
+               'state_root_identity': [2], 'current_target': 'same', 'systemd': props,
+               'public': {'height': 221, 'commit': guest.OLD}}
+        tip = {'height': 221, 'hash': 'c' * 64}
         now = [0.0]
         with patch.object(guest.time, 'monotonic', side_effect=lambda: now[0]), \
              patch.object(guest.time, 'sleep', side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
              patch.object(guest, 'observe', side_effect=[RuntimeError('curl before HTTP start'),
                                                       old, old]) as observe, \
+             patch.object(guest, 'systemd', return_value=props), \
+             patch.object(guest, 'native_kura_hash', return_value=tip['hash']), \
              patch.object(guest, 'command', side_effect=[RuntimeError('readyz 503'), b'']) as http:
-            result = guest.wait_for_cohort([{'role': guest.ROLES[0]}], [old], after=False, commit=guest.OLD, timeout=5)
+            result = guest.wait_for_cohort([{'role': guest.ROLES[0]}], [old], after=False,
+                                          commit=guest.OLD, retained_tip=tip, timeout=5)
             self.assertEqual(result, [old])
             self.assertEqual(observe.call_count, 3)
             self.assertEqual(now[0], 4)
             self.assertIn('http://127.0.0.1:8080/readyz', http.call_args.args[0])
             observe.side_effect = RuntimeError('still not ready')
             with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
-                guest.wait_for_cohort([{}], [old], after=True, commit='a' * 40, timeout=5)
+                guest.wait_for_cohort([{}], [old], after=True, commit='a' * 40,
+                                      retained_tip=tip, timeout=5)
             self.assertEqual(now[0], 9)
+
+    def test_cohort_target_is_highest_stopped_tip_and_rejects_conflicting_maximum(self):
+        checkpoints = [{'role': role, 'kura_tip': {'height': height, 'hash': digest * 64}}
+                       for role, height, digest in zip(guest.ROLES,
+                           [1260, 1260, 1023, 1260], ['c', 'c', 'b', 'c'], strict=True)]
+        self.assertEqual(guest.cohort_retained_tip(checkpoints),
+                         {'height': 1260, 'hash': 'c' * 64})
+        checkpoints[1]['kura_tip']['hash'] = 'd' * 64
+        with self.assertRaisesRegex(RuntimeError, 'highest retained Kura tips disagree'):
+            guest.cohort_retained_tip(checkpoints)
+        checkpoints[1]['kura_tip']['hash'] = 'c' * 64
+        checkpoints[2]['kura_tip']['height'] = guest.REPLAY_BARRIER - 1
+        with self.assertRaisesRegex(RuntimeError, 'retained cohort Kura tip is invalid'):
+            guest.cohort_retained_tip(checkpoints)
+        with self.assertRaisesRegex(RuntimeError, 'checkpoint cohort differs'):
+            guest.cohort_retained_tip(checkpoints[::-1])
+
+    def test_cohort_requires_common_prefix_without_requiring_empty_blocks(self):
+        rows = [{'role': role} for role in guest.ROLES]
+        props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
+                 'MainPID': '42', 'InvocationID': 'a' * 32}
+        before = [{'role': role, 'config_stamp': [1], 'state_root_identity': [2],
+                   'current_target': 'same', 'systemd': props,
+                   'public': {'height': height, 'commit': guest.OLD}}
+                  for role, height in zip(guest.ROLES, [1260, 1260, 1023, 1260], strict=True)]
+        current = copy.deepcopy(before)
+        tip = {'height': 1260, 'hash': 'c' * 64}
+        now = [0.0]
+        with patch.object(guest.time, 'monotonic', side_effect=lambda: now[0]), \
+             patch.object(guest.time, 'sleep', side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
+             patch.object(guest, 'observe', side_effect=lambda row, **kw: current[guest.ROLES.index(row['role'])]), \
+             patch.object(guest, 'systemd', return_value=props) as states, \
+             patch.object(guest, 'native_kura_hash', return_value=tip['hash']) as hashes, \
+             patch.object(guest, 'command', return_value=b'') as ready:
+            with self.assertRaisesRegex(RuntimeError, 'common retained cohort height is not ready'):
+                guest.wait_for_cohort(rows, before, after=True, commit=guest.OLD,
+                                      retained_tip=tip, timeout=3)
+            ready.assert_not_called()
+            states.assert_not_called()
+            current[2]['public']['height'] = 1260
+            hashes.reset_mock()
+            self.assertEqual(guest.wait_for_cohort(rows, before, after=True, commit=guest.OLD,
+                                                 retained_tip=tip, timeout=3), current)
+            self.assertEqual([call.args for call in hashes.call_args_list],
+                             [(role, 1260) for role in guest.ROLES])
+            self.assertEqual(now[0], 3, 'an idle converged chain needs no delay or new block')
+            hashes.return_value = 'd' * 64
+            with self.assertRaisesRegex(RuntimeError, 'retained Kura prefix hash changed'):
+                guest.observe_cohort(rows, before, after=True, commit=guest.OLD, retained_tip=tip)
+
+    def test_cohort_final_process_sweep_rejects_restart_after_individual_observation(self):
+        props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
+                 'MainPID': '42', 'InvocationID': 'a' * 32}
+        observations = [{'role': role, 'systemd': dict(props)} for role in guest.ROLES]
+        for changes in ({'MainPID': '43'}, {'InvocationID': 'b' * 32},
+                        {'ActiveState': 'failed', 'SubState': 'failed', 'MainPID': '0'}):
+            with self.subTest(changes=changes), \
+                 patch.object(guest, 'systemd', return_value=dict(props, **changes)):
+                with self.assertRaisesRegex(RuntimeError, 'process changed across cohort verification'):
+                    guest.verify_cohort_processes(observations)
+        restarted = copy.deepcopy(observations)
+        restarted[2]['systemd']['InvocationID'] = 'b' * 32
+        with patch.object(guest, 'systemd', return_value=props):
+            with self.assertRaisesRegex(RuntimeError, 'process changed across cohort verification'):
+                guest.verify_cohort_processes(restarted, observations)
 
     def test_retained_attempt_binds_exact_completed_predecessor(self):
         build, old_plan = fixture()
@@ -646,7 +719,7 @@ class CoordinatorTests(unittest.TestCase):
                      patch.object(guest, 'native_digest', return_value=('d' if failure == 'artifact' else 'b') * 64), \
                      patch.object(guest, 'record') as record, \
                      patch.object(guest, 'stop_all') as stop:
-                    if failure:
+                    if failure not in (None, 'after.json', 'checkpoint-restored.json'):
                         with self.assertRaises((RuntimeError, FileNotFoundError)):
                             guest.retained_attempt(plan)
                     else:
@@ -692,6 +765,17 @@ class CoordinatorTests(unittest.TestCase):
         records = {}
         units = {row['role']: base64.b64decode(row['before']) for row in plan['units']}
 
+        def running(role):
+            index = guest.ROLES.index(role) + 1
+            props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
+                     'MainPID': str(100 + index), 'InvocationID': str(index) * 32, 'Job': ''}
+            if 'public-doctor' in events and role == guest.ROLES[2]:
+                if failure == 'post-doctor-invocation':
+                    props['InvocationID'] = 'b' * 32
+                if failure == 'post-doctor-pid':
+                    props['MainPID'] = '203'
+            return props
+
         def native(argv, *, timeout=60, name=None):
             events.append(name or str(argv[0]))
             if failure is not None and name == failure:
@@ -711,13 +795,19 @@ class CoordinatorTests(unittest.TestCase):
             return {'role': row['role'], 'unit_stamp': [1, 2, 0o100600, 0, 0, 1, 3, 4, 5],
                     'config_stamp': [1, 4], 'config_sha256': 'same', 'state_root_identity': [1, 8],
                     'current_target': 'unchanged',
+                    'systemd': running(row['role']),
                     'executable': str(guest.DAEMON if after else guest.PREVIOUS_DAEMON),
                     'public': {'commit': plan['commit'] if after else guest.PREDECESSOR['commit'],
+                               'network_id': guest.NETWORK,
                                'height': 200 if after else 199}}
 
         def observe(row, *, after=False):
             if not after:
                 raise AssertionError('stopped predecessor has no live Torii observation')
+            events.append('observe-' + row['role'])
+            if (failure == 'post-doctor-http' and 'public-doctor' in events
+                    and row['role'] == guest.ROLES[2]):
+                raise RuntimeError('validator no longer answers HTTP')
             return identity(row, after=after)
 
         def install(path, raw, expected, mode):
@@ -763,7 +853,11 @@ class CoordinatorTests(unittest.TestCase):
             stack.enter_context(patch.object(guest, 'retained_identity', side_effect=identity))
             paused = {'ActiveState': 'inactive', 'SubState': 'dead', 'MainPID': '0',
                       'ControlPID': '0', 'Job': '', 'InvocationID': 'f' * 32}
-            stack.enter_context(patch.object(guest, 'systemd', return_value=paused))
+            def systemd(unit):
+                events.append('systemd-' + unit)
+                return (running(unit.removeprefix('iroha3d-').removesuffix('.service'))
+                        if 'start' in events else paused)
+            stack.enter_context(patch.object(guest, 'systemd', side_effect=systemd))
             stack.enter_context(patch.object(guest, 'stop_all', side_effect=lambda: events.append('stop-all') or [{'unit': unit, 'systemd': paused} for unit in guest.UNITS]))
             def checkpoint(row, *, stopped, prior):
                 self.assertTrue(stopped)
@@ -771,10 +865,17 @@ class CoordinatorTests(unittest.TestCase):
                 if recovery:
                     self.assertEqual(prior, failed_records['checkpoint-stopped.json'][guest.ROLES.index(row['role'])])
                 return {'role': row['role'], 'selection': 'selected', 'checkpoint_height': 199,
-                        'kura_tip': {'height': 199, 'hash': 'c' * 64}}
+                        'cohort_stopped': True, 'invocation_id': row['systemd']['InvocationID'],
+                        'kura_tip': {'height': 200, 'hash': 'c' * 64}}
             stack.enter_context(patch.object(guest, 'checkpoint_barrier', side_effect=checkpoint))
             stack.enter_context(patch.object(guest, 'snapshot_selection', return_value='selected'))
-            stack.enter_context(patch.object(guest, 'native_kura_tip', return_value={'height': 199, 'hash': 'c' * 64}))
+            stack.enter_context(patch.object(guest, 'native_kura_tip', return_value={'height': 200, 'hash': 'c' * 64}))
+            def kura_hash(role, height):
+                events.append('hash-' + role)
+                self.assertEqual(height, 200)
+                return ('d' if failure == 'post-doctor-hash' and 'public-doctor' in events
+                        and role == guest.ROLES[2] else 'c') * 64
+            stack.enter_context(patch.object(guest, 'native_kura_hash', side_effect=kura_hash))
             stack.enter_context(patch.object(guest, 'verify_restored_checkpoint', side_effect=lambda row, cp:
                 {'role': row['role'], 'restored_height': 199, 'native_strict_checkpoint_verified': True}))
             stack.enter_context(patch.object(guest, 'install_unit', side_effect=install))
@@ -796,6 +897,14 @@ class CoordinatorTests(unittest.TestCase):
         self.assertIn('retained-entry.json', records)
         self.assertIn('checkpoint-stopped.json', records)
         self.assertIn('checkpoint-restored.json', records)
+        self.assertEqual(records['cohort-retained-tip.json'], {'height': 200, 'hash': 'c' * 64})
+        self.assertEqual(records['cohort-ready.json']['retained_tip'], records['cohort-retained-tip.json'])
+        self.assertTrue(records['cohort-ready.json']['startup_processes_unchanged'])
+        self.assertTrue(records['result.json']['cohort_processes_verified_after_public_doctor'])
+        doctor = events.index('public-doctor')
+        for role in guest.ROLES:
+            for event in ('observe-' + role, 'hash-' + role, 'systemd-iroha3d-' + role + '.service'):
+                self.assertIn(event, events[doctor + 1:])
         self.assertFalse(records['result.json']['canary_applied_verified'])
         self.assertFalse(records['result.json']['application_ready'])
         self.assertNotIn('rollback-start', events)
@@ -824,6 +933,68 @@ class CoordinatorTests(unittest.TestCase):
         self.assertNotIn('rollback-start', events)
         self.assertTrue(records['failure.json']['new_start_attempted'])
         self.assertNotIn('result.json', records)
+
+    def test_post_doctor_cohort_failures_cannot_report_success_or_restart_old_daemons(self):
+        for failure in ('post-doctor-invocation', 'post-doctor-pid',
+                        'post-doctor-http', 'post-doctor-hash'):
+            with self.subTest(failure=failure):
+                events, records, _, _ = self.simulate(failure)
+                self.assertIn('public-doctor', events)
+                self.assertIn('after.json', records, 'retain the earlier startup observations')
+                self.assertIn('checkpoint-restored.json', records)
+                self.assertTrue(records['failure.json']['new_start_attempted'])
+                self.assertNotIn('cohort-ready.json', records)
+                self.assertNotIn('result.json', records)
+                self.assertNotIn('rollback.json', records)
+                self.assertNotIn('rollback-start', events)
+
+    def test_actual_late_failure_records_can_recover_without_promoting_partial_observations(self):
+        for failure in ('public-doctor', 'post-doctor-invocation', 'post-doctor-pid',
+                        'post-doctor-http', 'post-doctor-hash'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                _, records, _, failed = self.simulate(failure)
+                root = Path(temporary).resolve()
+                failed_directory = root / failed['operation']
+                required = {name: records[name] for name in guest.FAILED_START_RECORDS}
+                reference = write_failed_reference(failed_directory, required)
+                for name, value in records.items():
+                    if name not in required:
+                        (failed_directory / name).write_text(json.dumps(value))
+                self.assertTrue((failed_directory / 'after.json').exists())
+                self.assertTrue((failed_directory / 'checkpoint-restored.json').exists())
+                build, prior = fixture()
+                build['commit'] = 'c' * 40
+                recovery_guest = fresh_guest()
+                plan = runner.make_plan(build, deployment(), prior, recovery_guest,
+                                        'update-' + '3' * 32, reference)
+                baseline = root / deployment()['current']['attempt_name']
+                baseline.mkdir()
+                baseline_records = {
+                    'intent.json': prior, 'after.json': records['before.json'],
+                    'checkpoint-stopped.json': records['checkpoint-stopped.json'],
+                    'checkpoint-restored.json': records['checkpoint-restored.json'],
+                    'result.json': {'schema': 'taira.daemon-update.result.v1',
+                                    'runtime_update_complete': True, 'state_preserved': True,
+                                    'retained_native_snapshot_verified': True,
+                                    'commit': recovery_guest.PREDECESSOR['commit'],
+                                    'network_id': recovery_guest.NETWORK}}
+                for name, value in baseline_records.items():
+                    (baseline / name).write_text(json.dumps(value))
+                with patch.object(recovery_guest, 'BASE', root), \
+                     patch.object(recovery_guest, 'stamp', return_value=[0] * 6 + [2_000_000]), \
+                     patch.object(recovery_guest, 'native_digest', return_value='b' * 64), \
+                     patch.object(recovery_guest, 'stop_all') as stop:
+                    retained = recovery_guest.retained_attempt(plan)
+                    self.assertEqual(retained, (records['before.json'], records['checkpoint-stopped.json']))
+                    self.assertEqual(retained[0][0]['public']['commit'], recovery_guest.PREDECESSOR['commit'])
+                    self.assertNotEqual(retained[0][0]['public']['commit'], records['after.json'][0]['public']['commit'])
+                    for name in ('result.json', 'rollback.json'):
+                        marker = failed_directory / name
+                        marker.write_text('{}')
+                        with self.assertRaisesRegex(RuntimeError, 'success or rollback marker'):
+                            recovery_guest.retained_attempt(plan)
+                        marker.unlink()
+                    stop.assert_not_called()
 
     def test_failed_start_recovery_keeps_historical_health_and_exact_rollback_boundary(self):
         for failure in (None, 'partial-install', 'start', 'public-doctor'):
