@@ -21,6 +21,9 @@ class IndependentCheckpointTests(unittest.TestCase):
     def setUp(self):
         self.fixture = existing.TairaPrepareTests()
         self.fixture.setUp()
+        # This disposable census replaces the full stage groups; basic has a
+        # separate admission/startup and network census that is not mocked here.
+        self.fixture.args.native_check_scope = "full"
         self.addCleanup(self.fixture.tearDown)
         self.fixture.source.mkdir(mode=0o700)
         self.root = self.fixture.root
@@ -60,7 +63,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         stack.enter_context(patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "CARGO_HOME": str(self.root / "cargo-home")}, clear=True))
         self.source_lock = stack.enter_context((self.root / "source-lock").open("w"))
         self.events = []
-        for group in ("CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES",
+        for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES",
                       "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
             stack.enter_context(patch.object(gate, group, ()))
         for group, selection in (("CORE_STAGES", "core"), ("STAGES", "cli"), ("NETWORK_STAGES", "network")):
@@ -97,11 +100,12 @@ class IndependentCheckpointTests(unittest.TestCase):
         copies.release = release_copy
         return copies
 
-    def run_network_fixture(self, _root, fixture_root, env, lock_fds, *, harness):
+    def run_network_fixture(self, _root, fixture_root, env, lock_fds, *, harness, stages):
         self.events.append("network")
         self.assertTrue(self.checkpoint.exists(), "independent pass must precede real network execution")
         self.assertFalse((self.fixture.out / "checks.json").exists())
-        gate.run_stages(harness, fixture_root, env, gate.NETWORK_STAGES, lock_fds)
+        self.assertEqual(stages, gate.NETWORK_STAGES)
+        gate.run_stages(harness, fixture_root, env, stages, lock_fds)
 
     def prepare(self, **kwargs):
         return self.fixture.prepare(check=self.actual_checks, source_lane_fd=self.source_lock.fileno(), **kwargs)
