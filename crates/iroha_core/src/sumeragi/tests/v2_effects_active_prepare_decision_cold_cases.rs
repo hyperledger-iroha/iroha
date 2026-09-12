@@ -781,6 +781,27 @@ fn recover_stale_prepare_decision_crash_fixture(
         0,
         "the actual response occurrence was durably consumed"
     );
+    let validate = launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+        let ProductionCompletionDispatchV1::BodyStageAdvanced {
+            parent_ordinal: store,
+            child_ordinal: validate,
+            child: LifecycleWorkClass::Validate,
+        } = owner
+            .dispatch_completion_for_test(services, executor, 0)
+            .expect("the real persisted current response Store publishes Validate")
+        else {
+            panic!("actual current Decision Store must advance to one physical Validate")
+        };
+        assert!(store > fetch && validate > store);
+        assert_recovered_body_publication_timer(
+            owner,
+            executor,
+            services,
+            &mut next_timer,
+            LifecycleWorkClass::Validate,
+        );
+        validate
+    });
     let (owner, executor, services) = (*launched).into_settled_body_fixture_for_test();
     transport.executor = executor;
     let mut fixture = ReadyBodyFixture {
@@ -792,25 +813,6 @@ fn recover_stale_prepare_decision_crash_fixture(
         certificate,
         ordinal: fetch,
     };
-    let ProductionCompletionDispatchV1::BodyStageAdvanced {
-        parent_ordinal: store,
-        child_ordinal: validate,
-        child: LifecycleWorkClass::Validate,
-    } = fixture
-        .owner
-        .dispatch_completion_for_test(&mut fixture.services, &mut fixture.transport.executor, 0)
-        .expect("the real persisted current response Store publishes Validate")
-    else {
-        panic!("actual current Decision Store must advance to one physical Validate")
-    };
-    assert!(store > fetch && validate > store);
-    assert_recovered_body_publication_timer(
-        &mut fixture.owner,
-        &mut fixture.transport.executor,
-        &mut fixture.services,
-        &mut next_timer,
-        LifecycleWorkClass::Validate,
-    );
     fixture
         .owner
         .body_recovery_snapshot_for_test(previous_ordinal, validate);

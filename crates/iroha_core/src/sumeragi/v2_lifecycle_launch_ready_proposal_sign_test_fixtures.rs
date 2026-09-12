@@ -462,7 +462,8 @@ impl LaunchedProductionLifecycleV1 {
         );
     }
 
-    /// Return the already-settled owner trio after its exact ingress has drained.
+    /// Retire launch ingress and return the settled synchronous body fixture.
+    /// Finish all ordinary runtime/timer turns before this cold-boundary extraction.
     pub(in crate::sumeragi) fn into_settled_body_fixture_for_test(
         self,
     ) -> (
