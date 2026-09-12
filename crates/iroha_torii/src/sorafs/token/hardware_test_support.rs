@@ -1,6 +1,6 @@
 //! Independently signed custody/receipt/observer simulations, never physical hardware evidence.
 
-use super::hardware_finality::{FinalityFloorV1, HardwareFinalityV1};
+use super::hardware_finality::{FinalityFloorV1, HardwareFinalityV1, HistoricalFinalityV1};
 use super::hardware_lifecycle::{HardwareClockV1, HardwareDriverV1};
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair, Signature};
@@ -162,7 +162,8 @@ impl HardwareFinalityV1 for SimulatedFinality {
         minimum: SignerCustodyAnchorV1,
         candidate: SignerCustodyAnchorV1,
         floor: FinalityFloorV1,
-        historical: &[FinalityFloorV1],
+        historical: &[HistoricalFinalityV1],
+        observation: &SignerStreamTokenStateObservationBodyV1,
     ) -> Result<(), StreamTokenIssuerError> {
         let call = self.validations.fetch_add(1, Ordering::SeqCst) + 1;
         if self.unavailable.load(Ordering::SeqCst)
@@ -173,8 +174,13 @@ impl HardwareFinalityV1 for SimulatedFinality {
             || candidate.height < self.tip.load(Ordering::SeqCst)
             || floor.block_hash != block_hash(floor.height)
             || (candidate.height == minimum.height && candidate != minimum)
+            || historical.is_empty()
             || historical.len() > 3
+            || observation.current_anchor != candidate
+            || !matches!(historical[0], HistoricalFinalityV1::Custody(anchor)
+                if anchor == observation.active_head.approved_anchor)
             || historical.iter().any(|anchor| {
+                let anchor = anchor.coordinates();
                 !(90..=candidate.height).contains(&anchor.height)
                     || anchor.block_hash != block_hash(anchor.height)
             })

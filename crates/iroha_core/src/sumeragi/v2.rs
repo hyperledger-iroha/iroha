@@ -9842,31 +9842,6 @@ fn commit_qc_status(
     })
 }
 impl SumeragiV2Adapter {
-    /// Return whether the exact live Decision WAL source still awaits its
-    /// Validate-to-Apply body-frame join. This borrows the affine seal only;
-    /// lifecycle publication remains its sole consuming path.
-    #[cfg(test)]
-    pub(crate) fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: reducer::EventTag,
-        decision_round: wire::ConsensusRound,
-        proposal_round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        execution_commitment: wire::ExecutionCommitment,
-    ) -> bool {
-        self.pending_live_decision_apply
-            .as_ref()
-            .is_some_and(|sealed| {
-                sealed.exactly_binds_pending_apply_decision(
-                    tag,
-                    decision_round,
-                    proposal_round,
-                    subject,
-                    execution_commitment,
-                )
-            })
-    }
-
     /// Open the safety WAL, replay every complete frame, and resume durable work.
     ///
     /// Network ingress is never exposed before replay has completed.  The

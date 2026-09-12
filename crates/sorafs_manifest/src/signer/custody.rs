@@ -605,8 +605,17 @@ fn validate_trust(
     statement: &SignerCustodyStatementV1,
     trust: &SignerCustodyTrustV1,
 ) -> Result<(), SignerCustodyErrorV1> {
+    if statement.authority != trust.authority {
+        return Err(SignerCustodyErrorV1::UntrustedAuthority);
+    }
+    validate_trust_binding(&statement.binding, trust)
+}
+
+pub(super) fn validate_trust_binding(
+    signer: &SignerCustodyBindingV1,
+    trust: &SignerCustodyTrustV1,
+) -> Result<(), SignerCustodyErrorV1> {
     if !valid_authority(&trust.authority)
-        || statement.authority != trust.authority
         || trust.public_key.try_algorithm().ok() != Some(Algorithm::Ed25519)
         || trust.active_from_unix_ms == 0
         || trust.active_until_unix_ms <= trust.active_from_unix_ms
@@ -617,7 +626,6 @@ fn validate_trust(
     {
         return Err(SignerCustodyErrorV1::UntrustedAuthority);
     }
-    let signer = &statement.binding;
     if trust.public_key == signer.public_key
         || [
             &trust.authority.service_id,
