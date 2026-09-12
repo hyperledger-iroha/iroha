@@ -9365,10 +9365,6 @@ seiyaku Privacy {
         );
         assert!(require_privacy_exact12_network_v1(&other, other.as_bytes(), &expected).is_err());
     }
-    fn disable_packed_struct_once() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(ensure_packed_struct_disabled);
-    }
     fn hash_literal(byte: u8) -> String {
         let mut buf = [byte; Hash::LENGTH];
         buf[buf.len() - 1] |= 1;
@@ -10666,7 +10662,6 @@ seiyaku Privacy {
     }
     #[test]
     fn kaigi_commitment_option_roundtrip() {
-        disable_packed_struct_once();
         let buf = [0x11u8; 32];
         let commitment = KaigiParticipantCommitment {
             commitment: KaigiAuthorizationScalarV1::from_le_bytes(buf).unwrap(),
@@ -11392,7 +11387,6 @@ seiyaku Privacy {
     #[test]
     #[allow(clippy::too_many_lines)] // End-to-end JSON roundtrip coverage is easier to read as one consolidated case table.
     fn rwa_instruction_json_roundtrip() {
-        disable_packed_struct_once();
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
         let rwa_id = sample_rwa_id("commodities", 0x31);
@@ -11518,7 +11512,6 @@ seiyaku Privacy {
     }
     #[test]
     fn rwa_instruction_json_rejects_non_quantity_spellings() {
-        disable_packed_struct_once();
         let rwa_id = sample_rwa_id("commodities", 0x41);
         let parent_rwa_id = sample_rwa_id("commodities", 0x42);
         let invalid_quantities = [
@@ -11555,7 +11548,6 @@ seiyaku Privacy {
     }
     #[test]
     fn kaigi_join_instruction_json_roundtrip() {
-        disable_packed_struct_once();
         let mut call_id = json::Map::new();
         call_id.insert("domain_id".into(), Value::String("wonderland.sora".into()));
         call_id.insert("call_name".into(), Value::String("weekly-sync".into()));
@@ -11756,7 +11748,6 @@ seiyaku Privacy {
     }
     #[test]
     fn join_kaigi_instruction_json_roundtrip() {
-        disable_packed_struct_once();
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
         let participant = sample_account("wonderland");
         let commitment = KaigiParticipantCommitment {
@@ -11788,7 +11779,6 @@ seiyaku Privacy {
     }
     #[test]
     fn join_kaigi_instruction_norito_roundtrip_from_json() {
-        disable_packed_struct_once();
         let participant = account_json_literal(&sample_account("wonderland"));
         let payload = r#"{
             "Kaigi": {
@@ -13468,7 +13458,6 @@ seiyaku Privacy {
     }
     #[test]
     fn decode_signed_contract_call_json_exposes_expected_code_hash() {
-        disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let network_id = test_network_id(b"js-contract-call");
@@ -13513,7 +13502,6 @@ seiyaku Privacy {
     }
     #[test]
     fn build_transaction_from_instructions_json_roundtrip() {
-        disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let network_id = test_network_id(b"instruction-json-roundtrip");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -13564,7 +13552,6 @@ seiyaku Privacy {
     }
     #[test]
     fn build_executable_batch_transaction_preserves_mixed_order_and_tag() {
-        disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let network_id = test_network_id(b"mixed-batch-network");
@@ -13644,7 +13631,6 @@ seiyaku Privacy {
     }
     #[test]
     fn build_ivm_proved_transaction_roundtrip() {
-        disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let network_id = test_network_id(b"ivm-proved-roundtrip");
         let authority = AccountId::new(keypair.public_key().clone());

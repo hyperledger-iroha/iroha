@@ -57,7 +57,9 @@ fn shared_codec_adapter_preserves_instruction_frames_archives_and_errors() {
     );
     for malformed in ["{", "{\"Register\":null}"] {
         let shared_error = iroha_js_codec::encode_instruction_frame(malformed).unwrap_err();
-        let native_error = norito_encode_instruction(malformed.to_owned()).unwrap_err();
+        let native_error = norito_encode_instruction(malformed.to_owned())
+            .err()
+            .expect("malformed instruction must fail native encoding");
         let expected_status = match shared_error.kind() {
             iroha_js_codec::CodecErrorKind::InvalidArgument => napi::Status::InvalidArg,
             iroha_js_codec::CodecErrorKind::Failure => napi::Status::GenericFailure,

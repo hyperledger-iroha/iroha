@@ -41,6 +41,29 @@ test("browser initialization is single-flight and publishes only a complete immu
   assert.equal(calls, 1);
 });
 
+test("bundled ES module getters resolve once into immutable codec functions", async () => {
+  const exports = moduleFixture();
+  const namespace = Object.create(null);
+  let reads = 0;
+  for (const name of Object.keys(exports)) {
+    Object.defineProperty(namespace, name, {
+      enumerable: true,
+      get() { reads += 1; return exports[name]; },
+    });
+  }
+  const runtime = createBrowserCodecRuntime(() => namespace);
+  await runtime.initialize();
+  assert.equal(reads, 6);
+  exports.noritoEncodeInstruction = () => Uint8Array.of(99);
+  assert.deepEqual(runtime.binding().noritoEncodeInstruction("{}"), Uint8Array.of(1, 2));
+  assert.equal(reads, 6);
+});
+
+test("inherited codec methods cannot substitute for package exports", async () => {
+  const runtime = createBrowserCodecRuntime(() => Object.create(moduleFixture()));
+  await assert.rejects(runtime.initialize(), (error) => error.cause.code === "ERR_IROHA_CODEC_ABI");
+});
+
 test("failed initialization and early account access do not poison an immutable native context", async () => {
   let calls = 0;
   const browser = createBrowserCodecRuntime(() => {
