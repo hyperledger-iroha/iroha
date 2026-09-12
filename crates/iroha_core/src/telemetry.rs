@@ -4616,9 +4616,10 @@ pub fn record_state_tx_queue_backpressure(
             .metrics
             .sumeragi_tx_queue_max_retained_bytes
             .set(max_retained_bytes);
-        telemetry.metrics.sumeragi_tx_queue_saturated.set(u64::from(
-            saturated_by_count || saturated_by_bytes || saturated_by_age,
-        ));
+        telemetry
+            .metrics
+            .sumeragi_tx_queue_saturated
+            .set(u64::from(saturated_by_count || saturated_by_bytes));
         telemetry
             .metrics
             .sumeragi_tx_queue_saturated_by_count
@@ -5248,9 +5249,9 @@ impl Telemetry {
             self.metrics
                 .sumeragi_tx_queue_max_retained_bytes
                 .set(max_retained_bytes);
-            self.metrics.sumeragi_tx_queue_saturated.set(u64::from(
-                saturated_by_count || saturated_by_bytes || saturated_by_age,
-            ));
+            self.metrics
+                .sumeragi_tx_queue_saturated
+                .set(u64::from(saturated_by_count || saturated_by_bytes));
             self.metrics
                 .sumeragi_tx_queue_saturated_by_count
                 .set(u64::from(saturated_by_count));
@@ -6533,12 +6534,43 @@ impl Actor {
         }
         self.last_online_peers = current_online;
         self.metrics.connected_peers.set(peer_count);
-        let queued = self.queue.queued_len() as u64;
-        let active = self.queue.active_len() as u64;
+        // Queue transitions may have no StateTelemetry handle. Refresh the entire
+        // queue observation here so a drained queue cannot retain an earlier
+        // consensus-pressure sample indefinitely while the node is idle.
+        let pressure = self.queue.pressure_snapshot();
+        let queued = pressure.queued_tx_count as u64;
+        let active = pressure.tracked_tx_count as u64;
         let inflight = active.saturating_sub(queued);
         self.metrics.queue_size.set(active);
         self.metrics.queue_queued.set(queued);
         self.metrics.queue_inflight.set(inflight);
+        self.metrics.sumeragi_tx_queue_depth.set(queued);
+        self.metrics
+            .sumeragi_tx_queue_capacity
+            .set(pressure.capacity.get() as u64);
+        self.metrics
+            .sumeragi_tx_queue_retained_bytes
+            .set(pressure.retained_bytes);
+        self.metrics
+            .sumeragi_tx_queue_max_retained_bytes
+            .set(pressure.max_retained_bytes.get());
+        // Match QueuePressureSnapshot::into_backpressure and the operator
+        // status projection. Age is a latency signal, not capacity exhaustion.
+        self.metrics.sumeragi_tx_queue_saturated.set(u64::from(
+            pressure.saturated_by_count || pressure.saturated_by_bytes,
+        ));
+        self.metrics
+            .sumeragi_tx_queue_saturated_by_count
+            .set(u64::from(pressure.saturated_by_count));
+        self.metrics
+            .sumeragi_tx_queue_saturated_by_bytes
+            .set(u64::from(pressure.saturated_by_bytes));
+        self.metrics
+            .sumeragi_tx_queue_saturated_by_age
+            .set(u64::from(pressure.saturated_by_age));
+        self.metrics
+            .sumeragi_tx_queue_oldest_queued_age_ms
+            .set(pressure.oldest_queued_tx_age_ms);
         // P2P counters (gauges): sample from p2p module
         self.metrics
             .p2p_dropped_posts
@@ -9843,6 +9875,72 @@ mod tests {
         assert_eq!(metrics.sumeragi_tx_queue_saturated_by_bytes.get(), 1);
         assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 1);
         assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 7_500);
+    }
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn queue_age_pressure_is_not_capacity_backpressure() {
+        let metrics = Arc::new(Metrics::default());
+        let state_telemetry = StateTelemetry::new(metrics.clone(), true);
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        record_state_tx_queue_backpressure(
+            &state_telemetry,
+            2,
+            20_000,
+            21_888,
+            134_217_728,
+            false,
+            false,
+            true,
+            23_611,
+        );
+        assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 1);
+        assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 23_611);
+
+        metrics.sumeragi_tx_queue_saturated.set(1);
+        telemetry.record_tx_queue_backpressure(
+            2,
+            20_000,
+            21_888,
+            134_217_728,
+            false,
+            false,
+            true,
+            23_611,
+        );
+        assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 1);
+    }
+    #[tokio::test]
+    async fn fresh_queue_metrics_replace_stale_pressure_on_an_idle_node() {
+        let system = SystemUnderTest::new();
+        // Model the last event-driven sample before work was removed without
+        // StateTelemetry. No new block or transaction should be needed to clear it.
+        system
+            .telemetry
+            .record_tx_queue_backpressure(2, 2, 21_888, 21_888, true, true, true, 23_611);
+        assert_eq!(system.telemetry.metrics.sumeragi_tx_queue_depth.get(), 2);
+        assert_eq!(
+            system.telemetry.metrics.sumeragi_tx_queue_saturated.get(),
+            1
+        );
+
+        let metrics = system
+            .telemetry
+            .metrics_fresh_checked()
+            .await
+            .expect("fresh metrics for the idle queue");
+        assert_eq!(metrics.queue_size.get(), 0);
+        assert_eq!(metrics.queue_queued.get(), 0);
+        assert_eq!(metrics.queue_inflight.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 10);
+        assert_eq!(metrics.sumeragi_tx_queue_retained_bytes.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_count.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_bytes.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 0);
     }
     #[cfg(feature = "telemetry")]
     #[test]

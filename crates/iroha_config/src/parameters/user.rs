@@ -18158,7 +18158,10 @@ pub struct AccountOnboarding {
     #[config(default = "defaults::torii::account_onboarding::LEASE_TERM_YEARS")]
     #[norito(default = "default_account_onboarding_lease_term_years")]
     pub lease_term_years: u8,
-    /// Permission names that sponsored onboarding may additionally grant.
+    /// Supported unscoped permission names that authenticated onboarding requests may grant.
+    ///
+    /// Empty by default; configured permissions still require an explicit request and executor
+    /// authorization. Granting `DpnUser` requires the signer to hold `DpnAdmin` directly.
     #[config(default)]
     #[norito(default)]
     pub additional_permissions: Vec<String>,
@@ -18537,6 +18540,7 @@ impl AccountOnboarding {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<Vec<Name>> {
         const UNSCOPED_DEFAULT_PERMISSIONS: &[&str] = &[
+            "DpnUser",
             "CanManagePeers",
             "CanManageLaneRelayEmergency",
             "CanResolveEscrowDispute",

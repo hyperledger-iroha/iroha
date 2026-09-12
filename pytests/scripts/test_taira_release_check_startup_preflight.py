@@ -57,14 +57,14 @@ class StartupPreflightTests(unittest.TestCase):
             output.chmod(0o500)
             copies = gate.NativeArtifactCopies(output, paths, identities, observations)
             complete_stages = tuple((name, selections[name]) for name in ("cli", "proof", "core", "daemon"))
-            prior = gate.independent_check_evidence(copies, complete_stages) if reuse else None
+            prior = gate.independent_check_evidence(copies, complete_stages, qualification_scope="full") if reuse else None
             if reuse == "changed":
                 prior = copy.deepcopy(prior)
                 prior["selected_tests"][2]["stages"][-1]["tests"] = ["old_startup"]
             updates = []
             error = None
             with contextlib.ExitStack() as stack:
-                for group in ("CONFIG_STAGES", "STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES",
+                for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES",
                               "CORE_STAGES", "DAEMON_STAGES", "CRYPTO_STAGES", "P2P_STAGES",
                               "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES"):
                     stack.enter_context(patch.object(gate, group, groups.get(group, ())))
@@ -79,7 +79,7 @@ class StartupPreflightTests(unittest.TestCase):
                 stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
                 env = dict(os.environ, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR=str(root))
                 try:
-                    gate.run_checks(root, environment=env, source_commit="a" * 40,
+                    gate.run_checks(root, qualification_scope="full", environment=env, source_commit="a" * 40,
                                     completed_independent_checks=prior, update_independent_checks=updates.append)
                 except gate.CheckError as caught:
                     error = caught

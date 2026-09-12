@@ -40327,6 +40327,19 @@ fn validate_account_onboarding_readiness(
             );
         }
     }
+    if signer.allowed_permissions.contains("DpnUser") {
+        let admin = Permission::from(iroha_executor_data_model::permission::dpn::DpnAdmin);
+        // Native DPN grants require the exact direct unit token; role-derived or
+        // differently scoped permissions do not authorize this lifecycle.
+        if !world.account_contains_inherent_permission(&signer.authority, &admin) {
+            blocked(
+                "alias.onboarding.dpn_user_grant_authority_missing",
+                Some("DpnUser".to_owned()),
+                "torii.account_onboarding.authority",
+                "use an onboarding authority with direct DpnAdmin permission or remove DpnUser from additional_permissions",
+            );
+        }
+    }
     if let Some(program_id) = signer.fee_sponsor_program_id.as_ref() {
         if world.fee_sponsor_programs().get(program_id).is_none() {
             blocked(
@@ -40488,6 +40501,7 @@ fn validate_account_onboarding_readiness(
                     | "alias.onboarding.policy_missing"
                     | "alias.onboarding.payer_unfunded"
                     | "alias.onboarding.additional_permission_unknown"
+                    | "alias.onboarding.dpn_user_grant_authority_missing"
                     | "alias.onboarding.sponsor_program_missing"
                     | "alias.onboarding.credential_dataspace_unknown"
                     | "alias.onboarding.credential_domain_missing"

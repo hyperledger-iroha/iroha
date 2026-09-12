@@ -115,7 +115,7 @@ shared lifecycle source assertions directly with the pinned Rust compiler. Both
 must execute every listed test without skips. Lifecycle mutation controls check
 that removing or reordering required retries still fails. The gate also reconciles
 the shipping binary table with Cargo manifests and the early compilation targets.
-Configuration, CLI, SDK, Torii, crypto, P2P, Core, proof and fixture harnesses,
+Configuration library and integration tests, CLI, SDK, Torii, crypto, P2P, Core, proof and fixture harnesses,
 including all four shipping entry points, then share one Cargo invocation,
 resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when an independent-test checkpoint can be reused.

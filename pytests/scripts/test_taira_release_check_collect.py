@@ -61,7 +61,7 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 env = dict(os.environ, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR=str(root))
                 for name, group in self.groups:
                     stack.enter_context(patch.object(gate, group, ((name, (name + "_first", name + "_second")),)))
-                for group in ("CONFIG_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
+                for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
                     stack.enter_context(patch.object(gate, group, ()))
                 for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
                     stack.enter_context(patch.object(gate, function))
@@ -72,7 +72,7 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 stack.enter_context(contextlib.redirect_stdout(output))
                 stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
                 with self.assertRaises(gate.CheckError) as caught:
-                    gate.run_checks(root, environment=env, source_commit="a" * 40, lock_fds=locks)
+                    gate.run_checks(root, qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=locks)
             batch.assert_called_once()
             self.assertEqual(batch.call_args.kwargs["harnesses"], tuple(name for name, _ in self.groups[:-1]) + ("network", "cli"))
             network.assert_not_called()

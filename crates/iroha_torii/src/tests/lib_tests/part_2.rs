@@ -74,6 +74,138 @@ fn onboarding_readiness_rejects_unknown_additional_permission() {
         })
     );
 }
+fn declare_onboarding_dpn_permissions_for_test(app: &SharedAppState) {
+    let height = next_block_height(app);
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).expect("height>0"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut stx = block.transaction();
+    let world = stx.world_mut_for_testing();
+    let current = world.executor_data_model();
+    let mut permissions = current.permissions().clone();
+    permissions.extend(["DpnUser".to_owned(), "DpnAdmin".to_owned()]);
+    let model = iroha_data_model::executor::ExecutorDataModel::new(
+        current.parameters().clone(),
+        current.instructions().clone(),
+        permissions,
+        current.schema().clone(),
+    );
+    world.apply_executor_data_model(model);
+    stx.apply();
+    block.transactions.insert_block(
+        HashSet::new(),
+        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+    );
+    block.commit().expect("declare onboarding DPN permissions");
+}
+#[test]
+fn onboarding_readiness_dpn_user_requires_exact_direct_admin() {
+    use iroha_executor_data_model::permission::dpn::DpnAdmin;
+
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0xA3, "derive DPN onboarding authority fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let scoped_admin = Permission::new(
+        "DpnAdmin".to_owned(),
+        iroha_primitives::json::Json::new(norito::json!({ "scope": 0 })),
+    );
+    for (label, permission, ready) in [
+        ("missing", None, false),
+        ("scoped", Some(scoped_admin), false),
+        ("direct", Some(Permission::from(DpnAdmin)), true),
+    ] {
+        let app = onboarding_alias_test_app(&authority, &authority);
+        declare_onboarding_dpn_permissions_for_test(&app);
+        grant_account_permissions_for_test(&app, &authority, permission);
+        let mut signer = onboarding_alias_signer_for_test(&key_pair);
+        signer.allowed_permissions.insert("DpnUser".to_owned());
+        let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+        if ready {
+            assert_onboarding_readiness_ready(&app, &signer);
+        } else {
+            assert_eq!(
+                report.status,
+                iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
+                "{label}: {report:?}"
+            );
+            assert_eq!(report.diagnostics.len(), 1, "{label}: {report:?}");
+            assert_eq!(
+                report.diagnostics[0].code, "alias.onboarding.dpn_user_grant_authority_missing",
+                "{label}: {report:?}"
+            );
+        }
+    }
+}
+#[test]
+fn onboarding_readiness_dpn_user_rejects_role_derived_admin() {
+    use iroha_executor_data_model::permission::dpn::DpnAdmin;
+
+    let key_pair = checked_torii_test_ed25519_keypair(
+        0xA4,
+        "derive role DPN onboarding authority fixture key",
+    );
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let admin = Permission::from(DpnAdmin);
+    let app =
+        onboarding_alias_test_app_with_role_permissions(&authority, &authority, [admin.clone()]);
+    declare_onboarding_dpn_permissions_for_test(&app);
+    assert!(torii_account_has_permission(
+        &app.state.world_view(),
+        &authority,
+        &admin,
+    ));
+    assert!(
+        !app.state
+            .world_view()
+            .account_contains_inherent_permission(&authority, &admin)
+    );
+    let mut signer = onboarding_alias_signer_for_test(&key_pair);
+    signer.allowed_permissions.insert("DpnUser".to_owned());
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
+        "{report:?}"
+    );
+    assert_eq!(report.diagnostics.len(), 1, "{report:?}");
+    assert_eq!(
+        report.diagnostics[0].code,
+        "alias.onboarding.dpn_user_grant_authority_missing"
+    );
+}
+#[test]
+fn onboarding_readiness_default_permissions_do_not_require_dpn_admin() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0xA7, "derive default onboarding authority fixture key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    let signer = onboarding_alias_signer_for_test(&key_pair);
+    assert!(signer.allowed_permissions.is_empty());
+    assert_onboarding_readiness_ready(&app, &signer);
+}
+#[test]
+fn onboarding_readiness_dpn_user_is_pending_while_joining_state_is_empty() {
+    let key_pair =
+        checked_torii_test_ed25519_keypair(0xA8, "derive joining DPN onboarding fixture key");
+    let app = mk_app_state_for_tests();
+    let mut signer = onboarding_alias_signer_for_test(&key_pair);
+    signer.allowed_permissions.insert("DpnUser".to_owned());
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Pending,
+        "{report:?}"
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "alias.onboarding.dpn_user_grant_authority_missing"
+    }));
+}
 #[test]
 fn onboarding_alias_credential_domains_accept_exact_direct_permissions() {
     let key_pair = checked_torii_test_ed25519_keypair(
@@ -1205,7 +1337,10 @@ fn alias_setup_parent_and_size_diagnostics_are_deterministic() {
     assert_eq!(blocker.severity, AliasSetupSeverityV1::Error);
     let request_time = UNIX_EPOCH + Duration::from_millis(1_000);
     assert_eq!(alias_plan_deadline(request_time, None).unwrap(), 61_000);
-    assert_eq!(alias_plan_deadline(request_time, Some(30_000)).unwrap(), 30_000);
+    assert_eq!(
+        alias_plan_deadline(request_time, Some(30_000)).unwrap(),
+        30_000
+    );
     assert_eq!(alias_plan_deadline(request_time, Some(999)).unwrap(), 999);
     assert!(alias_plan_deadline(UNIX_EPOCH - Duration::from_millis(1), None).is_err());
 }

@@ -19,8 +19,8 @@ class CombinedCliGraphTests(unittest.TestCase):
     artifact = staticmethod(existing.NativeTestBatchBuildTests.artifact)
     process = existing.NativeTestBatchBuildTests.process
 
-    def test_thirteen_targets_share_one_graph_without_extra_binary_or_feature_selection(self):
-        names = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
+    def test_fourteen_targets_share_one_graph_without_extra_binary_or_feature_selection(self):
+        names = ("config", "config-unit", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
         lines = "".join(self.artifact(name) for name in reversed(names))
         lines += self.artifact("cli")
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
@@ -174,7 +174,7 @@ class CliCopyLifetimeTests(unittest.TestCase):
             return copies
 
         def four_peer(*args, **kwargs):
-            self.assertEqual(kwargs, {"harness": copies["network"]})
+            self.assertEqual(kwargs, {"harness": copies["network"], "stages": gate.NETWORK_STAGES})
             order.append("production-build-and-four-peer")
             self.assertFalse(copy.exists(), "release completed CLI copy before production graph")
             self.assertTrue(executed.exists())
@@ -187,7 +187,7 @@ class CliCopyLifetimeTests(unittest.TestCase):
                 raise gate.CheckError("synthetic four-peer failure")
 
         with contextlib.ExitStack() as stack:
-            for group in ("CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
+            for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
                 stack.enter_context(patch.object(gate, group, ()))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", gate.NETWORK_STAGES if network else ()))
             stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", ("cli_fixture",)),)))
@@ -199,7 +199,7 @@ class CliCopyLifetimeTests(unittest.TestCase):
             stack.enter_context(patch.object(gate, "run_stages", side_effect=run_cli))
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             stack.enter_context(self.assertRaises(gate.CheckError) if failure else contextlib.nullcontext())
-            gate.run_checks(self.source, environment=self.env | {"CARGO_HOME": "/isolated"}, source_commit="a" * 40, lock_fds=locks)
+            gate.run_checks(self.source, qualification_scope="full", environment=self.env | {"CARGO_HOME": "/isolated"}, source_commit="a" * 40, lock_fds=locks)
         self.assertEqual(batch.call_count, 1)
         later_compile.assert_not_called()
         self.assertEqual(peers.call_count, int(network and failure != "cli"))
