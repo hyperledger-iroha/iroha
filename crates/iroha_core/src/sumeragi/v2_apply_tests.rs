@@ -1,10 +1,282 @@
 //! Test-only extensions and the stable v2 apply test module.
 #[derive(Default)]
 pub(super) struct FailureInjection {
+    successful_frontier_pause: std::sync::Mutex<Option<Arc<SuccessfulApplyFrontierPause>>>,
     pub(super) kura_store: std::sync::atomic::AtomicBool,
     pub(super) wsv_checkpoint: std::sync::atomic::AtomicBool,
     pub(super) provider_ingest_archive_capture: std::sync::atomic::AtomicBool,
     pub(super) reputation_archive_capture: std::sync::atomic::AtomicBool,
+}
+/// Arrival, release and worker exit belong to the same synchronized observation.
+#[derive(Default)]
+struct ApplyFrontierBarrierState {
+    arrived: bool,
+    released: bool,
+    worker_finished: bool,
+}
+/// A deterministic rendezvous whose arrival wait ends if its worker exits.
+#[derive(Default)]
+struct ApplyFrontierBarrier {
+    state: std::sync::Mutex<ApplyFrontierBarrierState>,
+    changed: std::sync::Condvar,
+}
+impl ApplyFrontierBarrier {
+    fn arrive_and_wait(&self) {
+        let mut state = self.state.lock().expect("frontier barrier lock");
+        state.arrived = true;
+        self.changed.notify_all();
+        while !state.released {
+            state = self.changed.wait(state).expect("frontier barrier wait");
+        }
+    }
+    fn wait_until_arrived(&self) {
+        let state = self.state.lock().expect("frontier observation lock");
+        let state = self
+            .changed
+            .wait_while(state, |state| !state.arrived && !state.worker_finished)
+            .expect("frontier observation wait");
+        let arrived = state.arrived;
+        drop(state);
+        assert!(
+            arrived,
+            "successful Apply worker exited before reaching the test rendezvous"
+        );
+    }
+    fn release(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .released = true;
+        self.changed.notify_all();
+    }
+    fn mark_worker_finished(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .worker_finished = true;
+        self.changed.notify_all();
+    }
+}
+#[derive(Default)]
+struct SuccessfulApplyFrontierPause {
+    before_store: ApplyFrontierBarrier,
+    after_store: ApplyFrontierBarrier,
+}
+struct ReleaseSuccessfulApply(Arc<SuccessfulApplyFrontierPause>);
+impl Drop for ReleaseSuccessfulApply {
+    fn drop(&mut self) {
+        self.0.before_store.release();
+        self.0.after_store.release();
+    }
+}
+/// Wake observers on normal return, an Apply error or worker panic.
+struct NotifySuccessfulApplyExit(Arc<SuccessfulApplyFrontierPause>);
+impl Drop for NotifySuccessfulApplyExit {
+    fn drop(&mut self) {
+        self.0.before_store.mark_worker_finished();
+        self.0.after_store.mark_worker_finished();
+    }
+}
+
+#[test]
+fn successful_apply_frontier_rendezvous_observes_both_gates_before_worker_completion() {
+    let pause = Arc::new(SuccessfulApplyFrontierPause::default());
+    std::thread::scope(|scope| {
+        let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
+        let worker_pause = Arc::clone(&pause);
+        let (completed, observed) = std::sync::mpsc::channel();
+        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-both-gates")
+            .spawn_scoped(scope, move || {
+                let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
+                worker_pause.before_store.arrive_and_wait();
+                completed
+                    .send("before-store released")
+                    .expect("observer alive");
+                worker_pause.after_store.arrive_and_wait();
+                completed
+                    .send("after-store released")
+                    .expect("observer alive");
+            })
+            .expect("spawn frontier worker");
+        pause.before_store.wait_until_arrived();
+        assert_eq!(
+            observed.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+        pause.before_store.release();
+        pause.after_store.wait_until_arrived();
+        assert_eq!(observed.try_recv(), Ok("before-store released"));
+        assert_eq!(
+            observed.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+        pause.after_store.release();
+        worker.join().expect("worker completes after both releases");
+        assert_eq!(observed.try_recv(), Ok("after-store released"));
+        assert_eq!(
+            observed.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        );
+        // Completion must not erase either actual arrival.
+        pause.before_store.wait_until_arrived();
+        pause.after_store.wait_until_arrived();
+    });
+}
+
+#[test]
+fn successful_apply_frontier_worker_exit_before_arrival_notifies_both_gates() {
+    // Exercise successful return, returned error and panic with no arrival.
+    for disposition in 0..3 {
+        let pause = Arc::new(SuccessfulApplyFrontierPause::default());
+        std::thread::scope(|scope| {
+            let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
+            let worker_pause = Arc::clone(&pause);
+            let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-early-exit")
+                .spawn_scoped(scope, move || {
+                    let _finished = NotifySuccessfulApplyExit(worker_pause);
+                    match disposition {
+                        0 => Ok(()),
+                        1 => Err("Apply rejected before either gate"),
+                        _ => panic!("Apply panicked before either gate"),
+                    }
+                })
+                .expect("spawn exiting frontier worker");
+            for gate in [&pause.before_store, &pause.after_store] {
+                let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    gate.wait_until_arrived();
+                }))
+                .expect_err("worker exit cannot stand in for an actual storage observation");
+                assert_eq!(
+                    error
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| error.downcast_ref::<String>().map(String::as_str)),
+                    Some("successful Apply worker exited before reaching the test rendezvous")
+                );
+            }
+            let outcome = worker.join();
+            match disposition {
+                0 => assert_eq!(outcome.expect("normal worker return"), Ok(())),
+                1 => assert_eq!(
+                    outcome.expect("returned Apply error"),
+                    Err("Apply rejected before either gate")
+                ),
+                _ => assert_eq!(
+                    outcome
+                        .expect_err("worker panic remains a panic")
+                        .downcast_ref::<&str>(),
+                    Some(&"Apply panicked before either gate")
+                ),
+            }
+        });
+    }
+}
+
+#[test]
+fn successful_apply_frontier_worker_exit_between_gates_preserves_first_arrival() {
+    let pause = Arc::new(SuccessfulApplyFrontierPause::default());
+    std::thread::scope(|scope| {
+        let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
+        let worker_pause = Arc::clone(&pause);
+        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-between-gates")
+            .spawn_scoped(scope, move || {
+                let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
+                worker_pause.before_store.arrive_and_wait();
+                Err::<(), _>("Apply rejected after the first gate")
+            })
+            .expect("spawn frontier worker");
+        pause.before_store.wait_until_arrived();
+        pause.before_store.release();
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pause.after_store.wait_until_arrived();
+        }))
+        .expect_err("the first gate must not satisfy the second observation");
+        assert_eq!(
+            error
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| error.downcast_ref::<String>().map(String::as_str)),
+            Some("successful Apply worker exited before reaching the test rendezvous")
+        );
+        assert_eq!(
+            worker.join().expect("returned Apply error"),
+            Err("Apply rejected after the first gate")
+        );
+        pause.before_store.wait_until_arrived();
+    });
+}
+
+#[test]
+fn successful_apply_frontier_observer_unwind_releases_and_joins_worker() {
+    let pause = Arc::new(SuccessfulApplyFrontierPause::default());
+    std::thread::scope(|scope| {
+        let release = ReleaseSuccessfulApply(Arc::clone(&pause));
+        let worker_pause = Arc::clone(&pause);
+        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-observer-unwind")
+            .spawn_scoped(scope, move || {
+                let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
+                worker_pause.before_store.arrive_and_wait();
+                worker_pause.after_store.arrive_and_wait();
+                "both gates released during observer unwind"
+            })
+            .expect("spawn frontier worker");
+        let observer_pause = Arc::clone(&pause);
+        let outcome = std::panic::catch_unwind(move || {
+            let _release = release;
+            observer_pause.before_store.wait_until_arrived();
+            panic!("observer assertion failed at the first gate");
+        });
+        let error = outcome.expect_err("observer failure remains visible");
+        assert_eq!(
+            error
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| error.downcast_ref::<String>().map(String::as_str)),
+            Some("observer assertion failed at the first gate")
+        );
+        assert_eq!(
+            worker.join().expect("released worker completes normally"),
+            "both gates released during observer unwind"
+        );
+        pause.before_store.wait_until_arrived();
+        pause.after_store.wait_until_arrived();
+    });
+}
+
+impl V2ApplyService {
+    fn pause_successful_apply_frontier_for_test(&self) -> Arc<SuccessfulApplyFrontierPause> {
+        let pause = Arc::new(SuccessfulApplyFrontierPause::default());
+        let previous = self
+            .test_failures
+            .successful_frontier_pause
+            .lock()
+            .expect("install successful Apply barrier")
+            .replace(Arc::clone(&pause));
+        assert!(previous.is_none(), "one successful Apply pause per fixture");
+        pause
+    }
+    pub(super) fn before_successful_apply_kura_store_for_test(&self) {
+        let pause = self
+            .test_failures
+            .successful_frontier_pause
+            .lock()
+            .expect("read successful Apply barrier")
+            .clone();
+        if let Some(pause) = pause {
+            pause.before_store.arrive_and_wait();
+        }
+    }
+    pub(super) fn after_successful_apply_kura_store_for_test(&self) {
+        let pause = self
+            .test_failures
+            .successful_frontier_pause
+            .lock()
+            .expect("read successful Apply barrier")
+            .clone();
+        if let Some(pause) = pause {
+            pause.after_store.arrive_and_wait();
+        }
+    }
 }
 /// Test-only durable-application crash boundary.
 pub(super) enum CrashPoint {

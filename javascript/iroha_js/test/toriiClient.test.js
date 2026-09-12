@@ -635,7 +635,7 @@ const FIXTURE_ASSET_ID_D = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
 
 function fixtureMultisigAccountId() {
   const members = ["multisig-a", "multisig-b", "multisig-c"].map((label) => {
-    const controller = fixtureAccountAddress(label)._controller;
+    const controller = fixtureAccountAddress(label).controllerInfo();
     return {
       curve: controller.curve,
       publicKey: controller.publicKey,
@@ -1512,6 +1512,7 @@ function multisigDraftForBindings({
   feePayment = authorityFeePayment(),
   creationTimeMs = 42,
   metadata = {},
+  admissionIntent = 0,
 } = {}) {
   const request = {
     ...normalizedVerifyingKeyRequest(),
@@ -1534,6 +1535,7 @@ function multisigDraftForBindings({
   ttl.writeBigUInt64LE(100_000n);
   fields[4] = Buffer.concat([Buffer.of(1), encodeTestCompactField(ttl)]);
   fields[7] = Buffer.alloc(4);
+  fields[7].writeUInt32LE(admissionIntent);
   return verifyingKeyDraftForPayload(
     Buffer.concat(fields.map(encodeTestCompactField)),
   );
@@ -21988,6 +21990,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
   const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
   const payload = { value: 7, labels: ["a", "b"] };
   const draft = multisigDraftForBindings({
+    admissionIntent: 1,
     authority: FIXTURE_ALICE_ID,
     feePayment,
     creationTimeMs: 42,
@@ -22078,6 +22081,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
 test("prepareContractCall rejects submitted and unmarked response state", async () => {
   const txHash = "3".repeat(64);
   const draft = multisigDraftForBindings({
+    admissionIntent: 1,
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
@@ -22152,6 +22156,7 @@ test("prepareContractCall rejects submitted and unmarked response state", async 
 
 test("callContract response requires operation_receipt", async () => {
   const draft = multisigDraftForBindings({
+    admissionIntent: 1,
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
@@ -22192,6 +22197,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
   const contractAddress =
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
   const draft = multisigDraftForBindings({
+    admissionIntent: 1,
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
@@ -22290,6 +22296,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
   const payload = { value: 7, labels: ["a", "b"] };
   const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
   const draft = multisigDraftForBindings({
+    admissionIntent: 1,
     authority: FIXTURE_ALICE_ID,
     feePayment,
     creationTimeMs: 42,
@@ -22336,6 +22343,19 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
     draftIntent,
   };
   const cases = [
+    ...[0, 2].map((admissionIntent) => [
+      `rehashed admission intent ${admissionIntent}`,
+      (value) => {
+        const replacement = Buffer.alloc(4);
+        replacement.writeUInt32LE(admissionIntent);
+        Object.assign(value, draftWithReplacedTransactionField(draft, 7, replacement));
+      },
+      (error) => {
+        assert.match(error.message, /one canonical transaction payload/);
+        assert.match(error.cause?.message ?? "", /TransactionAdmissionIntent::QueuePlanSynced/);
+        return true;
+      },
+    ]),
     [
       "colluding resolved address",
       (value) => {
@@ -22391,6 +22411,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
       "colluding creation time",
       (value) => {
         const substitutedDraft = multisigDraftForBindings({
+          admissionIntent: 1,
           authority: FIXTURE_ALICE_ID,
           feePayment,
           creationTimeMs: 43,
@@ -22445,6 +22466,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
 test("prepareContractCall validates caller-trusted payload intent before fetch", async () => {
   const payload = { value: 7 };
   const draft = multisigDraftForBindings({
+    admissionIntent: 1,
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
@@ -22476,6 +22498,7 @@ test("prepareContractCall validates caller-trusted payload intent before fetch",
 
 test("prepareContractCall rejects a zero explicit creation time before fetch", async () => {
   const draft = multisigDraftForBindings({
+    admissionIntent: 1,
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,

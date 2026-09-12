@@ -1212,18 +1212,18 @@ pub use routing::{
     EvidenceListQuery, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
     KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
     MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsQueryRequestDto,
-    MultisigProposalsResolveRequestDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
-    RegisterPinManifestResponseDto, SetContractAliasDto, SetContractAliasResponseDto,
-    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
-    ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
-    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk,
-    handle_post_asset_transfer, handle_post_contract_alias_set, handle_post_contract_call,
+    MultisigProposalsResolveRequestDto, PreparedContractCallRequest, ProofApiLimits,
+    ProofFindByIdQueryDto, ProofListQuery, RegisterPinManifestResponseDto, SetContractAliasDto,
+    SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
+    VkListQuery, ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs,
+    handle_get_contract_code_bytes, handle_get_proof, handle_get_vk, handle_list_proofs,
+    handle_list_vk, handle_post_asset_transfer, handle_post_contract_alias_set,
     handle_post_contract_call_batch_prepare, handle_post_contract_call_simulate,
     handle_post_contract_view, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
     handle_queries_with_opts, handle_v1_events_sse_for_tests, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, signed_find_proof_by_id,
+    handle_v1_sumeragi_evidence_list, prepare_contract_call_request, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -37541,22 +37541,57 @@ async fn handler_post_contract_call(
         "call",
     )
     .await?;
-    match crate::routing::handle_post_contract_call(
+    let telemetry = app.telemetry.clone();
+    let result = match crate::routing::prepare_contract_call_request(
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("call"));
-            Err(err)
+    ) {
+        Ok(prepared) => submit_prepared_contract_call(app, headers, prepared).await,
+        Err(err) => Err(err),
+    };
+    if !matches!(&result, Ok(response) if response.status().is_success()) {
+        telemetry.with_metrics(|tel| tel.inc_torii_contract_error("call"));
+    }
+    result
+}
+#[cfg(feature = "app_api")]
+async fn submit_prepared_contract_call(
+    app: SharedAppState,
+    headers: axum::http::HeaderMap,
+    prepared: crate::routing::PreparedContractCallRequest,
+) -> Result<AxResponse, Error> {
+    match prepared {
+        crate::routing::PreparedContractCallRequest::Unsigned(response) => {
+            Ok(JsonBody(response).into_response())
+        }
+        crate::routing::PreparedContractCallRequest::Signed {
+            transaction,
+            response,
+        } => {
+            // Preserve the caller's exact signature-bound bytes and the canonical
+            // owner's failure/ambiguity evidence. A prepared receipt is not admission.
+            let accept = headers
+                .get(axum::http::header::ACCEPT)
+                .cloned()
+                .map(crate::utils::extractors::ExtractAccept);
+            let admitted =
+                submit_signed_transaction_for_ingress(app, headers, accept, transaction).await?;
+            Ok(contract_call_response_after_admission(response, admitted))
         }
     }
 }
+#[cfg(feature = "app_api")]
+fn contract_call_response_after_admission(
+    response: crate::routing::ContractCallResponseDto,
+    admitted: AxResponse,
+) -> AxResponse {
+    if admitted.status() != StatusCode::ACCEPTED {
+        return admitted;
+    }
+    JsonBody(response).into_response()
+}
+
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_batch_prepare(
     State(app): State<SharedAppState>,

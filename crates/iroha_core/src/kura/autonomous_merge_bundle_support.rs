@@ -3095,9 +3095,11 @@ impl Kura {
                                 ),
                             )
                         })?;
-                    self.ensure_certified_bundle_capacity_reservation_under_prune_guard(
-                        &artifact, &published, None,
-                    )?;
+                    // This slot is already durable and can precede the current
+                    // frontier. Consume only its authenticated outstanding
+                    // bundle component; historical readback must not request
+                    // admission to publish another certified frontier.
+                    self.consume_autonomous_bundle_pair_capacity(&published)?;
                     continue;
                 }
                 let source = self

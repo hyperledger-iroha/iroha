@@ -7,6 +7,22 @@
       "mode": "0755"
     },
     {
+      "path": "crates/iroha",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/iroha/tests",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/iroha/tests/fixtures",
+      "mode": "0755"
+    },
+    {
+      "path": "crates/iroha/tests/fixtures/contract_code_readback",
+      "mode": "0755"
+    },
+    {
       "path": "crates/ivm",
       "mode": "0755"
     },
@@ -76,6 +92,12 @@
     }
   ],
   "files": [
+    {
+      "path": "crates/iroha/tests/fixtures/contract_code_readback/code_readback.to",
+      "mode": "0644",
+      "size": 793,
+      "sha256": "410c267340917e089adb12c938e943c7e5962985eb444be839ec7298db237a6e"
+    },
     {
       "path": "crates/ivm/docs/examples/01_hajimari.to",
       "mode": "0644",

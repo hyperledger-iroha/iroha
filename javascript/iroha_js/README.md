@@ -3158,9 +3158,10 @@ payload and metadata, typed `feePayment`, and an off-wire `draftIntent` built
 from the locally verified contract artifact. Private signing material and the
 intent are never sent to Torii. The client rejects the returned draft unless
 its exact network, authority, executable, metadata, quoted fee, creation time,
-TTL, admission mode, nonce, and attachments match caller-trusted state. Sign
-only after that validation succeeds, then submit the finalized transaction
-through the normal transaction route.
+TTL, nonce, and attachments match caller-trusted state. Contract drafts must
+carry the signature-bound `QueuePlanSynced` admission intent. Sign only after
+that validation succeeds, then submit the exact finalized transaction through
+the normal transaction route.
 
 ```js
 import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";

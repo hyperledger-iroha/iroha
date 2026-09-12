@@ -19,6 +19,39 @@ fn build_apply_fixture_from_current_parent(
     context: wire::HeightContext,
     autonomous_lane_payloads: Vec<iroha_data_model::block::AutonomousLanePayloadEnvelopeV1>,
 ) -> SuccessorApplyFixture {
+    build_apply_fixture_from_current_parent_with_controls(
+        fixture,
+        context,
+        autonomous_lane_payloads,
+        Vec::new(),
+    )
+}
+/// Build an admission carrier through the same signed four-validator Apply path.
+fn build_apply_fixture_at_context_with_queue_plan_admissions(
+    fixture: &ApplyFixture,
+    context: wire::HeightContext,
+    queue_plan_admissions: Vec<Vec<u8>>,
+) -> SuccessorApplyFixture {
+    assert_eq!(
+        verified_successor_context_at_fixture_tip(fixture).context(),
+        &context,
+        "admission carrier uses the verified live successor context"
+    );
+    assert!(!queue_plan_admissions.is_empty());
+    build_apply_fixture_from_current_parent_with_controls(
+        fixture,
+        context,
+        Vec::new(),
+        queue_plan_admissions,
+    )
+}
+/// Share normal control attachments without changing the signed carrier pipeline.
+fn build_apply_fixture_from_current_parent_with_controls(
+    fixture: &ApplyFixture,
+    context: wire::HeightContext,
+    autonomous_lane_payloads: Vec<iroha_data_model::block::AutonomousLanePayloadEnvelopeV1>,
+    queue_plan_admissions: Vec<Vec<u8>>,
+) -> SuccessorApplyFixture {
     let parent_height = fixture.state.committed_height();
     assert_eq!(
         context.height,
@@ -49,10 +82,12 @@ fn build_apply_fixture_from_current_parent(
     )])
     .sign(fixture.genesis_key.private_key());
     let leader_index = context.leader(round.view);
-    let carries_only_autonomous_payloads = !autonomous_lane_payloads.is_empty();
-    let execution_context = if carries_only_autonomous_payloads {
+    let carries_only_controls =
+        !autonomous_lane_payloads.is_empty() || !queue_plan_admissions.is_empty();
+    let execution_context = if carries_only_controls {
         BlockExecutionContextBundle::new(Vec::new())
             .with_autonomous_lane_payloads(autonomous_lane_payloads)
+            .with_queue_plan_admissions(queue_plan_admissions)
     } else {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
         let routing_plan = fixture
@@ -88,7 +123,7 @@ fn build_apply_fixture_from_current_parent(
         .creation_time()
         .checked_add(fixture.service.block_cadence)
         .expect("successor logical time fits Duration");
-    if !carries_only_autonomous_payloads {
+    if !carries_only_controls {
         logical_time = logical_time.max(
             transaction
                 .creation_time()
@@ -137,7 +172,7 @@ fn build_apply_fixture_from_current_parent(
         "successor signer must be the rotating leader"
     );
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
-    if !carries_only_autonomous_payloads {
+    if !carries_only_controls {
         builder.push_transaction(transaction);
     }
     builder.set_da_proof_policies(Some(proof_policy_bundle));
@@ -288,6 +323,40 @@ fn reserve_canonical_autonomous_batch_with_installed_authority(
     sort_by_signed_transaction_hash: bool,
     native_receipt_builder: Option<ApplyNativeReceiptBuilder>,
 ) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
+    let prepared = prepare_canonical_autonomous_batch_with_instructions(
+        fixture,
+        queue,
+        context,
+        count,
+        instructions,
+        sort_by_signed_transaction_hash,
+        |binding| install_fixture_queue_plan_registry_value(fixture.state.as_ref(), binding),
+    );
+    reserve_prepared_canonical_autonomous_batch(
+        fixture,
+        queue,
+        context,
+        prepared,
+        native_receipt_builder,
+    )
+}
+/// Exact queued transaction identities retained across a real admission carrier.
+struct PreparedCanonicalAutonomousBatch {
+    entrypoints: Vec<TransactionEntrypoint>,
+    expected_fifo: Vec<HashOf<TransactionEntrypoint>>,
+    planned_routing: Vec<crate::queue::RoutingPlan>,
+    admission_bindings: Vec<crate::torii_proxy::QueuePlanAdmissionBindingV1>,
+}
+/// Enqueue exact claims before reservation without implicitly changing canonical State.
+fn prepare_canonical_autonomous_batch_with_instructions(
+    fixture: &ApplyFixture,
+    queue: &Arc<Queue>,
+    context: &wire::HeightContext,
+    count: usize,
+    instructions: impl Fn(usize) -> Vec<InstructionBox>,
+    sort_by_signed_transaction_hash: bool,
+    mut after_enqueue: impl FnMut(&crate::torii_proxy::QueuePlanAdmissionBindingV1),
+) -> PreparedCanonicalAutonomousBatch {
     assert_eq!(
         &context.network_id,
         fixture.state.network_id_ref(),
@@ -340,6 +409,7 @@ fn reserve_canonical_autonomous_batch_with_installed_authority(
         .map(TransactionEntrypoint::hash)
         .collect::<Vec<_>>();
     let mut planned_routing = Vec::with_capacity(count);
+    let mut admission_bindings = Vec::with_capacity(count);
     for transaction in &transactions {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
         let routing_plan = queue
@@ -364,9 +434,33 @@ fn reserve_canonical_autonomous_batch_with_installed_authority(
                 &binding,
             )
             .expect("durably enqueue canonical autonomous transaction");
-        install_fixture_queue_plan_registry_value(fixture.state.as_ref(), &binding);
+        after_enqueue(&binding);
+        admission_bindings.push(binding);
         planned_routing.push(routing_plan);
     }
+    PreparedCanonicalAutonomousBatch {
+        entrypoints,
+        expected_fifo,
+        planned_routing,
+        admission_bindings,
+    }
+}
+/// Reserve the original queued claims against their exact committed admission bindings.
+fn reserve_prepared_canonical_autonomous_batch(
+    fixture: &ApplyFixture,
+    queue: &Arc<Queue>,
+    context: &wire::HeightContext,
+    prepared: PreparedCanonicalAutonomousBatch,
+    native_receipt_builder: Option<ApplyNativeReceiptBuilder>,
+) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
+    let PreparedCanonicalAutonomousBatch {
+        entrypoints,
+        expected_fifo,
+        planned_routing,
+        admission_bindings,
+    } = prepared;
+    let count = entrypoints.len();
+    assert_eq!(admission_bindings.len(), count);
     let coordinator_routes = planned_routing
         .iter()
         .map(crate::queue::RoutingPlan::coordinator_route)
@@ -445,6 +539,16 @@ fn reserve_canonical_autonomous_batch_with_installed_authority(
         .iter()
         .map(|reservation| *reservation.key())
         .collect::<Vec<_>>();
+    assert!(
+        reservation_keys
+            .iter()
+            .zip(&admission_bindings)
+            .all(|(key, binding)| {
+                key.entrypoint_hash == binding.entrypoint_hash
+                    && key.queue_plan_admission_binding_hash == binding.canonical_hash()
+            }),
+        "reservation must retain the exact admitted context, timestamp and binding hash"
+    );
     let routing_plans = reserved
         .iter()
         .map(|reservation| reservation.routing_plan().clone())

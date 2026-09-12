@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for the contract call endpoint.
+//! Contract preparation and in-memory execution fixtures; public certified admission is tested separately.
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
 use axum::{Router, routing::post};
@@ -339,7 +339,7 @@ fn contract_test_app(
     state: Arc<State>,
     _kura: Arc<Kura>,
     queue: Arc<Queue>,
-    telemetry: iroha_torii::MaybeTelemetry,
+    _telemetry: iroha_torii::MaybeTelemetry,
 ) -> Router {
     Router::new()
         .route(
@@ -347,17 +347,25 @@ fn contract_test_app(
             post({
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
                     iroha_torii::ContractCallDto,
                 >| async move {
-                    iroha_torii::handle_post_contract_call(
+                    match iroha_torii::prepare_contract_call_request(
                         queue.clone(),
                         state.clone(),
-                        telemetry.clone(),
                         iroha_torii::NoritoJson(req),
-                    )
-                    .await
+                    )? {
+                        iroha_torii::PreparedContractCallRequest::Unsigned(response) => {
+                            Ok(iroha_torii::JsonBody(response))
+                        }
+                        iroha_torii::PreparedContractCallRequest::Signed { .. } => {
+                            Err(iroha_torii::Error::AppConflict {
+                                code: "fixture_preparation_only",
+                                message: "This fixture does not admit public transactions"
+                                    .to_owned(),
+                            })
+                        }
+                    }
                 }
             }),
         )
@@ -451,6 +459,183 @@ async fn run_contract_view_response(
         json::from_slice(&bytes).expect("decode contract view response"),
     )
 }
+fn locally_sign_prepared_contract_call_fixture(
+    response_bytes: &[u8],
+    state: &Arc<State>,
+    creds: &iroha_torii::test_utils::AuthorityCreds,
+) -> iroha_data_model::transaction::SignedTransaction {
+    let response: json::Value =
+        json::from_slice(response_bytes).expect("decode unsigned contract-call fixture");
+    assert_eq!(
+        response.get("submitted").and_then(json::Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        response
+            .get("tx_hash_hex")
+            .is_some_and(json::Value::is_null)
+    );
+    let payload_b64 = response
+        .get("transaction_payload_b64")
+        .and_then(json::Value::as_str)
+        .expect("unsigned contract-call payload");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload_b64)
+        .expect("decode payload");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&bytes),
+        payload_b64
+    );
+    let builder =
+        TransactionBuilder::decode_payload(&bytes).expect("strict canonical fixture payload");
+    assert_eq!(builder.encode_payload(), bytes);
+    assert_eq!(builder.payload().network_id(), Some(state.network_id_ref()));
+    assert_eq!(builder.payload().authority, creds.account);
+    assert_eq!(
+        builder.payload().admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    );
+    let signing_b64 = response
+        .get("signing_message_b64")
+        .and_then(json::Value::as_str)
+        .expect("unsigned contract-call signing message");
+    let signing = base64::engine::general_purpose::STANDARD
+        .decode(signing_b64)
+        .expect("decode signing message");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&signing),
+        signing_b64
+    );
+    assert_eq!(signing, builder.payload_hash_bytes());
+    let signed = builder.sign(&creds.private_key.0);
+    signed
+        .verify_signature()
+        .expect("locally signed fixture remains valid");
+    signed
+}
+/// Execute one locally signed contract-call fixture without public queue admission.
+///
+/// `execution_height` supplies the synthetic execution context only. Stateless and
+/// stateful admission validate the exact signed transaction, and Core atomically
+/// stages its effects before this helper commits only the world overlay. No block
+/// membership, committed height, Kura record, DA certificate, or queue admission is
+/// created by this fixture.
+fn apply_locally_signed_contract_call_fixture(
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    chain_id: &iroha_data_model::ChainId,
+    execution_height: u64,
+    transaction: iroha_data_model::transaction::SignedTransaction,
+) -> usize {
+    use iroha_core::{
+        smartcontracts::ivm::cache::IvmCache, state::StateReadOnly, tx::AcceptedTransaction,
+    };
+    use iroha_data_model::{
+        block::BlockHeader,
+        transaction::{Executable, TransactionAdmissionIntent},
+    };
+    assert_eq!(
+        transaction.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
+    assert!(matches!(
+        transaction.instructions(),
+        Executable::ContractCall(_)
+    ));
+    let queued_before = queue.active_len();
+    let (parameters, committed_height, latest_block) = {
+        let view = state.view();
+        (
+            view.world().parameters().clone(),
+            view.height(),
+            view.latest_block(),
+        )
+    };
+    let latest_hash = latest_block.as_ref().map(|block| block.hash());
+    let accepted = AcceptedTransaction::accept(
+        transaction,
+        state.network_id_ref(),
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        state.crypto().as_ref(),
+    )
+    .expect("stateless acceptance of locally signed contract-call fixture");
+    let entrypoint_hash = accepted.hash_as_entrypoint();
+    let _routing_plan = queue
+        .route_plan_with_state(&accepted, state)
+        .expect("resolve contract-call fixture routing plan without queue admission");
+    let timestamp_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("fixture clock is after the Unix epoch")
+            .as_millis(),
+    )
+    .expect("fixture timestamp fits u64");
+    let header = BlockHeader::new(
+        NonZeroU64::new(execution_height).expect("nonzero fixture execution height"),
+        latest_hash,
+        None,
+        None,
+        timestamp_ms,
+        0,
+    );
+    let mut state_block = state.block(header);
+    state_block.chain_id = chain_id.clone();
+    // This public Core entrypoint resolves the stateful route and runs the
+    // executor, permissions, fees and rollback boundary on the unchanged payload.
+    let (executed_hash, result) = state_block.validate_transaction(accepted, &mut IvmCache::new());
+    assert_eq!(executed_hash, entrypoint_hash);
+    result.expect("stateful execution of locally signed contract-call fixture");
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit only the executed contract-call fixture world overlay");
+    assert_eq!(
+        queue.active_len(),
+        queued_before,
+        "fixture execution must not change queue membership"
+    );
+    let view = state.view();
+    assert_eq!(view.height(), committed_height);
+    assert_eq!(
+        view.latest_block().as_ref().map(|block| block.hash()),
+        latest_hash
+    );
+    1
+}
+fn apply_prepared_contract_call_bytes_fixture(
+    response_bytes: &[u8],
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    chain_id: &iroha_data_model::ChainId,
+    creds: &iroha_torii::test_utils::AuthorityCreds,
+    height: u64,
+) -> usize {
+    let signed = locally_sign_prepared_contract_call_fixture(response_bytes, state, creds);
+    apply_locally_signed_contract_call_fixture(state, queue, chain_id, height, signed)
+}
+async fn apply_prepared_contract_call_fixture(
+    response: axum::response::Response,
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    chain_id: &iroha_data_model::ChainId,
+    creds: &iroha_torii::test_utils::AuthorityCreds,
+    height: u64,
+) -> usize {
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read preparation response")
+        .to_bytes();
+    assert_eq!(
+        status,
+        http::StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    apply_prepared_contract_call_bytes_fixture(&bytes, state, queue, chain_id, creds, height)
+}
 async fn run_contract_hajimari_and_apply(
     app: &Router,
     state: &Arc<State>,
@@ -463,7 +648,6 @@ async fn run_contract_hajimari_and_apply(
 ) {
     let body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address,
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "hajimari",
@@ -486,12 +670,18 @@ async fn run_contract_hajimari_and_apply(
         "{}",
         String::from_utf8_lossy(&response_body)
     );
-    let applied =
-        iroha_torii::test_utils::apply_queued_in_one_block(state, queue, chain_id, block_height);
+    let applied = apply_prepared_contract_call_bytes_fixture(
+        &response_body,
+        state,
+        queue,
+        chain_id,
+        creds,
+        block_height,
+    );
     assert_eq!(applied, 1, "hajimari transaction must apply exactly once");
 }
 #[tokio::test]
-async fn contracts_call_enqueues_transaction() {
+async fn contracts_call_prepares_and_verifies_locally_signed_transactions() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
         eprintln!(
             "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
@@ -515,8 +705,8 @@ async fn contracts_call_enqueues_transaction() {
     assert_eq!(applied_deploy, 1);
     let missing_limit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
+        iroha_torii::json_entry("entrypoint", "main"),
     ]);
     let missing_limit_body = json::to_json(&missing_limit_payload).expect("serialize call request");
     let missing_limit_req = http::Request::builder()
@@ -527,9 +717,15 @@ async fn contracts_call_enqueues_transaction() {
         .unwrap();
     let missing_limit_resp = app.clone().oneshot(missing_limit_req).await.unwrap();
     assert_eq!(missing_limit_resp.status(), http::StatusCode::BAD_REQUEST);
+    let missing_limit_bytes = missing_limit_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(String::from_utf8_lossy(&missing_limit_bytes).contains("fee_payment"));
     let zero_limit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "main",
@@ -545,10 +741,18 @@ async fn contracts_call_enqueues_transaction() {
         .unwrap();
     let zero_limit_resp = app.clone().oneshot(zero_limit_req).await.unwrap();
     assert_eq!(zero_limit_resp.status(), http::StatusCode::BAD_REQUEST);
+    let zero_limit_bytes = zero_limit_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(
+        String::from_utf8_lossy(&zero_limit_bytes).contains("fee_payment.gas_limit is required")
+    );
     let transaction_ttl_ms = 900_000_u64;
     let call_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
@@ -557,6 +761,35 @@ async fn contracts_call_enqueues_transaction() {
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
         ),
     ]);
+    let mut retired_private_key_payload = call_payload.clone();
+    retired_private_key_payload
+        .as_object_mut()
+        .expect("call object")
+        .insert(
+            "private_key".to_owned(),
+            json::Value::String(creds.private_key.to_string()),
+        );
+    let retired_private_key_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(
+            json::to_json(&retired_private_key_payload).unwrap(),
+        ))
+        .unwrap();
+    let retired_private_key_resp = app.clone().oneshot(retired_private_key_req).await.unwrap();
+    assert_eq!(
+        retired_private_key_resp.status(),
+        http::StatusCode::BAD_REQUEST
+    );
+    let retired_private_key_bytes = retired_private_key_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(String::from_utf8_lossy(&retired_private_key_bytes).contains("private_key"));
+    assert_eq!(queue.active_len(), 0);
     let call_body = json::to_json(&call_payload).expect("serialize call request");
     let call_req = http::Request::builder()
         .method("POST")
@@ -608,17 +841,17 @@ async fn contracts_call_enqueues_transaction() {
             .unwrap(),
         abi_hash_hex
     );
-    let tx_hash_hex = call_json
-        .get("tx_hash_hex")
-        .and_then(json::Value::as_str)
-        .expect("tx_hash_hex present");
-    assert_eq!(tx_hash_hex.len(), 64);
+    assert!(
+        call_json
+            .get("tx_hash_hex")
+            .is_some_and(json::Value::is_null)
+    );
     assert_eq!(
         call_json
             .get("submitted")
             .and_then(json::Value::as_bool)
-            .unwrap_or(false),
-        true
+            .unwrap_or(true),
+        false
     );
     let call_receipt = call_json
         .get("operation_receipt")
@@ -632,7 +865,7 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert_eq!(
         call_receipt.get("status").and_then(json::Value::as_str),
-        Some("submitted")
+        Some("pending_signature")
     );
     assert_eq!(
         call_receipt.get("transport").and_then(json::Value::as_str),
@@ -652,7 +885,7 @@ async fn contracts_call_enqueues_transaction() {
         call_receipt
             .get("tx_hash_hex")
             .and_then(json::Value::as_str),
-        Some(tx_hash_hex)
+        None
     );
     assert_eq!(
         call_receipt
@@ -663,8 +896,15 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert!(!call_receipt.contains_key("private_key"));
     assert!(!call_receipt.contains_key("payload"));
+    assert_eq!(
+        queue.active_len(),
+        0,
+        "preparation must not admit a transaction"
+    );
+    let locally_signed = locally_sign_prepared_contract_call_fixture(&call_bytes, &state, &creds);
+    assert_eq!(hex::encode(locally_signed.hash().as_ref()).len(), 64);
     let applied_call =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        apply_locally_signed_contract_call_fixture(&state, &queue, &chain_id, 2, locally_signed);
     assert_eq!(applied_call, 1);
     let draft_body = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
@@ -806,6 +1046,40 @@ async fn contracts_call_enqueues_transaction() {
     ]);
     let detached_submit_body =
         json::to_json(&detached_submit_body).expect("serialize detached submit request");
+    let detached_request: iroha_torii::ContractCallDto =
+        json::from_slice(detached_submit_body.as_bytes()).expect("decode detached request");
+    let expected_signed = transaction_builder.sign(&creds.private_key.0);
+    assert_eq!(queue.active_len(), 0);
+    let prepared = iroha_torii::prepare_contract_call_request(
+        queue.clone(),
+        state.clone(),
+        iroha_torii::NoritoJson(detached_request),
+    )
+    .expect("verify the exact locally signed preparation without admission");
+    let iroha_torii::PreparedContractCallRequest::Signed {
+        transaction,
+        response,
+    } = prepared
+    else {
+        panic!("detached signature must produce a verified signed candidate");
+    };
+    assert_eq!(transaction, expected_signed);
+    assert_eq!(
+        transaction.admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    );
+    transaction
+        .verify_signature()
+        .expect("pure Signed verification preserves signature");
+    assert_eq!(
+        queue.active_len(),
+        0,
+        "pure Signed preparation is not public admission"
+    );
+    // These are candidate DTO assertions, never a miniature public-submission response.
+    let detached_submit_json: json::Value =
+        json::from_slice(json::to_json(&response).unwrap().as_bytes())
+            .expect("candidate receipt JSON");
     let detached_submit_req = http::Request::builder()
         .method("POST")
         .uri("/v1/contracts/call")
@@ -813,14 +1087,15 @@ async fn contracts_call_enqueues_transaction() {
         .body(axum::body::Body::from(detached_submit_body))
         .unwrap();
     let detached_submit_resp = app.clone().oneshot(detached_submit_req).await.unwrap();
-    assert_eq!(detached_submit_resp.status(), http::StatusCode::OK);
-    let detached_submit_bytes = detached_submit_resp
+    assert_eq!(detached_submit_resp.status(), http::StatusCode::CONFLICT);
+    let rejected_bytes = detached_submit_resp
         .into_body()
         .collect()
         .await
         .unwrap()
         .to_bytes();
-    let detached_submit_json: json::Value = json::from_slice(&detached_submit_bytes).unwrap();
+    assert!(String::from_utf8_lossy(&rejected_bytes).contains("fixture_preparation_only"));
+    assert_eq!(queue.active_len(), 0);
     assert_eq!(
         detached_submit_json
             .get("submitted")
@@ -833,6 +1108,16 @@ async fn contracts_call_enqueues_transaction() {
         .and_then(json::Value::as_str)
         .expect("detached submit tx hash present");
     assert_eq!(detached_submit_hash.len(), 64);
+    assert_eq!(
+        detached_submit_hash,
+        hex::encode(transaction.hash().as_ref())
+    );
+    assert_eq!(
+        detached_submit_json
+            .get("entrypoint_hash_hex")
+            .and_then(json::Value::as_str),
+        Some(hex::encode(transaction.hash_as_entrypoint().as_ref()).as_str())
+    );
     for field in ["transaction_payload_b64", "signing_message_b64"] {
         assert!(
             detached_submit_json.get(field).is_none()
@@ -877,7 +1162,7 @@ async fn contracts_call_enqueues_transaction() {
                 .is_some_and(json::Value::is_null)
     );
     let applied_detached_submit =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_locally_signed_contract_call_fixture(&state, &queue, &chain_id, 3, transaction);
     assert_eq!(applied_detached_submit, 1);
 }
 #[tokio::test]
@@ -987,7 +1272,6 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
     .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "configure",
@@ -1004,7 +1288,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
     let init_resp = app.clone().oneshot(init_req).await.unwrap();
     assert_eq!(init_resp.status(), http::StatusCode::OK);
     let applied_init =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(init_resp, &state, &queue, &chain_id, &creds, 3).await;
     assert_eq!(applied_init, 1);
     let literal = run_contract_view(&app, &creds.account, &contract_address, "literal", None).await;
     assert_eq!(
@@ -1067,7 +1351,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let payload = norito::json!({ "amount": "7" });
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "credit_by_payload",
@@ -1084,7 +1367,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let call_resp = app.clone().oneshot(call_req).await.unwrap();
     assert_eq!(call_resp.status(), http::StatusCode::OK);
     let applied_call =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(call_resp, &state, &queue, &chain_id, &creds, 3).await;
     assert_eq!(applied_call, 1);
     let state_after_credit = run_contract_view(
         &app,
@@ -1104,7 +1387,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let asset_payload = norito::json!({ "asset_definition_id": asset_literal });
     let asset_call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "record_asset_by_payload",
@@ -1121,7 +1403,8 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let asset_call_resp = app.clone().oneshot(asset_call_req).await.unwrap();
     assert_eq!(asset_call_resp.status(), http::StatusCode::OK);
     let applied_asset_call =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
+        apply_prepared_contract_call_fixture(asset_call_resp, &state, &queue, &chain_id, &creds, 4)
+            .await;
     assert_eq!(applied_asset_call, 1);
     let state_after_asset = run_contract_view(
         &app,
@@ -1195,7 +1478,6 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     );
     let bind_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "bind",
@@ -1212,7 +1494,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     let bind_resp = app.clone().oneshot(bind_req).await.unwrap();
     assert_eq!(bind_resp.status(), http::StatusCode::OK);
     let applied_bind =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(bind_resp, &state, &queue, &chain_id, &creds, 3).await;
     assert_eq!(applied_bind, 1);
     let stored = run_contract_view(&app, &creds.account, &contract_address, "stored", None).await;
     assert_eq!(
@@ -1285,7 +1567,6 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
     ]);
     let configure_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "configure",
@@ -1314,8 +1595,14 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
             hex::encode(&configure_bytes)
         );
     }
-    let applied_configure =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+    let applied_configure = apply_prepared_contract_call_bytes_fixture(
+        &configure_bytes,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        2,
+    );
     assert_eq!(applied_configure, 1);
     let admin = run_contract_view(&app, &creds.account, &contract_address, "admin", None).await;
     assert_eq!(
@@ -1373,7 +1660,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let credit_payload = norito::json!({ "amount": "7" });
     let credit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "credit_by_payload",
@@ -1390,12 +1676,12 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let credit_resp = app.clone().oneshot(credit_req).await.unwrap();
     assert_eq!(credit_resp.status(), http::StatusCode::OK);
     let applied_credit =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(credit_resp, &state, &queue, &chain_id, &creds, 3)
+            .await;
     assert_eq!(applied_credit, 1);
     let asset_payload = norito::json!({ "asset_definition_id": asset_literal });
     let asset_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "record_asset_by_payload",
@@ -1412,7 +1698,8 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let asset_resp = app.clone().oneshot(asset_req).await.unwrap();
     assert_eq!(asset_resp.status(), http::StatusCode::OK);
     let applied_asset =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
+        apply_prepared_contract_call_fixture(asset_resp, &state, &queue, &chain_id, &creds, 4)
+            .await;
     assert_eq!(applied_asset, 1);
     let view_json = run_contract_view(
         &app,
@@ -1475,7 +1762,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let write_payload = norito::json!({ "amount": "7" });
     let write_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "write_with_isi",
@@ -1492,7 +1778,8 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let write_resp = app.clone().oneshot(write_req).await.unwrap();
     assert_eq!(write_resp.status(), http::StatusCode::OK);
     let applied_write =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(write_resp, &state, &queue, &chain_id, &creds, 3)
+            .await;
     assert_eq!(applied_write, 1);
     let view_json = run_contract_view(
         &app,
@@ -1579,7 +1866,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     ]);
     let write_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "write_with_mint",
@@ -1596,7 +1882,8 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let write_resp = app.clone().oneshot(write_req).await.unwrap();
     assert_eq!(write_resp.status(), http::StatusCode::OK);
     let applied_write =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(write_resp, &state, &queue, &chain_id, &creds, 3)
+            .await;
     assert_eq!(applied_write, 1);
     let view_json = run_contract_view(
         &app,
@@ -1678,7 +1965,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "init_hub",
@@ -1695,7 +1981,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let init_resp = app.clone().oneshot(init_req).await.unwrap();
     assert_eq!(init_resp.status(), http::StatusCode::OK);
     let applied_init =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(init_resp, &state, &queue, &chain_id, &creds, 3).await;
     assert_eq!(applied_init, 1);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
@@ -1706,7 +1992,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     ]);
     let deposit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "deposit_like",
@@ -1723,7 +2008,8 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let deposit_resp = app.clone().oneshot(deposit_req).await.unwrap();
     assert_eq!(deposit_resp.status(), http::StatusCode::OK);
     let applied_deposit =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
+        apply_prepared_contract_call_fixture(deposit_resp, &state, &queue, &chain_id, &creds, 4)
+            .await;
     assert_eq!(applied_deposit, 1);
     let view_json = run_contract_view(
         &app,
@@ -1810,7 +2096,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "init_hub",
@@ -1827,7 +2112,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let init_resp = app.clone().oneshot(init_req).await.unwrap();
     assert_eq!(init_resp.status(), http::StatusCode::OK);
     let applied_init =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        apply_prepared_contract_call_fixture(init_resp, &state, &queue, &chain_id, &creds, 3).await;
     assert_eq!(applied_init, 1);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
@@ -1838,7 +2123,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     ]);
     let deposit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "deposit_like",
@@ -1855,7 +2139,8 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let deposit_resp = app.clone().oneshot(deposit_req).await.unwrap();
     assert_eq!(deposit_resp.status(), http::StatusCode::OK);
     let applied_deposit =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
+        apply_prepared_contract_call_fixture(deposit_resp, &state, &queue, &chain_id, &creds, 4)
+            .await;
     assert_eq!(applied_deposit, 1);
     let burn_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
@@ -1864,7 +2149,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     ]);
     let burn_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
-        &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: "burn_like",
@@ -1881,7 +2165,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let burn_resp = app.clone().oneshot(burn_req).await.unwrap();
     assert_eq!(burn_resp.status(), http::StatusCode::OK);
     let applied_burn =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 5);
+        apply_prepared_contract_call_fixture(burn_resp, &state, &queue, &chain_id, &creds, 5).await;
     assert_eq!(applied_burn, 1);
     let view_json = run_contract_view(
         &app,

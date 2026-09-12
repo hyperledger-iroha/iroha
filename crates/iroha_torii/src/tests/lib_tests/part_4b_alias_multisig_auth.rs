@@ -1045,3 +1045,140 @@ async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
         "authentication failure must not mutate queue state"
     );
 }
+
+#[cfg(feature = "app_api")]
+fn contract_call_admission_test_receipt() -> routing::ContractCallResponseDto {
+    routing::ContractCallResponseDto {
+        ok: true,
+        submitted: true,
+        dataspace: "universal".to_owned(),
+        contract_address: None,
+        code_hash_hex: "11".repeat(32),
+        abi_hash_hex: "22".repeat(32),
+        creation_time_ms: 42,
+        transaction_ttl_ms: None,
+        tx_hash_hex: Some("33".repeat(32)),
+        pipeline_status: None,
+        entrypoint_hash_hex: Some("44".repeat(32)),
+        transaction_payload_b64: None,
+        signing_message_b64: None,
+        entrypoint: Some("main".to_owned()),
+        operation_receipt: routing::OperationReceiptDto {
+            operation_kind: "contract_call".to_owned(),
+            status: "submitted".to_owned(),
+            transport: "torii".to_owned(),
+            dataspace: "universal".to_owned(),
+            contract_alias: None,
+            contract_address: None,
+            code_hash_hex: Some("11".repeat(32)),
+            abi_hash_hex: Some("22".repeat(32)),
+            tx_hash_hex: Some("33".repeat(32)),
+            entrypoint: Some("main".to_owned()),
+            entrypoint_hash_hex: Some("44".repeat(32)),
+            gas_limit: Some(5_000),
+            gas_used: None,
+            fee_payment: Some(iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                std::num::NonZeroU64::new(5_000),
+            )),
+            payload_digest_hex: "55".repeat(32),
+        },
+    }
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn prepared_contract_call_requires_canonical_ingress_before_success() {
+    let mut app = mk_app_state_for_tests();
+    let state = Arc::get_mut(&mut app).expect("unique app state");
+    state.require_api_token = true;
+    state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::default());
+    let key = checked_torii_test_ed25519_keypair(0xe4, "contract detached dispatch fixture");
+    let transaction = TransactionBuilder::new(
+        *app.state.network_id_ref(),
+        AccountId::new(key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(key.private_key())
+    .expect("sign exact ingress fixture");
+    let queue_len = app.queue.active_len();
+    let prepared = routing::PreparedContractCallRequest::Signed {
+        transaction,
+        response: contract_call_admission_test_receipt(),
+    };
+    let error = submit_prepared_contract_call(app.clone(), HeaderMap::new(), prepared)
+        .await
+        .expect_err("prepared receipt cannot bypass canonical ingress authentication");
+    assert_unconfigured_api_token_error(error);
+    assert_eq!(app.queue.active_len(), queue_len);
+
+    let mut draft = contract_call_admission_test_receipt();
+    draft.submitted = false;
+    draft.tx_hash_hex = None;
+    draft.entrypoint_hash_hex = None;
+    draft.operation_receipt.status = "pending_signature".to_owned();
+    draft.operation_receipt.tx_hash_hex = None;
+    draft.operation_receipt.entrypoint_hash_hex = None;
+    let unsigned = submit_prepared_contract_call(
+        app.clone(),
+        HeaderMap::new(),
+        routing::PreparedContractCallRequest::Unsigned(draft),
+    )
+    .await
+    .expect("unsigned preparation does not enter transaction ingress");
+    assert_eq!(unsigned.status(), StatusCode::OK);
+    assert_eq!(app.queue.active_len(), queue_len);
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn contract_call_submission_preserves_rejected_and_ambiguous_responses() {
+    for status in [
+        StatusCode::OK,
+        StatusCode::CONFLICT,
+        StatusCode::SERVICE_UNAVAILABLE,
+    ] {
+        let body = if status == StatusCode::SERVICE_UNAVAILABLE {
+            "{\"code\":\"queue_plan_admission_outcome_unknown\"}"
+        } else {
+            "{\"code\":\"queue_plan_admission_intent_mismatch\"}"
+        };
+        let admitted = AxResponse::builder()
+            .status(status)
+            .header("content-type", "application/json")
+            .header("x-iroha-entrypoint-hash", "entrypoint-identity")
+            .header("x-iroha-signed-transaction-hash", "signed-identity")
+            .body(Body::from(body))
+            .expect("canonical owner response fixture");
+        let expected_headers = admitted.headers().clone();
+        let response = contract_call_response_after_admission(
+            contract_call_admission_test_receipt(),
+            admitted,
+        );
+        assert_eq!(response.status(), status);
+        assert_eq!(response.headers(), &expected_headers);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bounded response");
+        assert_eq!(bytes.as_ref(), body.as_bytes());
+    }
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn contract_call_submission_emits_contract_receipt_after_accepted() {
+    let receipt = contract_call_admission_test_receipt();
+    let expected = norito::json::to_value(&receipt).expect("exact contract receipt");
+    let admitted = AxResponse::builder()
+        .status(StatusCode::ACCEPTED)
+        .body(Body::empty())
+        .expect("accepted admission fixture");
+    let response = contract_call_response_after_admission(receipt, admitted);
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 16_384)
+        .await
+        .expect("bounded contract receipt");
+    let actual: norito::json::Value = norito::json::from_slice(&bytes).expect("decode receipt");
+    assert_eq!(actual, expected);
+    assert_eq!(actual["submitted"].as_bool(), Some(true));
+    assert!(actual["transaction_payload_b64"].is_null());
+    assert!(actual["signing_message_b64"].is_null());
+}

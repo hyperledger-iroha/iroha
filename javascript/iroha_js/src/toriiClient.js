@@ -22400,6 +22400,7 @@ async function normalizeContractCallDraftResponse(
     draftIntent,
     localSigningContext,
     "contractCall draft",
+    "queue_plan_synced",
   );
   return response;
 }
@@ -23413,6 +23414,7 @@ async function validateUnsignedResponsePayloadBinding(
   draftIntent,
   localSigningContext,
   context,
+  expectedAdmissionIntent,
 ) {
   if (draftIntent === null) {
     rejectType(`${context} requires a caller-trusted draftIntent`);
@@ -23427,6 +23429,7 @@ async function validateUnsignedResponsePayloadBinding(
     bindings = inspectCanonicalTransactionPayloadBindings(
       strictDecodeBase64(response.transaction_payload_b64),
       authority,
+      expectedAdmissionIntent,
     );
   } catch (error) {
     rejectType(`${context}.transaction_payload_b64 must contain one canonical transaction payload bound to the requested signer`, { cause: error });
@@ -23485,6 +23488,7 @@ async function validateMultisigResponseRequestBinding(
       draftIntent,
       localSigningContext,
       context,
+      "ordinary",
     );
   }
   return response;
@@ -34796,7 +34800,7 @@ function identifierCanonicalU8(value, context) {
 function identifierAccountIdPayload(accountId, context) {
   const literal = requireExactAccountId(accountId, context);
   const address = AccountAddress.fromI105(literal);
-  const controller = address._controller;
+  const controller = address.controllerInfo();
   if (!controller || typeof controller.tag !== "number") {
     rejectError(`${context} could not resolve account controller information`);
   }

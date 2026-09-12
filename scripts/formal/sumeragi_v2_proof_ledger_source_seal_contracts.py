@@ -3943,25 +3943,25 @@ _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
         "fa19a22ac3e2e8027daccca4545d066928aaac5b6ab3ee0fbb529012a0fe1070"
     ),
     "V2LaneWorkAdapter::retain_merge_sidecars_for_global_view_guarded": (
-        "1aaa08b9aae7de0256cfe72a8ef75964f0bd09ac0aeec59c826bab76481541b6"
+        "cf843d6a420cd3f4e466c03b03e906b2be2792f446b0e2fade9ffc9d06b28831"
     ),
     "V2LaneWorkAdapter::decode_and_validate_leader_candidate": (
-        "cce83b4a82be4d118cb9aed2da9192a247e09ed558a8448243eb43575f6b3973"
+        "158719d3bf443fb55ec5a1930ad47b18bc31f814793dd12c95166aecd53378e6"
     ),
     "V2LaneWorkAdapter::validate_merge_candidate_for_active_round": (
-        "1e63fccfc5d909626161b2a66601b49a1ad7bec1486ecd585cd991a2299dfed5"
+        "6a895b88dd30b2080f134d8f9a67a188726ccb1c3b7f8875f882dbda81fa84f4"
     ),
     "V2LaneWorkAdapter::merge_execution_candidate_validation_memo": (
         "cd51dc01cb4eff2b917d3a444a590f6ea99c0984e498a6800f420468a99f5d51"
     ),
-    "V2LaneWorkAdapter::merge_parent_frontier_is_exact_at_generation": (
-        "a8f9013ef8b0f3e25433e534fe3f7823872a6d7f67283590f22f701cd8d282e4"
+    "V2LaneWorkAdapter::merge_parent_frontier_at_generation": (
+        "4d6c98834a10298ffd9a8bd6ae9cd270cb7511c2d1ae3704631a531082dd35ee"
     ),
     "V2LaneWorkAdapter::build_and_memoize_merge_execution_candidate": (
-        "c69b5aac1825ce52ef7e3a07de83ad3ff6ad2da764b906c36d28ee0fff79cd90"
+        "e3b505c8d734dda676fba19fb76f33cb708eda4f007c2a8abb999dba45b40d8e"
     ),
     "V2LaneWorkAdapter::refresh_merge_candidates": (
-        "fc88d0ad5b84dcee198c7fa0b1398d1f4a9da0d88d4d176134c8eab77a38f3c0"
+        "30fa486a8a0e3cfa8176f511b84bdccd3e7ad25f78c19a987f9101ac6657a107"
     ),
 }
 
@@ -3979,7 +3979,7 @@ def _require_merge_execution_validation_cache_contract(
         "decode_and_validate_leader_candidate": (),
         "validate_merge_candidate_for_active_round": (),
         "merge_execution_candidate_validation_memo": (),
-        "merge_parent_frontier_is_exact_at_generation": (),
+        "merge_parent_frontier_at_generation": (),
         "build_and_memoize_merge_execution_candidate": (),
         "refresh_merge_candidates": (),
     }
@@ -4059,15 +4059,24 @@ struct ValidatedMergeExecutionCandidate {
         items.get("decode_and_validate_leader_candidate"),
         """
 let digest = crate::merge::merge_qc_message_digest(
-    &self.context.network_id,
-    &candidate,
-    VALIDATOR_SET_HASH_VERSION_V1,
-    self.frozen_validator_set_hash(),
-);
-if digest != signature.message_digest {
-    return Err("merge leader candidate body differs from its signed digest".to_owned());
-}
-self.validate_merge_candidate_for_active_round(&candidate, parent_header, active_view)?;
+            &self.context.network_id,
+            &candidate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            self.frozen_validator_set_hash(),
+        );
+        if digest != signature.message_digest {
+            return Err(MergeCandidateValidationError::Invalid(
+                "merge leader candidate body differs from its signed digest".to_owned(),
+            ));
+        }
+        match self.validate_merge_candidate_for_active_round(
+            &candidate,
+            parent_header,
+            active_view,
+        )? {
+            MergeCandidateValidation::Ready => Ok(Some(candidate)),
+            MergeCandidateValidation::Deferred => Ok(None),
+        }
 """,
         "leader candidate digest rejection must precede any expensive execution validation",
         errors,
@@ -4091,16 +4100,17 @@ if candidate.execution_batch.is_none() {
         validation_item,
         """
 if candidate.execution_batch.is_none() {
-    return self
-        .state
-        .validate_merge_candidate_for_global_round(
-            candidate,
-            parent_header,
-            active_view,
-            self.context.mode,
-        )
-        .map_err(|error| error.to_string());
-}
+            return self
+                .state
+                .validate_merge_candidate_for_global_round(
+                    candidate,
+                    parent_header,
+                    active_view,
+                    self.context.mode,
+                )
+                .map(|()| MergeCandidateValidation::Ready)
+                .map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()));
+        }
 """,
         "relay and drain candidates must retain full live production validation",
         errors,
@@ -4167,29 +4177,62 @@ Ok(ValidatedMergeExecutionCandidate {
         lane_path,
         validation_item,
         """
-let state_view_generation = self.state.state_view_generation();
-let validated = self.merge_execution_candidate_validation_memo(
-    candidate,
-    parent_header,
-    active_view,
-    state_view_generation,
-)?;
-let cache_hit = self
-    .validated_merge_execution_candidate
-    .as_ref()
-    .is_some_and(|cached| cached == &validated);
+let validated = validated.map_err(MergeCandidateValidationError::Invalid)?;
+        let cache_hit = self
+            .validated_merge_execution_candidate
+            .as_ref()
+            .is_some_and(|cached| cached == &validated);
 """,
         "live validation must derive one exact memo before testing bounded positive authority",
         errors,
     )
     _require_rust_token_sequence(
         lane_path,
-        items.get("merge_parent_frontier_is_exact_at_generation"),
+        items.get("merge_parent_frontier_at_generation"),
         """
-state_view_generation % 2 == 0
-    && self.state.state_view_generation() == state_view_generation
-    && self.merge_parent_frontier_is_exact()
-    && self.state.state_view_generation() == state_view_generation
+let state_height = self.state.committed_height();
+        let state_hash = self.state.latest_block_hash_fast();
+        // Preserve every exact storage error. Neither a lossy height nor Option::None
+        // authenticates a retryable publication boundary.
+        let durable_height = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| error.to_string())?;
+        let durable_parent = self.kura.get_durable_block_hash(parent_height);
+        let durable_height_after = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| error.to_string())?;
+        if self.state.state_view_generation() != state_view_generation {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
+        if durable_parent != Some(expected_parent) {
+            return Err(
+                "merge validation parent is missing or differs from the exact durable Kura chain"
+                    .to_owned(),
+            );
+        }
+        if durable_height_after < durable_height
+            || durable_height_after < state_height
+            || state_height < parent_height.get()
+        {
+            return Err(
+                "merge validation observed a regressed or contradictory committed frontier"
+                    .to_owned(),
+            );
+        }
+        if state_height == parent_height.get() && state_hash != Some(expected_parent) {
+            return Err(
+                "merge validation parent differs from the exact committed State tip".to_owned(),
+            );
+        }
+        if durable_height_after != durable_height
+            || durable_height_after > parent_height.get()
+            || state_height > parent_height.get()
+        {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
+        Ok(MergeCandidateValidation::Ready)
 """,
         "merge execution cache reuse must bracket an exact durable parent frontier with the unchanged stable generation",
         errors,
@@ -4198,15 +4241,13 @@ state_view_generation % 2 == 0
         lane_path,
         validation_item,
         """
-if cache_hit {
-    if self.merge_parent_frontier_is_exact_at_generation(state_view_generation) {
-        return Ok(());
-    }
-    return Err(
-        "execution candidate validation cache crossed a committed frontier change"
-            .to_owned(),
-    );
+if self.merge_parent_frontier_at_generation(state_view_generation).map_err(MergeCandidateValidationError::Frontier)? == MergeCandidateValidation::Deferred {
+ self.validated_merge_execution_candidate = None;
+ return Ok(MergeCandidateValidation::Deferred);
 }
+let validated = validated.map_err(MergeCandidateValidationError::Invalid)?;
+let cache_hit = self.validated_merge_execution_candidate.as_ref().is_some_and(|cached| cached == &validated);
+if cache_hit { return Ok(MergeCandidateValidation::Ready); }
 """,
         "cache reuse must require the generation-bracketed durable parent frontier helper",
         errors,
@@ -4215,21 +4256,25 @@ if cache_hit {
         lane_path,
         validation_item,
         """
-self.state
-    .validate_merge_candidate_for_global_round(
-        candidate,
-        parent_header,
-        active_view,
-        self.context.mode,
-    )
-    .map_err(|error| error.to_string())?;
-if !self.merge_parent_frontier_is_exact_at_generation(state_view_generation) {
-    return Err(
-        "execution candidate validation crossed a committed State frontier change"
-            .to_owned(),
-    );
-}
-self.validated_merge_execution_candidate = Some(validated);
+let validation = self.state.validate_merge_candidate_for_global_round(
+            candidate,
+            parent_header,
+            active_view,
+            self.context.mode,
+        );
+        #[cfg(test)]
+        self.run_merge_frontier_test_hook(MergeFrontierTestPhase::FullValidation);
+        if self
+            .merge_parent_frontier_at_generation(state_view_generation)
+            .map_err(MergeCandidateValidationError::Frontier)?
+            == MergeCandidateValidation::Deferred
+        {
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeCandidateValidation::Deferred);
+        }
+        validation.map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()))?;
+        self.validated_merge_execution_candidate = Some(validated);
+        Ok(MergeCandidateValidation::Ready)
 """,
         "a cache miss must complete full live validation and recheck the stable durable frontier before publishing positive authority",
         errors,
@@ -4239,22 +4284,25 @@ self.validated_merge_execution_candidate = Some(validated);
         items.get("build_and_memoize_merge_execution_candidate"),
         """
 let state_view_generation = self.state.state_view_generation();
-let candidate = self
-    .state
-    .build_merge_execution_candidate(application_block_header, self.context.mode)?;
-if self.state.state_view_generation() == state_view_generation
-    && state_view_generation % 2 == 0
-    && let Ok(validated) = self.merge_execution_candidate_validation_memo(
-        &candidate,
-        parent_header,
-        active_view,
-        state_view_generation,
-    )
-    && self.merge_parent_frontier_is_exact_at_generation(state_view_generation)
-{
-    self.validated_merge_execution_candidate = Some(validated);
-}
-Some(candidate)
+        let candidate = self
+            .state
+            .build_merge_execution_candidate(application_block_header, self.context.mode)?;
+        if self.state.state_view_generation() == state_view_generation
+            && state_view_generation % 2 == 0
+            && let Ok(validated) = self.merge_execution_candidate_validation_memo(
+                &candidate,
+                parent_header,
+                active_view,
+                state_view_generation,
+            )
+            && matches!(
+                self.merge_parent_frontier_at_generation(state_view_generation),
+                Ok(MergeCandidateValidation::Ready)
+            )
+        {
+            self.validated_merge_execution_candidate = Some(validated);
+        }
+        Some(candidate)
 """,
         "only State's validating builder may seed a memo after exact identity and stable-frontier reauthentication",
         errors,
@@ -4291,99 +4339,145 @@ execution_candidate.or_else(|| {
     refresh_authority_clauses = (
         ("""
 self.queue_plan_admission_handoff_retry_required = false;
-if !self.voting_enabled {
-    self.merge_entries.clear();
-    self.merge_claims.clear();
-    self.validated_merge_execution_candidate = None;
-    return Ok(());
-}
-let carrier_protected = self
-    .retained_merge_carrier_state
-    .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
-if self.globally_locked_body.is_some() || carrier_protected {
-    self.merge_entries.clear();
-    self.merge_claims.clear();
-    self.validated_merge_execution_candidate = None;
-    return Ok(());
-}
-self.merge_entries.retain(|key, _| key.view == active_view);
-self.merge_claims.retain(|(_, view, _), _| *view == active_view);
-if self.pre_apply_unlocked_merge_view() != Some(active_view)
-    || !self.merge_parent_frontier_is_exact()
-{
-    self.validated_merge_execution_candidate = None;
-    return Ok(());
-}
-let Some(expected_parent) = self.context.parent_commit_qc.as_ref()
-    .map(|qc| qc.subject.block_hash)
-    .or_else(|| {
-        self.context.snapshot_bootstrap.as_ref()
-            .map(|anchor| anchor.snapshot_block_hash)
-    })
-else {
-    self.validated_merge_execution_candidate = None;
-    return Ok(());
-};
-let Some(parent_header) = self.state.latest_block_header_fast() else {
-    self.validated_merge_execution_candidate = None;
-    return Ok(());
-};
-if parent_header.hash() != expected_parent
-    || parent_header.height().get().checked_add(1) != Some(self.context.height)
-{
-    self.validated_merge_execution_candidate = None;
-    return Ok(());
-}
+        if !self.voting_enabled {
+            self.merge_entries.clear();
+            self.merge_claims.clear();
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeRefreshOutcome::Ready);
+        }
+        let carrier_protected = self
+            .retained_merge_carrier_state
+            .is_some_and(|(_, locked, decided)| locked.is_some() || decided.is_some());
+        if self.globally_locked_body.is_some() || carrier_protected {
+            self.merge_entries.clear();
+            self.merge_claims.clear();
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeRefreshOutcome::Ready);
+        }
+        self.merge_entries.retain(|key, _| key.view == active_view);
+        self.merge_claims
+            .retain(|(_, view, _), _| *view == active_view);
+        if self.pre_apply_unlocked_merge_view() != Some(active_view) {
+            return Ok(self.defer_merge_candidate_work());
+        }
+        // Height one has no committed parent and no merge execution candidate.
+        if self.context.height == 1 {
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeRefreshOutcome::Ready);
+        }
+        let refresh_generation = self.state.state_view_generation();
+        if self
+            .merge_parent_frontier_at_generation(refresh_generation)
+            .map_err(V2LaneWorkError::SigningGuard)?
+            == MergeCandidateValidation::Deferred
+        {
+            return Ok(self.defer_merge_candidate_work());
+        }
+        let expected_parent = self
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            });
+        let parent_header = self.state.latest_block_header_fast();
+        #[cfg(test)]
+        self.run_merge_frontier_test_hook(MergeFrontierTestPhase::ParentHeader);
+        if self
+            .merge_parent_frontier_at_generation(refresh_generation)
+            .map_err(V2LaneWorkError::SigningGuard)?
+            == MergeCandidateValidation::Deferred
+        {
+            return Ok(self.defer_merge_candidate_work());
+        }
+        let expected_parent = expected_parent.ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "merge refresh requires its exact committed parent".to_owned(),
+            )
+        })?;
+        let parent_header = parent_header.ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "merge refresh parent header is absent from committed State".to_owned(),
+            )
+        })?;
+        if parent_header.hash() != expected_parent
+            || parent_header.height().get().checked_add(1) != Some(self.context.height)
+        {
+            return Err(V2LaneWorkError::SigningGuard(
+                "merge refresh parent header differs from its exact committed context".to_owned(),
+            ));
+        }
 """, "persisted merge reuse must follow exact voting, unlocked-view, and durable-parent authority"),
         ("""
 let mut persisted_entries = self.merge_entries.iter().filter_map(|(key, pending)| {
-    let PendingMergeStage::Persisted(entry) = &pending.stage else {
-        return None;
-    };
-    Some((*key, entry))
-});
-if let Some((key, entry)) = persisted_entries.next() {
-    if persisted_entries.next().is_some() {
-        return Err(V2LaneWorkError::SigningGuard(
-            "one global round retained multiple persisted merge candidates".to_owned(),
-        ));
-    }
-    let candidate = crate::merge::MergeLedgerCandidate::from(entry);
-    let candidate_bytes = candidate.canonical_bytes();
-    let signing_context = MergeSigningContextV1 {
-        epoch_id: candidate.epoch_id,
-        view: candidate.view,
-        carrier_height: candidate.carrier_height,
-        parent_hash: candidate.carrier_parent_hash,
-        validator_set_hash,
-    };
-    let authorized = signing_guard.authorized_candidate(&signing_context)
-        .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
-    let expected_digest = crate::merge::merge_qc_message_digest(
-        &self.context.network_id,
-        &candidate,
-        VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash,
-    );
-    if key.epoch_id != expected_epoch
-        || key.view != active_view
-        || candidate.epoch_id != key.epoch_id
-        || candidate.view != key.view
-        || candidate.carrier_height != self.context.height
-        || candidate.carrier_parent_hash != expected_parent
-        || key.digest != expected_digest
-        || entry.merge_qc.epoch_id != key.epoch_id
-        || entry.merge_qc.view != key.view
-        || entry.merge_qc.message_digest != key.digest
-        || authorized != Some((key.digest, candidate, candidate_bytes))
-    {
-        return Err(V2LaneWorkError::SigningGuard(
-            "persisted merge candidate contradicts its exact global-round authority"
-                .to_owned(),
-        ));
-    }
-    return Ok(());
-}
+            let PendingMergeStage::Persisted(entry) = &pending.stage else {
+                return None;
+            };
+            Some((*key, entry))
+        });
+        if let Some((key, entry)) = persisted_entries.next() {
+            if persisted_entries.next().is_some() {
+                return Err(V2LaneWorkError::SigningGuard(
+                    "one global round retained multiple persisted merge candidates".to_owned(),
+                ));
+            }
+            let candidate = crate::merge::MergeLedgerCandidate::from(entry);
+            let candidate_bytes = candidate.canonical_bytes();
+            let signing_context = MergeSigningContextV1 {
+                epoch_id: candidate.epoch_id,
+                view: candidate.view,
+                carrier_height: candidate.carrier_height,
+                parent_hash: candidate.carrier_parent_hash,
+                validator_set_hash,
+            };
+            let authorized = signing_guard
+                .authorized_candidate(&signing_context)
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+            let expected_digest = crate::merge::merge_qc_message_digest(
+                &self.context.network_id,
+                &candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash,
+            );
+            // Epoch and persisted evidence are live reads. Classify contradictions
+            // only while the same committed frontier still owns those observations.
+            if self
+                .merge_parent_frontier_at_generation(refresh_generation)
+                .map_err(V2LaneWorkError::SigningGuard)?
+                == MergeCandidateValidation::Deferred
+            {
+                return Ok(self.defer_merge_candidate_work());
+            }
+            if key.epoch_id != expected_epoch
+                || key.view != active_view
+                || candidate.epoch_id != key.epoch_id
+                || candidate.view != key.view
+                || candidate.carrier_height != self.context.height
+                || candidate.carrier_parent_hash != expected_parent
+                || key.digest != expected_digest
+                || entry.merge_qc.epoch_id != key.epoch_id
+                || entry.merge_qc.view != key.view
+                || entry.merge_qc.message_digest != key.digest
+                || authorized != Some((key.digest, candidate, candidate_bytes))
+            {
+                return Err(V2LaneWorkError::SigningGuard(
+                    "persisted merge candidate contradicts its exact global-round authority"
+                        .to_owned(),
+                ));
+            }
+            if self
+                .merge_parent_frontier_at_generation(refresh_generation)
+                .map_err(V2LaneWorkError::SigningGuard)?
+                == MergeCandidateValidation::Deferred
+            {
+                return Ok(self.defer_merge_candidate_work());
+            }
+            return Ok(MergeRefreshOutcome::Ready);
+        }
 """, "persisted merge reuse must reject competing owners and bind the full candidate, QC, and durable signing bytes"),
         ("""
 let authorized_candidate = signing_guard.authorized_candidate(&signing_context)
@@ -4447,14 +4541,511 @@ self.retain_native_amx_for_global_view(view)?;
         "self.validated_merge_execution_candidate = None;",
         "every refresh path without exact voting, unlocked-view, and durable-parent authority must invalidate the memo",
         errors,
-        count=6,
+        count=3,
     )
+
+    _require_merge_frontier_deferral_contract(lane_path, lane_source, errors)
+
+
+# Typed transient-frontier outcomes never confer signing or publication authority.
+# These caller seals are separate from the existing cache and global ACK inventories.
+_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256 = {'defer_merge_candidate_work': '4a48a4a3afe761e5b2a0de2a8a413812bb59579131e67f12ef738919d6dc3613',
+ 'authorize_local_merge_claim': 'e85e10a023322546e13ef8ad8d71ba6d91307ffaf77b007f275794ab15603253',
+ 'accept_merge_signature': 'db8ddd45d7d6298e24f801a45006cbcc3238b1f72049ed05835201b346126ceb',
+ 'prepare_certified_execution_carrier': '7e8174dac126b8c2800d28efbba4e22e4d5a5d7259bb8ca09c7f9e2cb355209a',
+ 'prepare': 'd43e16b68e0e2961e1c87c0e540a8c2f524b9b0b206c9dc13857ba41ddd2c060',
+ 'defer_merge_frontier': '061aac13eb01958d1665afea6ca200f570abb9d50e3d7a4401dd61dcbfae31a3'}
+
+_MERGE_FRONTIER_DEFERRAL_OWNERS = {'decode_and_validate_leader_candidate': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                          (('impl', 'V2LaneWorkAdapter'),),
+                                          (),
+                                          '_PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256',
+                                          'V2LaneWorkAdapter::decode_and_validate_leader_candidate'),
+ 'validate_merge_candidate_for_active_round': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                               (('impl', 'V2LaneWorkAdapter'),),
+                                               (),
+                                               '_PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256',
+                                               'V2LaneWorkAdapter::validate_merge_candidate_for_active_round'),
+ 'merge_parent_frontier_at_generation': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                         (('impl', 'V2LaneWorkAdapter'),),
+                                         (),
+                                         '_PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256',
+                                         'V2LaneWorkAdapter::merge_parent_frontier_at_generation'),
+ 'refresh_merge_candidates': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                              (('impl', 'V2LaneWorkAdapter'),),
+                              (),
+                              '_PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256',
+                              'V2LaneWorkAdapter::refresh_merge_candidates'),
+ 'defer_merge_candidate_work': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                (('impl', 'V2LaneWorkAdapter'),),
+                                (),
+                                '_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256',
+                                'defer_merge_candidate_work'),
+ 'authorize_local_merge_claim': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                 (('impl', 'V2LaneWorkAdapter'),),
+                                 (),
+                                 '_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256',
+                                 'authorize_local_merge_claim'),
+ 'accept_merge_signature': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                            (('impl', 'V2LaneWorkAdapter'),),
+                            (),
+                            '_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256',
+                            'accept_merge_signature'),
+ 'prepare_certified_execution_carrier': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                         (('impl', 'V2LaneWorkAdapter'),),
+                                         ('#[allow(dead_code)]',),
+                                         '_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256',
+                                         'prepare_certified_execution_carrier'),
+ 'prepare': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+             (('impl', 'CandidateWorkProvider', 'for', '&', 'mut', 'V2LaneWorkAdapter'),),
+             (),
+             '_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256',
+             'prepare'),
+ 'schedule_retransmission_at': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                (('impl', 'V2LaneWorkAdapter'),),
+                                (),
+                                '_PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256',
+                                'V2LaneWorkAdapter::schedule_retransmission_at'),
+ 'defer_merge_frontier': ('crates/iroha_core/src/sumeragi/v2_runner.rs',
+                          (('impl', 'LocalProposalState'),),
+                          (),
+                          '_PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256',
+                          'defer_merge_frontier'),
+ 'schedule_local_proposal': ('crates/iroha_core/src/sumeragi/v2_runner.rs',
+                             (),
+                             ('#[allow(clippy::too_many_arguments)]',),
+                             '_LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256',
+                             'schedule_local_proposal'),
+ 'new_with_output_guard_and_transport_inner': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+                                               (('impl', 'V2LaneWorkAdapter'),),
+                                               ('#[allow(clippy::too_many_arguments)]',),
+                                               '_PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256',
+                                               'V2LaneWorkAdapter::new_with_output_guard_and_transport_inner')}
+
+_MERGE_FRONTIER_DEFERRAL_CLAUSES = (
+    ('merge_parent_frontier_at_generation', 'odd or changing State generation defers without authority', """
+if state_view_generation % 2 != 0
+            || self.state.state_view_generation() != state_view_generation
+        {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
+""", 1),
+    ('merge_parent_frontier_at_generation', 'missing exact parent and unrepresentable height remain fatal', """
+let expected_parent = self
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            })
+            .ok_or_else(|| "merge validation requires its exact committed parent".to_owned())?;
+        let parent_height = self
+            .context
+            .height
+            .checked_sub(1)
+            .and_then(|height| usize::try_from(height).ok())
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| "merge validation parent height is not representable".to_owned())?;
+""", 1),
+    ('merge_parent_frontier_at_generation', 'storage errors and stable contradictory frontier remain fatal; authenticated forward progress defers', """
+let state_height = self.state.committed_height();
+        let state_hash = self.state.latest_block_hash_fast();
+        // Preserve every exact storage error. Neither a lossy height nor Option::None
+        // authenticates a retryable publication boundary.
+        let durable_height = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| error.to_string())?;
+        let durable_parent = self.kura.get_durable_block_hash(parent_height);
+        let durable_height_after = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| error.to_string())?;
+        if self.state.state_view_generation() != state_view_generation {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
+        if durable_parent != Some(expected_parent) {
+            return Err(
+                "merge validation parent is missing or differs from the exact durable Kura chain"
+                    .to_owned(),
+            );
+        }
+        if durable_height_after < durable_height
+            || durable_height_after < state_height
+            || state_height < parent_height.get()
+        {
+            return Err(
+                "merge validation observed a regressed or contradictory committed frontier"
+                    .to_owned(),
+            );
+        }
+        if state_height == parent_height.get() && state_hash != Some(expected_parent) {
+            return Err(
+                "merge validation parent differs from the exact committed State tip".to_owned(),
+            );
+        }
+        if durable_height_after != durable_height
+            || durable_height_after > parent_height.get()
+            || state_height > parent_height.get()
+        {
+            return Ok(MergeCandidateValidation::Deferred);
+        }
+        Ok(MergeCandidateValidation::Ready)
+""", 1),
+    ('validate_merge_candidate_for_active_round', 'each frontier deferral clears the memo and returns Deferred', """
+if self.merge_parent_frontier_at_generation(state_view_generation).map_err(MergeCandidateValidationError::Frontier)? == MergeCandidateValidation::Deferred {
+ self.validated_merge_execution_candidate = None;
+ return Ok(MergeCandidateValidation::Deferred);
+}
+""", 3),
+    ('validate_merge_candidate_for_active_round', 'memo derivation errors are classified only after the frontier recheck', """
+let validated = self.merge_execution_candidate_validation_memo(candidate,parent_header,active_view,state_view_generation,);
+""", 1),
+    ('validate_merge_candidate_for_active_round', 'a stable live validation error propagates before positive memo publication', """
+let validation = self.state.validate_merge_candidate_for_global_round(
+            candidate,
+            parent_header,
+            active_view,
+            self.context.mode,
+        );
+        #[cfg(test)]
+        self.run_merge_frontier_test_hook(MergeFrontierTestPhase::FullValidation);
+        if self
+            .merge_parent_frontier_at_generation(state_view_generation)
+            .map_err(MergeCandidateValidationError::Frontier)?
+            == MergeCandidateValidation::Deferred
+        {
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeCandidateValidation::Deferred);
+        }
+        validation.map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()))?;
+        self.validated_merge_execution_candidate = Some(validated);
+        Ok(MergeCandidateValidation::Ready)
+""", 1),
+    ('defer_merge_candidate_work', 'deferral purges only positive memo and queued merge broadcasts', """
+self.validated_merge_execution_candidate = None;
+        self.purge_queued_merge_broadcasts();
+        MergeRefreshOutcome::Deferred
+""", 1),
+    ('new_with_output_guard_and_transport_inner', 'constructor frontier hook remains test-only and initially absent', """
+#[cfg(test)]
+            merge_validation_test_hook: None,
+            #[cfg(test)]
+            merge_execution_full_validation_checks: 0,
+""", 1),
+    ('authorize_local_merge_claim', 'intrinsic candidate mismatch is fatal while a closed live view defers', """
+if candidate.view != active_view
+            || candidate.carrier_height != self.context.height
+            || candidate.carrier_parent_hash != expected_parent
+        {
+            return Err(MergeSidecarError::LocalSigningEquivocation);
+        }
+        if self.pre_apply_unlocked_merge_view() != Some(active_view) {
+            self.validated_merge_execution_candidate = None;
+            return Ok(LocalMergeAuthorization::Deferred);
+        }
+""", 1),
+    ('authorize_local_merge_claim', 'signing validates the exact generation before durable authorization', """
+let validation_generation = self.state.state_view_generation();
+        if self
+            .merge_parent_frontier_at_generation(validation_generation)
+            .map_err(MergeSidecarError::SigningGuard)?
+            == MergeCandidateValidation::Deferred
+        {
+            self.validated_merge_execution_candidate = None;
+            return Ok(LocalMergeAuthorization::Deferred);
+        }
+        let committed_height_usize = self.state.committed_height();
+        let committed_height = u64::try_from(committed_height_usize)
+            .map_err(|_| MergeSidecarError::SigningGuard("State height overflow".to_owned()))?;
+        let parent_header = self.state.latest_block_header_fast();
+        if self
+            .merge_parent_frontier_at_generation(validation_generation)
+            .map_err(MergeSidecarError::SigningGuard)?
+            == MergeCandidateValidation::Deferred
+        {
+            self.validated_merge_execution_candidate = None;
+            return Ok(LocalMergeAuthorization::Deferred);
+        }
+        let parent_header = parent_header.ok_or_else(|| {
+            MergeSidecarError::SigningGuard(
+                "merge signing parent header is absent from committed State".to_owned(),
+            )
+        })?;
+        if parent_header.hash() != expected_parent
+            || parent_header.height().get() != committed_height
+        {
+            return Err(MergeSidecarError::SigningGuard(
+                "merge signing parent header differs from the frozen context".to_owned(),
+            ));
+        }
+        if self
+            .validate_merge_candidate_for_active_round(candidate, &parent_header, active_view)
+            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
+            == MergeCandidateValidation::Deferred
+            || self
+                .merge_parent_frontier_at_generation(validation_generation)
+                .map_err(MergeSidecarError::SigningGuard)?
+                == MergeCandidateValidation::Deferred
+        {
+            self.validated_merge_execution_candidate = None;
+            return Ok(LocalMergeAuthorization::Deferred);
+        }
+        // This successful stable observation authorizes one exact durable decision.
+        // Once authorize succeeds, later frontier movement can stop continuation but
+        // cannot erase that decision or convert any persistence failure into deferral.
+        self.merge_signing_guard
+            .as_ref()
+            .expect("merge signing guard checked above")
+            .authorize(durable_context, message_digest, candidate)?;
+        self.merge_claims.entry(claim_key).or_insert(message_digest);
+        Ok(LocalMergeAuthorization::Authorized)
+""", 1),
+    ('refresh_merge_candidates', 'durable authorized bytes and validation errors stay fatal', """
+if let Some((digest, candidate, bytes)) = authorized_candidate.as_ref() {
+            let recomputed = crate::merge::merge_qc_message_digest(
+                &self.context.network_id,
+                candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash,
+            );
+            if *digest != recomputed || *bytes != candidate.canonical_bytes() {
+                return Err(V2LaneWorkError::SigningGuard(
+                    "durable merge candidate bytes differ from its exact global-round authority"
+                        .to_owned(),
+                ));
+            }
+            match self.validate_merge_candidate_for_active_round(
+                candidate,
+                &parent_header,
+                active_view,
+            ) {
+                Ok(MergeCandidateValidation::Ready) => {}
+                Ok(MergeCandidateValidation::Deferred) => {
+                    return Ok(self.defer_merge_candidate_work());
+                }
+                Err(reason) => {
+                    return Err(V2LaneWorkError::SigningGuard(format!(
+                        "durable merge candidate no longer revalidates against its exact global round: {reason}"
+                    )));
+                }
+            }
+        }
+""", 1),
+    ('refresh_merge_candidates', 'installed candidates propagate frontier deferral', """
+let mut installed_candidates = Vec::with_capacity(installed_candidate_bodies.len());
+        for candidate in installed_candidate_bodies {
+            match self.validate_merge_candidate_for_active_round(
+                &candidate,
+                &parent_header,
+                active_view,
+            ) {
+                Ok(MergeCandidateValidation::Ready) => installed_candidates.push(candidate),
+                Ok(MergeCandidateValidation::Deferred) => {
+                    return Ok(self.defer_merge_candidate_work());
+                }
+                Err(MergeCandidateValidationError::Invalid(_)) => {}
+                Err(MergeCandidateValidationError::Frontier(reason)) => {
+                    return Err(V2LaneWorkError::SigningGuard(reason));
+                }
+            }
+        }
+""", 1),
+    ('refresh_merge_candidates', 'parent snapshot recheck precedes stable fatal classification', """
+let expected_parent = self
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            });
+        let parent_header = self.state.latest_block_header_fast();
+        #[cfg(test)]
+        self.run_merge_frontier_test_hook(MergeFrontierTestPhase::ParentHeader);
+        if self
+            .merge_parent_frontier_at_generation(refresh_generation)
+            .map_err(V2LaneWorkError::SigningGuard)?
+            == MergeCandidateValidation::Deferred
+        {
+            return Ok(self.defer_merge_candidate_work());
+        }
+        let expected_parent = expected_parent.ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "merge refresh requires its exact committed parent".to_owned(),
+            )
+        })?;
+        let parent_header = parent_header.ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "merge refresh parent header is absent from committed State".to_owned(),
+            )
+        })?;
+        if parent_header.hash() != expected_parent
+            || parent_header.height().get().checked_add(1) != Some(self.context.height)
+        {
+            return Err(V2LaneWorkError::SigningGuard(
+                "merge refresh parent header differs from its exact committed context".to_owned(),
+            ));
+        }
+""", 1),
+    ('accept_merge_signature', 'leader filtering never suppresses fatal frontier errors', """
+Err(MergeCandidateValidationError::Frontier(reason)) => { return Err(V2LaneWorkError::SigningGuard(reason)); }
+""", 1),
+    ('refresh_merge_candidates', 'signing and pending insertion follow explicit local authorization', """
+match self.authorize_local_merge_claim(&candidate, active_view, local_index, digest) {
+                Ok(LocalMergeAuthorization::Authorized) => {}
+                Ok(LocalMergeAuthorization::Deferred) => {
+                    return Ok(self.defer_merge_candidate_work());
+                }
+                Err(MergeSidecarError::SigningGuard(reason)) => {
+                    return Err(V2LaneWorkError::SigningGuard(reason));
+                }
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        epoch = candidate.epoch_id,
+                        view = candidate.view,
+                        "refusing local merge signature without durable exact-context authorization"
+                    );
+                    continue;
+                }
+            }
+            #[cfg(test)]
+            self.run_merge_frontier_test_hook(MergeFrontierTestPhase::Authorized);
+            if self
+                .merge_parent_frontier_at_generation(refresh_generation)
+                .map_err(V2LaneWorkError::SigningGuard)?
+                == MergeCandidateValidation::Deferred
+            {
+                return Ok(self.defer_merge_candidate_work());
+            }
+            let signature = Signature::try_new(self.key_pair.private_key(), digest.as_ref())
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+            let payload = signature.payload().to_vec();
+            let share = self.local_merge_share(key, &candidate, local_index, payload.clone())?;
+            self.merge_entries
+                .entry(key)
+                .or_insert(PendingMerge {
+                    stage: PendingMergeStage::Collecting(candidate),
+                    signatures: BTreeMap::new(),
+                })
+                .signatures
+                .insert(local_index, payload);
+            self.push_effect(V2LaneWorkEffect::BroadcastMerge(share));
+            #[cfg(test)]
+            self.run_merge_frontier_test_hook(MergeFrontierTestPhase::Signed);
+            if self
+                .merge_parent_frontier_at_generation(refresh_generation)
+                .map_err(V2LaneWorkError::SigningGuard)?
+                == MergeCandidateValidation::Deferred
+            {
+                return Ok(self.defer_merge_candidate_work());
+            }
+            self.try_commit_merge(key)?;
+        }
+""", 1),
+    ('accept_merge_signature', 'deferred leader validation cannot persist authorization', """
+Ok(Some(candidate)) => candidate,
+ Ok(None) => { self.defer_merge_candidate_work(); return Ok(V2LaneIngressOutcome::Rejected); }
+""", 1),
+    ('accept_merge_signature', 'leader ingress stops after refresh deferral', """
+if self.refresh_merge_candidates(active_view)? == MergeRefreshOutcome::Deferred { return Ok(V2LaneIngressOutcome::Rejected); }
+""", 1),
+    ('schedule_retransmission_at', 'deferred refresh clears the selected retransmission view', """
+if self.refresh_merge_candidates(view)? == MergeRefreshOutcome::Deferred { active_merge_view = None; self.purge_queued_merge_broadcasts(); }
+""", 1),
+    ('schedule_retransmission_at', 'merge share retransmission uses only the remaining active view', """
+if let Some(view) = active_merge_view { self.schedule_merge_share_retransmissions(view)?; }
+""", 1),
+    ('schedule_retransmission_at', 'merge QC retry stops when refresh deferred', """
+let Some(active_merge_view) = active_merge_view else { operation.complete(); return Ok(()); };
+""", 1),
+    ('schedule_retransmission_at', 'scheduler preserves fatal collect_committed_lane_sessions', """
+self.collect_committed_lane_sessions()?;
+""", 1),
+    ('schedule_retransmission_at', 'scheduler preserves fatal purge_queued_global_body_effects_except_committed_outputs', """
+self.purge_queued_global_body_effects_except_committed_outputs()?;
+""", 1),
+    ('schedule_retransmission_at', 'scheduler preserves fatal schedule_committed_lane_outputs', """
+self.schedule_committed_lane_outputs()?;
+""", 1),
+    ('prepare', 'provider completes the operation and returns unavailable on deferral', """
+Ok(MergeRefreshOutcome::Deferred) => { operation.complete(); return Err(all_unavailable(candidates.len(), "merge frontier is changing",)); }
+""", 1),
+    ('prepare', 'provider keeps refresh errors fatal', """
+Err(error) => { drop(operation); return Err(all_unavailable(candidates.len(), error.to_string())); }
+""", 1),
+    ('prepare_certified_execution_carrier', 'provider completes the operation and returns unavailable on deferral', """
+Ok(MergeRefreshOutcome::Deferred) => { operation.complete(); return Err(all_unavailable(candidates.len(), "merge frontier is changing",)); }
+""", 1),
+    ('prepare_certified_execution_carrier', 'provider keeps refresh errors fatal', """
+Err(error) => return Err(all_unavailable(candidates.len(), error.to_string())),
+""", 1),
+    ('defer_merge_frontier', 'producer uses bounded recheck without arming non-empty retry', """
+let started_at = self
+            .candidate_work_wait
+            .filter(|wait| wait.owner == owner)
+            .map_or(now, |wait| wait.started_at);
+        self.candidate_work_wait = Some(CandidateWorkWait {
+            owner,
+            started_at,
+            next_retry: deadline_after(now, CANDIDATE_WORK_RECHECK),
+        });
+""", 1),
+    ('schedule_local_proposal', 'producer returns before admitting work after frontier deferral', """
+if lane_work.refresh_merge_candidates(directive.tag().view())? == super::v2_lane_work::MergeRefreshOutcome::Deferred {
+ proposal_state.defer_merge_frontier(owner, Instant::now()); return Ok(());
+}
+""", 1),
+ )
+
+
+def _require_merge_frontier_deferral_contract(
+    lane_path: Path, lane_source: str, errors: list[str],
+) -> None:
+    """Require typed deferral to stop every merge-authorizing continuation.
+
+    This narrow contract does not waive the unchanged global, lock, or effects
+    owners checked by the encompassing production source contracts.
+    """
+    runner_path = lane_path.with_name("v2_runner.rs")
+    if runner_path.is_symlink() or not runner_path.is_file():
+        errors.append(f"{runner_path}: merge frontier deferral requires its real runner source")
+        return
+    sources = {"v2_lane_work.rs": lane_source,
+               "v2_runner.rs": runner_path.read_text(encoding="utf-8")}
+    items: dict[str, RustItem] = {}
+    for name, (relative, context, attributes, seal_map, seal_key) in _MERGE_FRONTIER_DEFERRAL_OWNERS.items():
+        path = lane_path.with_name(Path(relative).name)
+        candidates = [candidate for candidate in rust_items(sources[path.name], name)
+                      if candidate.brace_context == context]
+        purpose = f"merge frontier deferral owner {name}"
+        if len(candidates) != 1:
+            errors.append(f"{path}: {purpose} requires exactly one owner; found {len(candidates)}")
+            continue
+        item = candidates[0]
+        items[name] = item
+        _require_rust_item_context(path, item, context, purpose, errors,
+                                   expected_attributes=attributes)
+        _require_rust_item_token_sha256(path, item, globals()[seal_map][seal_key], purpose, errors)
+    for name, purpose, clause, count in _MERGE_FRONTIER_DEFERRAL_CLAUSES:
+        relative = _MERGE_FRONTIER_DEFERRAL_OWNERS[name][0]
+        _require_rust_token_sequence(lane_path.with_name(Path(relative).name),
+                                    items.get(name), clause,
+                                    f"merge frontier deferral: {purpose}", errors, count=count)
 
 _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "be6dab607a9d6656ec34deb79c2cc0aff0e75d59731c290051e0f6dc10ba6bd5",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
     "V2LaneWorkAdapter::new_with_output_guard_and_transport": "017c1afe0515ff169d85bd9fd1a9ba86689ea35405952fe7647c66f42dabc8dd",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "5b5a01ca8361803451e756564c69aef102ddc4c99996882e293a018c57c0b0c2",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "9a0c7279278653b1925ff5c801aa903db15f55bb6f26590ea95060f30c0641d9",
     "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
     "V2LaneWorkAdapter::into_retained_merge_sidecars": "96d1e194eda3660ccccf9b4e1860b26a4db8d9ee9fb2bad4f988e37c85627218",
     "V2LaneWorkAdapter::accept_relay_message": "87420fc8a24b8fb713af40ba5ba2f2df0efa3a04cf2893b087b2f221f34a0603",
@@ -4488,7 +5079,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::preflight_effect_insertion": "a2b3369f2c20c49bfa9e30bb6dc2b66c466aec9e83bf6793b49a7966ea7163e0",
     "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
-    "V2LaneWorkAdapter::schedule_retransmission_at": "0bda995ee82b67dd357ce7eb6556b5e80c94db96e15cfb40d89059b42539b849",
+    "V2LaneWorkAdapter::schedule_retransmission_at": "a9e4128e377ee1c42117c7ed71511da09d7471778e3210ca362ef89dcb2c4439",
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "177899971313ecd797a0b773bab37ff331226c5768efe2627345532079bd6de7",
     "V2LaneWorkAdapter::sidecar_effect_slots": "13a99e0350b8d59489cc591573adcc2b1f3f775308e9b225f1672649235699e6",
     "V2LaneWorkAdapter::next_sidecar_effect_selection": "614006f927ec384764396c8742a3b05b5a70907dddd8bcf39ed2db0aba4d8975",

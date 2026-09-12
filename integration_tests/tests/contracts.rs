@@ -13,7 +13,10 @@ use iroha::data_model::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
         OfferContractOwnership, SetContractParliamentDelegation,
     },
-    parameter::system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
+    parameter::{
+        CustomParameter, CustomParameterId,
+        system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
+    },
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
@@ -70,6 +73,41 @@ fn minimal_contract_artifact() -> Vec<u8> {
 // The 200-entry probe uses about 3.9M gas locally. Reserve headroom for
 // instance-scoped state paths and bounded scan precharges on real validators.
 const CONTRACT_STATE_PROBE_GAS_LIMIT: u64 = 5_000_000;
+
+// Proposal selection reserves the full signed call bound. Grant this isolated
+// workload the same block budget in genesis, without changing node defaults.
+fn contract_probe_block_gas_parameter() -> Parameter {
+    Parameter::Custom(CustomParameter::new(
+        CustomParameterId::new(
+            "ivm_gas_limit_per_block"
+                .parse()
+                .expect("canonical block gas parameter name"),
+        ),
+        iroha_primitives::json::Json::new(CONTRACT_STATE_PROBE_GAS_LIMIT),
+    ))
+}
+
+#[test]
+fn contract_v1_probe_block_gas_budget_matches_signed_call_limit() {
+    let parameter = contract_probe_block_gas_parameter();
+    let encoded = norito::to_bytes(&parameter).expect("encode governed block gas parameter");
+    let decoded: Parameter =
+        norito::decode_from_bytes(&encoded).expect("decode governed block gas parameter");
+    assert_eq!(decoded, parameter);
+    let Parameter::Custom(custom) = decoded else {
+        panic!("the block gas budget must use the canonical custom parameter");
+    };
+    assert_eq!(custom.id().name().as_ref(), "ivm_gas_limit_per_block");
+    assert_eq!(
+        custom.payload().get(),
+        "5000000",
+        "canonical numeric u64 JSON"
+    );
+    let budget: u64 = norito::json::from_str(custom.payload().get())
+        .expect("block gas budget must decode as u64");
+    assert!(budget > 0);
+    assert_eq!(budget, CONTRACT_STATE_PROBE_GAS_LIMIT);
+}
 
 fn contract_state_probe_artifact() -> Vec<u8> {
     let src = r#"
@@ -197,6 +235,236 @@ fn contract_probe_call_intent(
         },
         metadata,
     })
+}
+
+// Exercise the real detached endpoint once, after the SDK validates the exact
+// unsigned draft. The request-account signature and transaction signature have
+// separate owners; only their public fields cross HTTP.
+async fn submit_contract_probe_detached(
+    client: &iroha::blocking::Client,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    intent: &iroha::client::ContractCallDraftIntent,
+    gas_limit: u64,
+) -> Result<norito::json::Value> {
+    use base64::Engine as _;
+    use iroha_torii::{
+        HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS,
+        canonical_network_request_signature_message, signature_header_value,
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    assert_eq!(intent.invocation.entrypoint, "verify");
+    assert!(intent.invocation.arguments.is_none());
+    let prepared = client
+        .account_client()
+        .post_contract_call_json(
+            &iroha_test_samples::ALICE_ID,
+            None,
+            None,
+            Some(contract_alias),
+            "verify",
+            None,
+            None,
+            None,
+            None,
+            &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(gas_limit)),
+            intent,
+        )
+        .await?;
+    let payload_b64 = prepared["transaction_payload_b64"]
+        .as_str()
+        .ok_or_else(|| eyre!("validated detached draft has no payload"))?;
+    let payload_bytes = base64::engine::general_purpose::STANDARD.decode(payload_b64)?;
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&payload_bytes),
+        payload_b64
+    );
+    let builder = TransactionBuilder::decode_payload(&payload_bytes)?;
+    assert_eq!(builder.encode_payload(), payload_bytes);
+    assert_eq!(
+        builder.payload().admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    );
+    let signing_message_b64 = prepared["signing_message_b64"]
+        .as_str()
+        .ok_or_else(|| eyre!("validated detached draft has no signing message"))?;
+    let signing_message = base64::engine::general_purpose::STANDARD.decode(signing_message_b64)?;
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&signing_message),
+        signing_message_b64
+    );
+    assert_eq!(signing_message, builder.payload_hash_bytes());
+    let transaction_signature = iroha_crypto::Signature::try_new(
+        iroha_test_samples::ALICE_KEYPAIR.private_key(),
+        &signing_message,
+    )?;
+    let signed = builder
+        .clone()
+        .build_with_signature(transaction_signature.clone());
+    signed.verify_signature()?;
+    assert_eq!(signed.payload(), builder.payload());
+    assert_eq!(
+        TransactionBuilder::from_payload(signed.payload().clone())?.encode_payload(),
+        payload_bytes
+    );
+    let tx_hash_hex = hex::encode(signed.hash().as_ref());
+    let entrypoint_hash_hex = hex::encode(signed.hash_as_entrypoint().as_ref());
+    let request = norito::json!({
+        "authority": (iroha_test_samples::ALICE_ID.clone()),
+        "public_key_hex": (hex::encode(iroha_test_samples::ALICE_KEYPAIR.public_key().to_bytes().1)),
+        "signature_b64": (base64::engine::general_purpose::STANDARD.encode(transaction_signature.payload())),
+        "contract_alias": (contract_alias.clone()),
+        "entrypoint": "verify",
+        "creation_time_ms": (builder.payload().creation_time_ms),
+        "transaction_ttl_ms": (prepared["transaction_ttl_ms"].clone()),
+        "fee_payment": (builder.payload().fee_payment.clone()),
+    });
+    assert!(request.get("private_key").is_none());
+    let body = norito::json::to_vec(&request)?;
+    let bound_client = client.client();
+    let url = bound_client.torii_url.join("v1/contracts/call")?;
+    let uri: iroha_torii::Uri = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()).parse()?,
+        None => url.path().parse()?,
+    };
+    let timestamp_ms: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "contract-detached-{timestamp_ms}-{}",
+        NONCE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let request_message = canonical_network_request_signature_message(
+        &bound_client.network_id,
+        &iroha_torii::Method::POST,
+        &uri,
+        &body,
+        timestamp_ms,
+        &nonce,
+    )?;
+    let request_signature =
+        iroha_crypto::Signature::try_new(bound_client.key_pair.private_key(), &request_message)?;
+    // Keep the existing integration HTTP timeout. Disable redirect/retry so this
+    // signed POST cannot become an unobserved second submission.
+    let http = reqwest::Client::builder()
+        .timeout(integration_tests::http::request_timeout())
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()?;
+    let response = http
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header(HEADER_ACCOUNT, bound_client.account.to_canonical_hex()?)
+        .header(
+            HEADER_SIGNATURE,
+            signature_header_value(&request_signature)?,
+        )
+        .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(HEADER_NONCE, nonce)
+        .body(body)
+        .send()
+        .await?;
+    let status = response.status();
+    let response_bytes = response.bytes().await?;
+    if status != StatusCode::OK {
+        return Err(eyre!(
+            "detached contract verify returned {status}: {}",
+            String::from_utf8_lossy(&response_bytes)
+        ));
+    }
+    let actual: norito::json::Value = norito::json::from_slice(&response_bytes)?;
+    let root_fields = [
+        "ok",
+        "submitted",
+        "dataspace",
+        "contract_address",
+        "code_hash_hex",
+        "abi_hash_hex",
+        "creation_time_ms",
+        "transaction_ttl_ms",
+        "tx_hash_hex",
+        "pipeline_status",
+        "entrypoint_hash_hex",
+        "transaction_payload_b64",
+        "signing_message_b64",
+        "entrypoint",
+        "operation_receipt",
+    ];
+    let receipt_fields = [
+        "operation_kind",
+        "status",
+        "transport",
+        "dataspace",
+        "contract_alias",
+        "contract_address",
+        "code_hash_hex",
+        "abi_hash_hex",
+        "tx_hash_hex",
+        "entrypoint",
+        "entrypoint_hash_hex",
+        "gas_limit",
+        "gas_used",
+        "fee_payment",
+        "payload_digest_hex",
+    ];
+    for (object, fields) in [
+        (actual.as_object(), root_fields.as_slice()),
+        (
+            actual["operation_receipt"].as_object(),
+            receipt_fields.as_slice(),
+        ),
+    ] {
+        let object = object
+            .ok_or_else(|| eyre!("detached contract response must contain closed objects"))?;
+        assert_eq!(object.len(), fields.len());
+        for field in fields {
+            assert!(
+                object.contains_key(*field),
+                "missing response field {field}"
+            );
+        }
+    }
+    let mut expected = prepared;
+    let object = expected
+        .as_object_mut()
+        .expect("SDK-validated closed prepare response");
+    object.insert("submitted".to_owned(), true.into());
+    object.insert("tx_hash_hex".to_owned(), tx_hash_hex.clone().into());
+    object.insert(
+        "entrypoint_hash_hex".to_owned(),
+        entrypoint_hash_hex.clone().into(),
+    );
+    object.insert(
+        "transaction_payload_b64".to_owned(),
+        norito::json::Value::Null,
+    );
+    object.insert("signing_message_b64".to_owned(), norito::json::Value::Null);
+    object.insert(
+        "pipeline_status".to_owned(),
+        norito::json::to_value(&iroha_torii_shared::PipelineTransactionStatusResponse::new(
+            tx_hash_hex.clone(),
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: "Queued".to_owned(),
+                block_height: None,
+            },
+            "local".to_owned(),
+            "queue".to_owned(),
+        ))?,
+    );
+    let receipt = object
+        .get_mut("operation_receipt")
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("SDK-validated closed receipt");
+    receipt.insert("status".to_owned(), "submitted".into());
+    receipt.insert("tx_hash_hex".to_owned(), tx_hash_hex.into());
+    receipt.insert("entrypoint_hash_hex".to_owned(), entrypoint_hash_hex.into());
+    assert_eq!(
+        actual, expected,
+        "detached submit must preserve every exact draft binding and only advance submission fields"
+    );
+    Ok(actual)
 }
 
 fn contract_probe_call_observation(
@@ -3902,6 +4170,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
                     1_i64,
                 );
         })
+        .with_genesis_instruction(SetParameter::new(contract_probe_block_gas_parameter()))
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             iroha_test_samples::ALICE_ID.clone(),
@@ -3933,6 +4202,38 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         return Ok(());
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
+    {
+        // Both registration modes must carry the exact budget in their signed genesis.
+        let genesis = network.genesis();
+        let expected = contract_probe_block_gas_parameter();
+        let Parameter::Custom(expected_custom) = &expected else {
+            unreachable!("fixture helper returns a custom parameter");
+        };
+        let mut block_gas_parameters = Vec::new();
+        for transaction in genesis.0.external_transactions() {
+            let iroha_data_model::transaction::Executable::Instructions(instructions) =
+                transaction.instructions()
+            else {
+                panic!("every signed genesis transaction must contain inspectable instructions");
+            };
+            for instruction in instructions {
+                let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                else {
+                    continue;
+                };
+                if let Parameter::Custom(custom) = set_parameter.inner()
+                    && custom.id() == expected_custom.id()
+                {
+                    block_gas_parameters.push(set_parameter.inner().clone());
+                }
+            }
+        }
+        assert_eq!(
+            block_gas_parameters,
+            vec![expected],
+            "signed genesis must contain the exact probe block budget once in either scenario",
+        );
+    }
     let handshake = signed_consensus_handshake(&network)?;
     handshake
         .validate()
@@ -3995,11 +4296,13 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         }
     })
     .await?;
+    // Applied follows successive admission, autonomous-anchor, and execution
+    // carriers. Keep its wait outside the signed-cadence round budget.
     let deployment_height = wait_for_tx_applied(
         &http,
         &client.client().torii_url,
         &hex::encode(deployment_tx_hash.as_ref()),
-        Duration::from_secs(60),
+        network.da_commit_quorum_timeout(),
         "contract V1 deployment",
     )
     .await?;
@@ -4030,29 +4333,33 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
             &contract_alias,
             entrypoint,
         )?;
-        let response = client
-            .account_client()
-            .post_contract_call_json(
-                &iroha_test_samples::ALICE_ID,
-                Some(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-                None,
-                Some(&contract_alias),
-                entrypoint,
-                None,
-                None,
-                None,
-                None,
-                &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(gas_limit)),
-                &intent,
-            )
-            .await?;
+        let response = if registered_in_genesis && entrypoint == "verify" {
+            submit_contract_probe_detached(&client, &contract_alias, &intent, gas_limit).await?
+        } else {
+            client
+                .account_client()
+                .post_contract_call_json(
+                    &iroha_test_samples::ALICE_ID,
+                    Some(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+                    None,
+                    Some(&contract_alias),
+                    entrypoint,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(gas_limit)),
+                    &intent,
+                )
+                .await?
+        };
         if response
             .get("submitted")
             .and_then(norito::json::Value::as_bool)
             != Some(true)
         {
             return Err(eyre!(
-                "{entrypoint} was not locally signed and submitted: {response:?}"
+                "{entrypoint} was not signed locally and submitted: {response:?}"
             ));
         }
         let tx_hash = response
@@ -4061,8 +4368,8 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
             .ok_or_else(|| {
                 eyre!("{entrypoint} response is missing its exact transaction hash: {response:?}")
             })?;
-        // Emit only the locally signed public identity returned by the SDK. This lets an
-        // external observer follow calls without transaction bodies or binary call-site guesses.
+        // Emit only the locally signed public identity after exact response validation.
+        // Observers can follow either submission path without transaction bodies.
         println!(
             "{}",
             contract_probe_call_observation(
@@ -4077,7 +4384,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
             &http,
             &client.client().torii_url,
             tx_hash,
-            Duration::from_secs(60),
+            network.da_commit_quorum_timeout(),
             entrypoint,
         )
         .await?;

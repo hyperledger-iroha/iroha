@@ -21,8 +21,7 @@ mod transaction_admission_domain_source_tests {
             "handle_transaction_with_metrics",
             "handle_transaction_with_metrics_and_routing_plan",
             "handle_transaction_with_metrics_and_routing_plan_sync",
-            "submit_contract_call_request",
-            "handle_post_contract_call",
+            "prepare_contract_call_request",
             "handle_post_contract_call_multisig_propose",
             "handle_post_contract_call_multisig_approve",
             "handle_post_multisig_cancel",
@@ -49,6 +48,17 @@ mod transaction_admission_domain_source_tests {
             assert!(
                 !signature.contains("ChainId"),
                 "`{name}` must derive transaction security domains from CoreState NetworkId: {signature}"
+            );
+        }
+        let public_source = include_str!("../lib.rs");
+        for name in [
+            "handler_post_contract_call",
+            "submit_prepared_contract_call",
+        ] {
+            let signature = function_signature(public_source, name);
+            assert!(
+                !signature.contains("ChainId"),
+                "`{name}` must use the same CoreState NetworkId security domain: {signature}"
             );
         }
         let dead_underscore_parameter = source.lines().find(|line| {

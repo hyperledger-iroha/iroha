@@ -159,6 +159,10 @@ Major first-release areas include:
 - contracts, runtime governance, verifying keys, privacy, KAGEMUSHA V1, SCCP, VPN, and
   SoraFS routes.
 
+Contract-call drafts require the signature-bound `QueuePlanSynced` admission
+intent. `CallContractAsync` checks it with the exact caller-trusted network,
+authority, invocation, metadata and fee before returning a draft for local signing.
+
 ## Run the sample
 
 ```bash

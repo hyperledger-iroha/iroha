@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
@@ -16389,6 +16390,27 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Contains("argument record differs", error.Message);
     }
 
+    [Theory]
+    [InlineData(TransactionAdmissionIntent.Ordinary)]
+    [InlineData((TransactionAdmissionIntent)2)]
+    public async Task CallContractAsyncRejectsRehashedAdmissionIntentSubstitution(
+        TransactionAdmissionIntent admissionIntent)
+    {
+        var request = TrustedContractCallRequest();
+        var responseJson = BoundContractCallResponseJsonObject(
+            request,
+            transactionAdmissionIntent: admissionIntent);
+        using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
+        using var client = BoundToriiClient(handler);
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.CallContractAsync(
+                request,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("admission intent", error.Message);
+    }
+
     [Fact]
     public async Task CallContractAsyncRejectsRehashedMetadataSubstitution()
     {
@@ -28832,7 +28854,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         FeePaymentIntent feePayment,
         TransactionContractInvocation invocation,
         IReadOnlyDictionary<string, JsonNode?> metadata,
-        NetworkId? networkId = null)
+        NetworkId? networkId = null,
+        TransactionAdmissionIntent admissionIntent = TransactionAdmissionIntent.QueuePlanSynced)
     {
         var encoding = new TransactionEncodingContext(authority);
         var payload = new CanonicalNoritoWriter();
@@ -28847,7 +28870,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             encoding.EncodeUInt64));
         payload.WriteField(encoding.EncodeOption<uint>(null, encoding.EncodeUInt32));
         payload.WriteField(encoding.EncodeFeePaymentIntent(feePayment));
-        payload.WriteField(encoding.EncodeUInt32((uint)TransactionAdmissionIntent.Ordinary));
+        payload.WriteField(encoding.EncodeUInt32((uint)admissionIntent));
         payload.WriteField(encoding.EncodeMetadata(metadata));
         payload.WriteField(new byte[] { 0 });
         var bytes = payload.ToArray();
@@ -28863,7 +28886,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         TransactionContractInvocation? transactionInvocation = null,
         IReadOnlyDictionary<string, JsonNode?>? transactionMetadata = null,
         ulong creationTimeMilliseconds = 123456,
-        NetworkId? transactionNetworkId = null)
+        NetworkId? transactionNetworkId = null,
+        TransactionAdmissionIntent transactionAdmissionIntent = TransactionAdmissionIntent.QueuePlanSynced)
     {
         var draftIntent = request.DraftIntent
             ?? throw new InvalidOperationException("Test request requires a draft intent.");
@@ -28875,7 +28899,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             transactionFeePayment ?? selectedFeePayment,
             transactionInvocation ?? draftIntent.Invocation,
             transactionMetadata ?? draftIntent.Metadata,
-            transactionNetworkId);
+            transactionNetworkId,
+            transactionAdmissionIntent);
         var response = new JsonObject
         {
             ["ok"] = true,
@@ -30953,12 +30978,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return Convert.ToHexString(SHA256.HashData(preimage)).ToLowerInvariant();
     }
 
-    private static string TestAccountId(byte publicKeyByte)
+    private static string TestAccountId(byte seedByte)
     {
-        var publicKey = new byte[32];
-        Array.Fill(publicKey, publicKeyByte);
+        var seed = new byte[Ed25519Signer.PrivateKeySeedLength];
+        Array.Fill(seed, seedByte);
         return AccountAddress
-            .FromPublicKey(publicKey)
+            .FromPublicKey(Ed25519Signer.GetPublicKey(seed))
             .ToI105(AccountAddress.DefaultChainDiscriminant);
     }
 

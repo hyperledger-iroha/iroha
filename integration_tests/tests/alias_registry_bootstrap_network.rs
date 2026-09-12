@@ -1273,9 +1273,9 @@ async fn assert_bpng_metadata(
 ) -> Result<()> {
     let client = client.clone();
     let domain = read(move || {
-        client
+        Ok(client
             .client()
-            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))
+            .query_single(FindDomainById::new(DomainId::try_new("mibank", "bpng")?))?)
     })
     .await?;
     ensure!(
@@ -2350,11 +2350,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .collect::<Vec<_>>();
     layers.push(Cow::Owned(dataspace_only_restart_layer(&grant)));
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(
-            NETWORK_TIMEOUT,
-            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
-        )
-        .await??;
+        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;
@@ -2621,11 +2617,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     // Restart two deliberately reuses the same dataspace-only operator layer.
     // Lane 8 must come exclusively from the signed lifecycle replay.
     try_join_all(network.peers().iter().map(|peer| async {
-        timeout(
-            NETWORK_TIMEOUT,
-            peer.start_checked(layers.iter().map(Cow::Borrowed), None),
-        )
-        .await??;
+        timeout(NETWORK_TIMEOUT, peer.start_checked(layers.iter(), None)).await??;
         Ok::<_, eyre::Report>(())
     }))
     .await?;

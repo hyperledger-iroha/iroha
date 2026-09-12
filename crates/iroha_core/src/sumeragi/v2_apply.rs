@@ -5074,6 +5074,8 @@ impl V2ApplyService {
         // idempotent repair boundary for a durable block whose merge
         // association was interrupted after its block fsync.
         let pre_wsv_finality_receipt = if store_block {
+            #[cfg(test)]
+            self.before_successful_apply_kura_store_for_test();
             self.kura.store_block(committed_block.clone())?;
             #[cfg(test)]
             self.inject_test_crash(tests::CrashPoint::KuraStore)?;
@@ -5090,6 +5092,10 @@ impl V2ApplyService {
         } else {
             None
         };
+        #[cfg(test)]
+        if store_block {
+            self.after_successful_apply_kura_store_for_test();
+        }
         if carries_autonomous_execution {
             iroha_logger::debug!(
                 height = context.height,

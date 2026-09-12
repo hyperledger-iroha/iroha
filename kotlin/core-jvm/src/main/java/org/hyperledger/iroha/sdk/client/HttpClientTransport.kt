@@ -1218,6 +1218,7 @@ class HttpClientTransport private constructor(
      *
      * The intent must contain the exact resolved invocation and complete final transaction
      * metadata. Torii may enrich fee charge maxima, but cannot select any other signed field.
+     * The canonical payload must already use QueuePlanSynced before signing material is returned.
      */
     fun prepareContractCall(
         authority: String,
@@ -2977,7 +2978,7 @@ class HttpClientTransport private constructor(
             }
             val decoded = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
                 transactionBytes,
-                TransactionAdmissionIntent.ORDINARY,
+                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             )
             check(decoded.networkId == expectedNetworkId) {
                 "contract call transaction payload changed the configured network"
@@ -3017,7 +3018,7 @@ class HttpClientTransport private constructor(
             check(
                 decoded.timeToLiveMs == DEFAULT_TRANSACTION_TTL_MS &&
                     decoded.nonce == null &&
-                    decoded.admissionIntent == TransactionAdmissionIntent.ORDINARY &&
+                    decoded.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED &&
                     decoded.attachments == null,
             ) {
                 "contract call transaction payload changed default lifetime, nonce, admission, or attachments"

@@ -1154,9 +1154,12 @@ fn installed_execution_candidate_with_wrong_carrier_context_never_reaches_local_
             signatures: BTreeMap::new(),
         },
     );
-    adapter
-        .refresh_merge_candidates(0)
-        .expect("carrier-mismatched execution candidate fails closed without signing");
+    assert_eq!(
+        adapter
+            .refresh_merge_candidates(0)
+            .expect("carrier-mismatched execution candidate fails closed without signing"),
+        MergeRefreshOutcome::Ready
+    );
     assert!(adapter.merge_entries[&key].signatures.is_empty());
     assert!(
         adapter
@@ -1443,7 +1446,7 @@ fn merge_leader_candidate_body_is_canonical_under_ambient_layout() {
         adapter.decode_and_validate_leader_candidate(&share, view, &parent)
     }
     .expect("canonical leader body remains valid under alternate ambient flags");
-    assert_eq!(decoded, candidate);
+    assert_eq!(decoded, Some(candidate.clone()));
     let canonical_body =
         norito::encode_canonical(&candidate).expect("encode canonical merge candidate");
     assert_eq!(
@@ -1464,7 +1467,7 @@ fn merge_leader_candidate_body_is_canonical_under_ambient_layout() {
             .expect_err("alternate-layout leader body must fail closed")
     };
     assert!(
-        reason.contains("not canonical"),
+        reason.to_string().contains("not canonical"),
         "unexpected alternate-layout rejection: {reason}"
     );
 }
@@ -1558,7 +1561,9 @@ fn authenticated_execution_candidate_rejects_noncanonical_carrier_context_header
         .decode_and_validate_leader_candidate(&share, view, &parent)
         .expect_err("wrong-time execution candidate must not obtain a follower share");
     assert!(
-        reason.contains("exact deterministic carrier context header"),
+        reason
+            .to_string()
+            .contains("exact deterministic carrier context header"),
         "unexpected carrier-context rejection: {reason}"
     );
     assert_eq!(
@@ -1603,7 +1608,9 @@ fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
         .decode_and_validate_leader_candidate(&share, view, &parent)
         .expect_err("relay snapshots cannot be relabeled as autonomous execution");
     assert!(
-        reason.contains("execution candidates must not mix relay snapshots"),
+        reason
+            .to_string()
+            .contains("execution candidates must not mix relay snapshots"),
         "unexpected authenticated execution rejection: {reason}"
     );
     assert_eq!(
@@ -2119,12 +2126,15 @@ fn merge_signing_rejects_wrong_round_context_and_post_apply_state() {
     );
     assert_eq!(
         adapter.authorize_local_merge_claim(&candidate, 0, signer, digest),
-        Err(MergeSidecarError::LocalSigningEquivocation),
+        Ok(LocalMergeAuthorization::Deferred),
         "post-apply recovery must never authorize another share"
     );
-    adapter
-        .refresh_merge_candidates(0)
-        .expect("post-apply refresh remains signing-silent");
+    assert_eq!(
+        adapter
+            .refresh_merge_candidates(0)
+            .expect("post-apply refresh remains signing-silent"),
+        MergeRefreshOutcome::Deferred
+    );
     adapter
         .schedule_retransmission()
         .expect("schedule post-apply retransmission");
@@ -2168,11 +2178,10 @@ fn merge_signing_rejects_block_first_kura_ahead_crash_image() {
             .all(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_))),
         "a Kura-ahead crash image must not release a private-key operation"
     );
-    assert!(matches!(
+    assert_eq!(
         adapter.authorize_local_merge_claim(&candidate, candidate.view, signer, digest),
-        Err(MergeSidecarError::SigningGuard(message))
-            if message.contains("identical committed State and durable Kura frontiers")
-    ));
+        Ok(LocalMergeAuthorization::Deferred)
+    );
     assert_eq!(
         adapter
             .merge_signing_guard
@@ -2481,4 +2490,31 @@ fn merge_signature_state_is_bound_to_the_active_global_view() {
     );
     assert!(adapter.merge_claims.is_empty());
     assert!(adapter.merge_entries.is_empty());
+}
+
+#[test]
+fn merge_frontier_missing_durable_parent_remains_fatal() {
+    let (mut adapter, _) = fixture_with_durable_relay_parent();
+    let generation = adapter.state.state_view_generation();
+    assert_eq!(
+        adapter
+            .merge_parent_frontier_at_generation(generation)
+            .expect("stable fixture parent"),
+        MergeCandidateValidation::Ready
+    );
+    // An empty, independently valid store cannot authenticate this State parent.
+    // None must not be interpreted as the successful-Apply publication corridor.
+    adapter.kura = Kura::blank_kura_for_testing();
+    assert_eq!(adapter.state.state_view_generation(), generation);
+    assert_eq!(
+        adapter
+            .kura
+            .exact_durable_blocks_count()
+            .expect("empty durable journal"),
+        0
+    );
+    let error = adapter
+        .merge_parent_frontier_at_generation(generation)
+        .expect_err("missing exact durable parent remains fatal");
+    assert!(error.contains("missing or differs from the exact durable Kura chain"));
 }

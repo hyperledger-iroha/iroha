@@ -208,6 +208,7 @@ def _contract_call_draft(
     metadata: bytes = _CONTRACT_DRAFT_METADATA,
     creation_time_ms: int = 42,
     transaction_ttl_ms: Optional[int] = None,
+    admission_intent: int = 1,
 ) -> Dict[str, Any]:
     def field(value: bytes) -> bytes:
         return client_module._multisig_norito_field(value)
@@ -234,7 +235,7 @@ def _contract_call_draft(
             + field((transaction_ttl_ms or 100_000).to_bytes(8, "little")),
             b"\x00",
             client_module._multisig_fee_payment_archive(normalized_fee),
-            (0).to_bytes(4, "little"),
+            admission_intent.to_bytes(4, "little"),
             metadata,
             b"\x00",
         )
@@ -3448,6 +3449,41 @@ def test_call_contract_rejects_rehashed_unsigned_payload_substitution(
             fee_payment=_authority_fee_payment(5000),
             draft_intent=_contract_draft_intent(payload=call_payload),
         )
+
+
+@pytest.mark.parametrize("admission_intent", [0, 2], ids=["ordinary", "unknown"])
+def test_call_contract_rejects_rehashed_non_queue_plan_admission(
+    admission_intent: int,
+) -> None:
+    call_payload = {"value": 1}
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_contract_call_draft(
+                fee_payment=_authority_fee_payment(5000),
+                payload=call_payload,
+                admission_intent=admission_intent,
+            )
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        local_signing_context=_local_signing_context(),
+    )
+
+    # The fixture recomputes the signing hash from the substituted payload.
+    # Hash consistency must not substitute for the required admission policy.
+    with pytest.raises(RuntimeError, match="caller-trusted admission_intent"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER,
+            contract_alias="router::universal",
+            entrypoint="ping",
+            payload=call_payload,
+            fee_payment=_authority_fee_payment(5000),
+            draft_intent=_contract_draft_intent(payload=call_payload),
+        )
+    assert len(session.calls) == 1
 
 
 @pytest.mark.parametrize("field", ["contract_address", "code_hash_hex"])

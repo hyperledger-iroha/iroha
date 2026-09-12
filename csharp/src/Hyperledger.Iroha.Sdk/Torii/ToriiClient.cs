@@ -3691,6 +3691,7 @@ public sealed partial class ToriiClient : IDisposable
                 attachments,
                 expectedNetworkId,
                 TransactionBuilder.DefaultTimeToLiveMilliseconds,
+                TransactionAdmissionIntent.Ordinary,
                 encoding,
                 context);
             if (!authority.SequenceEqual(encoding.EncodeAccountId(expectedSignerAccountId)))
@@ -3744,6 +3745,7 @@ public sealed partial class ToriiClient : IDisposable
         ReadOnlySpan<byte> attachments,
         NetworkId expectedNetworkId,
         ulong expectedTimeToLiveMilliseconds,
+        TransactionAdmissionIntent expectedAdmissionIntent,
         TransactionEncodingContext encoding,
         string context)
     {
@@ -3786,7 +3788,7 @@ public sealed partial class ToriiClient : IDisposable
         if (!nonce.SequenceEqual(new byte[] { 0 })
             || admissionIntent.Length != sizeof(uint)
             || BinaryPrimitives.ReadUInt32LittleEndian(admissionIntent)
-                != (uint)TransactionAdmissionIntent.Ordinary
+                != (uint)expectedAdmissionIntent
             || !attachments.SequenceEqual(new byte[] { 0 }))
         {
             throw new JsonException(
@@ -6032,6 +6034,7 @@ public sealed partial class ToriiClient : IDisposable
                 expectedNetworkId,
                 request.TransactionTimeToLiveMilliseconds
                     ?? TransactionBuilder.DefaultTimeToLiveMilliseconds,
+                TransactionAdmissionIntent.QueuePlanSynced,
                 encoding,
                 context);
             if (!authority.SequenceEqual(encoding.EncodeAccountId(request.Authority)))

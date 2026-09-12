@@ -11770,6 +11770,7 @@ mod evidence_http_tests {
         );
         builder.set_creation_time(Duration::from_millis(123));
         let builder = builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .with_metadata(intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 intent.invocation.clone(),
@@ -12157,6 +12158,38 @@ mod evidence_http_tests {
         result.expect("exact contract call draft intent");
         super::tests::assert_canonical_account_signed_json_request(&client, &snapshot);
 
+        let ordinary_builder = builder
+            .clone()
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary);
+        let ordinary_response = prepared_contract_call_response(&intent, &ordinary_builder);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&ordinary_response).expect("encode rehashed Ordinary draft"),
+        );
+        let (result, _) = capture_request(response, |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_contract_call_json_for_test(
+                &client.account,
+                None,
+                Some(&contract_address),
+                None,
+                "ping",
+                None,
+                None,
+                Some(123),
+                None,
+                &fee_payment,
+                &intent,
+            )
+        });
+        let error = result.expect_err("a self-consistent Ordinary draft must fail before signing");
+        assert!(
+            format!("{error:#}").contains("must use QueuePlanSynced admission"),
+            "unexpected error: {error:#}"
+        );
+
         let mut caller_metadata = Metadata::default();
         caller_metadata.insert(
             "caller_note".parse().expect("caller metadata key"),
@@ -12260,19 +12293,22 @@ mod evidence_http_tests {
         let mut builder =
             TransactionBuilder::new(client.network_id, authority.clone(), fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(123));
-        let builder = builder.with_executable(
-            iroha_data_model::transaction::Executable::ContractCall(intent.invocation.clone()),
-        );
+        let builder = builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                intent.invocation.clone(),
+            ));
         let prepared_response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&prepared_contract_call_response(&intent, &builder))
                 .expect("encode bound-account prepared response"),
         );
         let expected_signed = builder
+            .clone()
             .try_sign(transaction_key.private_key())
             .expect("sign with the bound transaction authority");
         assert_eq!(expected_signed.authority(), &authority);
-        let expected_wire = Client::prepare_transaction_payload(&expected_signed);
+        let expected_wire = PreparedTransactionPayload::from_transaction(&expected_signed);
         mark_data_model_compatible(&client);
 
         let (foreign_authority, foreign_key) = gen_account_in("external");
@@ -12352,6 +12388,59 @@ mod evidence_http_tests {
                 response.get("submitted").and_then(Value::as_bool),
                 Some(private_key.is_some())
             );
+            let root_fields = [
+                "ok",
+                "submitted",
+                "dataspace",
+                "contract_address",
+                "code_hash_hex",
+                "abi_hash_hex",
+                "creation_time_ms",
+                "transaction_ttl_ms",
+                "tx_hash_hex",
+                "pipeline_status",
+                "entrypoint_hash_hex",
+                "transaction_payload_b64",
+                "signing_message_b64",
+                "entrypoint",
+                "operation_receipt",
+            ];
+            let root = response.as_object().expect("contract call response object");
+            assert_eq!(root.len(), root_fields.len());
+            for field in root_fields {
+                assert!(
+                    root.contains_key(field),
+                    "missing contract response field {field}"
+                );
+            }
+            let receipt_fields = [
+                "operation_kind",
+                "status",
+                "transport",
+                "dataspace",
+                "contract_alias",
+                "contract_address",
+                "code_hash_hex",
+                "abi_hash_hex",
+                "tx_hash_hex",
+                "entrypoint",
+                "entrypoint_hash_hex",
+                "gas_limit",
+                "gas_used",
+                "fee_payment",
+                "payload_digest_hex",
+            ];
+            let receipt = response
+                .get("operation_receipt")
+                .and_then(Value::as_object)
+                .expect("contract call receipt object");
+            assert_eq!(receipt.len(), receipt_fields.len());
+            for field in receipt_fields {
+                assert!(
+                    receipt.contains_key(field),
+                    "missing contract receipt field {field}"
+                );
+            }
             if private_key.is_some() {
                 assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
                 assert_eq!(snapshots[1].body.as_slice(), expected_wire.as_bytes());
@@ -12359,6 +12448,37 @@ mod evidence_http_tests {
                     response.get("tx_hash_hex"),
                     Some(&Value::from(hex::encode(expected_signed.hash().as_ref())))
                 );
+                assert_eq!(
+                    response.get("entrypoint_hash_hex"),
+                    Some(&Value::from(hex::encode(
+                        expected_signed.hash_as_entrypoint().as_ref()
+                    )))
+                );
+                for field in ["transaction_payload_b64", "signing_message_b64"] {
+                    assert_eq!(response.get(field), Some(&Value::Null), "{field}");
+                }
+                assert_eq!(receipt.get("status"), Some(&Value::from("submitted")));
+                for field in ["tx_hash_hex", "entrypoint_hash_hex"] {
+                    assert_eq!(receipt.get(field), response.get(field), "{field}");
+                }
+                let expected_status = PipelineTransactionStatusResponse::new(
+                    hex::encode(expected_signed.hash().as_ref()),
+                    iroha_torii_shared::PipelineTransactionStatus {
+                        kind: "Queued".to_owned(),
+                        block_height: None,
+                    },
+                    "local".to_owned(),
+                    "queue".to_owned(),
+                );
+                assert_eq!(
+                    response.get("pipeline_status"),
+                    Some(
+                        &norito::json::to_value(&expected_status)
+                            .expect("serialize exact queued status")
+                    )
+                );
+            } else {
+                assert_eq!(response, prepared_contract_call_response(&intent, &builder));
             }
         }
     }
@@ -22231,10 +22351,10 @@ impl AccountClient {
             fee_payment,
         )?;
         if builder.payload().admission_intent()
-            != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+            != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
         {
             return Err(eyre!(
-                "contract call transaction payload must use Ordinary admission"
+                "contract call transaction payload must use QueuePlanSynced admission"
             ));
         }
         let mut expected_builder =
@@ -22244,6 +22364,7 @@ impl AccountClient {
             expected_builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
         }
         let expected_builder = expected_builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .with_metadata(draft_intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 draft_intent.invocation.clone(),
@@ -22291,8 +22412,8 @@ impl AccountClient {
                     "queue".to_owned(),
                 ))?,
             );
-            response_object.remove("transaction_payload_b64");
-            response_object.remove("signing_message_b64");
+            response_object.insert("transaction_payload_b64".to_owned(), JsonValue::Null);
+            response_object.insert("signing_message_b64".to_owned(), JsonValue::Null);
             if let Some(receipt) = response_object
                 .get_mut("operation_receipt")
                 .and_then(norito::json::Value::as_object_mut)

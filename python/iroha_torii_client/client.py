@@ -2671,6 +2671,7 @@ def _validate_exact_unsigned_transaction_intent(
     fee_payment: Mapping[str, Any],
     executable_b64: str,
     metadata_b64: str,
+    expected_admission_intent: bytes,
     expected_ttl_ms: int = 100_000,
     context: str,
 ) -> None:
@@ -2687,7 +2688,7 @@ def _validate_exact_unsigned_transaction_intent(
         + _multisig_norito_field(expected_ttl_ms.to_bytes(8, "little")),
         "nonce": b"\x00",
         "fee_payment": _multisig_fee_payment_archive(fee_payment),
-        "admission_intent": (0).to_bytes(4, "little"),
+        "admission_intent": expected_admission_intent,
         "metadata": _trusted_intent_archive(
             metadata_b64,
             f"{context}.intent.metadata_b64",
@@ -10678,6 +10679,7 @@ class ToriiClient(
                 fee_payment=result.fee_payment,
                 executable_b64=draft_intent.executable_b64,
                 metadata_b64=draft_intent.metadata_b64,
+                expected_admission_intent=(0).to_bytes(4, "little"),
                 context="multisig propose response",
             )
         return result
@@ -16512,6 +16514,8 @@ class ToriiClient(
             fee_payment=receipt.fee_payment,
             executable_b64=draft_intent.executable_b64,
             metadata_b64=draft_intent.metadata_b64,
+            # Public contract submissions require this signature-bound intent.
+            expected_admission_intent=(1).to_bytes(4, "little"),
             expected_ttl_ms=transaction_ttl_ms or 100_000,
             context="contract call draft",
         )

@@ -441,6 +441,16 @@ impl ApplyFixture {
     fn new_for_production_recovered_decision_apply_with_native_lane_lifecycle() -> Self {
         Self::new_with_options(false, false, true, true)
     }
+    fn new_for_cold_merge_registry_replay() -> Self {
+        Self::new_with_options_and_retention_and_genesis(
+            false,
+            false,
+            true,
+            true,
+            iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            true,
+        )
+    }
     fn new_with_options(
         include_lane_payload: bool,
         include_projection_policies: bool,
@@ -461,6 +471,23 @@ impl ApplyFixture {
         include_lane_lifecycle: bool,
         include_native_lane: bool,
         blocks_in_memory: NonZeroUsize,
+    ) -> Self {
+        Self::new_with_options_and_retention_and_genesis(
+            include_lane_payload,
+            include_projection_policies,
+            include_lane_lifecycle,
+            include_native_lane,
+            blocks_in_memory,
+            false,
+        )
+    }
+    fn new_with_options_and_retention_and_genesis(
+        include_lane_payload: bool,
+        include_projection_policies: bool,
+        include_lane_lifecycle: bool,
+        include_native_lane: bool,
+        blocks_in_memory: NonZeroUsize,
+        seed_genesis_domain: bool,
     ) -> Self {
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
         let mut keys = (1_u8..=4)
@@ -514,13 +541,22 @@ impl ApplyFixture {
         let transaction_authority = AccountId::new(transaction_key.public_key().clone());
         let custody_account = AccountId::new(custody_key.public_key().clone());
         let treasury_account = AccountId::new(treasury_key.public_key().clone());
-        let world = fixture_world(
+        let mut world = fixture_world(
             &transaction_authority,
             &custody_account,
             &treasury_account,
             include_projection_policies,
             include_native_lane,
         );
+        if seed_genesis_domain {
+            // Ordered production replay resolves this already-seeded account
+            // through the genesis domain. Install it before State initialization
+            // and before the initial execution commitment and Commit QC are signed.
+            world.domains.insert(
+                iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+                Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&transaction_authority),
+            );
+        }
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Arc::clone(&kura),

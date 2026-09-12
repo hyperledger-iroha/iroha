@@ -26,11 +26,11 @@ mod certified_body_fence_supersession {
     fn ready_body_fixture() -> ReadyBodyFixture {
         // A fixed roster index can be a dormant Set-B validator. The current
         // leader is always eligible to fetch a certified candidate body.
-        let leader = ProductionTransportFixture::new().context.leader(0);
-        let mut transport = ProductionTransportFixture::new_with_local_validator_and_queue_config(
-            Some(leader),
+        let mut transport = ProductionTransportFixture::new_with_local_role_and_queue_config(
+            Some(crate::sumeragi::v2_core::CommitteeRole::Leader),
             RuntimeQueueConfig::default(),
         );
+        let leader = transport.context.leader(0);
         let proofs = transport
             .validator_keys
             .iter()

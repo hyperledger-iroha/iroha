@@ -1,7 +1,74 @@
 include!("v2_apply_unsealed_01c_second_autonomous_cycle.rs");
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MergeFrontierFixtureCase {
+    HistoricalRecovery,
+    StartupRegistryBoundaries,
+    SuccessfulApply,
+    CompletedAuthorization,
+    CompletedSignature,
+    ParentGeneration,
+    FailedValidationGeneration,
+    MissingParent,
+    WrongParent,
+    DamagedKura,
+}
 v2_apply_test!(
     historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application,
     {
+        run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::HistoricalRecovery);
+    }
+);
+v2_apply_test!(
+    cold_state_merge_hydration_preserves_registry_replay_boundary,
+    {
+        run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::StartupRegistryBoundaries);
+    }
+);
+v2_apply_test!(
+    merge_frontier_successful_apply_defers_scheduler_and_both_providers,
+    {
+        run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::SuccessfulApply);
+    }
+);
+v2_apply_test!(
+    merge_frontier_preserves_completed_authorization_before_deferring,
+    {
+        run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::CompletedAuthorization);
+    }
+);
+v2_apply_test!(
+    merge_frontier_preserves_completed_signature_and_purges_broadcast,
+    {
+        run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::CompletedSignature);
+    }
+);
+v2_apply_test!(
+    merge_frontier_parent_generation_change_defers_then_revalidates,
+    {
+        run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::ParentGeneration);
+    }
+);
+v2_apply_test!(
+    merge_frontier_failed_validation_rechecks_generation_before_rejection,
+    {
+        run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::FailedValidationGeneration);
+    }
+);
+v2_apply_test!(merge_frontier_stable_missing_parent_header_is_fatal, {
+    run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::MissingParent);
+});
+v2_apply_test!(merge_frontier_stable_wrong_parent_header_is_fatal, {
+    run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::WrongParent);
+});
+v2_apply_test!(merge_frontier_damaged_kura_index_is_fatal, {
+    run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::DamagedKura);
+});
+fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase) {
+    {
+        use crate::sumeragi::v2_candidate::CandidateWorkProvider as _;
+        use crate::sumeragi::v2_lane_work::{
+            MergeFrontierTestPhase, MergeRefreshOutcome, V2LaneWorkError,
+        };
         use crate::{
             queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
             state::WorldReadOnly as _,
@@ -15,8 +82,11 @@ v2_apply_test!(
             isi::SetKeyValue,
         };
         // Finality reauthentication binds the fixture context to the State network.
-        let fixture =
-            ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle();
+        let fixture = if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries {
+            ApplyFixture::new_for_cold_merge_registry_replay()
+        } else {
+            ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()
+        };
         let assert_fixture_context = |stage: &str| {
             assert_eq!(
                 crate::sumeragi::v2_recovery::committed_execution_policy_hash(
@@ -40,7 +110,13 @@ v2_apply_test!(
             .execute(&mut genesis_store)
             .expect("commit parent before historical autonomous end-to-end recovery");
         assert_fixture_context("after parent commit");
-        let context = successor_height_context(&fixture);
+        let startup_snapshot_before_admission =
+            (frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries).then(|| {
+                norito::json::to_value(fixture.state.as_ref())
+                    .expect("snapshot the exact parent before QueuePlan admission")
+            });
+        let mut context = successor_height_context(&fixture);
+        let mut startup_snapshot_after_admission = None;
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
         let queue = fixture_queue(fixture.state.as_ref(), events_sender.clone());
         let journal_dir =
@@ -94,30 +170,122 @@ v2_apply_test!(
         let reservation_domains = participant_domains.clone();
         let reservation_metadata_key = participant_metadata_key.clone();
         let reservation_asset = autonomous_asset_id.clone();
-        let (payload, expected_fifo) =
+        let instructions = move |index: usize| {
+            vec![
+                InstructionBox::from(Mint::asset_quantity(1_u32, reservation_asset.clone())),
+                InstructionBox::from(SetKeyValue::domain(
+                    reservation_domains[index].clone(),
+                    reservation_metadata_key.clone(),
+                    iroha_primitives::json::Json::new(
+                        u32::try_from(index).expect("participant index fits u32"),
+                    ),
+                )),
+            ]
+        };
+        let (payload, expected_fifo) = if frontier_case
+            == MergeFrontierFixtureCase::StartupRegistryBoundaries
+        {
+            let before_prepare =
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            let prepared = prepare_canonical_autonomous_batch_with_instructions(
+                &fixture,
+                &queue,
+                &context,
+                2,
+                instructions,
+                true,
+                |binding| {
+                    assert_eq!(
+                        fixture
+                            .state
+                            .queue_plan_admission_registry_match(
+                                binding.entrypoint_hash,
+                                binding.canonical_hash(),
+                            )
+                            .expect("read pre-admission registry"),
+                        crate::state::QueuePlanAdmissionRegistryMatch::Absent,
+                        "enqueue must not fabricate a canonical admission",
+                    );
+                },
+            );
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                before_prepare,
+                "preparing exact queued claims must not modify canonical State",
+            );
+            let admissions =
+                cold_fixture_queue_plan_certificates(&fixture, &prepared.admission_bindings);
+            let mut admission_carrier = build_apply_fixture_at_context_with_queue_plan_admissions(
+                &fixture,
+                context.clone(),
+                admissions,
+            );
+            assert_eq!(admission_carrier.body.external_entrypoint_count(), 0);
+            fixture
+                .service
+                .execute(
+                    &admission_carrier.context,
+                    &mut admission_carrier.store,
+                    &admission_carrier.task,
+                )
+                .expect("commit real signed QueuePlan admissions before lane reservation");
+            assert_eq!(fixture.state.committed_height(), 2);
+            for binding in &prepared.admission_bindings {
+                assert_eq!(
+                    fixture
+                        .state
+                        .queue_plan_admission_registry_match(
+                            binding.entrypoint_hash,
+                            binding.canonical_hash(),
+                        )
+                        .expect("read the committed exact admission"),
+                    crate::state::QueuePlanAdmissionRegistryMatch::Exact,
+                );
+                assert!(
+                    !fixture
+                        .state
+                        .has_committed_entrypoint(binding.entrypoint_hash)
+                );
+            }
+            startup_snapshot_after_admission = Some(
+                norito::json::to_value(fixture.state.as_ref())
+                    .expect("snapshot the real QueuePlan admission carrier"),
+            );
+            context = verified_successor_context_at_fixture_tip(&fixture)
+                .context()
+                .clone();
+            assert_eq!(context.height, 3);
+            let before_reservation =
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            let reserved = reserve_prepared_canonical_autonomous_batch(
+                &fixture,
+                &queue,
+                &context,
+                prepared,
+                Some(native_amx_receipts_for_apply_fixture),
+            );
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                before_reservation,
+                "reserving already-admitted inputs must not modify canonical State",
+            );
+            reserved
+        } else {
             reserve_canonical_successor_autonomous_batch_with_instructions(
                 &fixture,
                 &queue,
                 &context,
                 2,
-                move |index| {
-                    vec![
-                        InstructionBox::from(Mint::asset_quantity(
-                            1_u32,
-                            reservation_asset.clone(),
-                        )),
-                        InstructionBox::from(SetKeyValue::domain(
-                            reservation_domains[index].clone(),
-                            reservation_metadata_key.clone(),
-                            iroha_primitives::json::Json::new(
-                                u32::try_from(index).expect("participant index fits u32"),
-                            ),
-                        )),
-                    ]
-                },
+                instructions,
                 true,
                 Some(native_amx_receipts_for_apply_fixture),
-            );
+            )
+        };
+        let source_carrier_height = context.height;
+        let source_height =
+            usize::try_from(source_carrier_height).expect("source height fits usize");
+        let merge_carrier_height = source_carrier_height.checked_add(1).expect("merge height");
+        let merge_height = usize::try_from(merge_carrier_height).expect("merge height fits usize");
         assert_fixture_context("after autonomous queue reservation");
         let origin_descriptor = payload.origin_proposal.descriptor.clone();
         let expected_reservation_keys = payload.reservation_keys.clone();
@@ -232,14 +400,27 @@ v2_apply_test!(
             payload.epoch,
         )
         .expect("encode historical autonomous end-to-end envelope");
-        let mut successor =
-            build_successor_apply_fixture_with_autonomous_payloads(&fixture, vec![envelope]);
+        let mut successor = if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries
+        {
+            build_apply_fixture_at_context_with_autonomous_payloads(
+                &fixture,
+                context.clone(),
+                vec![envelope],
+            )
+        } else {
+            build_successor_apply_fixture_with_autonomous_payloads(&fixture, vec![envelope])
+        };
         fixture
             .service
             .execute(&successor.context, &mut successor.store, &successor.task)
             .expect("finalize the historical autonomous control-only carrier");
-        assert_eq!(fixture.state.committed_height(), 2);
+        assert_eq!(fixture.state.committed_height(), source_height);
         assert_fixture_context("after control-only carrier commit");
+        let startup_snapshot_before_merge =
+            (frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries).then(|| {
+                norito::json::to_value(fixture.state.as_ref())
+                    .expect("snapshot the exact source carrier before merge application")
+            });
         let reserved_row = diagnostic_at(
             &queue,
             SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
@@ -251,7 +432,13 @@ v2_apply_test!(
         assert_eq!(reserved_row.source_bundle_hash, None);
         assert_eq!(reserved_row.merge_entry_hash, None);
         assert_eq!(reserved_row.application_block_height, None);
-        let active_context = verified_successor_context_after_fixture_tip(&fixture);
+        let active_context = if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries
+        {
+            verified_successor_context_at_fixture_tip(&fixture)
+        } else {
+            verified_successor_context_after_fixture_tip(&fixture)
+        };
+        assert_eq!(active_context.context().height, merge_carrier_height);
         assert_eq!(
             active_context.context().execution_policy_hash,
             crate::sumeragi::v2_recovery::committed_execution_policy_hash(fixture.state.as_ref(),)
@@ -306,7 +493,7 @@ v2_apply_test!(
             .expect("one historical autonomous recovery installation");
         assert!(install.has_valid_identity());
         assert_eq!(install.historical_context, successor.context);
-        assert_eq!(install.canonical_body.height, 2);
+        assert_eq!(install.canonical_body.height, source_carrier_height);
         assert_eq!(install.canonical_body.block_hash, successor.body.hash());
         assert_eq!(
             install.payload.origin_proposal.descriptor,
@@ -331,7 +518,7 @@ v2_apply_test!(
         let anchored_hint = anchored_proposal
             .payload_block_hint
             .expect("historical recovery binds the exact canonical carrier hint");
-        assert_eq!(anchored_hint.proposal_height, 2);
+        assert_eq!(anchored_hint.proposal_height, source_carrier_height);
         assert_eq!(anchored_hint.proposal_view, 0);
         assert_eq!(anchored_hint.proposal_block_hash, successor.body.hash());
         assert_eq!(
@@ -427,7 +614,7 @@ v2_apply_test!(
                 .expect("default Native AMX signing limits"),
             );
         let local_leader_index = usize::try_from(active_context.context().leader(0))
-            .expect("height-three leader index fits usize");
+            .expect("merge carrier leader index fits usize");
         let local_key = validator_keys[local_leader_index].clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
         let mut lane_work = crate::sumeragi::v2_lane_work::V2LaneWorkAdapter::new(
@@ -662,7 +849,7 @@ v2_apply_test!(
                 active_context.context().mode,
             )
             .expect("select the exact contiguous certified autonomous source");
-        assert_eq!(candidate.carrier_height, 3);
+        assert_eq!(candidate.carrier_height, merge_carrier_height);
         assert_eq!(candidate.carrier_parent_hash, successor.body.hash());
         let batch = candidate
             .execution_batch
@@ -675,11 +862,78 @@ v2_apply_test!(
             .latest_block_header_fast()
             .expect("autonomous execution candidate has its exact committed parent");
         assert_eq!(parent_header.hash(), successor.body.hash());
+        let install_generation_change =
+            |adapter: &mut crate::sumeragi::v2_lane_work::V2LaneWorkAdapter, phase| {
+                let state = Arc::clone(&fixture.state);
+                let lane = origin_descriptor.lane_id;
+                let incarnation = state
+                    .lane_incarnation(lane)
+                    .expect("fixture active incarnation");
+                adapter.set_merge_validation_hook_for_test(phase, move || {
+                    assert_eq!(
+                        state.set_lane_incarnation_for_test(lane, incarnation),
+                        Some(incarnation),
+                        "generation publication must preserve every lane incarnation byte"
+                    );
+                });
+            };
         lane_work.drain_effects(usize::MAX);
+        if matches!(
+            frontier_case,
+            MergeFrontierFixtureCase::CompletedAuthorization
+                | MergeFrontierFixtureCase::CompletedSignature
+        ) {
+            // Observe the first real authorization/signature without deleting or
+            // replacing any previously established authority.
+            let phase = if frontier_case == MergeFrontierFixtureCase::CompletedAuthorization {
+                MergeFrontierTestPhase::Authorized
+            } else {
+                MergeFrontierTestPhase::Signed
+            };
+            install_generation_change(&mut lane_work, phase);
+        }
         lane_work
             .retain_merge_sidecars_for_global_view(0, None, None)
             .expect("refresh and sign the exact locally built execution candidate");
         let candidate_bytes = candidate.canonical_bytes();
+        if matches!(
+            frontier_case,
+            MergeFrontierFixtureCase::CompletedAuthorization
+                | MergeFrontierFixtureCase::CompletedSignature
+        ) {
+            let authorized = lane_work
+                .authorized_merge_candidate_for_test(&candidate)
+                .expect("completed durable authorization survives deferral");
+            assert_eq!(authorized.1, candidate);
+            assert_eq!(authorized.2, candidate_bytes);
+            assert_eq!(
+                lane_work.merge_local_signature_count_for_test(),
+                usize::from(frontier_case == MergeFrontierFixtureCase::CompletedSignature)
+            );
+            assert!(
+                !lane_work
+                    .drain_effects(usize::MAX)
+                    .iter()
+                    .any(|effect| matches!(
+                        effect,
+                        crate::sumeragi::v2_lane_work::V2LaneWorkEffect::BroadcastMerge(_)
+                    )),
+                "deferral purges queued merge publication after the observed movement"
+            );
+            assert!(lane_work.merge_output_is_open_for_test());
+            assert_eq!(
+                lane_work
+                    .refresh_merge_candidates(0)
+                    .expect("healthy frontier resumes"),
+                MergeRefreshOutcome::Ready
+            );
+            assert_eq!(
+                lane_work.authorized_merge_candidate_for_test(&candidate),
+                Some(authorized)
+            );
+            assert_eq!(lane_work.merge_local_signature_count_for_test(), 1);
+            return;
+        }
         assert!(
             lane_work
                 .drain_effects(usize::MAX)
@@ -698,9 +952,12 @@ v2_apply_test!(
             "State's validating builder result must seed the exact adapter memo"
         );
         for _ in 0..4 {
-            lane_work
-                .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
-                .expect("validate the exact execution candidate through the adapter");
+            assert_eq!(
+                lane_work
+                    .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
+                    .expect("validate the exact execution candidate through the adapter"),
+                MergeRefreshOutcome::Ready
+            );
         }
         assert_eq!(
             lane_work.merge_execution_full_validation_checks_for_test(),
@@ -724,14 +981,126 @@ v2_apply_test!(
             1,
             "a byte-distinct execution candidate must take the full-validation path"
         );
-        lane_work
-            .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
-            .expect("the exact memo remains valid after a rejected byte-distinct candidate");
+        assert_eq!(
+            lane_work
+                .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
+                .expect("the exact memo remains valid after a rejected byte-distinct candidate"),
+            MergeRefreshOutcome::Ready
+        );
         assert_eq!(
             lane_work.merge_execution_full_validation_checks_for_test(),
             1,
             "a rejected candidate must not replace the exact positive memo"
         );
+        if frontier_case == MergeFrontierFixtureCase::ParentGeneration {
+            install_generation_change(&mut lane_work, MergeFrontierTestPhase::ParentHeader);
+            assert_eq!(
+                lane_work
+                    .refresh_merge_candidates(0)
+                    .expect("changing parent snapshot defers"),
+                MergeRefreshOutcome::Deferred
+            );
+            assert!(lane_work.merge_output_is_open_for_test());
+            assert_eq!(
+                lane_work
+                    .refresh_merge_candidates(0)
+                    .expect("stable parent resumes"),
+                MergeRefreshOutcome::Ready
+            );
+            return;
+        }
+        if frontier_case == MergeFrontierFixtureCase::FailedValidationGeneration {
+            install_generation_change(&mut lane_work, MergeFrontierTestPhase::FullValidation);
+            let count = lane_work.merge_execution_full_validation_checks_for_test();
+            assert_eq!(
+                lane_work
+                    .validate_merge_execution_candidate_for_test(
+                        &mutated_candidate,
+                        &parent_header,
+                        0
+                    )
+                    .expect("moved generation takes precedence over a live validation failure"),
+                MergeRefreshOutcome::Deferred
+            );
+            assert_eq!(
+                lane_work.merge_execution_full_validation_checks_for_test(),
+                count + 1
+            );
+            assert!(
+                lane_work
+                    .validate_merge_execution_candidate_for_test(
+                        &mutated_candidate,
+                        &parent_header,
+                        0
+                    )
+                    .is_err(),
+                "the same invalid candidate is rejected once the frontier is stable"
+            );
+            assert_eq!(
+                lane_work
+                    .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
+                    .expect("exact valid bytes revalidate"),
+                MergeRefreshOutcome::Ready
+            );
+            assert!(lane_work.merge_output_is_open_for_test());
+            return;
+        }
+        if matches!(
+            frontier_case,
+            MergeFrontierFixtureCase::MissingParent
+                | MergeFrontierFixtureCase::WrongParent
+                | MergeFrontierFixtureCase::DamagedKura
+        ) {
+            let durable = lane_work.authorized_merge_candidate_for_test(&candidate);
+            let expected = match frontier_case {
+                MergeFrontierFixtureCase::MissingParent => {
+                    fixture.state.clear_latest_block_header_cache_for_testing();
+                    "parent header is absent"
+                }
+                MergeFrontierFixtureCase::WrongParent => {
+                    fixture
+                        .state
+                        .update_latest_block_header_cache_for_tests(fixture.body.header());
+                    "parent header differs"
+                }
+                MergeFrontierFixtureCase::DamagedKura => {
+                    use std::io::Write as _;
+                    let path = iroha_config::parameters::actual::LaneConfig::default()
+                        .primary()
+                        .blocks_dir(fixture.kura.store_root())
+                        .join("blocks.index");
+                    std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .expect("open exact fixture block index")
+                        .write_all(&[0x7f])
+                        .expect("append a partial durable journal entry");
+                    assert!(fixture.kura.exact_durable_blocks_count().is_err());
+                    "partial trailing entry"
+                }
+                _ => unreachable!(),
+            };
+            let error = lane_work
+                .refresh_merge_candidates(0)
+                .expect_err("stable contradictory authority remains fatal");
+            assert!(
+                matches!(&error, V2LaneWorkError::SigningGuard(reason) if reason.contains(expected)),
+                "{error:?}"
+            );
+            assert_eq!(
+                lane_work.authorized_merge_candidate_for_test(&candidate),
+                durable
+            );
+            let unavailable = lane_work
+                .prepare_certified_execution_carrier(active_context.context(), 0, &[])
+                .expect_err("fatal provider failure remains unavailable");
+            assert!(unavailable.reason().contains(expected));
+            assert!(
+                !lane_work.merge_output_is_open_for_test(),
+                "fatal errors still poison the output guard"
+            );
+            return;
+        }
         let execution = &batch.lanes[0];
         assert_eq!(execution.source_bundle, source.source_bundle);
         assert_eq!(execution.source_bundle_hash, source.bundle_hash);
@@ -860,7 +1229,7 @@ v2_apply_test!(
         );
         let parent = fixture
             .kura
-            .get_block(NonZeroUsize::new(2).expect("non-zero carrier parent height"))
+            .get_block(NonZeroUsize::new(source_height).expect("non-zero carrier parent height"))
             .expect("read exact autonomous control carrier");
         let (_, carrier_time_source) = TimeSource::new_mock(application_header.creation_time());
         let confidential_features = {
@@ -876,7 +1245,7 @@ v2_apply_test!(
         let execution_context = BlockExecutionContextBundle::new(Vec::new())
             .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
         let leader_index = active_context.context().leader(0);
-        let leader = usize::try_from(leader_index).expect("height-three leader index");
+        let leader = usize::try_from(leader_index).expect("merge carrier leader index");
         let carrier = BlockBuilder::new_with_time_source(Vec::new(), carrier_time_source)
             .chain(0, Some(parent.as_ref()))
             .bind_certified_merge_application_context(&application_header)
@@ -894,7 +1263,7 @@ v2_apply_test!(
             .expect("sign the exact autonomous merge carrier")
             .unpack(|_| {});
         let carrier = SignedBlock::from(carrier);
-        assert_eq!(carrier.header().height().get(), 3);
+        assert_eq!(carrier.header().height().get(), merge_carrier_height);
         assert_eq!(
             carrier.header().prev_block_hash(),
             Some(successor.body.hash())
@@ -912,7 +1281,7 @@ v2_apply_test!(
         };
         let round = wire::ConsensusRound {
             context_id: active_context.context().id(),
-            height: 3,
+            height: merge_carrier_height,
             view: 0,
         };
         let manifest = crate::sumeragi::v2_chunks::encode_payload(
@@ -967,9 +1336,9 @@ v2_apply_test!(
                 .collect::<Vec<_>>(),
         )
         .expect("aggregate exact autonomous global Commit votes");
-        let body_root = tempfile::tempdir().expect("height-three merge body-store directory");
+        let body_root = tempfile::tempdir().expect("merge carrier body-store directory");
         let mut body_store = V2BodyStore::open(body_root.path(), active_context.context().clone())
-            .expect("open height-three merge body store");
+            .expect("open merge carrier body store");
         let durable = body_store
             .store(manifest, canonical_wire)
             .expect("persist exact autonomous merge carrier body");
@@ -979,8 +1348,12 @@ v2_apply_test!(
             })
             .expect("persist exact autonomous merge validation marker");
         let task = ApplyTask::for_test(
-            3,
-            EventTag::new(3, 0, Generation::new(3)),
+            merge_carrier_height,
+            EventTag::new(
+                merge_carrier_height,
+                0,
+                Generation::new(merge_carrier_height),
+            ),
             subject,
             certificate,
             validated,
@@ -994,6 +1367,137 @@ v2_apply_test!(
         let pre_live_state_hash =
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
         let pre_live_merge_ledger = fixture.state.merge_ledger.snapshot();
+        if frontier_case == MergeFrontierFixtureCase::SuccessfulApply {
+            let pause = service.pause_successful_apply_frontier_for_test();
+            let prior_authority = lane_work.authorized_merge_candidate_for_test(&candidate);
+            let prior_signatures = lane_work.merge_local_signature_count_for_test();
+            let generation = fixture.state.state_view_generation();
+            std::thread::scope(|scope| {
+                let release = ReleaseSuccessfulApply(Arc::clone(&pause));
+                let worker = crate::sumeragi::sumeragi_thread_builder("successful-apply-frontier")
+                    .spawn_scoped(scope, || {
+                        let _finished = NotifySuccessfulApplyExit(Arc::clone(&pause));
+                        service
+                            .execute(active_context.context(), &mut body_store, &task)
+                            .expect("successful Apply completes after the observation pause");
+                    })
+                    .expect("spawn real Apply worker");
+                pause.before_store.wait_until_arrived();
+                let hook_pause = Arc::clone(&pause);
+                lane_work.set_merge_validation_hook_for_test(
+                    MergeFrontierTestPhase::MemoDerived,
+                    move || {
+                        hook_pause.before_store.release();
+                        hook_pause.after_store.wait_until_arrived();
+                    },
+                );
+                lane_work
+                    .schedule_retransmission()
+                    .expect("scheduler defers a moving Kura frontier");
+                assert_eq!(
+                    fixture.state.state_view_generation(),
+                    generation,
+                    "real durable publication precedes State generation change"
+                );
+                assert_eq!(fixture.state.committed_height(), source_height);
+                assert_eq!(
+                    fixture
+                        .kura
+                        .exact_durable_blocks_count()
+                        .expect("exact Kura frontier"),
+                    merge_height
+                );
+                assert_eq!(
+                    fixture.kura.get_durable_block_hash(
+                        NonZeroUsize::new(merge_height).expect("merge height")
+                    ),
+                    Some(carrier.hash())
+                );
+                assert_eq!(
+                    lane_work
+                        .refresh_merge_candidates(0)
+                        .expect("Kura-ahead refresh defers"),
+                    MergeRefreshOutcome::Deferred
+                );
+                assert_eq!(
+                    lane_work
+                        .validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)
+                        .expect("Kura-ahead exact candidate defers"),
+                    MergeRefreshOutcome::Deferred
+                );
+                let certified = lane_work
+                    .prepare_certified_execution_carrier(active_context.context(), 0, &[])
+                    .expect_err("certified provider waits for State publication");
+                assert_eq!(certified.reason(), "merge frontier is changing");
+                assert!(
+                    lane_work.merge_output_is_open_for_test(),
+                    "deferred certified provider completes its guard"
+                );
+                let ordinary = (&mut lane_work)
+                    .prepare(active_context.context(), 0, &[])
+                    .expect_err("ordinary provider waits for State publication");
+                assert_eq!(ordinary.reason(), "merge frontier is changing");
+                assert!(
+                    lane_work.merge_output_is_open_for_test(),
+                    "deferred ordinary provider completes its guard"
+                );
+                assert_eq!(
+                    lane_work.authorized_merge_candidate_for_test(&candidate),
+                    prior_authority
+                );
+                assert_eq!(
+                    lane_work.merge_local_signature_count_for_test(),
+                    prior_signatures
+                );
+                assert!(
+                    !lane_work
+                        .drain_effects(usize::MAX)
+                        .iter()
+                        .any(|effect| matches!(
+                            effect,
+                            crate::sumeragi::v2_lane_work::V2LaneWorkEffect::BroadcastMerge(_)
+                        )),
+                    "scheduler/provider continuation must not publish stale merge shares"
+                );
+                drop(release);
+                if let Err(error) = worker.join() {
+                    std::panic::resume_unwind(error);
+                }
+            });
+            assert_eq!(fixture.state.committed_height(), merge_height);
+            assert_eq!(
+                fixture
+                    .kura
+                    .exact_durable_blocks_count()
+                    .expect("applied durable frontier"),
+                merge_height
+            );
+            assert_eq!(fixture.state.latest_block_hash_fast(), Some(carrier.hash()));
+            assert!(fixture.state.state_view_generation() > generation);
+            assert_eq!(
+                autonomous_balance(),
+                Some(iroha_primitives::numeric::Quantity::from(2_u32))
+            );
+            assert!(participant_metadata_is_committed());
+            assert!(
+                expected_fifo
+                    .iter()
+                    .all(|hash| fixture.state.has_committed_entrypoint(*hash))
+            );
+            assert!(queue.live_lane_reservations().is_empty());
+            assert_eq!(
+                lane_work
+                    .refresh_merge_candidates(0)
+                    .expect("old adapter defers to successor"),
+                MergeRefreshOutcome::Deferred
+            );
+            assert!(lane_work.merge_output_is_open_for_test());
+            assert_eq!(
+                lane_work.authorized_merge_candidate_for_test(&candidate),
+                prior_authority
+            );
+            return;
+        }
         fixture.kura.fail_next_native_amx_prepublication_for_tests();
         let error = service
             .execute(active_context.context(), &mut body_store, &task)
@@ -1007,7 +1511,7 @@ v2_apply_test!(
             "unexpected Native prepublication failure: {error:?}"
         );
         assert!(error.requires_restart_recovery());
-        assert_eq!(fixture.state.committed_height(), 2);
+        assert_eq!(fixture.state.committed_height(), source_height);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
             pre_live_state_hash,
@@ -1026,11 +1530,11 @@ v2_apply_test!(
                 .kura
                 .exact_durable_blocks_count()
                 .expect("read exact durable height after Native crash"),
-            3
+            merge_height
         );
         let durable_carrier = fixture
             .kura
-            .get_block(NonZeroUsize::new(3).expect("non-zero Native carrier height"))
+            .get_block(NonZeroUsize::new(merge_height).expect("non-zero Native carrier height"))
             .expect("read result-bearing Native merge carrier after live crash");
         assert!(durable_carrier.has_results());
         assert_eq!(
@@ -1040,23 +1544,23 @@ v2_apply_test!(
         );
         assert_eq!(batch.entrypoint_count, 2);
         assert_eq!(durable_carrier.hash(), carrier.hash());
-        let height_three_finality = fixture
+        let merge_carrier_finality = fixture
             .kura
-            .v2_finality_artifact(3)
+            .v2_finality_artifact(merge_carrier_height)
             .expect("read Native carrier finality")
             .expect("Native carrier finality precedes prepublication");
-        assert_eq!(height_three_finality.block_hash, durable_carrier.hash());
+        assert_eq!(merge_carrier_finality.block_hash, durable_carrier.hash());
         assert!(
             fixture
                 .kura
-                .wsv_checkpoint(3)
+                .wsv_checkpoint(merge_carrier_height)
                 .expect("read absent Native crash checkpoint")
                 .is_none()
         );
         assert!(
             fixture
                 .kura
-                .commit_manifest(3)
+                .commit_manifest(merge_carrier_height)
                 .expect("read absent Native crash commit manifest")
                 .is_none()
         );
@@ -1066,7 +1570,7 @@ v2_apply_test!(
             .expect("read staged Native merge-carrier record")
             .expect("Kura block commit stages the exact merge association");
         assert_eq!(durable_merge_carrier.entry_hash, entry_hash);
-        assert_eq!(durable_merge_carrier.block_height, 3);
+        assert_eq!(durable_merge_carrier.block_height, merge_carrier_height);
         assert_eq!(durable_merge_carrier.block_hash, durable_carrier.hash());
         assert_eq!(
             fixture
@@ -1085,14 +1589,17 @@ v2_apply_test!(
         let native_entry = &native_amx_manifest.entries()[0];
         assert_eq!(
             native_entry.participant_proposal.descriptor.proposal_height,
-            2
+            source_carrier_height
         );
-        assert_eq!(native_entry.leaf.application_block_height, 3);
+        assert_eq!(
+            native_entry.leaf.application_block_height,
+            merge_carrier_height
+        );
         assert_eq!(
             native_entry
                 .participant_settlement
                 .authority_context_height(),
-            2
+            source_carrier_height
         );
         assert_eq!(native_entry.leaf.members.len(), 2);
         let native_amx_frontiers = State::native_amx_participant_frontier_markers_and_merge_entry(
@@ -1122,14 +1629,14 @@ v2_apply_test!(
         assert!(live_prepublication.authenticates_state_frontiers(
             durable_carrier.as_ref(),
             &native_amx_manifest,
-            &height_three_finality,
+            &merge_carrier_finality,
             &native_amx_frontiers,
         ));
         service
             .execute(active_context.context(), &mut body_store, &task)
             .expect("atomically apply the exact canonical autonomous merge carrier");
         assert_fixture_context("after exact Native carrier application");
-        assert_eq!(fixture.state.committed_height(), 3);
+        assert_eq!(fixture.state.committed_height(), merge_height);
         assert_eq!(
             fixture.state.merge_ledger.snapshot(),
             vec![Arc::new(entry.clone())]
@@ -1164,11 +1671,14 @@ v2_apply_test!(
             crate::kura::LaneBlockApplicationReceiptArtifactFormat::MergeExecution
         );
         assert_eq!(receipt.proposal, anchored_proposal);
-        assert_eq!(receipt.application_block_height, 3);
+        assert_eq!(receipt.application_block_height, merge_carrier_height);
         assert_eq!(receipt.application_block_hash, carrier.hash());
         assert_eq!(receipt.merge_epoch_id, Some(entry.epoch_id));
         assert_eq!(receipt.merge_entry_hash, Some(entry_hash));
-        assert_eq!(receipt.merge_carrier_block_height, Some(3));
+        assert_eq!(
+            receipt.merge_carrier_block_height,
+            Some(merge_carrier_height)
+        );
         assert_eq!(receipt.merge_carrier_block_hash, Some(carrier.hash()));
         assert_eq!(receipt.merge_source_bundle_hash, Some(source.bundle_hash));
         assert_eq!(
@@ -1199,13 +1709,16 @@ v2_apply_test!(
         );
         assert_eq!(finalized_row.source_bundle_hash, Some(source.bundle_hash));
         assert_eq!(finalized_row.merge_entry_hash, Some(entry_hash));
-        assert_eq!(finalized_row.application_block_height, Some(3));
+        assert_eq!(
+            finalized_row.application_block_height,
+            Some(merge_carrier_height)
+        );
         assert_eq!(finalized_row.application_block_hash, Some(carrier.hash()));
         assert_eq!(finalized_row.stuck_reason, None);
         service
             .execute(active_context.context(), &mut body_store, &task)
             .expect("retry the exact canonical autonomous merge application");
-        assert_eq!(fixture.state.committed_height(), 3);
+        assert_eq!(fixture.state.committed_height(), merge_height);
         assert_eq!(
             fixture.state.merge_ledger.snapshot(),
             vec![Arc::new(entry.clone())]
@@ -1233,6 +1746,18 @@ v2_apply_test!(
         assert!(
             queue.lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
         );
+        if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries {
+            assert_cold_merge_registry_replay_boundary(
+                &fixture,
+                &entry,
+                startup_snapshot_before_admission.expect("captured pre-admission snapshot"),
+                startup_snapshot_after_admission.expect("captured actual admission snapshot"),
+                startup_snapshot_before_merge.expect("captured pre-merge source snapshot"),
+                &expected_reservation_keys,
+                active_context.context().mode,
+            );
+            return;
+        }
         let native_marker = native_amx_frontiers[0];
         let native_receipt = fixture
             .kura
@@ -1339,7 +1864,7 @@ v2_apply_test!(
         let startup_context = {
             let state_view = fixture.state.view();
             crate::sumeragi::v2_context::build_successor_height_context_from_state(
-                &height_three_finality,
+                &merge_carrier_finality,
                 &state_view,
                 crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                     fixture.state.as_ref(),
@@ -1500,4 +2025,341 @@ v2_apply_test!(
             limits,
         );
     }
-);
+}
+
+/// Sign the exact queued bindings with their frozen four-validator coordinator authority.
+fn cold_fixture_queue_plan_certificates(
+    fixture: &ApplyFixture,
+    bindings: &[crate::torii_proxy::QueuePlanAdmissionBindingV1],
+) -> Vec<Vec<u8>> {
+    let mut ordered = bindings.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|binding| binding.registry_key());
+    assert!(
+        ordered
+            .windows(2)
+            .all(|pair| pair[0].registry_key() < pair[1].registry_key())
+    );
+    ordered
+        .into_iter()
+        .map(|binding| {
+            let coordinator = &binding.admission_context.route_incarnations[0];
+            assert_eq!(coordinator.validator_set.len(), 4);
+            assert_eq!(coordinator.durability_threshold, 2);
+            let attestations = (0..coordinator.durability_threshold)
+                .map(|validator_index| {
+                    let validator = &coordinator.validator_set[usize::from(validator_index)];
+                    let key = fixture
+                        .validator_keys
+                        .iter()
+                        .find(|key| key.public_key() == validator.public_key())
+                        .expect("fixture retains the exact ordered coordinator signing key");
+                    let signing_bytes =
+                        crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
+                            binding.canonical_hash(),
+                            validator_index,
+                        )
+                        .expect("derive the production QueuePlan attestation preimage");
+                    crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
+                        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+                        validator_index,
+                        signature: Signature::try_new(key.private_key(), &signing_bytes)
+                            .expect("sign the exact queued admission binding"),
+                    }
+                })
+                .collect();
+            let bytes =
+                norito::encode_canonical(&crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
+                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+                    binding: binding.clone(),
+                    attestations,
+                })
+                .expect("encode the canonical signed QueuePlan certificate");
+            let validated =
+                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+                    fixture.state.network_id_ref(),
+                    &bytes,
+                )
+                .expect("the production decoder authenticates the exact admission quorum");
+            assert_eq!(&validated.certificate.binding, binding);
+            assert_eq!(validated.binding_hash, binding.canonical_hash());
+            bytes
+        })
+        .collect()
+}
+
+fn assert_cold_merge_registry_replay_boundary(
+    fixture: &ApplyFixture,
+    entry: &MergeLedgerEntry,
+    before_admission: norito::json::Value,
+    after_admission: norito::json::Value,
+    before_merge: norito::json::Value,
+    reservations: &[crate::queue::LaneQueueReservationKeyV1],
+    mode: wire::ConsensusMode,
+) {
+    use crate::state::QueuePlanAdmissionRegistryMatch;
+
+    // KuraSeed restores canonical State. Normal startup separately refreshes
+    // static Nexus configuration while retaining snapshot topology and cooldown,
+    // then installs the frozen manifests before replay. Reuse the actual fixture
+    // configuration and the four-validator registry that authenticated its carriers.
+    let startup_nexus = fixture.state.nexus_snapshot();
+    let startup_lane_manifests = fixture.state.lane_manifests.read().clone();
+    let restore = |snapshot| {
+        crate::state::deserialize::KuraSeed {
+            kura: Arc::clone(&fixture.kura),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(snapshot)
+        .and_then(|mut state| {
+            let restored_nexus = state.nexus_snapshot();
+            let restored_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+            // Authenticate Kura's primary and restore the exact snapshot storage
+            // cursor before applying static policy, as the daemon does at startup.
+            state
+                .prepare_restored_configured_primary_geometry_anchor(
+                    &startup_nexus.configured_lane_catalog,
+                )
+                .map_err(|error| {
+                    norito::json::Error::Message(format!(
+                        "anchor fixture snapshot primary geometry: {error}"
+                    ))
+                })?;
+            state
+                .restore_kura_lane_segments_from_nexus()
+                .map_err(|error| {
+                    norito::json::Error::Message(format!(
+                        "restore fixture snapshot lane storage: {error}"
+                    ))
+                })?;
+            let mut nexus = startup_nexus.clone();
+            nexus.lane_catalog = restored_nexus.lane_catalog.clone();
+            nexus.lane_config = restored_nexus.lane_config.clone();
+            nexus.autoscale.last_transition_height =
+                restored_nexus.autoscale.last_transition_height;
+            state.set_nexus_from_config(nexus).map_err(|error| {
+                norito::json::Error::Message(format!(
+                    "restore fixture Nexus startup configuration: {error}"
+                ))
+            })?;
+            state.install_lane_manifests(&startup_lane_manifests);
+            let installed_nexus = state.nexus_snapshot();
+            assert_eq!(installed_nexus.lane_catalog, restored_nexus.lane_catalog);
+            assert_eq!(installed_nexus.lane_config, restored_nexus.lane_config);
+            assert_eq!(
+                installed_nexus.autoscale.last_transition_height,
+                restored_nexus.autoscale.last_transition_height,
+            );
+            assert_eq!(
+                installed_nexus.configured_lane_catalog,
+                startup_nexus.configured_lane_catalog,
+            );
+            assert_eq!(
+                installed_nexus.dataspace_catalog,
+                startup_nexus.dataspace_catalog,
+            );
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(&state),
+                restored_hash,
+                "startup runtime attachment must preserve the restored canonical State",
+            );
+            Ok(state)
+        })
+    };
+    let mut cold_world = fixture_world(
+        &fixture.service.genesis_account,
+        &fixture.custody_account,
+        &fixture.treasury_account,
+        fixture.include_projection_policies,
+        fixture.include_native_lane,
+    );
+    cold_world.domains.insert(
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+        Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone())
+            .build(&fixture.service.genesis_account),
+    );
+    let cold = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        cold_world,
+        Arc::clone(&fixture.kura),
+        LiveQueryStore::start_test(),
+        fixture.state.chain_id.clone(),
+        fixture.context.network_id,
+    )
+    .expect(
+        "the public cold constructor validates future durable execution before admissions replay",
+    );
+    assert_eq!(cold.committed_height(), 0);
+    assert!(cold.merge_ledger.snapshot().is_empty());
+    for key in reservations {
+        assert_eq!(
+            cold.queue_plan_admission_registry_match(
+                key.entrypoint_hash,
+                key.queue_plan_admission_binding_hash,
+            )
+            .expect("fresh State has no admission marker or pending obligation"),
+            QueuePlanAdmissionRegistryMatch::Absent,
+        );
+        assert!(!cold.has_committed_entrypoint(key.entrypoint_hash));
+    }
+    drop(cold);
+
+    let expected_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+    let complete_snapshot = norito::json::to_value(fixture.state.as_ref())
+        .expect("snapshot the exactly applied merge carrier");
+    for (height, snapshot) in [
+        (1, before_admission),
+        (2, after_admission),
+        (3, before_merge.clone()),
+    ] {
+        let mut partial = restore(snapshot).expect("hydrate future execution over an exact prefix");
+        assert_eq!(partial.committed_height(), height);
+        assert!(partial.merge_ledger.snapshot().is_empty());
+        for key in reservations {
+            assert_eq!(
+                partial
+                    .queue_plan_admission_registry_match(
+                        key.entrypoint_hash,
+                        key.queue_plan_admission_binding_hash,
+                    )
+                    .expect("prefix registry is either absent or exactly pending"),
+                if height == 1 {
+                    QueuePlanAdmissionRegistryMatch::Absent
+                } else {
+                    QueuePlanAdmissionRegistryMatch::Exact
+                },
+            );
+            assert!(!partial.has_committed_entrypoint(key.entrypoint_hash));
+        }
+        crate::state::replay_blocks_from_kura_range(
+            &fixture.kura,
+            &mut partial,
+            usize::try_from(height + 1).expect("fixture height fits usize"),
+            4,
+        )
+        .expect("ordered replay admits before executing the exact future merge carrier");
+        assert_eq!(partial.committed_height(), 4);
+        assert_eq!(
+            partial.merge_ledger.snapshot(),
+            vec![Arc::new(entry.clone())]
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&partial),
+            expected_hash
+        );
+        for key in reservations {
+            assert!(partial.has_committed_entrypoint(key.entrypoint_hash));
+            assert_eq!(
+                partial
+                    .queue_plan_admission_registry_match(
+                        key.entrypoint_hash,
+                        key.queue_plan_admission_binding_hash,
+                    )
+                    .expect("applied execution retains its immutable registry binding"),
+                QueuePlanAdmissionRegistryMatch::Exact,
+            );
+        }
+    }
+
+    let restored = restore(complete_snapshot.clone()).expect("hydrate the exact completed prefix");
+    assert_eq!(restored.committed_height(), 4);
+    assert_eq!(
+        restored.merge_ledger.snapshot(),
+        vec![Arc::new(entry.clone())]
+    );
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        expected_hash
+    );
+    drop(restored);
+
+    for corrupt in ["missing", "conflicting", "malformed"] {
+        for (height, snapshot) in [(3, before_merge.clone()), (4, complete_snapshot.clone())] {
+            let mut restored = restore(snapshot).expect("restore the unmodified control prefix");
+            if height == 3 {
+                restored
+                    .validate_certified_merge_entry_for_global_order(entry, mode)
+                    .expect("the unmodified pending admission authorizes this exact execution");
+            }
+            let registry_keys = restored
+                .world
+                .smart_contract_state
+                .view()
+                .iter()
+                .filter(|(key, _)| key.to_string().starts_with("queue_plan_admission_v2_"))
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(registry_keys.len(), reservations.len());
+            let mut world = restored.world.block();
+            for key in registry_keys {
+                match corrupt {
+                    "missing" => {
+                        world.smart_contract_state.remove(key);
+                    }
+                    "conflicting" => {
+                        let value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 {
+                            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
+                            binding_hash: Hash::new(b"different immutable admission owner"),
+                        };
+                        world.smart_contract_state.insert(
+                            key,
+                            norito::to_bytes(&value)
+                                .expect("encode a well-formed conflicting owner"),
+                        );
+                    }
+                    "malformed" => {
+                        world.smart_contract_state.insert(key, vec![0xff]);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            world.commit();
+            let before = crate::snapshot::canonical_state_snapshot_hash(&restored);
+            if height == 3 {
+                let error = restored
+                    .validate_certified_merge_entry_for_global_order(entry, mode)
+                    .expect_err(
+                        "future hydration never authorizes missing or conflicting live bindings",
+                    );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("exact QueuePlan admission registry binding"),
+                    "{corrupt} pending registry failed at an unrelated stage: {error}",
+                );
+                assert!(
+                    crate::state::replay_blocks_from_kura_range(
+                        &fixture.kura,
+                        &mut restored,
+                        4,
+                        4,
+                    )
+                    .is_err(),
+                    "actual replay must reject a {corrupt} pending admission",
+                );
+                assert_eq!(restored.committed_height(), 3);
+                assert!(restored.merge_ledger.snapshot().is_empty());
+                assert_eq!(
+                    crate::snapshot::canonical_state_snapshot_hash(&restored),
+                    before
+                );
+            }
+            if height == 4 {
+                let malformed_snapshot = norito::json::to_value(&restored)
+                    .expect("serialize the isolated completed-prefix registry corruption");
+                let error = restore(malformed_snapshot).err().expect(
+                    "restored history must retain the exact registry binding of its applied execution",
+                );
+                assert!(
+                    error.to_string().to_lowercase().contains("queue"),
+                    "{corrupt} restored registry failed for an unrelated reason: {error}",
+                );
+            }
+        }
+    }
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+        expected_hash,
+        "all startup and rejection checks leave the original canonical state intact",
+    );
+}

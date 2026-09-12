@@ -21,6 +21,7 @@ export class AccountAddress {
   toI105() { getNativeBinding(); }
   toString() { getNativeBinding(); }
   displayFormats() { getNativeBinding(); }
+  controllerInfo() { getNativeBinding(); }
   multisigPolicyInfo() { getNativeBinding(); }
 }
 

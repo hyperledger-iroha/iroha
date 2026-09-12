@@ -11834,7 +11834,7 @@ public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
             throw DecodingError.dataCorruptedError(
                 forKey: .boundKind,
                 in: container,
-                debugDescription: "dynamic access hint bound_kind must be take or range"
+                debugDescription: "dynamic access hint bound_kind must be take or page"
             )
         }
         guard hasCanonicalMaximum else {
@@ -11853,7 +11853,7 @@ public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
                 .init(codingPath: encoder.codingPath,
                       debugDescription:
                           "dynamic access hint must use a canonical state declaration, "
-                          + "StateMap key type, take/range bound, and max_keys in 1...64")
+                          + "StateMap key type, take/page bound, and max_keys in 1...64")
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -15130,7 +15130,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
                 _ = try ToriiCanonicalTransactionDraft.decode(
                     transactionPayloadB64: transactionPayloadB64,
                     signingMessageB64: signingMessageB64,
-                    expectedAdmissionIntent: .ordinary,
+                    expectedAdmissionIntent: .queuePlanSynced,
                     context: "contract call response"
                 )
             } catch {
@@ -15146,6 +15146,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
 
 /// A server-prepared contract call whose exact signing bytes and all public
 /// operation bindings are retained for a detached Ed25519 signature.
+/// Preparation requires QueuePlanSynced admission before exposing signing bytes.
 public struct ToriiContractCallDraft: Sendable, Equatable {
     public let request: ToriiContractCallRequest
     public let transactionPayload: Data
@@ -15233,7 +15234,7 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
             draft = try ToriiCanonicalTransactionDraft.decode(
                 transactionPayloadB64: transactionPayloadB64,
                 signingMessageB64: signingMessageB64,
-                expectedAdmissionIntent: .ordinary,
+                expectedAdmissionIntent: .queuePlanSynced,
                 context: "contract call response"
             )
             try Self.validateTransactionPayloadBindings(

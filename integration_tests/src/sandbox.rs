@@ -652,11 +652,13 @@ pub async fn start_network_async_or_skip(
                 .await
                 .wrap_err("network startup applied-height barrier failed while reaching block 1")?;
             let client = network.client();
-            let status_result =
-                tokio::task::spawn_blocking(move || get_status_with_retry_at_least(&client, 1))
-                    .await
-                    .map_err(Report::new)
-                    .wrap_err("network startup authoritative status-height task failed")?;
+            // Tokio blocking-pool workers retain a runtime handle, which synchronous
+            // SDK reads reject. Keep the authoritative poll on the existing read owner.
+            let status_result = iroha_test_network::read_on_dedicated_thread(move || {
+                Ok(get_status_with_retry_at_least(&client, 1))
+            })
+            .await
+            .wrap_err("network startup authoritative status-height task failed")?;
             status_result.wrap_err("network startup authoritative status-height barrier failed")?;
             Ok::<(), Report>(())
         }

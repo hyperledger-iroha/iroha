@@ -109,6 +109,14 @@ pub fn apply_queued_in_one_block(
             )
         })
         .collect();
+    apply_accepted_fixture_block(state, chain_id, expected_height, accepted)
+}
+fn apply_accepted_fixture_block(
+    state: &Arc<State>,
+    chain_id: &ChainId,
+    expected_height: u64,
+    accepted: Vec<(AcceptedTransaction<'static>, RoutingDecision, RoutingPlan)>,
+) -> usize {
     let applied = accepted.len();
     // Synthetic Torii states do not all install the production lane-manifest snapshot. Preserve
     // every explicit test registry, including registries that intentionally omit lane zero, but
@@ -489,16 +497,14 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         hex::encode(verified.abi_hash.as_ref()),
     )
 }
-/// Build JSON string for contract call request body.
+/// Build a secret-free JSON body for unsigned contract-call preparation.
 pub fn contract_call_request_json(
     account: &AccountId,
-    private_key: &ExposedPrivateKey,
     contract_address: &str,
     options: ContractCallOptions<'_>,
 ) -> String {
     let mut entries = vec![
         crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("contract_address", contract_address),
     ];
     entries.push(crate::json_entry("entrypoint", options.entrypoint));

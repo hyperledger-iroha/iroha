@@ -1674,6 +1674,7 @@ fn test_source_authorization(
         [0x88; 32],
         [0x66; 32],
         iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0x55; 32])
+            .expect("nonzero test manifest digest")
             .as_bytes()
             .to_vec(),
         "sorafs.sf1@1.0.0".to_owned(),

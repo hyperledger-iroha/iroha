@@ -394,12 +394,17 @@ class ContractManifestTest {
             )
             assertFailsWith<IllegalStateException>("accepted key_type `$keyType`") { parse(payload) }
         }
-        listOf("", "Range", "Take", "all", "prefix", "range ", " take").forEach { boundKind ->
+        listOf("", "range", "Range", "Take", "all", "prefix", "range ", " take").forEach { boundKind ->
             val payload = fullResponse().replaceFirst(
                 "\"bound_kind\":\"take\"",
                 "\"bound_kind\":\"$boundKind\"",
             )
-            assertFailsWith<IllegalStateException>("accepted bound_kind `$boundKind`") { parse(payload) }
+            val failure = assertFailsWith<IllegalStateException>("accepted bound_kind `$boundKind`") {
+                parse(payload)
+            }
+            if (boundKind == "range") {
+                assertEquals("dynamic access hint.bound_kind must be `take` or `page`", failure.message)
+            }
         }
         listOf("0", "65", "4294967295", "-1", "1.0", "\"1\"").forEach { maxKeys ->
             val payload = fullResponse().replaceFirst("\"max_keys\":64", "\"max_keys\":$maxKeys")

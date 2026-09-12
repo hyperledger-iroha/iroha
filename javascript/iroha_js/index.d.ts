@@ -262,6 +262,24 @@ export interface AccountAddressDisplay {
   i105Warning: string;
 }
 
+/** Normalized admitted controller with frozen records and caller-owned key-byte copies. */
+export type AccountAddressControllerInfo =
+  | {
+      readonly tag: 0;
+      readonly curve: number;
+      readonly publicKey: Uint8Array;
+    }
+  | {
+      readonly tag: 1;
+      readonly version: number;
+      readonly threshold: number;
+      readonly members: ReadonlyArray<{
+        readonly curve: number;
+        readonly weight: number;
+        readonly publicKey: Uint8Array;
+      }>;
+    };
+
 export class AccountAddress {
   static fromAccount(options: {
     publicKey:
@@ -288,6 +306,8 @@ export class AccountAddress {
     input: string,
     expectedPrefix?: number | string | bigint,
   ): { address: AccountAddress; chainDiscriminant?: number };
+  /** Return a fresh controller snapshot; mutable key-byte copies never alias the account. */
+  controllerInfo(): AccountAddressControllerInfo;
   canonicalBytes(): Uint8Array;
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;

@@ -998,6 +998,7 @@ class HttpClientTransportTest {
                 authority = authority,
                 creationTimeMs = creationTimeMs,
                 executable = Executable.contractCall(invocation),
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 feePayment = quotedFeePayment,
                 metadata = metadata,
             ),
@@ -1114,6 +1115,7 @@ class HttpClientTransportTest {
             authority = authority,
             creationTimeMs = 123_456L,
             executable = Executable.contractCall(invocation),
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             feePayment = feePayment,
             metadata = metadata,
         )
@@ -1134,7 +1136,7 @@ class HttpClientTransportTest {
             base.copy(metadata = mapOf("attacker" to JsonValue.bool(true))),
             base.copy(timeToLiveMs = 99_999L),
             base.copy(nonce = 7L),
-            base.copy(admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED),
+            base.copy(admissionIntent = TransactionAdmissionIntent.ORDINARY),
             base.copy(attachments = listOf(attachment)),
             base.copy(feePayment = testFeePayment(5_001L)),
         )
@@ -1161,6 +1163,15 @@ class HttpClientTransportTest {
                 ).join()
             }
             assertNotNull(error.cause)
+            if (substituted.admissionIntent == TransactionAdmissionIntent.ORDINARY) {
+                assertTrue(
+                    generateSequence(error.cause) { it.cause }.any {
+                        it.message?.contains(
+                            "transaction payload admission intent must be QUEUE_PLAN_SYNCED",
+                        ) == true
+                    },
+                )
+            }
         }
     }
 
@@ -1181,6 +1192,7 @@ class HttpClientTransportTest {
             authority = authority,
             creationTimeMs = 654_321L,
             executable = Executable.contractCall(invocation),
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             feePayment = testFeePayment(5_000L),
         )
         val encodedPayload = NoritoJavaCodecAdapter(

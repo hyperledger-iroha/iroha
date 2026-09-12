@@ -1781,3 +1781,39 @@ test("normalizeIdentifierInput normalizes supported identifier forms", () => {
     "alice.example@example.com",
   );
 });
+
+test("identifier receipt encodes a valid multisig account with canonical compact bytes", () => {
+  const vectors = JSON.parse(
+    readFileSync(new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8"),
+  );
+  const multisigVector = vectors.cases.positive.find(
+    (vector) => vector.case_id === "addr-multisig-council-threshold3",
+  );
+  assert.ok(multisigVector);
+  const address = AccountAddress.fromI105(multisigVector.encodings.i105.string);
+  assert.deepEqual(
+    Buffer.from(address.canonicalBytes()),
+    Buffer.from(multisigVector.encodings.canonical_hex.replace(/^0x/u, ""), "hex"),
+  );
+  const payload = {
+    ...IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload,
+    account_id: address.toI105(753),
+  };
+  const encoded = Buffer.from(encodeIdentifierResolutionReceiptPayload(payload));
+  // Independent compact Norito reference: AccountController tag 1; policy
+  // version 1, threshold 3, and three Ed25519 members with weights 1, 1, 2.
+  // The reference also reproduces the existing Rust single-key receipt digest.
+  const expectedAccountField = Buffer.from(
+    "820201000000fc010101020300f50103000000000000004e4a21000000000000000100016801f401" +
+    "b60101017d010f0187016a015501c8010a018201b80138018a015401aa01d2016401d30167012601" +
+    "9e012d01e801be0107019c0193015b015f01960201004e4a21000000000000000100017e01a001e3" +
+    "01bd015201e2010701c901d301b001eb01a6015c0107010401e6016f01ca012d018e0116015a0117" +
+    "0152011801b1017401fc0141016001e401130201004e4a210000000000000001000188014b018801" +
+    "5701f401ea01a10161013c01610150014d01b3014d014b01ea01f301460151017a010e013101de01" +
+    "3c01dd01d401d901b40120011d019d010b020200",
+    "hex",
+  );
+  assert.equal(encoded.length, 1021);
+  assert.deepEqual(encoded.subarray(761), expectedAccountField);
+  assert.equal(sha256Hex(encoded), "B43BC15554F610D14AF5AD373F23FA7C14CED568217182231783E14CBB717AB8");
+});

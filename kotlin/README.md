@@ -168,6 +168,11 @@ the exact lowercase BLAKE3-256 digest of the canonical UTF-8 JSON request
 payload. An omitted payload hashes the empty byte sequence; noncanonical hex or
 a digest mismatch fails closed before the draft is returned.
 
+The canonical contract-call payload must already use `QueuePlanSynced` before
+signing material is returned. An `Ordinary` downgrade is rejected even with a
+matching recomputed payload hash. Sign the verified payload without changing
+its admission intent or any other signed field.
+
 Canonical request builders keep I105 as the semantic SDK identity but emit its lowercase
 canonical-hex address in `X-Iroha-Account`, which is safe on strict ASCII HTTP stacks. Active
 canonical ASCII aliases are emitted unchanged. Signed JSON `account_id` fields retain the caller's

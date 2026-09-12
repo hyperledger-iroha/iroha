@@ -203,7 +203,7 @@ fn fixture_account_uses_checked_seed_derivation() {
     assert_eq!(account, expected);
 }
 #[test]
-fn load_storage_pin_payload_uses_canonical_directory_ordering() {
+fn load_prepared_storage_payload_uses_canonical_directory_ordering() {
     let tempdir = tempdir().expect("tempdir");
     let payload_dir = tempdir.path().join("site");
     fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
@@ -213,13 +213,26 @@ fn load_storage_pin_payload_uses_canonical_directory_ordering() {
         "console.log('hayahi');",
     )
     .expect("write script");
-    let manifest = sample_manifest();
+    let mut manifest = sample_manifest();
     let profile = chunk_profile_from_manifest(&manifest).expect("chunk profile");
     let (expected_plan, expected_payload) =
         CarBuildPlan::from_directory_with_profile(&payload_dir, profile)
             .expect("build canonical directory payload");
+    let mut reader = expected_payload.as_slice();
+    let stats = CarStreamingWriter::new(&expected_plan)
+        .write_from_reader(&mut reader, &mut io::sink())
+        .expect("canonical directory CAR stats");
+    manifest.root_cid = stats.root_cids[0].clone();
+    manifest.dag_codec = DagCodecId(stats.dag_codec);
+    manifest.content_length = expected_plan.content_length;
+    manifest.chunk_digest_sha3_256 =
+        sorafs_car::compute_chunk_plan_digest_sha3(&expected_plan.chunks);
+    manifest.por_root =
+        compute_por_root(&expected_payload, &expected_plan).expect("directory PoR root");
+    manifest.car_digest = *stats.car_archive_digest.as_bytes();
+    manifest.car_size = stats.car_size;
     let (payload, files, payload_kind) =
-        load_storage_pin_payload(&payload_dir, &manifest).expect("load storage payload");
+        load_prepared_storage_payload(&payload_dir, &manifest).expect("load storage payload");
     assert_eq!(payload_kind, "directory");
     assert_eq!(payload, expected_payload);
     let files = files.expect("directory payload should include file entries");

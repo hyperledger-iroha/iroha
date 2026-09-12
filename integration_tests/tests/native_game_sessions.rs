@@ -14,7 +14,10 @@ use std::{collections::BTreeMap, time::Duration};
 
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::{
+    blocking::Client,
+    client::{AccountTransactionDraft, FeeQuoteRequest},
+};
 use iroha_core::execution_proofs::{
     compiled_race_profile_v1, prove_race_v1, race_profile_id_v1, race_result_v1,
     race_state_root_v1, race_transcript_root_v1, replay_race_v1, verify_game_proof_for_history_v1,
@@ -23,8 +26,8 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     block::consensus_v2::{ConsensusMode, finality::V2FinalityArtifact},
     execution_proofs::{
-        ExecutionPublicInputsV1, RaceDnfEventV1, RaceInputFrameV1, RaceProverRequestV1,
-        RaceReplayV1, RaceTrackV1,
+        ExecutionProofVerificationV1, ExecutionPublicInputsV1, RaceDnfEventV1, RaceInputFrameV1,
+        RaceProverRequestV1, RaceReplayV1, RaceTrackV1,
     },
     game::*,
     isi::game::*,
@@ -34,7 +37,7 @@ use iroha_data_model::{
 };
 use iroha_test_network::{
     ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
-    Network, NetworkBuilder, NetworkPeer, init_instruction_registry,
+    Network, NetworkBuilder, NetworkPeer, init_instruction_registry, read_on_dedicated_thread,
 };
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode;
@@ -66,8 +69,71 @@ fn manifest() -> GameManifestV1 {
     }
 }
 
-fn record(client: &Client, session_id: Hash) -> Result<GameSessionRecordV1> {
-    Ok(client.query_single(FindGameSessionById::new(session_id))?)
+async fn record(client: &Client, session_id: Hash) -> Result<GameSessionRecordV1> {
+    let client = client.clone();
+    read_on_dedicated_thread(move || {
+        Ok(client
+            .client()
+            .query_single(FindGameSessionById::new(session_id))?)
+    })
+    .await
+}
+
+async fn verification(
+    client: &Client,
+    verification_id: Hash,
+) -> Result<ExecutionProofVerificationV1> {
+    let client = client.clone();
+    read_on_dedicated_thread(move || {
+        Ok(client
+            .client()
+            .query_single(FindExecutionProofVerificationById::new(verification_id))?)
+    })
+    .await
+}
+
+async fn height(client: &Client) -> Result<u64> {
+    let client = client.clone();
+    read_on_dedicated_thread(move || Ok(client.client().get_status()?.blocks)).await
+}
+
+/// Prepare and sign an exact account transaction with its canonical fee quote.
+async fn prepare_instruction(
+    client: &Client,
+    instruction: impl Into<InstructionBox>,
+    fee_payment: FeePaymentIntent,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let instruction: InstructionBox = instruction.into();
+    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+        [instruction],
+        fee_payment,
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "game fee quote changed the selected payer, sponsor revision, or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    Ok(account.sign_transaction(payload)?)
+}
+
+/// Submit once and require Applied finality before the game-state assertion.
+async fn submit_instruction(
+    client: &Client,
+    instruction: impl Into<InstructionBox>,
+    fee_payment: FeePaymentIntent,
+) -> Result<HashOf<SignedTransaction>> {
+    let transaction = prepare_instruction(client, instruction, fee_payment).await?;
+    client
+        .account_client()
+        .submit_transaction_and_wait(&transaction)
+        .await
 }
 
 fn signed_checkpoint(
@@ -101,19 +167,21 @@ fn challenge(session: &GameSessionRecordV1) -> ChallengeGameSessionV1 {
 }
 
 /// Drive consensus heights with unique ledger transactions, never simulated wall-clock deadlines.
-fn advance_past(client: &Client, deadline: u64) -> Result<()> {
+async fn advance_past(client: &Client, deadline: u64) -> Result<()> {
     for ordinal in 0..350_u64 {
-        let height = client.get_status()?.blocks;
+        let height = height(client).await?;
         if height > deadline {
             return Ok(());
         }
-        client.submit_blocking(
+        submit_instruction(
+            client,
             Log::new(
                 Level::INFO,
                 format!("game deadline {deadline}/{height}/{ordinal}"),
             ),
             fees(),
-        )?;
+        )
+        .await?;
     }
     Err(eyre!(
         "bounded consensus-height progress did not pass {deadline}"
@@ -129,10 +197,9 @@ async fn assert_replicas(
         loop {
             let running: Vec<_> = network.peers().iter().filter(|peer| peer.is_running()).collect();
             ensure!(running.len() == expected_running, "unexpected live validator count");
-            let records: Vec<_> = running
-                .iter()
-                .map(|peer| record(&peer.client(), expected.session_id))
-                .collect();
+            let records = futures_util::future::join_all(running.iter().map(|peer| async move {
+                record(&peer.client(), expected.session_id).await
+            })).await;
             if records.iter().all(|value| value.as_ref().is_ok_and(|value| value == expected)) {
                 let root = Hash::new(expected.encode());
                 eprintln!(
@@ -158,6 +225,7 @@ async fn finalized_state_observation(
     voters: &BTreeMap<PeerId, Vec<u8>>,
 ) -> Result<Option<(HashOf<BlockHeader>, Hash, Hash)>> {
     let url = peer
+        .client()
         .client()
         .torii_url
         .join(&format!("v1/ledger/state/{height}"))?;
@@ -280,13 +348,15 @@ async fn assert_finalized_state_convergence(
         voters.len() == 4,
         "release gate must pin all four signed genesis validators"
     );
-    let height = peers
-        .iter()
-        .map(|peer| peer.client().get_status().map(|status| status.blocks))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .max()
-        .ok_or_else(|| eyre!("no running validators"))?;
+    let height = futures_util::future::try_join_all(
+        peers
+            .iter()
+            .map(|peer| async move { Ok::<_, eyre::Report>(peer.status().await?.blocks) }),
+    )
+    .await?
+    .into_iter()
+    .max()
+    .ok_or_else(|| eyre!("no running validators"))?;
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
@@ -315,8 +385,9 @@ async fn assert_finalized_state_convergence(
 // outside this inventory fails the scenario; it may never silently heal the partition.
 const PARTITION_VIEWS: u64 = 8;
 
-fn assert_partition_round_is_covered(peer: &NetworkPeer, fault_height: u64) -> Result<()> {
-    let status = peer.client().get_sumeragi_status()?;
+async fn assert_partition_round_is_covered(peer: &NetworkPeer, fault_height: u64) -> Result<()> {
+    let client = peer.client();
+    let status = read_on_dedicated_thread(move || client.client().get_sumeragi_status()).await?;
     ensure!(
         !status.restart_required
             && status.last_committed_height < fault_height
@@ -372,11 +443,16 @@ async fn challenge_through_consensus_partition(
 ) -> Result<GameSessionRecordV1> {
     assert_replicas(network, certified, 4).await?;
     let peers = network.peers();
-    let base = peers[0].client().get_status()?.blocks;
+    let base = peers[0].status().await?.blocks;
     ensure!(
-        peers
-            .iter()
-            .all(|p| p.client().get_status().is_ok_and(|s| s.blocks == base)),
+        futures_util::future::join_all(
+            peers
+                .iter()
+                .map(|p| async move { p.status().await.is_ok_and(|s| s.blocks == base) })
+        )
+        .await
+        .into_iter()
+        .all(|at_base| at_base),
         "partition must begin at one synchronized finalized height"
     );
     let fault_height = base
@@ -443,17 +519,26 @@ async fn challenge_through_consensus_partition(
         retain_partition_control_evidence(network, receiver_index, "armed")?;
     }
     ensure!(
-        peers
-            .iter()
-            .all(|p| p.is_running() && p.client().get_status().is_ok_and(|s| s.blocks == base)),
+        futures_util::future::join_all(peers.iter().map(|p| async move {
+            p.is_running() && p.status().await.is_ok_and(|s| s.blocks == base)
+        }))
+        .await
+        .into_iter()
+        .all(|at_base| at_base),
         "partition installation raced with unaccounted consensus progress"
     );
-    let transaction = peers[0].client().submit(challenge(certified), fees())?;
+    let partition_client = peers[0].client();
+    let signed = prepare_instruction(&partition_client, challenge(certified), fees()).await?;
+    // This phase requires acceptance only; waiting for Applied would prevent healing.
+    let transaction = partition_client
+        .account_client()
+        .submit_transaction(&signed)
+        .await?;
     timeout(Duration::from_secs(30), async {
         loop {
             let mut observed = 0;
             for (receiver_index, receiver) in peers.iter().enumerate() {
-                assert_partition_round_is_covered(receiver, fault_height)?;
+                assert_partition_round_is_covered(receiver, fault_height).await?;
                 let ack = receiver.consensus_message_control().unwrap().read_ack()?;
                 let (revision, overflowed, rejected, rules) = &armed[receiver_index];
                 ensure!(
@@ -481,8 +566,8 @@ async fn challenge_through_consensus_partition(
                 }
                 ensure!(
                     receiver.is_running()
-                        && receiver.client().get_status()?.blocks == base
-                        && record(&receiver.client(), certified.session_id)? == *certified,
+                        && receiver.status().await?.blocks == base
+                        && record(&receiver.client(), certified.session_id).await? == *certified,
                     "2+2 partition advanced the ledger or imposed a wall-clock forfeit"
                 );
             }
@@ -503,11 +588,11 @@ async fn challenge_through_consensus_partition(
     // can advance a game deadline even while every process continues servicing requests.
     sleep(Duration::from_secs(2)).await;
     for peer in peers {
-        assert_partition_round_is_covered(peer, fault_height)?;
+        assert_partition_round_is_covered(peer, fault_height).await?;
         ensure!(
             peer.is_running()
-                && peer.client().get_status()?.blocks == base
-                && record(&peer.client(), certified.session_id)? == *certified,
+                && peer.status().await?.blocks == base
+                && record(&peer.client(), certified.session_id).await? == *certified,
             "partition failed to preserve the exact pending checkpoint and controls"
         );
     }
@@ -525,7 +610,7 @@ async fn challenge_through_consensus_partition(
     }
     let selected = timeout(Duration::from_secs(90), async {
         loop {
-            let selected = record(&peers[0].client(), certified.session_id)?;
+            let selected = record(&peers[0].client(), certified.session_id).await?;
             if selected.phase == GamePhaseV1::SelectingCheckpoint {
                 return Ok::<_, eyre::Report>(selected);
             }
@@ -608,9 +693,10 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
         eyre!("four-validator release gate cannot succeed with sandbox startup skipped")
     })?;
     let result = timeout(Duration::from_secs(1_200), async {
-        let mut client = network.peers()[0].client();
+        let mut context = network.peers()[0].client().client().clone();
         // Allow actual native verification on development-profile validator binaries.
-        client.transaction_status_timeout = Duration::from_secs(120);
+        context.transaction_status_timeout = Duration::from_secs(120);
+        let client = Client::from_client(context)?;
         ensure!(
             !compiled_race_profile_v1().qualified,
             "this gate must exercise the real unqualified zero-stake admission path"
@@ -622,19 +708,19 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             DomainId::try_new("wonderland", "universal")?,
             "free_game_gate".parse()?,
         );
-        client.submit_blocking(
+        submit_instruction(&client,
             OpenGameSessionV1 {
                 session_id,
                 manifest: manifest(),
                 asset_definition,
                 stake: Quantity::zero(),
-                join_deadline_height: client.get_status()?.blocks + 100,
+                join_deadline_height: height(&client).await? + 100,
             },
             fees(),
-        )?;
-        let opened = record(&client, session_id)?;
+        ).await?;
+        let opened = record(&client, session_id).await?;
         for (slot, entrant) in [(0, &client), (1, &second_client)] {
-            entrant.submit_blocking(
+            submit_instruction(entrant,
                 JoinGameSessionV1 {
                     session_id,
                     input_key: input_key(slot).public_key().clone(),
@@ -646,10 +732,10 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
                     expected_stake: opened.stake.clone(),
                 },
                 fees(),
-            )?;
+            ).await?;
         }
-        client.submit_blocking(StartGameSessionV1 { session_id }, fees())?;
-        let started = record(&client, session_id)?;
+        submit_instruction(&client, StartGameSessionV1 { session_id }, fees()).await?;
+        let started = record(&client, session_id).await?;
         ensure!(
             started.phase == GamePhaseV1::Playing,
             "session did not start"
@@ -715,15 +801,15 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
                 signature: Signature::new(input_key(slot).private_key(), digest.as_ref()),
             })
             .collect();
-        client.submit_blocking(
+        submit_instruction(&client,
             CommitGameCheckpointV1 {
                 session_id,
                 checkpoint: checkpoint.clone(),
                 frontier: Some(frontier.clone()),
             },
             fees(),
-        )?;
-        let certified = record(&client, session_id)?;
+        ).await?;
+        let certified = record(&client, session_id).await?;
         let selected = challenge_through_consensus_partition(&network, &certified).await?;
         ensure!(
             selected.phase == GamePhaseV1::SelectingCheckpoint,
@@ -754,18 +840,17 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             },
         ] {
             ensure!(
-                client.submit_blocking(rejected, fees()).is_err(),
+                submit_instruction(&client, rejected, fees()).await.is_err(),
                 "replaced retained evidence"
             );
         }
         ensure!(
-            client
-                .submit_blocking(challenge(&selected), fees())
+            submit_instruction(&client, challenge(&selected), fees()).await
                 .is_err(),
             "challenge extended deadline"
         );
         ensure!(
-            record(&client, session_id)? == selected,
+            record(&client, session_id).await? == selected,
             "rejection changed game state"
         );
 
@@ -776,9 +861,9 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             .collect();
         let restarted = &network.peers()[3];
         restarted.shutdown().await;
-        advance_past(&client, selected.deadline_height)?;
-        client.submit_blocking(AdvanceGameDeadlineV1 { session_id }, fees())?;
-        let reveal_phase = record(&client, session_id)?;
+        advance_past(&client, selected.deadline_height).await?;
+        submit_instruction(&client, AdvanceGameDeadlineV1 { session_id }, fees()).await?;
+        let reveal_phase = record(&client, session_id).await?;
         ensure!(
             reveal_phase.phase == GamePhaseV1::ForcedReveal,
             "certified inputs were recommitted"
@@ -794,26 +879,25 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             "changed certified commitments"
         );
         // Anyone with the public matching reveal can relay it; the second player withholds theirs.
-        second_client.submit_blocking(
+        submit_instruction(&second_client,
             RevealGameInputsV1 {
                 reveal: reveals[0].clone(),
             },
             fees(),
-        )?;
-        let waiting = record(&client, session_id)?;
+        ).await?;
+        let waiting = record(&client, session_id).await?;
         ensure!(
             waiting.participants.iter().all(|p| p.dnf_at_tick.is_none()),
             "forfeit before deadline"
         );
         ensure!(
-            client
-                .submit_blocking(ExpireGameSessionV1 { session_id }, fees())
+            submit_instruction(&client, ExpireGameSessionV1 { session_id }, fees()).await
                 .is_err(),
             "active game was refunded"
         );
-        advance_past(&client, waiting.deadline_height)?;
-        client.submit_blocking(AdvanceGameDeadlineV1 { session_id }, fees())?;
-        let resolved = record(&client, session_id)?;
+        advance_past(&client, waiting.deadline_height).await?;
+        submit_instruction(&client, AdvanceGameDeadlineV1 { session_id }, fees()).await?;
+        let resolved = record(&client, session_id).await?;
         ensure!(
             resolved.phase == GamePhaseV1::AwaitingProof,
             "sole survivor was not awaiting proof"
@@ -869,12 +953,12 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             ExpireGameSessionV1 { session_id }.into(),
         ] {
             ensure!(
-                client.submit_blocking(late, fees()).is_err(),
+                submit_instruction(&client, late, fees()).await.is_err(),
                 "closed input round changed without proof"
             );
         }
         ensure!(
-            record(&client, session_id)? == resolved,
+            record(&client, session_id).await? == resolved,
             "late evidence changed resolved history"
         );
         assert_replicas(&network, &resolved, 4).await?;
@@ -951,7 +1035,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             proof_started.elapsed().as_millis()
         );
         ensure!(
-            client.query_single(FindExecutionProofVerificationById::new(verification_id)).is_err(),
+            verification(&client, verification_id).await.is_err(),
             "execution receipt existed before consensus verified the proof"
         );
 
@@ -959,23 +1043,23 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
         let mut malformed = proof.clone();
         *malformed.proof_bytes.last_mut().expect("nonempty native proof") ^= 1;
         ensure!(
-            client.submit_blocking(
+            submit_instruction(&client,
                 SettleGameSessionV1::new(session_id, malformed, outcome.clone()),
                 fees(),
-            ).is_err(),
+            ).await.is_err(),
             "altered proof bytes settled the session"
         );
-        ensure!(record(&client, session_id)? == resolved, "invalid proof changed session");
+        ensure!(record(&client, session_id).await? == resolved, "invalid proof changed session");
         ensure!(
-            client.query_single(FindExecutionProofVerificationById::new(verification_id)).is_err(),
+            verification(&client, verification_id).await.is_err(),
             "invalid proof retained a verification receipt"
         );
 
         let settlement = SettleGameSessionV1::new(session_id, proof, outcome.clone());
         let settlement_started = std::time::Instant::now();
-        let height_before_settlement = client.get_status()?.blocks;
-        client.submit_blocking(settlement.clone(), fees())?;
-        let settled = record(&client, session_id)?;
+        let height_before_settlement = height(&client).await?;
+        submit_instruction(&client, settlement.clone(), fees()).await?;
+        let settled = record(&client, session_id).await?;
         let settlement_height = settled.terminal_at_height
             .ok_or_else(|| eyre!("successful native proof did not retain its settlement height"))?;
         let mut expected = resolved.clone();
@@ -987,14 +1071,12 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
         ensure!(settled == expected, "settlement changed immutable history or zero-stake liabilities");
         ensure!(
             settlement_height > height_before_settlement
-                && settlement_height <= client.get_status()?.blocks,
+                && settlement_height <= height(&client).await?,
             "settlement height is not committed"
         );
         assert_replicas(&network, &settled, 4).await?;
         for peer in network.peers() {
-            let receipt = peer.client().query_single(
-                FindExecutionProofVerificationById::new(verification_id),
-            )?;
+            let receipt = verification(&peer.client(), verification_id).await?;
             ensure!(
                 receipt.profile_id == resolved.profile_id
                     && receipt.statement_hash == statement_hash
@@ -1004,10 +1086,10 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             );
         }
         ensure!(
-            client.submit_blocking(settlement, fees()).is_err(),
+            submit_instruction(&client, settlement, fees()).await.is_err(),
             "duplicate proof settlement succeeded"
         );
-        ensure!(record(&client, session_id)? == settled, "duplicate settlement changed result");
+        ensure!(record(&client, session_id).await? == settled, "duplicate settlement changed result");
         assert_replicas(&network, &settled, 4).await?;
         eprintln!(
             "native execution consensus settlement: height={settlement_height} receipt={verification_id} settlement_and_convergence_ms={}",

@@ -575,7 +575,7 @@ object ContractManifestJsonParser {
             "dynamic access hint.bound_kind",
         )
         check(boundKind in dynamicAccessBoundKinds) {
-            "dynamic access hint.bound_kind must be `take` or `range`"
+            "dynamic access hint.bound_kind must be `take` or `page`"
         }
         val maxKeys = unsignedInteger(
             required(root, "max_keys", "dynamic access hint"),
