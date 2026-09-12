@@ -6,6 +6,7 @@ use iroha_data_model::{
     account::{AccountId, NewAccount, address::AccountAddress},
     escrow::EscrowId,
     isi::{InstructionBox, escrow::CancelAssetLock},
+    smart_contract::manifest::ContractManifest,
 };
 use iroha_primitives::numeric::Quantity;
 use norito::{
@@ -701,10 +702,18 @@ fn deployment_json_rejects_noncanonical_integer_and_incomplete_payloads() {
     )
     .unwrap();
     for replacement in ["01", "+4", " 4", "18446744073709551616"] {
-        let mut value = valid.clone();
-        value["FinalizeSmartContractCodeUpload"]["total_size"] =
-            Value::String(replacement.to_owned());
-        assert_strict_rejection(&value);
+        let mut payload = valid["FinalizeSmartContractCodeUpload"]
+            .as_object()
+            .unwrap()
+            .clone();
+        payload.insert(
+            "total_size".to_owned(),
+            Value::String(replacement.to_owned()),
+        );
+        assert_strict_rejection(&object([(
+            "FinalizeSmartContractCodeUpload",
+            Value::Object(payload),
+        )]));
     }
     let payload = valid["FinalizeSmartContractCodeUpload"]
         .as_object()
@@ -846,7 +855,10 @@ fn typed_registration_respects_selected_context_and_native_error_categories() {
         )]))
     };
     for (encode, decode) in [
-        (encode_instruction_frame, decode_instruction_frame),
+        (
+            encode_instruction_frame as fn(&str, u16) -> CodecResult<Vec<u8>>,
+            decode_instruction_frame as fn(&[u8], u16) -> CodecResult<String>,
+        ),
         (encode_instruction_archive, decode_instruction_archive),
     ] {
         let bytes = encode(&source, 369).unwrap();

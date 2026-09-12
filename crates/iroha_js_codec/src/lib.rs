@@ -8,13 +8,9 @@ pub use error::{CodecError, CodecErrorKind, CodecResult};
 mod archive;
 pub use archive::{decode_instruction_archive, encode_instruction_archive};
 
-#[cfg(test)]
-mod tests;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use iroha_crypto::Hash;
-use iroha_data_model::HasMetadata;
 use iroha_data_model::account::Account;
 use iroha_data_model::account::AccountId;
 use iroha_data_model::account::NewAccount;
@@ -137,8 +133,6 @@ use iroha_data_model::rwa::NewRwa;
 use iroha_data_model::rwa::RwaControlPolicy;
 use iroha_data_model::rwa::RwaId;
 use iroha_data_model::rwa::RwaParentRef;
-use iroha_data_model::smart_contract::ContractAddress;
-use iroha_data_model::smart_contract::manifest::ContractManifest;
 use iroha_data_model::trigger::Trigger;
 use iroha_data_model::trigger::TriggerId;
 use iroha_data_model::trigger::action::Action;
@@ -151,8 +145,6 @@ use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Quantity;
 use norito::core as norito_core;
 use norito::json;
-use norito::json::Map;
-use norito::json::Value;
 use std::fmt;
 use std::panic::AssertUnwindSafe;
 use std::panic::catch_unwind;
@@ -4858,3 +4850,6 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     outer.insert("zk".to_owned(), json::Value::Object(variant));
     json::Value::Object(outer)
 }
+
+#[cfg(test)]
+mod tests;
