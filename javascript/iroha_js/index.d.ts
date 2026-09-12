@@ -309,9 +309,6 @@ export class AccountAddress {
   /** Return a fresh controller snapshot; mutable key-byte copies never alias the account. */
   controllerInfo(): AccountAddressControllerInfo;
   canonicalBytes(): Uint8Array;
-  controllerInfo():
-    | { tag: 0 | 2; curve: number; publicKey: Uint8Array }
-    | { tag: 1; version: number; threshold: number; members: Array<{ curve: number; publicKey: Uint8Array; weight: number }> };
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
   toString(): string;
