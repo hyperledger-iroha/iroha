@@ -183,6 +183,9 @@ concread = "=0.5.7"
 # [patch.crates-io] was temporarily disabled; keep the local overrides we still
 # rely on for Halo2 helpers and the CUDA helper.
 [patch.crates-io]
+pqcrypto-internals = { path = "vendor/pqcrypto-internals-0.2.11" }
+pqcrypto-mldsa = { path = "vendor/pqcrypto-mldsa-0.1.2" }
+pqcrypto-mlkem = { path = "vendor/pqcrypto-mlkem-0.1.1" }
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
