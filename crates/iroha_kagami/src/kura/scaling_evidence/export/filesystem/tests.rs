@@ -2,6 +2,7 @@
 
 // Actual descriptor and signed-adapter controls; no global cwd/hooks or child processes.
 use super::*;
+use crate::kura::scaling_evidence::fixture;
 use crate::kura::scaling_evidence::*;
 use iroha_core::kura::BlockStore;
 use norito::codec::Encode as _;
@@ -14,8 +15,6 @@ use std::{
     },
     panic::{AssertUnwindSafe, catch_unwind},
 };
-#[path = "../../fixture.rs"]
-mod fixture;
 
 struct Files {
     _directory: tempfile::TempDir,

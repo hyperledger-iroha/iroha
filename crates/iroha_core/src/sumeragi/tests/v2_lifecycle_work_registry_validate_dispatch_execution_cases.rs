@@ -4136,9 +4136,15 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                 publisher
                     .store_block(std::sync::Arc::clone(&parent_block))
                     .expect("persist the same canonical parent at the historical publisher");
-                publisher
+                let parent_receipt = publisher
                     .store_v2_finality_artifact(&parent_finality)
                     .expect("authenticate the same parent CommitQC at the historical publisher");
+                assert_eq!(parent_receipt.height(), parent_finality.height);
+                assert_eq!(parent_receipt.block_hash(), parent);
+                assert_eq!(
+                    parent_receipt.certificate(),
+                    parent_finality.commit_qc.as_ref()
+                );
                 publisher
                     .build_signed_kura_replica_advert(1, key)
                     .expect("validate exact keeper eligibility and complete canonical body")

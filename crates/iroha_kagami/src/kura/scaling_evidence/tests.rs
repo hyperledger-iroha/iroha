@@ -1,8 +1,6 @@
 //! Signed authentication, alignment, budget and complete-cohort adverse controls.
 
 use super::*;
-#[path = "fixture.rs"]
-mod fixture;
 use fixture::{Fixture, limits};
 use norito::codec::Encode as _;
 

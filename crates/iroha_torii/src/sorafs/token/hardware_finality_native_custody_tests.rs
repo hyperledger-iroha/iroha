@@ -24,7 +24,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
-    IntoKeyValue, Registrable,
+    Registrable,
     account::{Account, AccountId},
     block::{BlockHeader, builder::BlockBuilder},
     isi::sorafs::MutateSorafsStreamTokenCustody,
@@ -60,6 +60,7 @@ fn fixture_key(seed: u8) -> KeyPair {
 
 struct NativeCustodyFixture {
     state: Arc<State>,
+    kura: Arc<Kura>,
     pins: StreamTokenHardwarePinsV1,
     approval: SignerCustodyAnchorV1,
     current: StreamTokenCustodyControlSnapshotV1,
@@ -72,6 +73,7 @@ struct NativeCustodyFixture {
 // deliberately not the production consensus commit path or a proof of the resulting WSV root.
 fn execute_fixture_block(
     state: &mut State,
+    kura: &Kura,
     key: &KeyPair,
     now: u64,
     instruction: MutateSorafsStreamTokenCustody,
@@ -129,9 +131,7 @@ fn execute_fixture_block(
     assert_eq!(artifact.commit_qc.signers.len(), 3);
     let hash = signed.hash();
     let header = signed.header();
-    state
-        .kura()
-        .store_block(Arc::new(signed))
+    kura.store_block(Arc::new(signed))
         .expect("persist exact fixture block");
     state.push_block_hash_for_testing(hash);
     state.update_latest_block_header_cache_for_tests(header);
@@ -143,20 +143,21 @@ impl NativeCustodyFixture {
         let key = fixture_key(0xA1);
         let authority = AccountId::new(key.public_key().clone());
         let provider = ProviderId::new(PROVIDER);
-        let mut world = World::new();
-        let (id, account) = Account::new(authority.clone())
-            .build(&authority)
-            .into_key_value();
-        world.accounts.insert(id, account);
-        world.provider_owners.insert(provider, authority.clone());
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        world
+            .provider_owners_mut_for_testing()
+            .insert(provider, authority.clone());
         let mut permissions = Permissions::new();
         permissions.insert(Permission::from(CanManageSorafsStreamTokenCustody {
             provider_id: provider,
         }));
-        world.account_permissions.insert(authority, permissions);
+        world
+            .account_permissions_mut_for_testing()
+            .insert(authority, permissions);
+        let kura = Kura::blank_kura_for_testing();
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
-            Kura::blank_kura_for_testing(),
+            kura.clone(),
             LiveQueryStore::start_test(),
             SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
             sccp_taira_finality_network_id_v1(),
@@ -185,6 +186,7 @@ impl NativeCustodyFixture {
         };
         let first = execute_fixture_block(
             &mut state,
+            &kura,
             &key,
             NOW_MS - 500,
             MutateSorafsStreamTokenCustody {
@@ -233,6 +235,7 @@ impl NativeCustodyFixture {
         .expect("canonical full enrollment");
         let second = execute_fixture_block(
             &mut state,
+            &kura,
             &key,
             NOW_MS,
             MutateSorafsStreamTokenCustody {
@@ -256,6 +259,7 @@ impl NativeCustodyFixture {
         );
         Self {
             state: Arc::new(state),
+            kura,
             pins,
             approval: approval.anchor,
             current,
@@ -267,8 +271,7 @@ impl NativeCustodyFixture {
     fn persist_finality(&self, index: usize) {
         let artifact = &self.finalized[index].proof().finality_artifact;
         let receipt = self
-            .state
-            .kura()
+            .kura
             .store_v2_finality_artifact(artifact)
             .expect("durably persist verified complete artifact");
         assert_eq!(receipt.height(), artifact.height);
@@ -276,14 +279,13 @@ impl NativeCustodyFixture {
         assert_eq!(receipt.context_id(), artifact.context_id());
         assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
         let reloaded = self
-            .state
-            .kura()
+            .kura
             .v2_finality_artifact(artifact.height)
             .expect("verified Kura artifact read")
             .expect("durable artifact exists");
         assert_eq!(reloaded, *artifact);
         assert_eq!(
-            self.state.kura().get_durable_block_hash(
+            self.kura.get_durable_block_hash(
                 NonZeroUsize::new(usize::try_from(artifact.height).expect("small height")).unwrap()
             ),
             Some(artifact.block_hash)
@@ -477,7 +479,11 @@ fn actual_native_custody_retains_history_but_fences_removed_current_provider() {
     );
     let mut block = fixture.state.block(header);
     let mut tx = block.transaction();
-    tx.world.provider_owners.remove(ProviderId::new(PROVIDER));
+    assert_eq!(
+        tx.world
+            .remove_provider_owner_for_testing(ProviderId::new(PROVIDER)),
+        Some(AccountId::new(fixture_key(0xA1).public_key().clone()))
+    );
     tx.apply();
     block
         .commit_world_overlay_for_testing()
@@ -492,8 +498,7 @@ fn actual_native_custody_retains_history_but_fences_removed_current_provider() {
     for finalized in &fixture.finalized {
         assert_eq!(
             fixture
-                .state
-                .kura()
+                .kura
                 .v2_finality_artifact(finalized.proof().finality_artifact.height)
                 .expect("unchanged durable artifact")
                 .as_ref(),

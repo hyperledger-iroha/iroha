@@ -52,20 +52,17 @@ use iroha_crypto::{
 use iroha_data_model::{
     HasMetadata, NetworkId,
     account::{
-        Account, AccountId, NewAccount,
+        AccountId, NewAccount,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
-        AssetDefinitionAlias, AssetTransferAvailability, AssetTransferControlWindow,
-        AssetTransferLimit,
-        definition::{AssetDefinition, NewAssetDefinition},
+        AssetTransferControlWindow, AssetTransferLimit,
         id::{AssetDefinitionId, AssetId},
-        validate_asset_transfer_availability_reason,
     },
     block::{BlockHeader, consensus::LaneBlockCommitment},
     confidential::{ConfidentialMemoEnvelopeV1, ConfidentialMemoSuiteV1},
     da::manifest::DaManifestV1,
-    domain::{Domain, NewDomain},
+    domain::Domain,
     escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     governance::types::{
@@ -73,62 +70,29 @@ use iroha_data_model::{
         ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
     isi::{
-        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
-        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
-        RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
-        RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
-        SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
-        Unregister, UnregisterBox, UnregisterKaigiRelay,
-        asset_transfer_control::{
-            SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
-        },
+        EndKaigi, Instruction as InstructionTrait, InstructionBox, Register,
+        ReportKaigiRelayHealth, SetKeyValue, Transfer, TransferAssetBatch,
+        asset_transfer_control::{SetAssetTransferBlacklist, SetAssetTransferControl},
         escrow::CancelAssetLock,
-        governance::{
-            CastPlainBallot, CastZkBallot, ProposeDeployContract, ProposeValidationFeePolicy,
-            RegisterCitizen,
-        },
         ministry::SubmitAgendaProposal,
-        rwa::{
-            ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
-            RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
-        },
-        settlement::{
-            DvpIsi, FundFxCorridorEscrow, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy,
-            SettleFxCorridor, SettlementInstructionBox,
-        },
-        smart_contract_code::{
-            ActivateContractInstance, CancelSmartContractCodeUpload, DeactivateContractInstance,
-            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
-        },
-        social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
-        zk::{
-            CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
-            ScheduleConfidentialPolicyTransition, SubmitBallot,
-        },
+        settlement::{SettleFxCorridor, SettlementInstructionBox},
     },
     kaigi::{
-        KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
-        KaigiRelayRegistration, NewKaigi, scalar::KaigiAuthorizationScalarV1,
+        KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
+        scalar::KaigiAuthorizationScalarV1,
     },
-    ministry::AgendaProposalV1,
     nexus::{
         AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, LaneRelayEnvelope, TouchManifest,
         compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
     },
-    nft::{NewNft, Nft, NftId},
-    oracle::KeyedHash,
-    parameter::{CustomParameter, Parameter},
-    peer::Peer,
-    permission::Permission,
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
         PrivacyCompiledProfileCatalogV1, PrivacyExact12CapabilityManifestV1, PrivacyProtocolIdV1,
         validate_privacy_capability_archive_v1,
     },
     proof::{ProofAttachment, ProofAttachmentList},
-    role::{NewRole, Role, RoleId},
-    rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
-    smart_contract::{ContractAddress, manifest::ContractManifest},
+    rwa::{NewRwa, RwaParentRef},
+    smart_contract::ContractAddress,
     sorafs::orderbook_submission::{
         parse_sorafs_orderbook_cancel_reason_v1, parse_sorafs_orderbook_decimal_u64_v1,
         parse_sorafs_orderbook_fee_bps_v1, parse_sorafs_orderbook_payload_kind_v1,
@@ -142,15 +106,13 @@ use iroha_data_model::{
         signed::{SignedTransaction, TransactionBuilder},
     },
     trigger::{
-        Trigger, TriggerId,
+        Trigger,
         action::{Action, Repeats},
     },
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_storage_client::da::{
     DaProofConfig as IrohaDaProofConfig,
@@ -161,7 +123,6 @@ use std::{
     convert::{TryFrom, TryInto},
     fmt, fs,
     num::{NonZeroU32, NonZeroU64},
-    panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     ptr,
     str::FromStr,

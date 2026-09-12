@@ -1,5 +1,5 @@
 use super::{
-    BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage, SumeragiHandle,
+    BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage,
     authenticated_peer_for_test, fair_v2_ingress_is_certified_body_request,
     fair_v2_ingress_same_control_slot, test_sumeragi_handle,
     test_sumeragi_handle_with_source_geometry,

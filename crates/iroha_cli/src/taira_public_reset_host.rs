@@ -22735,8 +22735,13 @@ time.sleep(30)
         validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Basic)
             .expect("exact doctor report");
 
-        validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Full)
-            .expect_err("basic report must not satisfy full qualification");
+        let error =
+            validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Full)
+                .expect_err("basic report must not satisfy full qualification");
+        assert_eq!(
+            error.to_string(),
+            "Taira doctor report scope does not match signed qualification"
+        );
         let mut sparse = canonical.clone();
         sparse
             .as_object_mut()

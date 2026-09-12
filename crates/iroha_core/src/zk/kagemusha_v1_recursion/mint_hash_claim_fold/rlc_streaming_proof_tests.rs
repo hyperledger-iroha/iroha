@@ -6,7 +6,6 @@ mod proof_tests {
         plonk::{create_proof, keygen_pk2, keygen_vk_custom, verify_proof},
         poly::{
             VerificationStrategy as _,
-            commitment::ParamsProver as _,
             ipa::{
                 commitment::IPACommitmentScheme,
                 multiopen::{ProverIPA, VerifierIPA},

@@ -1,13 +1,10 @@
 //! Fault-injection smoke coverage for the custom data-model sample crate.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_data_model::{Level, prelude::*};
-use iroha_model_base::name::Name;
-use std::str::FromStr;
 const OVERLAY_KEY: &str = "fault_injection_overlay";
 fn overlay_entries(tx: &SignedTransaction) -> Vec<String> {
-    let key = Name::from_str(OVERLAY_KEY).expect("valid metadata key");
     tx.metadata()
-        .get(&key)
+        .get(OVERLAY_KEY)
         .cloned()
         .and_then(|value| value.try_into_any_norito::<Vec<String>>().ok())
         .unwrap_or_default()
