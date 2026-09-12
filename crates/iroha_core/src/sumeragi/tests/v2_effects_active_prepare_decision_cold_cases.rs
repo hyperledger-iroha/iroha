@@ -643,10 +643,9 @@ fn recover_stale_prepare_decision_crash_fixture(
                 .expect("release the initial recovered request's physical output occurrence");
             let wal_before_retry = std::fs::read(&wal_path).expect("recovered Decision WAL");
             next_timer += executor.runtime.retransmit_interval();
-            assert_eq!(
-                step_recovered_periodic_timer(executor, services, next_timer).non_validate_class(),
-                Some(RuntimeEffectClassV1::FetchBody),
-            );
+            let retry = step_recovered_periodic_timer(owner, executor, services, next_timer);
+            assert_eq!(retry.effect_count(), retry.broadcast_count() + 1);
+            assert_eq!(retry.store_count() + retry.validate_count(), 0);
             crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
                 executor, services,
             )
@@ -717,7 +716,7 @@ fn recover_stale_prepare_decision_crash_fixture(
     );
     assert_eq!(queued_fetch.active(), 0);
     assert_eq!(queued_fetch.completion_pending(), 0);
-    launched.with_proposal_restart_fixture_for_test(|_owner, executor, services| {
+    launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
         let owner_before = executor.recovered_decision_fetch_owner_for_test();
         assert!(owner_before.is_some());
         assert!(
@@ -737,10 +736,9 @@ fn recover_stale_prepare_decision_crash_fixture(
                 .expect("an unrelated control escape preserves the claimed Fetch"),
             EffectExecutorStep::Idle
         );
-        assert_eq!(
-            step_recovered_periodic_timer(executor, services, next_timer).non_validate_class(),
-            Some(RuntimeEffectClassV1::FetchBody),
-        );
+        let retry = step_recovered_periodic_timer(owner, executor, services, next_timer);
+        assert_eq!(retry.effect_count(), retry.broadcast_count() + 1);
+        assert_eq!(retry.store_count() + retry.validate_count(), 0);
         crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
             executor, services,
         )
@@ -761,8 +759,14 @@ fn recover_stale_prepare_decision_crash_fixture(
     assert_eq!(after_claimed_timer.command_depth(), 1);
     planner_io.execute_one_recovered_decision_fetch_for_test(Arc::clone(&output_guard));
     launched.settle_decision_fetch_worker_for_test();
-    launched.with_proposal_restart_fixture_for_test(|_owner, executor, services| {
-        assert_recovered_body_publication_timer(executor, services, &mut next_timer);
+    launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+        assert_recovered_body_publication_timer(
+            owner,
+            executor,
+            services,
+            &mut next_timer,
+            LifecycleWorkClass::Store,
+        );
     });
     let settled_fetch = planner_io.lifecycle_validate_io_snapshot();
     assert_eq!(settled_fetch.command_depth(), 0);
@@ -797,9 +801,11 @@ fn recover_stale_prepare_decision_crash_fixture(
     };
     assert!(store > fetch && validate > store);
     assert_recovered_body_publication_timer(
+        &mut fixture.owner,
         &mut fixture.transport.executor,
         &mut fixture.services,
         &mut next_timer,
+        LifecycleWorkClass::Validate,
     );
     fixture
         .owner
@@ -815,9 +821,11 @@ fn recover_stale_prepare_decision_crash_fixture(
 // Published Store/Validate markers must retain their sole physical lineage
 // when the same recovered Decision is rediscovered by a live periodic turn.
 fn assert_recovered_body_publication_timer(
+    owner: &mut ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     services: &mut ProductionV2Services,
     next_timer: &mut Instant,
+    stage: LifecycleWorkClass,
 ) {
     assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
     let ownership = |executor: &V2EffectExecutor<SerializedV2Runtime>| {
@@ -836,8 +844,22 @@ fn assert_recovered_body_publication_timer(
     };
     let before = ownership(executor);
     *next_timer += executor.runtime.retransmit_interval();
-    let observation = step_recovered_periodic_timer(executor, services, *next_timer);
-    assert_eq!(observation.store_count() + observation.validate_count(), 1);
+    let observation = step_recovered_periodic_timer(owner, executor, services, *next_timer);
+    assert_eq!(
+        observation.effect_count(),
+        observation.broadcast_count() + 1
+    );
+    match stage {
+        LifecycleWorkClass::Store => {
+            assert_eq!(observation.store_count(), 1);
+            assert_eq!(observation.validate_count(), 0);
+        }
+        LifecycleWorkClass::Validate => {
+            assert_eq!(observation.store_count(), 0);
+            assert_eq!(observation.validate_count(), 1);
+        }
+        _ => panic!("only the published Store and Validate boundaries are exercised"),
+    }
     crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
         executor, services,
     )
@@ -855,16 +877,50 @@ fn assert_recovered_body_publication_timer(
 // Verify the actual selected periodic turn, not its position among those steps
 // or the number of effects left after exact executor-side coalescing.
 fn step_recovered_periodic_timer(
+    owner: &mut ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     services: &mut ProductionV2Services,
     now: Instant,
 ) -> RuntimeStepObservationV1 {
+    let mut periodic = None;
     let mut last = None;
-    for _ in 0..16 {
-        executor.last_runtime_step_observation = None;
-        let step = executor
-            .step(now, services)
-            .expect("drive the actual due recovery timer");
+    for _ in 0..32 {
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("release physically admitted output before the next runner turn"),
+            "the accepting fixture transport must release every admitted target"
+        );
+        let outputs = executor
+            .settle_pending_lifecycle_output_admissions(owner, services)
+            .expect("settle the prior turn's lifecycle output through its owner");
+        if outputs.requires_outer_executor_yield() {
+            continue;
+        }
+        assert!(!executor.has_pending_lifecycle_output_admissions());
+        if let Some(observation) = periodic {
+            if executor.retained_effect_batch.is_none() && executor.parked_effect_batch.is_none() {
+                return observation;
+            }
+            executor
+                .drain_retained_effect_batch(services, true)
+                .expect("dispatch the selected timer's complete retained body suffix");
+            executor
+                .consume_leader_wire_runtime_terminals(services)
+                .expect("consume the selected timer's completed runtime occurrence");
+        } else {
+            executor.last_runtime_step_observation = None;
+            let step = executor
+                .step(now, services)
+                .expect("drive the actual due recovery timer");
+            let observation = executor.last_runtime_step_observation_for_test();
+            if let Some(observation) = observation
+                && observation.selected() == Some(RuntimeSelectedOwnerKind::PeriodicTimer)
+            {
+                periodic = Some(observation);
+            }
+            last = Some((step, observation));
+        }
         crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
             executor, services,
         )
@@ -873,15 +929,8 @@ fn step_recovered_periodic_timer(
         executor
             .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
             .expect("acknowledge each exact scheduler handoff");
-        let observation = executor.last_runtime_step_observation_for_test();
-        if let Some(observation) = observation
-            && observation.selected() == Some(RuntimeSelectedOwnerKind::PeriodicTimer)
-        {
-            return observation;
-        }
-        last = Some((step, observation));
     }
-    panic!("the due periodic recovery owner did not run: {last:?}");
+    panic!("the due periodic recovery owner did not finish: {last:?}");
 }
 
 // The second crash exercises the real linked Apply producer/consumer join,
