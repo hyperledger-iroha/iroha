@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 570
+EXPECTED_REGRESSION_COUNT = 573
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 387)
+        self.assertEqual(gate.selected_regression_count(), 390)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -70,6 +70,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(len(names), len(set(names)))
         self.assertEqual(basic["core"], gate.CORE_ADMISSION_STARTUP_STAGES)
         for test in (
+            "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers",
+            "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
+            "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
             "block::valid::tests::autonomous_anchor_gas_budget_enforces_complete_source_before_anchoring",
             "sumeragi::v2_lane_work::tests::autonomous_full_block_gas_call_reserves_with_idle_catalog_route",
             "state::tests::autonomous_full_gas_sources_share_one_merge_budget_before_execution",

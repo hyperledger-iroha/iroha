@@ -19,8 +19,10 @@ No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
 after durable publication. Failed captures, outputs and Cargo caches remain intact.
-Unrelated worktree edits are excluded; the executing controller sources must
-match the selected signed commit on both fresh preparation and resume.
+The explicit --expected-commit selects immutable Git objects on both fresh
+preparation and resume; unrelated HEAD advancement and worktree edits are excluded.
+The active repository must remain on optimizations, and the executing controller
+sources must match the selected signed commit.
 """
 
 from __future__ import annotations
@@ -120,24 +122,6 @@ def git(root: Path, *args: str) -> bytes:
                             env=child_environment(dict(os.environ), root / "target"))
     require(result.returncode == 0, "git " + args[0] + " failed")
     return result.stdout.strip()
-
-
-def verify_checkout(root: Path, commit: str, expected_signer: str) -> str:
-    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None,
-            "expected commit must be a full lowercase Git object ID")
-    require(re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64}|SHA256:[A-Za-z0-9+/]{43})", expected_signer) is not None,
-            "expected signer must be a full signing-key fingerprint")
-    require(git(root, "rev-parse", "--show-toplevel") == os.fsencode(root),
-            "repository root does not match the checkout")
-    require(git(root, "branch", "--show-current") == b"optimizations",
-            "Taira preparation requires optimizations")
-    require(git(root, "rev-parse", "HEAD").decode() == commit,
-            "HEAD differs from the expected commit")
-    git(root, "verify-commit", commit)
-    require(git(root, "show", "--no-patch", "--format=%GF", commit).decode() == expected_signer,
-            "commit signature does not match the expected signer")
-    verify_controller_sources(root, commit)
-    return git(root, "rev-parse", commit + "^{tree}").decode()
 
 
 def file_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -305,10 +289,15 @@ def signed_source_size(root: Path, commit: str, entries: bytes) -> int:
 
 
 def verify_signed_source(root: Path, commit: str, signer: str) -> str:
-    require(git(root, "rev-parse", "--show-toplevel") == os.fsencode(root)
-            and git(root, "branch", "--show-current") == b"optimizations",
-            "Taira preparation requires the selected optimizations repository")
-    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "invalid source commit")
+    """Authenticate the explicitly selected Git source for fresh and resumed builds."""
+    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None,
+            "expected commit must be a full lowercase Git object ID")
+    require(re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64}|SHA256:[A-Za-z0-9+/]{43})", signer) is not None,
+            "expected signer must be a full signing-key fingerprint")
+    require(git(root, "rev-parse", "--show-toplevel") == os.fsencode(root),
+            "repository root does not match the checkout")
+    require(git(root, "branch", "--show-current") == b"optimizations",
+            "Taira preparation requires optimizations")
     git(root, "verify-commit", commit)
     require(git(root, "show", "--no-patch", "--format=%GF", commit).decode() == signer,
             "commit signature does not match the expected signer")
@@ -933,8 +922,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         require(output.is_relative_to(root / "target"), "repository outputs must stay under target/")
     require(output != target_dir and not target_dir.is_relative_to(output),
             "output-dir must not contain the Cargo lane")
-    tree = (verify_checkout(root, args.expected_commit, args.expected_signer) if fresh
-            else verify_signed_source(root, args.expected_commit, args.expected_signer))
+    tree = verify_signed_source(root, args.expected_commit, args.expected_signer)
     entries = commit_entries(root, args.expected_commit)
     if fresh:
         capacity_preflight([(target_dir, signed_source_size(root, args.expected_commit, entries),

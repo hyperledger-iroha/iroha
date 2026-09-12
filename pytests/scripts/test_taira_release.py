@@ -77,7 +77,6 @@ class TairaPrepareTests(unittest.TestCase):
         def wrapped_build(*args, **kwargs):
             return (build or default_build)(*args)
         with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, source_lane_fd))), \
-             patch.object(release, "verify_checkout", return_value="b" * 40), \
              patch.object(release, "source_snapshot", return_value=[]), \
              patch.object(release, "verify_signed_source", return_value="b" * 40), \
              patch.object(release, "commit_entries", return_value=b""), \
@@ -310,7 +309,6 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_low_space_stops_before_output_or_native_gate(self):
         with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, 88))), \
-             patch.object(release, "verify_checkout", return_value="b" * 40), \
              patch.object(release, "source_snapshot", return_value=[]), \
              patch.object(release, "verify_signed_source", return_value="b" * 40), \
              patch.object(release, "commit_entries", return_value=b""), \
@@ -457,36 +455,51 @@ class TairaPrepareTests(unittest.TestCase):
                 release.run_build(self.root, ["fixture"], {}, log)
         self.assertEqual(log.read_bytes(), b"error: fixture compiler failure\n")
 
-    def test_unsigned_wrong_branch_or_wrong_commit_checkout_is_rejected(self):
-        def response(*args):
-            if args[1:] == ("rev-parse", "--show-toplevel"):
-                return os.fsencode(self.root)
-            if args[1:] == ("branch", "--show-current"):
-                return b"optimizations"
-            if args[1:] == ("rev-parse", "HEAD"):
-                return self.args.expected_commit.encode()
-            if args[1:] == ("rev-parse", self.args.expected_commit + "^{tree}"):
-                return b"b" * 40
-            if args[1:] == ("show", "--no-patch", "--format=%GF", self.args.expected_commit):
-                return self.args.expected_signer.encode()
-            return b""
-        failures = [("branch", b"other"),
-                    ("rev-parse", b"c" * 40), ("verify-commit", None), ("show", b"B" * 40)]
+    def test_unsigned_wrong_repository_branch_or_signer_source_is_rejected(self):
+        def response(_root, *args):
+            responses = {
+                ("rev-parse", "--show-toplevel"): os.fsencode(self.root),
+                ("branch", "--show-current"): b"optimizations",
+                ("verify-commit", self.args.expected_commit): b"",
+                ("rev-parse", self.args.expected_commit + "^{tree}"): b"b" * 40,
+                ("show", "--no-patch", "--format=%GF", self.args.expected_commit): self.args.expected_signer.encode(),
+            }
+            self.assertIn(args, responses, "source selection must never consult mutable HEAD")
+            return responses[args]
+        failures = [(("rev-parse", "--show-toplevel"), b"/wrong/repository"),
+                    (("branch", "--show-current"), b"other"),
+                    (("verify-commit", self.args.expected_commit), None),
+                    (("show", "--no-patch", "--format=%GF", self.args.expected_commit), b"B" * 40)]
         for command, result in failures:
-            def failed(*args):
-                if args[1] == command and args[2:] != ("--show-toplevel",):
+            def failed(root, *args):
+                if args == command:
                     if result is None:
                         raise release.PrepareError("signature verification failed")
                     return result
-                return response(*args)
+                return response(root, *args)
             with self.subTest(command=command), patch.object(release, "git", side_effect=failed), \
-                 patch.object(release, "verify_controller_sources"):
+                 patch.object(release, "verify_controller_sources") as controller:
                 with self.assertRaises(release.PrepareError):
-                    release.verify_checkout(self.root, self.args.expected_commit, self.args.expected_signer)
+                    release.verify_signed_source(self.root, self.args.expected_commit, self.args.expected_signer)
+                controller.assert_not_called()
         with patch.object(release, "git", side_effect=response), \
              patch.object(release, "verify_controller_sources") as controller:
-            self.assertEqual(release.verify_checkout(self.root, self.args.expected_commit, self.args.expected_signer), "b" * 40)
+            self.assertEqual(release.verify_signed_source(self.root, self.args.expected_commit, self.args.expected_signer), "b" * 40)
             controller.assert_called_once_with(self.root, self.args.expected_commit)
+
+    def test_selected_source_requires_full_commit_and_signer_before_git_reads(self):
+        invalid = [(commit, self.args.expected_signer)
+                   for commit in ("HEAD", "a" * 39, "A" * 40, "a" * 40 + "^{commit}")]
+        invalid += [(self.args.expected_commit, signer)
+                    for signer in ("", "a" * 40, "A" * 39, "SHA256:short")]
+        for commit, signer in invalid:
+            with self.subTest(commit=commit, signer=signer), \
+                 patch.object(release, "git") as git, \
+                 patch.object(release, "verify_controller_sources") as controller:
+                with self.assertRaises(release.PrepareError):
+                    release.verify_signed_source(self.root, commit, signer)
+                git.assert_not_called()
+                controller.assert_not_called()
 
     def test_snapshot_supports_empty_tracked_files_without_reading_untracked_inputs(self):
         (self.root / "empty").touch()
@@ -602,9 +615,15 @@ class TairaPrepareTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             return release.prepare(self.args)
 
-    def test_prepare_captures_signed_objects_and_preserves_unrelated_staged_unstaged_untracked_work(self):
+    def test_fresh_prepare_selects_signed_objects_before_unrelated_head_and_worktree_changes(self):
         commit, files = self.controller_fixture()
         source = self.root / "source.rs"
+        source.write_bytes(b"unrelated later committed input\n")
+        later_only = self.root / "later-only.rs"
+        later_only.write_bytes(b"input absent from selected commit\n")
+        self.fixture_git("add", "--", source.name, later_only.name)
+        advanced = self.commit_controller_fixture("unrelated HEAD before fresh preparation")
+        self.assertNotEqual(advanced, commit)
         source.write_bytes(b"unrelated staged edit\n")
         self.fixture_git("add", "--", source.name)
         source.write_bytes(b"unrelated unstaged edit after staging\n")
@@ -620,9 +639,12 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertEqual(kwargs["source_commit"], commit)
             self.assertEqual((root / "source.rs").read_bytes(), files["source.rs"])
             self.assertFalse((root / untracked.name).exists())
+            self.assertFalse((root / later_only.name).exists())
         result = self.prepare_controller_fixture(commit, check=check)
         self.assertEqual(observed, [Path(result["source_root"])])
         self.assertEqual(result["commit"], commit)
+        self.assertEqual(result["tree"], self.fixture_git("rev-parse", commit + "^{tree}").decode())
+        self.assertEqual(self.fixture_git("rev-parse", "HEAD").decode(), advanced)
         self.assertEqual((self.root / ".git/index").read_bytes(), before_index)
         self.assertEqual({path: (path.read_bytes(), release.file_identity(path.lstat()))
                           for path in before}, before)
@@ -670,8 +692,6 @@ class TairaPrepareTests(unittest.TestCase):
         with self.fixture_signature(commit), patch.object(release, "verify_controller_module_origins"):
             self.assertEqual(release.verify_signed_source(self.root, commit, self.args.expected_signer),
                              self.fixture_git("rev-parse", commit + "^{tree}").decode())
-            with self.assertRaisesRegex(release.PrepareError, "HEAD"):
-                release.verify_checkout(self.root, commit, self.args.expected_signer)
             relative = "scripts/taira_cargo_cache.py"
             (self.root / relative).write_bytes(files[relative] + b"later controller change\n")
             self.fixture_git("add", "--", relative)

@@ -1714,6 +1714,21 @@ fn validate_frozen_ownership_outside_state(
     geometry: &FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     selector_occurrences: &BTreeMap<u64, FairIngressSelectorOccurrence>,
 ) -> Result<(), FairIngressQueueCutError> {
+    // One bounded pass may project each peer thousands of times across the
+    // snapshot/live copies. Reuse only canonical identity bytes within this
+    // pass; every ownership and independent-carrier check still runs below.
+    let mut peer_encodings = super::super::FairV2IngressPeerIdentityEncodings::default();
+    validate_frozen_ownership_with_peer_encodings(
+        geometry,
+        selector_occurrences,
+        &mut peer_encodings,
+    )
+}
+fn validate_frozen_ownership_with_peer_encodings(
+    geometry: &FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
+    selector_occurrences: &BTreeMap<u64, FairIngressSelectorOccurrence>,
+    peer_encodings: &mut super::super::FairV2IngressPeerIdentityEncodings,
+) -> Result<(), FairIngressQueueCutError> {
     for occurrence in geometry.lanes.values().flat_map(|lane| lane.iter()) {
         let ordinal = occurrence.physical_admission_ordinal;
         let frozen = &occurrence.value;
@@ -1727,7 +1742,8 @@ fn validate_frozen_ownership_outside_state(
         let snapshot = frozen.ownership_snapshot.as_ref();
         if !snapshot.validate_exact()
             || !live.validate_exact()
-            || snapshot.process_local_projection_hash() != live.process_local_projection_hash()
+            || snapshot.process_local_projection_hash_with_peer_encodings(peer_encodings)
+                != live.process_local_projection_hash_with_peer_encodings(peer_encodings)
             || !live.matches_message(inbound.message())
             || !live.matches_semantic_origin(inbound.sender())
             || !live.matches_reply_routes(inbound.reply_routes())
@@ -2257,6 +2273,124 @@ mod tests {
             Err(FairIngressQueueCutError::MissingTarget)
         );
     }
+    #[test]
+    fn frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers() {
+        const HEIGHT: wire::Height = 41;
+        const REQUESTS_PER_PEER: u8 = 32;
+        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"lifecycle-ingress-peer-encoding-work",
+        )));
+        let peers = (0..4)
+            .map(|_| PeerId::from(KeyPair::random().public_key().clone()))
+            .collect::<Vec<_>>();
+        let ingress = FairV2Ingress::new(256, 8 * 1024 * 1024, 2 * 1024 * 1024, 0, 0);
+        ingress
+            .configure_roster(peers.clone())
+            .expect("four validator lanes fit the queue");
+        ingress.state.lock().leader_wire_context = Some((context_id, HEIGHT));
+        ingress.open().expect("open many-row ingress");
+        for peer in &peers {
+            for signature_byte in 0..REQUESTS_PER_PEER {
+                assert!(matches!(
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                        commit_certificate_request(context_id, HEIGHT, peer, signature_byte),
+                        peer.clone(),
+                    )),
+                    Ok(FairV2IngressPushDisposition::Enqueued)
+                ));
+            }
+        }
+        let cut = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("validate and capture the many-row queue")
+            .expect("the queued requests remain selectable");
+        assert_eq!(cut.selector_occurrences.len(), 128);
+        let mut encodings = super::super::super::FairV2IngressPeerIdentityEncodings::default();
+        validate_frozen_ownership_with_peer_encodings(
+            &cut.geometry,
+            &cut.selector_occurrences,
+            &mut encodings,
+        )
+        .expect("all independent ownership checks pass");
+        assert_eq!(
+            encodings.encoded_peers.len(),
+            peers.len(),
+            "128 rows and both ownership copies encode each exact peer only once"
+        );
+        for occurrence in cut.geometry.lanes.values().flatten() {
+            let snapshot = occurrence.value.ownership_snapshot.as_ref();
+            assert_eq!(
+                snapshot.process_local_projection_hash_with_peer_encodings(&mut encodings),
+                snapshot.process_local_projection_hash(),
+                "memoized identity bytes must preserve the complete direct projection"
+            );
+        }
+        assert_eq!(encodings.encoded_peers.len(), peers.len());
+        assert_eq!(
+            ingress.len(),
+            128,
+            "validation does not dequeue any request"
+        );
+    }
+
+    #[test]
+    fn cached_peer_encodings_preserve_forged_history_and_sender_rejection() {
+        let (ingress, _context, _peer, _message, _ordinal) = single_commit_request_ingress(73);
+        let mut cut = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("capture exact ownership")
+            .expect("one request is queued");
+        let mut encodings = super::super::super::FairV2IngressPeerIdentityEncodings::default();
+        validate_frozen_ownership_with_peer_encodings(
+            &cut.geometry,
+            &cut.selector_occurrences,
+            &mut encodings,
+        )
+        .expect("prime canonical peer bytes with valid ownership");
+        let mut forged_geometry = cut.geometry.clone();
+        let occurrence = forged_geometry
+            .lanes
+            .values_mut()
+            .flatten()
+            .next()
+            .expect("one frozen occurrence");
+        let forged = Arc::make_mut(&mut occurrence.value.ownership_snapshot);
+        for history in [&mut forged.first, &mut forged.latest] {
+            history.resource_before.message_capacity += 1;
+            history.resource_after.message_capacity += 1;
+        }
+        assert!(
+            forged.validate_exact(),
+            "the altered history is individually valid"
+        );
+        assert_eq!(
+            validate_frozen_ownership_with_peer_encodings(
+                &forged_geometry,
+                &cut.selector_occurrences,
+                &mut encodings,
+            ),
+            Err(FairIngressQueueCutError::InvalidOccurrenceIdentity),
+            "cached peer bytes cannot hide a changed ownership projection"
+        );
+        let selector = cut
+            .selector_occurrences
+            .values_mut()
+            .next()
+            .expect("one independent inbound carrier");
+        Arc::make_mut(&mut selector.inbound).sender =
+            PeerId::from(KeyPair::random().public_key().clone());
+        assert_eq!(
+            validate_frozen_ownership_with_peer_encodings(
+                &cut.geometry,
+                &cut.selector_occurrences,
+                &mut encodings,
+            ),
+            Err(FairIngressQueueCutError::InvalidOccurrenceIdentity),
+            "equal ownership projections cannot bypass the independent sender check"
+        );
+        assert_eq!(ingress.len(), 1, "rejection preserves the queued request");
+    }
+
     #[test]
     fn rejects_missing_foreign_and_duplicate_queue_rows() {
         let missing = freeze_geometry(

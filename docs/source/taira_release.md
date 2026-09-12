@@ -9,7 +9,7 @@ Run only the early native gate:
 
     python3 scripts/taira_release.py check
 
-Prepare binaries from the exact signed HEAD on optimizations:
+Prepare binaries from an explicitly selected signed commit in the optimizations repository:
 
     python3 scripts/taira_release.py prepare \
       --expected-commit FULL_SIGNED_COMMIT \
@@ -34,9 +34,13 @@ into the build. Gitlinks retain their signed mode and commit in the capture and
 remain empty there; worktree submodule contents are excluded. There are no
 embedded tool digests or release-number-specific paths to update.
 
-Before fresh preparation starts, the optimizations HEAD, its signature and the
-controller sources are checked.
-The command then reads that commit's Git objects into a private, read-only source
+Fresh preparation and resume use the same source admission: the selected repository
+must be on `optimizations`, and `--expected-commit` must name the exact signed Git
+commit with the supplied full signer fingerprint and matching controller sources.
+The selected commit can differ from HEAD, so unrelated commits already made on
+`optimizations` do not enter a new build. The command does not move HEAD, modify
+the index, or require another checkout.
+It reads the selected commit's Git objects into a private, read-only source
 capture under the selected Cargo target's `taira-release-sources/`. It creates no Git repository,
 worktree or branch. Both native checks and the Linux build consume this capture;
 One explicit `source/target` binding points to the selected existing warm Cargo
@@ -47,10 +51,11 @@ recorded separately as `source_output_target`. Every signed source path remains
 read-only. Subsequent
 checkout edits, merges or HEAD changes cannot mix source versions into
 the build. Native test selection is loaded from the captured gate helper, including
-a resumed check after the checkout has changed. Resume authenticates the recorded
-commit, the controller files against that commit, and the captured bytes. Unrelated
-HEAD advancement is allowed on optimizations; changes to controller files require
-a new preparation for their signed commit.
+a resumed check after the checkout has changed. Resume additionally authenticates
+the recorded request and captured bytes. Unrelated HEAD advancement is allowed
+before fresh preparation and resume; a different branch, signer, or executing
+controller is rejected before source capture. Changes to controller files require
+a preparation selecting the signed commit containing those exact controller files.
 
 Each selected warm Cargo lane has one stable source path. A lane-wide lock covers
 capture refresh, native checks, Linux compilation and artifact capture, including
