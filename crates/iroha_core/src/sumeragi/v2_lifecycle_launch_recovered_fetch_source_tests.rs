@@ -349,8 +349,22 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
             ".reconcile_decided_lane_certified_serve(&mut active_runner, permit)",
             "activated.with_runner_runtime(",
             "producer_claim.permits_decided_lane_recovery_ingress()",
+        ],
+    );
+    // The Validate-sidecar pacemaker branch has its own decided recovery permit
+    // and drain. Apply ordering must be checked within the Apply-owned branch.
+    let apply_recovery = source_region(
+        barrier,
+        "if producer_claim.permits_decided_lane_recovery_ingress() {",
+        "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
+    );
+    assert_source_tokens_in_order(
+        apply_recovery,
+        &[
+            ".decided_lane_recovery_permit()",
             "settle_apply_barrier_runner_decision_handoff(",
             "reconcile_terminal_lane_output_handoffs(",
+            "if producer_claim.permits_open_decided_lane_recovery_ingress() {",
             "drain_decided_lane_recovery_ingress(",
         ],
     );

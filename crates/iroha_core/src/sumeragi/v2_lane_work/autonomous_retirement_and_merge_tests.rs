@@ -2683,7 +2683,7 @@ fn quorate_merge_persistence_failure_latches_restart_required() {
 }
 #[test]
 fn merge_signature_state_is_bound_to_the_active_global_view() {
-    let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+    let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
     let stale_digest = Hash::new(b"stale merge claim");
     adapter.merge_claims.insert((7, 0, 0), stale_digest);
     adapter

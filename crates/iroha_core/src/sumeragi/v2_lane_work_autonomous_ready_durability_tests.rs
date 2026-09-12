@@ -2155,6 +2155,9 @@ fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() 
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
     prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    adapter
+        .retain_merge_sidecars_for_global_view(0, None, None)
+        .expect("install the runner's exact unlocked candidate view");
     assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
     let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
     let journal_path = journal_dir.path().join("lane-reservations.norito");
@@ -5889,10 +5892,12 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
 }
 #[test]
 fn repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligible() {
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (mut adapter, _) = native_multilane_signing_fixture();
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
-    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    adapter
+        .retain_merge_sidecars_for_global_view(0, None, None)
+        .expect("install the runner's exact unlocked candidate view");
     let transaction_key = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
         .expect("deterministic autonomous-route transaction key");
     let transaction = TransactionBuilder::new(
@@ -5927,8 +5932,18 @@ fn repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligibl
 
     // QueuePlan-synchronized ownership remains autonomous even when the
     // topology exposes only one route.
-    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+    let (mut observer, keys) =
+        observer_fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    enable_single_custom_lane_nexus(&mut observer, &keys, lane_id, dataspace_id);
+    let context = observer.context.clone();
+    let restart = LaneAdapterRestartParts::capture(&observer);
+    drop(observer);
+    let mut adapter = restart
+        .reopen_isolated(context, true)
+        .expect("open voting journals after freezing the single-route authority");
+    adapter
+        .retain_merge_sidecars_for_global_view(0, None, None)
+        .expect("install the runner's exact unlocked single-route candidate view");
     let transaction_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
         .expect("deterministic single-lane QueuePlan transaction key");
     let transaction = TransactionBuilder::new(
