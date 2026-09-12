@@ -593,6 +593,7 @@ fn recover_stale_prepare_decision_crash_fixture(
             Arc::clone(&output_guard),
             Arc::clone(&ingress),
         );
+    let mut next_timer = now;
     let request_hash =
         launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
             assert_eq!(
@@ -637,6 +638,32 @@ fn recover_stale_prepare_decision_crash_fixture(
                 .recovered_decision_fetch_owner_for_test()
                 .expect("retain the exact canonical Fetch request");
             assert_eq!(key.lifecycle_ordinal(), fetch);
+            services
+                .retry_pending_exact_output()
+                .expect("release the initial recovered request's physical output occurrence");
+            let wal_before_retry = std::fs::read(&wal_path).expect("recovered Decision WAL");
+            next_timer += executor.runtime.retransmit_interval();
+            assert!(matches!(
+                executor.step(next_timer, services)
+                    .expect("ordinary periodic recovery retains the exact recovered Fetch"),
+                EffectExecutorStep::Advanced { effects } if effects > 0
+            ));
+            crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+                executor, services,
+            )
+            .expect("reconcile the actual recovered Decision after the timer");
+            let directive = executor.local_proposal_directive().unwrap();
+            executor
+                .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+                .expect("acknowledge the exact recovered Decision handoff");
+            assert_eq!(
+                executor.recovered_decision_fetch_owner_for_test(),
+                Some((key, request_hash))
+            );
+            assert!(executor.pending_fetches.is_empty());
+            assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+            assert_eq!(std::fs::read(&wal_path).unwrap(), wal_before_retry);
+            assert!(!output_guard.restart_required());
             request_hash
         });
     let mut response = wire::CertifiedBodyResponse {
@@ -691,8 +718,45 @@ fn recover_stale_prepare_decision_crash_fixture(
     );
     assert_eq!(queued_fetch.active(), 0);
     assert_eq!(queued_fetch.completion_pending(), 0);
+    launched.with_proposal_restart_fixture_for_test(|_owner, executor, services| {
+        let owner_before = executor.recovered_decision_fetch_owner_for_test();
+        assert!(owner_before.is_some());
+        assert!(
+            executor
+                .recovered_decision_fetch_retransmission_owner()
+                .unwrap()
+                .is_none(),
+            "the authenticated response already claimed the dedicated Fetch"
+        );
+        next_timer += executor.runtime.retransmit_interval();
+        assert!(matches!(
+            executor.step_pacemaker_once(next_timer, services)
+                .expect("a due timer cannot duplicate the claimed recovered Fetch"),
+            EffectExecutorStep::Advanced { effects } if effects > 0
+        ));
+        crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+            executor, services,
+        )
+        .expect("reconcile the claimed Decision after the timer");
+        let directive = executor.local_proposal_directive().unwrap();
+        executor
+            .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+            .expect("preserve the exact claimed Decision handoff");
+        assert_eq!(
+            executor.recovered_decision_fetch_owner_for_test(),
+            owner_before
+        );
+        assert!(executor.pending_fetches.is_empty());
+        assert!(!output_guard.restart_required());
+    });
+    let after_claimed_timer = planner_io.lifecycle_validate_io_snapshot();
+    assert_eq!(after_claimed_timer.physical_admissions(), 1);
+    assert_eq!(after_claimed_timer.command_depth(), 1);
     planner_io.execute_one_recovered_decision_fetch_for_test(Arc::clone(&output_guard));
     launched.settle_decision_fetch_worker_for_test();
+    launched.with_proposal_restart_fixture_for_test(|_owner, executor, services| {
+        assert_recovered_body_publication_timer(executor, services, &mut next_timer);
+    });
     let settled_fetch = planner_io.lifecycle_validate_io_snapshot();
     assert_eq!(settled_fetch.command_depth(), 0);
     assert_eq!(settled_fetch.physical_admissions(), 0);
@@ -725,6 +789,11 @@ fn recover_stale_prepare_decision_crash_fixture(
         panic!("actual current Decision Store must advance to one physical Validate")
     };
     assert!(store > fetch && validate > store);
+    assert_recovered_body_publication_timer(
+        &mut fixture.transport.executor,
+        &mut fixture.services,
+        &mut next_timer,
+    );
     fixture
         .owner
         .body_recovery_snapshot_for_test(previous_ordinal, validate);
@@ -734,6 +803,35 @@ fn recover_stale_prepare_decision_crash_fixture(
         &fixture.transport.body,
     );
     finish_current_decision_validate_and_reopen(fixture, validate);
+}
+
+// Published Store/Validate markers must retain their sole physical lineage
+// when the same recovered Decision is rediscovered by the live pacemaker.
+fn assert_recovered_body_publication_timer(
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    services: &mut ProductionV2Services,
+    next_timer: &mut Instant,
+) {
+    assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
+    let ownership = executor.body_ownership_projection();
+    *next_timer += executor.runtime.retransmit_interval();
+    assert!(matches!(
+        executor
+            .step_pacemaker_once(*next_timer, services)
+            .expect("published recovered body work must coalesce its periodic retry"),
+        EffectExecutorStep::Advanced { .. }
+    ));
+    crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+        executor, services,
+    )
+    .expect("reconcile the published recovered Decision");
+    let directive = executor.local_proposal_directive().unwrap();
+    executor
+        .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+        .expect("retain the exact published Decision handoff");
+    assert_eq!(executor.body_ownership_projection(), ownership);
+    assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
+    assert!(!executor.output_guard.restart_required());
 }
 
 // The second crash exercises the real linked Apply producer/consumer join,

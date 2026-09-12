@@ -138,6 +138,10 @@ These include bounded regressions for failure reporting and worker teardown unde
 a held lifecycle operation, plus retained-output recovery through real actor admission.
 Live Decision cleanup also exercises the shared runner reconciliation after an idle
 runtime turn, before exact acknowledgement can release the Apply fence.
+Recovered Decision Fetch checks run real periodic runtime turns before the signed
+response arrives and while its persistence is queued, then complete Store,
+Validate and the cold Apply handoff. An exact retry retains the original request
+owner; unrelated or unauthenticated work cannot claim its coordinates.
 CLI and the canonical Kagami projection checks then precede the proof, crypto,
 transport, consensus and fixture selections. Every independent failure stops
 before daemon startup. Shipping targets without selected tests provide actual

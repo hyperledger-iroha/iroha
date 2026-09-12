@@ -12424,11 +12424,45 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .to_owned(),
             ));
         }
-        if self
+        if let Some(owner) = self
             .recovered_decision_fetches
             .values()
-            .any(|owner| owner.matches_body_coordinates(round, subject))
+            .find(|owner| owner.matches_body_coordinates(round, subject))
         {
+            // Cold Decision recovery already owns this request until its
+            // response is durably stored. The live reducer can independently
+            // rediscover Missing on a periodic tick, including while that
+            // response is queued. Coalesce only the exact certified Decision;
+            // preserve its dedicated request, response claim and retry path.
+            if manifest.is_none()
+                && proposal_replay.is_none()
+                && certificate.as_ref().is_some_and(|certificate| {
+                    owner.authenticates_fetch_rediscovery(
+                        tag,
+                        round,
+                        subject,
+                        &sources,
+                        certificate,
+                    )
+                })
+                && tag == self.current_tag()
+                && self
+                    .runtime
+                    .decided_body()
+                    .map_err(EffectExecutorError::Runtime)?
+                    == certificate.as_ref().map(|certificate| {
+                        (
+                            certificate.round,
+                            certificate.proposal_round,
+                            certificate.subject,
+                            certificate.execution_commitment,
+                        )
+                    })
+            {
+                self.validated_certified_request_presence()
+                    .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
+                return Ok(());
+            }
             return Err(EffectExecutorError::Contract(
                 "body-fetch coordinates already have a recovered Decision Fetch owner".to_owned(),
             ));

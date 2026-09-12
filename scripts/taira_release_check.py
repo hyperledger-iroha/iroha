@@ -447,8 +447,6 @@ CORE_STAGES += (("resolved validation and exact application ownership", (
     "sumeragi::v2_lifecycle_coordinator::work_registry::tests::cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks",
     "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::recovered_released_decision_apply_does_not_hide_current_source_with_changed_owner",
     "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::resolved_report_owner_tracks_terminal_and_statement_not_retry_encoding",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
     "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_body_keys_distinguish_prepare_and_decision_authority",
     "sumeragi::v2_lifecycle_coordinator::ledger::lifecycle_phase_codes_round_trip_without_aliases",
     "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::decision_body_retirement_preserves_current_winner_and_rejects_future_tags",
@@ -692,6 +690,11 @@ CORE_ADMISSION_STARTUP_STAGES += (("nested failure closes admission without bloc
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("live Decision cleanup after an idle runtime turn", (
     "sumeragi::v2_effects::tests::certified_body_fence_supersession::live_idle_decision_cleanup_reconciles_runner_frontier",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("recovered Decision Fetch and periodic runtime ownership", (
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_fences_later_ordinary_body_coordinates",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart recovery", (
     "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
