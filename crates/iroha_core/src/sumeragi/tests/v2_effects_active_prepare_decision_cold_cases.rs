@@ -729,9 +729,18 @@ fn recover_stale_prepare_decision_crash_fixture(
             "the authenticated response already claimed the dedicated Fetch"
         );
         next_timer += executor.runtime.retransmit_interval();
+        // The typed pacemaker escape admits certified control/absolute
+        // timeout work, not periodic retransmission. The ordinary turn owns
+        // the due Fetch retry while persistence remains queued.
+        assert_eq!(
+            executor
+                .step_pacemaker_once(next_timer, services)
+                .expect("an unrelated control escape preserves the claimed Fetch"),
+            EffectExecutorStep::Idle
+        );
         assert!(matches!(
-            executor.step_pacemaker_once(next_timer, services)
-                .expect("a due timer cannot duplicate the claimed recovered Fetch"),
+            executor.step(next_timer, services)
+                .expect("a due periodic timer cannot duplicate the claimed recovered Fetch"),
             EffectExecutorStep::Advanced { effects } if effects > 0
         ));
         crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
@@ -806,7 +815,7 @@ fn recover_stale_prepare_decision_crash_fixture(
 }
 
 // Published Store/Validate markers must retain their sole physical lineage
-// when the same recovered Decision is rediscovered by the live pacemaker.
+// when the same recovered Decision is rediscovered by a live periodic turn.
 fn assert_recovered_body_publication_timer(
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     services: &mut ProductionV2Services,
@@ -831,7 +840,7 @@ fn assert_recovered_body_publication_timer(
     *next_timer += executor.runtime.retransmit_interval();
     assert!(matches!(
         executor
-            .step_pacemaker_once(*next_timer, services)
+            .step(*next_timer, services)
             .expect("published recovered body work must coalesce its periodic retry"),
         EffectExecutorStep::Advanced { .. }
     ));
