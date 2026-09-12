@@ -282,7 +282,9 @@ def apply_plan(args):
     guest_source = read_public(HERE / 'taira_update_guest.py')
     payload = guest_source + b'\napply_locked(' + repr(plan).encode() + b')\n'
     with (args.output / 'stdout.json').open('xb') as out, (args.output / 'stderr.log').open('xb') as err:
-        process = subprocess.run(argv, input=payload, stdout=out, stderr=err, timeout=900)
+        # Bound the complete guest operation beyond its individual preflight,
+        # stop/start, ten-minute catch-up, doctor and final observation budgets.
+        process = subprocess.run(argv, input=payload, stdout=out, stderr=err, timeout=1800)
     write_new(args.output / 'exit.json', json.dumps({'exit_code': process.returncode}).encode())
     need(process.returncode == 0, 'guest update failed; inspect owner-private attempt, never blindly reapply')
     result = json.loads(read_public(args.output / 'stdout.json'))

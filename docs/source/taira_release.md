@@ -256,6 +256,10 @@ Probe failures identify the validator, endpoint and native exit code. Process
 observations include PID, invocation and restart count so an unavailable listener
 can be distinguished from a restarted worker without exposing response bodies,
 configuration or native error output.
+Startup and catch-up share a ten-minute observation budget; the host allows
+thirty minutes for the complete bounded operation. The updater returns as soon
+as the existing common tip and all readiness checks pass. It never waits for
+empty blocks or a fixed soak period.
 
 Validate this controller without Cargo or network:
 

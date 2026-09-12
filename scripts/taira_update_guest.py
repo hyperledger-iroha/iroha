@@ -634,7 +634,9 @@ def observe_cohort(rows, before, *, after, commit, retained_tip, expected_proces
     return observations
 
 
-def wait_for_cohort(rows, before, *, after, commit, retained_tip, timeout=180):
+def wait_for_cohort(rows, before, *, after, commit, retained_tip, timeout=600):
+    # Snapshot startup and catch-up share this budget. A lagging retained peer
+    # may need hundreds of existing blocks before it can meet the common tip.
     deadline = time.monotonic() + timeout
     latest = None
     while time.monotonic() < deadline:
