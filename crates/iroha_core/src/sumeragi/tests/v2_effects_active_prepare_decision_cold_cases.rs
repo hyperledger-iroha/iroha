@@ -643,11 +643,10 @@ fn recover_stale_prepare_decision_crash_fixture(
                 .expect("release the initial recovered request's physical output occurrence");
             let wal_before_retry = std::fs::read(&wal_path).expect("recovered Decision WAL");
             next_timer += executor.runtime.retransmit_interval();
-            assert!(matches!(
-                executor.step(next_timer, services)
-                    .expect("ordinary periodic recovery retains the exact recovered Fetch"),
-                EffectExecutorStep::Advanced { effects } if effects > 0
-            ));
+            assert_eq!(
+                step_recovered_periodic_timer(executor, services, next_timer).non_validate_class(),
+                Some(RuntimeEffectClassV1::FetchBody),
+            );
             crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
                 executor, services,
             )
@@ -738,11 +737,10 @@ fn recover_stale_prepare_decision_crash_fixture(
                 .expect("an unrelated control escape preserves the claimed Fetch"),
             EffectExecutorStep::Idle
         );
-        assert!(matches!(
-            executor.step(next_timer, services)
-                .expect("a due periodic timer cannot duplicate the claimed recovered Fetch"),
-            EffectExecutorStep::Advanced { effects } if effects > 0
-        ));
+        assert_eq!(
+            step_recovered_periodic_timer(executor, services, next_timer).non_validate_class(),
+            Some(RuntimeEffectClassV1::FetchBody),
+        );
         crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
             executor, services,
         )
@@ -838,12 +836,8 @@ fn assert_recovered_body_publication_timer(
     };
     let before = ownership(executor);
     *next_timer += executor.runtime.retransmit_interval();
-    assert!(matches!(
-        executor
-            .step(*next_timer, services)
-            .expect("published recovered body work must coalesce its periodic retry"),
-        EffectExecutorStep::Advanced { .. }
-    ));
+    let observation = step_recovered_periodic_timer(executor, services, *next_timer);
+    assert_eq!(observation.store_count() + observation.validate_count(), 1);
     crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
         executor, services,
     )
@@ -855,6 +849,39 @@ fn assert_recovered_body_publication_timer(
     assert_eq!(ownership(executor), before);
     assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
     assert!(!executor.output_guard.restart_required());
+}
+
+// An ordinary step may first drain an earlier admitted ingress occurrence.
+// Verify the actual selected periodic turn, not its position among those steps
+// or the number of effects left after exact executor-side coalescing.
+fn step_recovered_periodic_timer(
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    services: &mut ProductionV2Services,
+    now: Instant,
+) -> RuntimeStepObservationV1 {
+    let mut last = None;
+    for _ in 0..16 {
+        executor.last_runtime_step_observation = None;
+        let step = executor
+            .step(now, services)
+            .expect("drive the actual due recovery timer");
+        crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+            executor, services,
+        )
+        .expect("reconcile each actual scheduler turn before continuing");
+        let directive = executor.local_proposal_directive().unwrap();
+        executor
+            .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+            .expect("acknowledge each exact scheduler handoff");
+        let observation = executor.last_runtime_step_observation_for_test();
+        if let Some(observation) = observation
+            && observation.selected() == Some(RuntimeSelectedOwnerKind::PeriodicTimer)
+        {
+            return observation;
+        }
+        last = Some((step, observation));
+    }
+    panic!("the due periodic recovery owner did not run: {last:?}");
 }
 
 // The second crash exercises the real linked Apply producer/consumer join,
