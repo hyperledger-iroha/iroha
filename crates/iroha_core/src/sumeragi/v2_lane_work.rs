@@ -4754,6 +4754,22 @@ impl V2LaneWorkAdapter {
                 }
             }
         }
+        let queue = Arc::clone(self.lane_drain_queue.as_ref().ok_or_else(|| {
+            V2LaneWorkError::InvalidContext(
+                "autonomous lane production requires the installed live queue".to_owned(),
+            )
+        })?);
+        // Pending reservation owners above must run even when ordinary FIFO is
+        // empty. New reservations need materialized or replay-owned queue work;
+        // avoid scanning every lane's durable history on an otherwise idle tick.
+        // Use active_len, not queued_len: a missing hash FIFO can still require
+        // resynchronization, and payload-less durable owners consume active capacity.
+        // A concurrent admission is picked up by the bounded next producer tick;
+        // every actual selection still revalidates its complete State/Kura plan.
+        if queue.active_len() == 0 {
+            operation.complete();
+            return Ok(());
+        }
         let mut routes = self
             .state
             .consensus_lane_routes_at_height(self.context.height)
@@ -4794,11 +4810,6 @@ impl V2LaneWorkAdapter {
                     body.intent.lane_incarnation,
                 )
             });
-        let queue = Arc::clone(self.lane_drain_queue.as_ref().ok_or_else(|| {
-            V2LaneWorkError::InvalidContext(
-                "autonomous lane production requires the installed live queue".to_owned(),
-            )
-        })?);
         for (route_index, (lane_id, dataspace_id)) in routes.into_iter().enumerate() {
             if self
                 .autonomous_production_attempted_routes
@@ -4826,6 +4837,21 @@ impl V2LaneWorkAdapter {
             if drain_route == Some((lane_id, dataspace_id, incarnation)) {
                 continue;
             }
+            // These snapshots only defer irrelevant work; they never authorize
+            // selection. New admission and authority changes are retried on the
+            // bounded next tick, with the complete planner still binding State,
+            // Kura, incarnation, predecessor and the lane-height elected author.
+            if !queue.lane_has_pending_work(lane_id, dataspace_id, incarnation) {
+                continue;
+            }
+            if let Ok(committee) = self.state.resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+                self.context.height,
+            ) && !committee.validators().contains(&self.local_peer)
+            {
+                continue;
+            }
+            // Authority errors retain the full planner's existing classification.
             let slot = match plan_autonomous_lane_reservation_slot(
                 self.state.as_ref(),
                 self.kura.as_ref(),
@@ -12712,16 +12738,16 @@ impl V2LaneWorkAdapter {
     }
     /// Authenticate one local serving decision against the QC-selected carrier.
     ///
-    /// A current-height entry is still speculative and therefore uses the live
-    /// frozen context. Once this adapter has advanced, only Kura's verified
-    /// finality and immutable retained carrier witness may select the
-    /// historical context and compact reference. The requester contributes no
-    /// height or carrier authority. A speculative current-height sidecar is
-    /// restricted to the live global roster. A finalized historical sidecar
-    /// may additionally be served to a validator in an exact governed lane
-    /// committee bound to that historical carrier, because those validators
-    /// must apply the same public global history even when their roster is
-    /// disjoint.
+    /// The live global roster may fetch a speculative current-height entry
+    /// under the frozen context. Every other requester requires Kura's verified
+    /// finality and immutable retained carrier witness, including while this
+    /// adapter is still completing that finalized height. Adapter rollover is
+    /// not finality authority: delaying the exact governed-lane corridor until
+    /// rollover can hold back peers which need the sidecar to apply the carrier.
+    /// The requester contributes no height or carrier authority. The existing
+    /// global-roster recovery corridor is unchanged. Additional governed-lane
+    /// access requires the finalized entry's complete QC-bound lane catalog;
+    /// current mutable lane membership never grants that access.
     fn authenticates_certified_merge_sidecar_service_for_requester(
         &self,
         entry: &MergeLedgerEntry,
@@ -12740,9 +12766,8 @@ impl V2LaneWorkAdapter {
         if carrier_height == 0 || carrier_height > self.context.height {
             return Ok(false);
         }
-        if carrier_height == self.context.height {
-            return Ok(requester_belongs_to(&self.context)
-                && merge_entry_has_exact_carrier_binding(&self.context, entry)
+        if carrier_height == self.context.height && requester_belongs_to(&self.context) {
+            return Ok(merge_entry_has_exact_carrier_binding(&self.context, entry)
                 && authenticate_merge_entry_for_height_context(&self.context, entry).is_ok());
         }
         let Some((header, finality, canonical_reference)) = self.consensus_storage_read(
@@ -12955,11 +12980,12 @@ impl V2LaneWorkAdapter {
         // authenticated relay/hub carrying its reply route. A peer outside the
         // live global roster receives only the bounded recovery corridor when
         // it belongs to either the exact predecessor roster or the exact
-        // historical lane authority retained by the requested entry. Reject every outsider before
-        // the transport can allocate a stream, gate, route attempt, or
-        // materialization slot. The fair materialization scheduler verifies
-        // exact historical global finality before emitting bytes, so lane
-        // validators can never fetch a speculative current-height sidecar.
+        // historical lane authority retained by the requested entry. Reject
+        // every outsider before the transport can allocate a stream, gate,
+        // route attempt, or materialization slot. The fair materialization
+        // scheduler verifies exact global finality before emitting bytes, even
+        // before local rollover, so lane validators cannot fetch a speculative
+        // current-height sidecar.
         let sender_is_current = self.frozen_roster_contains(&sender);
         if !sender_is_current {
             // Perform only bounded structural work before the single exact,

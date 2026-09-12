@@ -21,6 +21,13 @@ source manifest, signer and immutable artifact closure. Valid syntax alone does
 not establish provenance. Runtime environment variables and node configuration
 cannot replace the compiled identity.
 
+Workspace source capture discovers effective ignore policies before hashing the
+canonical Git source inventory. It skips nested policy discovery only beneath
+root directories excluded by the tracked root `.gitignore`, whose bytes remain
+bound across discovery. Local Git excludes cannot authorize this shortcut.
+Force-tracked files inside ignored directories remain in the source inventory;
+source contents are freshly hashed on every capture.
+
 Both Docker source-build definitions require matching full commits in the
 `IROHA_GIT_COMMIT_HASH` and `VERGEN_GIT_SHA` build arguments before invoking
 Cargo. `scripts/build_release_image.sh` supplies both from the already admitted

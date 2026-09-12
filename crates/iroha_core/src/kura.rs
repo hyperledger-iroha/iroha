@@ -8120,6 +8120,23 @@ impl Kura {
         index_path: &Path,
     ) -> Result<BoundProgressPair> {
         let namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+        self.open_bound_progress_pair_in_namespace(namespace)
+    }
+    /// Bind an exact pair without reopening its already held directory chain.
+    fn open_bound_progress_pair_in_namespace(
+        &self,
+        namespace: BoundProgressNamespace,
+    ) -> Result<BoundProgressPair> {
+        let data_path_owned = namespace.data_path.clone();
+        let index_path_owned = namespace.index_path.clone();
+        let data_path = data_path_owned.as_path();
+        let index_path = index_path_owned.as_path();
+        if !self.bound_progress_namespace_unchanged(&namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path.to_path_buf(),
+                "progress namespace changed before opening its exact pair",
+            ));
+        }
         let sidecar_dir = namespace
             .data_path
             .parent()
@@ -8171,6 +8188,12 @@ impl Kura {
             ));
         }
         Ok(BoundProgressPair::Present(bound))
+    }
+    fn bound_progress_pair_namespace(pair: &BoundProgressPair) -> &BoundProgressNamespace {
+        match pair {
+            BoundProgressPair::Absent(namespace) => namespace,
+            BoundProgressPair::Present(bound) => &bound.namespace,
+        }
     }
     #[expect(
         dead_code,
@@ -26511,25 +26534,138 @@ impl Kura {
         index_path: &Path,
         kind: &str,
     ) -> Result<()> {
-        let paths = [
+        #[cfg(unix)]
+        {
+            self.ensure_bound_progress_recovery_absent_with_observer(
+                namespace,
+                data_path,
+                index_path,
+                kind,
+                |_| {},
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            let paths = [
+                data_path.with_extension("norito.tmp"),
+                index_path.with_extension("index.tmp"),
+                index_path.with_extension("index.prepend.tmp"),
+                Self::bound_progress_append_build_path(index_path),
+                Self::bound_progress_append_intent_path(index_path),
+            ];
+            for path in paths {
+                if self
+                    .open_optional_bound_progress_file(namespace, &path)?
+                    .is_some()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        format!(
+                            "{kind} has unresolved recovery state; read-only startup planning cannot mutate it"
+                        ),
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+    /// Prove absence of the fixed recovery inventory through held parent handles.
+    /// The observer is a no-op in production and injects filesystem races in tests.
+    #[cfg(unix)]
+    fn ensure_bound_progress_recovery_absent_with_observer<F>(
+        &self,
+        namespace: &BoundProgressNamespace,
+        data_path: &Path,
+        index_path: &Path,
+        kind: &str,
+        mut after_lookup: F,
+    ) -> Result<()>
+    where
+        F: FnMut(usize),
+    {
+        let invalid = |path: &Path, message: &str| {
+            Self::invalid_lane_artifact_error(path.to_path_buf(), message)
+        };
+        let immediate = namespace.directories.first().ok_or_else(|| {
+            invalid(
+                data_path,
+                "bound recovery namespace has no immediate directory",
+            )
+        })?;
+        if namespace.data_path != data_path
+            || namespace.index_path != index_path
+            || data_path.parent() != Some(immediate.expected_path.as_path())
+            || index_path.parent() != Some(immediate.expected_path.as_path())
+            || !self.bound_progress_namespace_unchanged(namespace)
+        {
+            return Err(invalid(
+                data_path,
+                "bound recovery namespace differs from the exact pair",
+            ));
+        }
+        let before = secure_file_metadata::from_file(&immediate.file)
+            .map_err(|error| Error::IO(error, immediate.expected_path.clone()))?;
+        if !before.is_dir()
+            || !Self::sidecar_directory_binding_unchanged(&immediate.metadata, &before)
+        {
+            return Err(invalid(
+                data_path,
+                "bound recovery directory changed before absence scan",
+            ));
+        }
+        for (ordinal, path) in [
             data_path.with_extension("norito.tmp"),
             index_path.with_extension("index.tmp"),
             index_path.with_extension("index.prepend.tmp"),
             Self::bound_progress_append_build_path(index_path),
             Self::bound_progress_append_intent_path(index_path),
-        ];
-        for path in paths {
-            if self
-                .open_optional_bound_progress_file(namespace, &path)?
-                .is_some()
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    format!(
-                        "{kind} has unresolved recovery state; read-only startup planning cannot mutate it"
-                    ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let name = path
+                .file_name()
+                .ok_or_else(|| invalid(&path, "bound recovery file has no immediate entry name"))?;
+            if path.parent() != Some(immediate.expected_path.as_path()) {
+                return Err(invalid(
+                    &path,
+                    "bound recovery file is outside its exact parent",
                 ));
             }
+            let observed =
+                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
+            after_lookup(ordinal);
+            match observed {
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => return Err(Error::IO(std::io::Error::from(error), path)),
+                Ok(metadata) => {
+                    if rustix::fs::FileType::from_raw_mode(metadata.st_mode)
+                        != rustix::fs::FileType::RegularFile
+                        || metadata.st_nlink != 1
+                    {
+                        return Err(invalid(
+                            &path,
+                            "recovery path is not a single-link regular file",
+                        ));
+                    }
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        format!(
+                            "{kind} has unresolved recovery state; read-only startup planning cannot mutate it"
+                        ),
+                    ));
+                }
+            }
+        }
+        let after = secure_file_metadata::from_file(&immediate.file)
+            .map_err(|error| Error::IO(error, immediate.expected_path.clone()))?;
+        if !Self::sidecar_directory_metadata_unchanged(&before, &after)
+            || !self.bound_progress_namespace_unchanged(namespace)
+        {
+            return Err(invalid(
+                data_path,
+                "bound recovery namespace changed during absence scan",
+            ));
         }
         Ok(())
     }
@@ -26896,7 +27032,7 @@ impl Kura {
             "certified lane frontier",
         )?;
         let frontier = self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
-        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let mut pair = self.open_bound_progress_pair_in_namespace(namespace)?;
         let Some(frontier) = frontier else {
             if let BoundProgressPair::Present(bound) = &pair
                 && (bound
@@ -26930,7 +27066,7 @@ impl Kura {
                 }
             };
             self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
-                &namespace,
+                Self::bound_progress_pair_namespace(&pair),
                 &data_path,
                 &index_path,
                 "certified lane frontier",
@@ -27041,7 +27177,7 @@ impl Kura {
             ));
         }
         self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
-            &namespace,
+            Self::bound_progress_pair_namespace(&pair),
             &data_path,
             &index_path,
             "certified lane frontier",

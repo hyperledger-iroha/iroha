@@ -959,6 +959,29 @@ fn run_lifecycle_active_height(
                             directive.tag(),
                             directive.decided_subject(),
                         )?;
+                        if let Some(_permit) = producer_claim
+                            .decided_validate_sidecar_recovery_permit(
+                                directive.decided_subject().is_some(),
+                            )
+                        {
+                            // The registered Validate owns the stored body and
+                            // its missing sidecar. Drain one exact decided
+                            // ingress occurrence without releasing that owner:
+                            // queued replica adverts and redundant body traffic
+                            // otherwise retain receive capacity needed by the
+                            // sidecar reply itself. The drain rechecks Decision
+                            // and preserves durable ingress terminal ownership.
+                            drain_decided_lane_recovery_ingress(
+                                receiver,
+                                executor,
+                                services,
+                                &mut lane_work,
+                                directive.tag().view(),
+                                kura.as_ref(),
+                                block_sync_server,
+                                DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
+                            )?;
+                        }
                     }
                     if producer_claim.permits_decided_lane_recovery_ingress() {
                         let permit =

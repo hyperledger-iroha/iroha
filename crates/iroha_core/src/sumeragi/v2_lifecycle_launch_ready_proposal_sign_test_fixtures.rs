@@ -4,6 +4,87 @@ pub(in crate::sumeragi) struct PreparedReadyLocalProposalSignIngressFixtureV1 {
 }
 
 impl LaunchedProductionLifecycleV1 {
+    /// Borrow the exact bound ingress for the registered Validate recovery regression.
+    pub(in crate::sumeragi) fn registered_validate_ingress_for_test(&self) -> Arc<FairV2Ingress> {
+        Arc::clone(&self.leader_wire_ingress_binding.ingress)
+    }
+
+    /// Bind the real four-validator recovery envelope budgets to the fixture's exact ingress gate.
+    pub(in crate::sumeragi) fn prepare_registered_validate_recovery_ingress_for_test(
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        directory: &TempDir,
+        wal_owner: [u8; 32],
+        recovery_authority: crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    ) -> PreparedReadyLocalProposalSignIngressFixtureV1 {
+        let context = executor.context();
+        let source_bytes =
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let ordinary_bytes = iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES
+            .get()
+            .checked_add(crate::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES)
+            .expect("bounded ordinary body partition");
+        let completion_bytes = source_bytes
+            .checked_sub(crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+            .and_then(|bytes| bytes.checked_sub(crate::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES))
+            .and_then(|bytes| bytes.checked_sub(ordinary_bytes))
+            .expect("disjoint source partitions");
+        let plaintext = iroha_p2p::frame_plaintext_cap(
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get(),
+        );
+        let ingress = Arc::new(FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            32, iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get(), source_bytes,
+            crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            crate::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, completion_bytes,
+            plaintext.min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get()),
+            plaintext.min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get()),
+            plaintext.min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get()),
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES.get(), None,
+        ));
+        ingress
+            .configure_roster_for_context(
+                context.roster.iter().map(|entry| entry.validator.clone()),
+                &context.network_id,
+                context.da_layout,
+            )
+            .expect("authenticate the complete recovery envelope geometry");
+        ingress.require_leader_wire_lifecycle_gate();
+        let max_chunk_count = ingress.state.lock().leader_wire_max_chunk_count;
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let capacity =
+            LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), max_chunk_count)
+                .expect("derive gate capacity from the exact configured ingress geometry");
+        let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+            &directory
+                .path()
+                .join("registered-validate-recovery-leader-wire.wal"),
+            context.id(),
+            context.height,
+            wal_owner,
+            roster,
+            capacity,
+            max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open the exact four-validator gate with the real WAL-backed authority");
+        let binding = ProductionLeaderWireIngressBindingV1::bind(
+            ingress,
+            gate,
+            restore,
+            lifecycle_ordinals,
+            context.id(),
+            context.height,
+        )
+        .expect("bind the exact recovery ingress instance");
+        PreparedReadyLocalProposalSignIngressFixtureV1 { binding }
+    }
+
     /// Prepare the isolated ingress binding before moving the live service owner.
     pub(in crate::sumeragi) fn prepare_ready_local_proposal_sign_ingress_for_test(
         executor: &V2EffectExecutor<SerializedV2Runtime>,

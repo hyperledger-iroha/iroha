@@ -3685,7 +3685,7 @@ fn registered_deferred_validate_passes_ordinary_completion_without_releasing_wai
     let handle = std::thread::Builder::new()
         .name("registered-sidecar-ordinary-completion".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(registered_deferred_validate_ordinary_completion_fixture)
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(false))
         .expect("spawn registered-sidecar Completion fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -3693,8 +3693,21 @@ fn registered_deferred_validate_passes_ordinary_completion_without_releasing_wai
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasing_wait() {
+    let handle = std::thread::Builder::new()
+        .name("registered-sidecar-decided-recovery".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true))
+        .expect("spawn registered-sidecar decided recovery fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
-fn registered_deferred_validate_ordinary_completion_fixture() {
+fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bool) {
     let marker = 0xDF;
     let (mut lane_work, keys, verified, reference, kura) =
         crate::sumeragi::v2_lane_work::tests::missing_lifecycle_sidecar_fixture_for_test();
@@ -3738,7 +3751,7 @@ fn registered_deferred_validate_ordinary_completion_fixture() {
         .clone();
     let fixture =
         durable_validate_fixture_from_material(marker, verified, manifest, canonical_wire);
-    let (mut fixture, _body_directory, body_store, _durable) =
+    let (mut fixture, _body_directory, body_store, durable) =
         durable_validate_store_fixture_from_fixture(fixture, None);
     let AdapterEffect::ValidateBody { tag, .. } = &fixture.effect else {
         unreachable!("local registered-sidecar fixture retains one Validate effect")
@@ -3763,17 +3776,19 @@ fn registered_deferred_validate_ordinary_completion_fixture() {
 
     let runtime_directory = TempDir::new().expect("temporary registered-sidecar safety WAL");
     let local_validator = fixture.verified.context().leader(0);
-    let (adapter, startup) = SumeragiV2Adapter::open(
+    let fingerprints = AdapterFingerprints {
+        node: Hash::new(b"registered-sidecar sidecar Validate node"),
+        build: Hash::new(b"registered-sidecar sidecar Validate build"),
+        config: Hash::new(b"registered-sidecar sidecar Validate config"),
+    };
+    let wal_owner = fingerprints.node.into();
+    let (mut adapter, startup) = SumeragiV2Adapter::open(
         &runtime_directory.path().join("safety.wal"),
         fixture.verified.clone(),
         Some(local_validator),
         tag.generation(),
         [marker; 32],
-        AdapterFingerprints {
-            node: Hash::new(b"registered-sidecar sidecar Validate node"),
-            build: Hash::new(b"registered-sidecar sidecar Validate build"),
-            config: Hash::new(b"registered-sidecar sidecar Validate config"),
-        },
+        fingerprints,
         DeferredAdmissionOrdinalSource::new(
             validate_ordinal
                 .checked_add(1)
@@ -3782,6 +3797,109 @@ fn registered_deferred_validate_ordinary_completion_fixture() {
     )
     .expect("open registered-sidecar sidecar Validate adapter");
     assert!(startup.is_empty());
+    if decided_recovery {
+        let mut proposal = wire::Proposal {
+            round,
+            proposer: local_validator,
+            subject,
+            manifest: fixture.manifest.clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification {
+                    certificate: fixture.verified.context().parent_commit_qc.clone(),
+                },
+            ),
+            signature: Vec::new(),
+        };
+        proposal.signature = iroha_crypto::Signature::new(
+            keys[local_validator as usize].private_key(),
+            &proposal.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let message = adapter
+            .authenticate(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ))
+            .expect(
+                "authenticate the signed body proposal against the frozen four-validator context",
+            );
+        let effects = adapter
+            .receive_authenticated(message)
+            .expect("admit exact body proposal")
+            .into_effects();
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::FetchBody { .. }]
+        ));
+        let effects = adapter
+            .body_available(tag, fixture.manifest.clone())
+            .expect("observe exact body")
+            .into_effects();
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::StoreBody { .. }]
+        ));
+        let effects = adapter
+            .body_stored(tag, round, subject, &durable)
+            .expect("join the actual durable body")
+            .into_effects();
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::ValidateBody { .. }]
+        ));
+        for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
+            let mut certificate = wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase,
+                subject,
+                execution_commitment: ValidatedBodyReceipt::for_test(durable.clone())
+                    .execution_commitment(),
+                signers: vec![0, 1, 2],
+                aggregate_signature: Vec::new(),
+            };
+            let vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase,
+                subject,
+                execution_commitment: certificate.execution_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let signatures = certificate
+                .signers
+                .iter()
+                .map(|index| {
+                    iroha_crypto::Signature::new(
+                        keys[*index as usize].private_key(),
+                        &vote.signature_preimage(),
+                    )
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate exact quorum signatures");
+            let message = adapter
+                .authenticate(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+                ))
+                .expect("authenticate the exact signed quorum certificate");
+            assert!(
+                adapter
+                    .receive_authenticated(message)
+                    .expect("persist the real Decision while Validate waits")
+                    .effects()
+                    .is_empty()
+            );
+        }
+    }
+    let recovery_authority = adapter
+        .leader_wire_recovery_authority()
+        .expect("retain authority from the actual open safety WAL before transferring its adapter");
     let started = std::time::Instant::now();
     let round_timeout = std::time::Duration::from_secs(60);
     let (runtime, startup) =
@@ -3791,7 +3909,7 @@ fn registered_deferred_validate_ordinary_completion_fixture() {
             started,
             round_timeout,
             crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
-            lifecycle_ordinals,
+            lifecycle_ordinals.clone(),
         )
         .expect("wrap registered-sidecar sidecar Validate adapter");
     assert!(startup.is_empty());
@@ -3799,7 +3917,7 @@ fn registered_deferred_validate_ordinary_completion_fixture() {
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let mut services =
         crate::sumeragi::v2_worker::tests::service_for_history_context_with_local_validator(
-            kura,
+            std::sync::Arc::clone(&kura),
             fixture.verified.context().clone(),
             &keys,
             local_validator,
@@ -3822,12 +3940,16 @@ fn registered_deferred_validate_ordinary_completion_fixture() {
         .expect("arm registered-sidecar sidecar Validate clocks after service construction");
     let binding_directory = TempDir::new().expect("temporary registered-sidecar ingress binding");
     let validator = fixture.verified.context().roster[signer].validator.clone();
-    let ingress =
+    let ingress = if decided_recovery {
+        super::super::LaunchedProductionLifecycleV1::prepare_registered_validate_recovery_ingress_for_test(
+            &executor, &binding_directory, wal_owner,
+            recovery_authority, lifecycle_ordinals.clone(),
+        )
+    } else {
         super::super::LaunchedProductionLifecycleV1::prepare_ready_local_proposal_sign_ingress_for_test(
-            &executor,
-            &binding_directory,
-            &validator,
-        );
+            &executor, &binding_directory, &validator,
+        )
+    };
     let mut launched =
         super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
             owner, executor, services, ingress,
@@ -3963,6 +4085,196 @@ fn registered_deferred_validate_ordinary_completion_fixture() {
         waiting,
         super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
     ));
+    if decided_recovery {
+        let ingress = launched.registered_validate_ingress_for_test();
+        ingress
+            .open()
+            .expect("open the already-bound exact ingress");
+        let parent_height = std::num::NonZeroUsize::new(1).expect("non-zero parent height");
+        let parent_block = kura
+            .get_block(parent_height)
+            .expect("read the receiver's exact durable parent");
+        let (parent_finality, _) = kura
+            .v2_finality_artifact_with_receipt(1)
+            .expect("authenticate the receiver's retained parent finality")
+            .expect("the durable parent has retained finality");
+        assert_eq!(parent_block.hash(), parent);
+        let (keeper_kura, advert) = parent_finality
+            .commit_qc
+            .signers
+            .iter()
+            .find_map(|index| {
+                let index = usize::try_from(*index).expect("keeper index fits usize");
+                let key = &keys[index];
+                let peer = crate::PeerId::new(key.public_key().clone());
+                assert_eq!(parent_finality.height_context.roster[index].validator, peer);
+                let publisher = crate::kura::Kura::blank_kura_for_testing();
+                publisher
+                    .bind_local_peer_id(peer)
+                    .expect("bind this independent historical publisher to its own identity");
+                publisher
+                    .store_block(std::sync::Arc::clone(&parent_block))
+                    .expect("persist the same canonical parent at the historical publisher");
+                publisher
+                    .store_v2_finality_artifact(&parent_finality)
+                    .expect("authenticate the same parent CommitQC at the historical publisher");
+                publisher
+                    .build_signed_kura_replica_advert(1, key)
+                    .expect("validate exact keeper eligibility and complete canonical body")
+                    .map(|advert| (publisher, advert))
+            })
+            .expect("the exact parent CommitQC has a deterministic keeper with its retained body");
+        let keeper = advert.keeper.clone();
+        assert!(matches!(
+            ingress.try_push(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                    crate::BlockMessage::KuraReplicaAdvert(advert),
+                    keeper,
+                )
+            ),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let mut request = wire::CommitCertificateRequest {
+            protocol_version: wire::PROTOCOL_VERSION,
+            network_id: fixture.verified.context().network_id,
+            context_id: fixture.verified.context().id(),
+            height: round.height,
+            requester: validator.clone(),
+            signature: Vec::new(),
+        };
+        request.signature =
+            iroha_crypto::Signature::new(keys[signer].private_key(), &request.signature_preimage())
+                .payload()
+                .to_vec();
+        assert!(matches!(
+            ingress.try_push(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                    crate::BlockMessage::V2(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::CommitCertificateRequest(request)
+                    )),
+                    validator.clone(),
+                )
+            ),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(ingress.len(), 2);
+        let admitted_lifecycle_ordinals = ingress
+            .state
+            .lock()
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .map(|entry| {
+                entry
+                    .ownership_snapshot
+                    .first
+                    .lifecycle_ordinal
+                    .expect("bound ingress records the shared lifecycle ordinal")
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(admitted_lifecycle_ordinals.len(), 2);
+        assert!(
+            admitted_lifecycle_ordinals
+                .iter()
+                .all(|ordinal| *ordinal > 224 && *ordinal > validate_ordinal)
+        );
+        assert_eq!(
+            lifecycle_ordinals.next_ordinal_for_test().unwrap(),
+            admitted_lifecycle_ordinals
+                .last()
+                .map(|ordinal| ordinal + 1),
+            "Runtime and ingress retain the same actor-global ordinal source"
+        );
+        let retained_after_admission =
+            launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+                assert_eq!(
+                    load_registration_for_test(&owner.coordinator)
+                        .expect("read durable wait after ingress admission")
+                        .as_ref(),
+                    Some(&registration_before)
+                );
+                (
+                    format!("{:?}", owner.coordinator),
+                    format!("{:?}", owner.registry.registry_for_test()),
+                )
+            });
+        assert_eq!(
+            retained_after_admission.1, retained_before.1,
+            "ingress admission cannot mutate the registered private work registry"
+        );
+        let claim =
+            super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
+        assert!(
+            claim
+                .decided_validate_sidecar_recovery_permit(false)
+                .is_none()
+        );
+        let local_signer = keys[signer].clone();
+        let mut block_sync =
+            crate::sumeragi::v2_block_sync::V2BlockSyncServer::new_with_historical_body_service(
+                fixture.verified.context().network_id,
+                4,
+                std::sync::Arc::clone(&kura),
+                local_signer,
+                crate::sumeragi::v2_block_sync::HistoricalBodyServeLimits::first_release(4, 4)
+                    .expect("bounded historical service"),
+            )
+            .expect("open exact recovery service");
+        let admitted_high_water = ingress.state.lock().last_admission_ordinal;
+        let wal_before = std::fs::read(runtime_directory.path().join("safety.wal"))
+            .expect("read durable Decision WAL");
+        for remaining in [1, 0] {
+            let drained = launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
+                let directive = executor.local_proposal_directive().expect("read actual executor Decision");
+                assert_eq!(directive.decided_subject(), Some(subject));
+                let _permit = claim.decided_validate_sidecar_recovery_permit(directive.decided_subject().is_some())
+                    .expect("only actual Decision opens the registered-wait recovery seam");
+                crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
+                    &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync,
+                ).expect("retire exactly one authenticated recovery occurrence")
+            });
+            assert!(drained);
+            assert_eq!(ingress.len(), remaining);
+            assert_eq!(
+                ingress.state.lock().last_admission_ordinal,
+                admitted_high_water
+            );
+            assert_eq!(claim, super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar);
+            let retained_after = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+                assert_eq!(
+                    load_registration_for_test(&owner.coordinator)
+                        .expect("read exact durable wait")
+                        .as_ref(),
+                    Some(&registration_before)
+                );
+                (
+                    format!("{:?}", owner.coordinator),
+                    format!("{:?}", owner.registry.registry_for_test()),
+                )
+            });
+            assert_eq!(
+                retained_after, retained_after_admission,
+                "recovery cannot mutate registered private work"
+            );
+            assert_eq!(
+                launched.runtime_queue_snapshot_for_ready_sign_test(started),
+                runtime_before
+            );
+            assert_eq!(
+                std::fs::read(runtime_directory.path().join("safety.wal")).unwrap(),
+                wal_before,
+                "recovery cannot step the reducer or append safety work"
+            );
+            assert!(!output_guard.restart_required());
+        }
+        assert_eq!(
+            keeper_kura
+                .canonical_block_wire_bytes_for_testing(parent_height)
+                .expect("the keeper retains its exact body through recovery"),
+            parent_block.encode_wire().expect("canonical parent wire")
+        );
+        return;
+    }
     for _ in 0..2 {
         launched
             .planner

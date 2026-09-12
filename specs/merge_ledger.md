@@ -225,6 +225,14 @@ historical committee's eligibility. Missing historical evidence fails closed;
 current authority is never a reconstruction of past authority. This historical
 read rule does not authorize stale committees to admit new financial writes.
 
+The finalized read corridor also applies when durable carrier finality exists
+at the responder's current adapter height, including before local WSV apply.
+A disjoint participant requester must pass the same canonical carrier,
+CommitQC, compact-reference, network, protocol and historical-catalog checks;
+it need not wait for that adapter to activate the successor. Speculative
+current-height service remains restricted to the exact current global roster
+and carrier binding. Future heights and missing or corrupt finality fail closed.
+
 Configuration and prospective lifecycle admission reserve the complete
 execution batch and QC before publishing lane geometry. In bytes, the bound is
 

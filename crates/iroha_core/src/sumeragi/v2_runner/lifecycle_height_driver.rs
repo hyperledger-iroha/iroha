@@ -89,8 +89,8 @@ pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
     },
     /// A queued worker or parked worker result must advance through Completion.
     AwaitingCompletion,
-    /// A registered Validate sidecar wait permits only lane transport and
-    /// sealed global pacemaker Progress to run.
+    /// A registered Validate sidecar wait permits lane transport and sealed
+    /// global pacemaker Progress, plus bounded recovery after Decision.
     AwaitingValidateSidecar,
     /// A typed Decision Apply owns the terminal barrier until Kura and LedgerV1 settle.
     AwaitingApplyCompletion,
@@ -116,9 +116,9 @@ struct LifecycleReadyProposalSignPreemptionPermitSealV1;
 
 /// Sealed authority to service only decided-lane recovery after Decision.
 ///
-/// The active runner can mint this token from either of the two Apply
-/// dispositions, or from the narrower authoritative repair proof that an
-/// `Eligible` executor is terminal and ready for rollover. Both paths keep
+/// The active runner can mint this token from a registered Validate sidecar
+/// wait with a current Decision, either Apply disposition, or the narrower
+/// proof that an `Eligible` executor is terminal and ready for rollover. These paths keep
 /// current-height certified-body service alive without reopening ordinary
 /// lifecycle admission.
 pub(in crate::sumeragi) struct LifecycleDecidedLaneRecoveryPermitV1 {
@@ -326,6 +326,25 @@ impl LifecycleProducerClaimDispositionV1 {
         if matches!(self, Self::AwaitingValidateSidecar) {
             Some(LifecycleValidateSidecarPacemakerEscapePermitV1 {
                 _seal: LifecycleValidateSidecarPacemakerEscapePermitSealV1,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Keep certified recovery ingress moving while an already stored Decision
+    /// body waits for its registered Validate sidecar.
+    ///
+    /// The caller must read Decision from the current executor after runner
+    /// reconciliation. This grants only the existing decided-ingress drain:
+    /// it neither releases Validate nor opens Runtime or finalization.
+    pub(in crate::sumeragi) const fn decided_validate_sidecar_recovery_permit(
+        self,
+        decided_subject_present: bool,
+    ) -> Option<LifecycleDecidedLaneRecoveryPermitV1> {
+        if matches!(self, Self::AwaitingValidateSidecar) && decided_subject_present {
+            Some(LifecycleDecidedLaneRecoveryPermitV1 {
+                _seal: LifecycleDecidedLaneRecoveryPermitSealV1,
             })
         } else {
             None
@@ -1927,15 +1946,42 @@ mod tests {
     }
 
     #[test]
-    fn registered_validate_sidecar_mints_only_the_pacemaker_escape_until_superseded() {
+    fn registered_validate_sidecar_recovery_preserves_the_wait_until_superseded() {
         use super::super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1 as Completion;
 
         let sidecar = LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
         assert!(sidecar.blocks_runtime());
         assert!(sidecar.validate_sidecar_pacemaker_escape_permit().is_some());
+        assert!(
+            sidecar
+                .decided_validate_sidecar_recovery_permit(false)
+                .is_none()
+        );
+        assert!(
+            sidecar
+                .decided_validate_sidecar_recovery_permit(true)
+                .is_some()
+        );
+        assert!(sidecar.blocks_runtime());
+        assert!(sidecar.terminal_finalization_cut(false, true).is_none());
         for claim in [
             LifecycleProducerClaimDispositionV1::Eligible,
             LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 1 },
+            LifecycleProducerClaimDispositionV1::AwaitingValidateFence {
+                ordinal: 1,
+                wait: super::super::super::v2_lifecycle_coordinator::wait_token_for_test(
+                    super::super::super::v2_lifecycle_coordinator::WaitSource::External(
+                        super::super::super::v2_lifecycle_coordinator::LifecycleDigest::new(
+                            [12; 32],
+                        ),
+                    ),
+                    4,
+                ),
+            },
+            LifecycleProducerClaimDispositionV1::AwaitingLiveApplyQueue {
+                parent_ordinal: 2,
+                child_ordinal: 3,
+            },
             LifecycleProducerClaimDispositionV1::AwaitingCompletion,
             LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion,
             LifecycleProducerClaimDispositionV1::ApplyTerminalSettled,
@@ -1944,6 +1990,11 @@ mod tests {
             assert!(
                 claim.validate_sidecar_pacemaker_escape_permit().is_none(),
                 "only the registered missing-sidecar barrier may service the pacemaker"
+            );
+            assert!(
+                claim
+                    .decided_validate_sidecar_recovery_permit(true)
+                    .is_none()
             );
         }
 

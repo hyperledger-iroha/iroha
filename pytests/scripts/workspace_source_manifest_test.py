@@ -353,6 +353,12 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
         check=True,
     )
     (tmp_path / "nested").mkdir()
+    # Compare against a fresh POSIX checkout's canonical permissions even when
+    # the test runner inherits an owner-only umask. The strict manifest records
+    # every permission bit; the Windows materialization uses index modes.
+    for member in (".gitignore", "tracked.txt", "Cargo.lock", "tree/payload"):
+        (tmp_path / member).chmod(0o644)
+    (tmp_path / "nested").chmod(0o755)
     subprocess.run(
         ["git", "commit", "-qm", "portable manifest fixture"],
         cwd=tmp_path,
@@ -1880,3 +1886,128 @@ def test_release_identity_detects_same_tree_head_change(tmp_path: Path) -> None:
         after["workspace_source_manifest_sha256"]
         == before["workspace_source_manifest_sha256"]
     )
+
+
+
+@pytest.mark.parametrize("directory", ["target", "cache space", "cache[1]", "cache:é"])
+def test_ignore_policy_discovery_prunes_only_literal_root_exclusions(
+    ignore_policy_repo: Path, monkeypatch, directory: str
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    escaped = directory.replace("[", "\\[").replace("]", "\\]")
+    (root / ".gitignore").write_text("/" + escaped + "/\n", encoding="utf-8")
+    path = root / directory / "nested"
+    path.mkdir(parents=True)
+    (path / ".gitignore").write_text("*\n", encoding="utf-8")
+    calls = []
+    original = module._git_paths
+    def observe(root, *args):
+        calls.append(args)
+        return original(root, *args)
+    monkeypatch.setattr(module, "_git_paths", observe)
+    assert module._git_source_paths(root) == [".gitignore", "Cargo.lock"]
+    discovery = next(args for args in calls if "--others" in args)
+    assert ":(top,exclude,literal)" + directory in discovery
+
+
+def test_ignore_policy_discovery_rejects_root_policy_change_before_filtering(
+    ignore_policy_repo: Path, monkeypatch
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / "target").mkdir()
+    (root / "target/.gitignore").write_text("*\n", encoding="utf-8")
+    original = module._git_paths
+    def change_after_discovery(root, *args):
+        result = original(root, *args)
+        if "--others" in args:
+            (root / ".gitignore").write_text("!target/\n", encoding="utf-8")
+        return result
+    monkeypatch.setattr(module, "_git_paths", change_after_discovery)
+    with pytest.raises(module.DirtyReleaseSourceError, match="root ignore policy changed"):
+        module._git_source_paths(root)
+
+
+def test_ignore_policy_discovery_does_not_prune_root_policy_from_local_excludes(
+    ignore_policy_repo: Path
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / ".gitignore").write_text("", encoding="utf-8")
+    (root / ".git/info/exclude").write_text("target/\n", encoding="utf-8")
+    (root / "target").mkdir()
+    (root / "target/.gitignore").write_text("*\n", encoding="utf-8")
+    excluded, _ = module._root_excluded_policy_directories(root)
+    assert excluded == []
+    with pytest.raises(module.DirtyReleaseSourceError, match="target/.gitignore"):
+        module._git_source_paths(root)
+
+
+
+def test_ignore_policy_discovery_keeps_force_tracked_file_and_nested_policy(
+    ignore_policy_repo: Path
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / "target").mkdir()
+    source = root / "target/tracked.rs"
+    policy = root / "target/.gitignore"
+    source.write_text("first\n", encoding="utf-8")
+    policy.write_text("*.generated\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-f", "target/tracked.rs", "target/.gitignore"], cwd=root, check=True)
+    assert {"target/tracked.rs", "target/.gitignore"}.issubset(module._git_source_paths(root))
+    before = module.workspace_source_manifest(root)
+    source.write_text("second\n", encoding="utf-8")
+    after_source = module.workspace_source_manifest(root)
+    assert after_source != before
+    policy.write_text("*\n", encoding="utf-8")
+    assert module.workspace_source_manifest(root) != after_source
+
+
+def test_ignore_policy_discovery_does_not_prune_reopened_root_directory(
+    ignore_policy_repo: Path
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / ".gitignore").write_text("target/\n!target/\n", encoding="utf-8")
+    (root / "target").mkdir()
+    (root / "target/.gitignore").write_text("*\n", encoding="utf-8")
+    excluded, _ = module._root_excluded_policy_directories(root)
+    assert excluded == []
+    with pytest.raises(module.DirtyReleaseSourceError, match="target/.gitignore"):
+        module._git_source_paths(root)
+
+
+def test_ignore_policy_discovery_does_not_trust_untracked_root_policy(
+    ignore_policy_repo: Path
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    subprocess.run(["git", "rm", "--cached", "-q", ".gitignore"], cwd=root, check=True)
+    (root / "target").mkdir()
+    (root / "target/.gitignore").write_text("*\n", encoding="utf-8")
+    assert module._root_excluded_policy_directories(root) == ([], None)
+    with pytest.raises(module.DirtyReleaseSourceError, match="untracked ignore policy.*[.]gitignore"):
+        module._git_source_paths(root)
+
+
+def test_ignore_policy_discovery_rejects_root_policy_change_during_rule_lookup(
+    ignore_policy_repo: Path, monkeypatch
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    (root / "target").mkdir()
+    (root / "target/.gitignore").write_text("*\n", encoding="utf-8")
+    original = module.subprocess.run
+    changed = []
+    def change_during_lookup(command, *args, **kwargs):
+        result = original(command, *args, **kwargs)
+        if "check-ignore" in command and not changed:
+            (root / ".gitignore").write_text("!target/\n", encoding="utf-8")
+            changed.append(True)
+        return result
+    monkeypatch.setattr(module.subprocess, "run", change_during_lookup)
+    with pytest.raises(module.DirtyReleaseSourceError, match="root ignore policy changed"):
+        module._git_source_paths(root)
+    assert changed == [True]

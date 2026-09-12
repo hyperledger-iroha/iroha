@@ -2754,7 +2754,237 @@ fn bound_progress_pair_revalidation_rejects_replaced_ancestors() {
     }
 }
 
+#[cfg(unix)]
+fn bound_progress_recovery_absence_batch_reuses_namespace() {
+    with_bound_progress_pair_fixture(|kura, bound| {
+        let data = &bound.namespace.data_path;
+        let index = &bound.namespace.index_path;
+        let original_data = fs::read(data).unwrap();
+        let original_index = fs::read(index).unwrap();
+        let paths = [
+            data.with_extension("norito.tmp"),
+            index.with_extension("index.tmp"),
+            index.with_extension("index.prepend.tmp"),
+            Kura::bound_progress_append_build_path(index),
+            Kura::bound_progress_append_intent_path(index),
+        ];
+        let old_probe = BoundPairCanonicalProbe::start();
+        for path in paths {
+            assert!(
+                kura.open_optional_bound_progress_file(&bound.namespace, &path)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let old_count = old_probe.count();
+        drop(old_probe);
+        let probe = BoundPairCanonicalProbe::start();
+        kura.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            &bound.namespace,
+            data,
+            index,
+            "absence test",
+        )
+        .unwrap();
+        assert_eq!(
+            probe.count(),
+            2,
+            "authenticate the complete namespace before and after the batch"
+        );
+        assert!(probe.count() < old_count);
+        drop(probe);
+        assert_eq!(fs::read(data).unwrap(), original_data);
+        assert_eq!(fs::read(index).unwrap(), original_index);
+    });
+}
+
+#[cfg(unix)]
+fn bound_progress_recovery_absence_batch_rejects_every_present_kind() {
+    use std::os::unix::fs::symlink;
+    for ordinal in 0..5 {
+        for kind in ["regular", "directory", "symlink", "hardlink"] {
+            with_bound_progress_pair_fixture(|kura, bound| {
+                let data = &bound.namespace.data_path;
+                let index = &bound.namespace.index_path;
+                let path = [
+                    data.with_extension("norito.tmp"),
+                    index.with_extension("index.tmp"),
+                    index.with_extension("index.prepend.tmp"),
+                    Kura::bound_progress_append_build_path(index),
+                    Kura::bound_progress_append_intent_path(index),
+                ][ordinal]
+                    .clone();
+                match kind {
+                    "regular" => fs::write(&path, b"unresolved").unwrap(),
+                    "directory" => fs::create_dir(&path).unwrap(),
+                    "symlink" => symlink(data, &path).unwrap(),
+                    "hardlink" => fs::hard_link(data, &path).unwrap(),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    kura.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                        &bound.namespace,
+                        data,
+                        index,
+                        "presence test"
+                    )
+                    .is_err(),
+                    "ordinal={ordinal}, kind={kind}"
+                );
+                if kind == "directory" {
+                    fs::remove_dir(&path).unwrap();
+                } else {
+                    fs::remove_file(&path).unwrap();
+                }
+            });
+        }
+    }
+}
+
+#[cfg(unix)]
+fn bound_progress_recovery_absence_batch_rejects_midscan_creation() {
+    for ordinal in 0..5 {
+        with_bound_progress_pair_fixture(|kura, bound| {
+            let data = &bound.namespace.data_path;
+            let index = &bound.namespace.index_path;
+            let path = [
+                data.with_extension("norito.tmp"),
+                index.with_extension("index.tmp"),
+                index.with_extension("index.prepend.tmp"),
+                Kura::bound_progress_append_build_path(index),
+                Kura::bound_progress_append_intent_path(index),
+            ][ordinal]
+                .clone();
+            let mut injected = false;
+            assert!(
+                kura.ensure_bound_progress_recovery_absent_with_observer(
+                    &bound.namespace,
+                    data,
+                    index,
+                    "creation test",
+                    |point| {
+                        if point == ordinal {
+                            fs::write(&path, b"arrived after its absent lookup").unwrap();
+                            injected = true;
+                        }
+                    }
+                )
+                .is_err(),
+                "creation after lookup {ordinal} must invalidate the whole batch"
+            );
+            assert!(injected);
+            assert_eq!(fs::read(&path).unwrap(), b"arrived after its absent lookup");
+        });
+    }
+}
+
+#[cfg(unix)]
+fn bound_progress_recovery_absence_batch_rejects_replaced_ancestors() {
+    use std::os::unix::fs::symlink;
+    for ordinal in 0..3 {
+        for point in [0, 4] {
+            for symlink_replacement in [false, true] {
+                with_bound_progress_pair_fixture(|kura, bound| {
+                    let path = bound.namespace.directories[ordinal].expected_path.clone();
+                    let displaced = path.with_extension("displaced");
+                    let mut injected = false;
+                    assert!(
+                        kura.ensure_bound_progress_recovery_absent_with_observer(
+                            &bound.namespace,
+                            &bound.namespace.data_path,
+                            &bound.namespace.index_path,
+                            "ancestor test",
+                            |observed| {
+                                if observed == point {
+                                    fs::rename(&path, &displaced).unwrap();
+                                    if symlink_replacement {
+                                        symlink(&displaced, &path).unwrap();
+                                    } else {
+                                        fs::create_dir(&path).unwrap();
+                                    }
+                                    injected = true;
+                                }
+                            }
+                        )
+                        .is_err()
+                    );
+                    assert!(injected);
+                    if symlink_replacement {
+                        fs::remove_file(&path).unwrap();
+                    } else {
+                        fs::remove_dir(&path).unwrap();
+                    }
+                    fs::rename(&displaced, &path).unwrap();
+                });
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn bound_progress_pair_open_consumes_existing_namespace() {
+    with_bound_progress_pair_fixture(|kura, bound| {
+        let data = bound.namespace.data_path.clone();
+        let index = bound.namespace.index_path.clone();
+        let old_probe = BoundPairCanonicalProbe::start();
+        let old_pair = kura.open_bound_progress_pair(&data, &index).unwrap();
+        let old_count = old_probe.count();
+        drop(old_probe);
+        let probe = BoundPairCanonicalProbe::start();
+        let pair = kura
+            .open_bound_progress_pair_in_namespace(bound.namespace)
+            .unwrap();
+        assert!(
+            probe.count() > 0 && probe.count() < old_count,
+            "reuse must retain fresh namespace checks and avoid opening the chain again"
+        );
+        drop(probe);
+        assert!(matches!(old_pair, BoundProgressPair::Present(_)));
+        assert!(matches!(pair, BoundProgressPair::Present(_)));
+        let namespace = Kura::bound_progress_pair_namespace(&pair);
+        assert_eq!(namespace.data_path, data);
+        assert_eq!(namespace.index_path, index);
+    });
+    with_bound_progress_pair_fixture(|kura, bound| {
+        let path = bound.namespace.directories[0].expected_path.clone();
+        let displaced = path.with_extension("displaced");
+        fs::rename(&path, &displaced).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(
+            kura.open_bound_progress_pair_in_namespace(bound.namespace)
+                .is_err()
+        );
+        fs::remove_dir(&path).unwrap();
+        fs::rename(&displaced, &path).unwrap();
+    });
+}
+
 mod progress_witness_durability {
+    #[cfg(unix)]
+    #[test]
+    fn bound_progress_recovery_absence_batch_reuses_namespace() {
+        super::bound_progress_recovery_absence_batch_reuses_namespace();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bound_progress_recovery_absence_batch_rejects_every_present_kind() {
+        super::bound_progress_recovery_absence_batch_rejects_every_present_kind();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bound_progress_recovery_absence_batch_rejects_midscan_creation() {
+        super::bound_progress_recovery_absence_batch_rejects_midscan_creation();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bound_progress_recovery_absence_batch_rejects_replaced_ancestors() {
+        super::bound_progress_recovery_absence_batch_rejects_replaced_ancestors();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bound_progress_pair_open_consumes_existing_namespace() {
+        super::bound_progress_pair_open_consumes_existing_namespace();
+    }
     #[cfg(unix)]
     #[test]
     fn bound_progress_pair_revalidation_reuses_authenticated_directory_handles() {
