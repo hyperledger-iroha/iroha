@@ -513,6 +513,12 @@ impl RecoveredLifecycleLocalProposalAttemptV1 {
     fn from_authenticated_durable_current_round(
         adapter: &SumeragiV2Adapter,
     ) -> Result<Option<Self>, AdapterError> {
+        // A replay-authenticated Decision owns this height even when its Fetch
+        // authority moves into the pending-Kura seal. The ProposalIntent stays
+        // durable history, but must not mint runner-local proposal ownership.
+        if adapter.reducer.durable_state().decision().is_some() {
+            return Ok(None);
+        }
         let tag = adapter.reducer.current_tag();
         let round = reducer::Round::new(tag.height(), tag.view());
         let Some(proposal) = adapter.reducer.durable_state().proposal_intent(round) else {

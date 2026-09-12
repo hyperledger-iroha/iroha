@@ -1610,18 +1610,63 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             } else {
                 (0, None, vec![WalRecordV2::Decision(decision.clone())])
             };
-            let authenticated = write_and_reopen_authenticated_wal_startup_at_path(
+            if marker == 0xB7 {
+                for prefix_len in 1..wal_records.len() {
+                    let prefix = TempDir::new().expect("pending Kura undecided WAL prefix");
+                    let startup = write_and_reopen_authenticated_wal_startup_at_path(
+                        prefix.path().join("undecided.wal"),
+                        &recovered_context,
+                        &proofs,
+                        local_validator,
+                        [marker; 32],
+                        wal_records[..prefix_len].to_vec(),
+                    );
+                    let directive = startup
+                        .adapter
+                        .local_proposal_directive()
+                        .expect("read the undecided WAL prefix directive");
+                    assert!(directive.decided_subject().is_none());
+                    let attempted = RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+                        &startup.adapter,
+                    )
+                    .expect("authenticate the undecided ProposalIntent")
+                    .expect("Prepare and Lock cannot discard local Proposal non-equivocation ownership");
+                    assert!(attempted.exactly_matches_directive(directive));
+                }
+            }
+            let startup = write_and_reopen_authenticated_wal_startup_at_path(
                 wal_path.clone(),
                 &recovered_context,
                 &proofs,
                 local_validator,
                 [marker; 32],
                 wal_records,
-            )
-            .bind_pending_kura_apply(expected)
-            .unwrap_or_else(|(error, _startup)| panic!("bind exact pending Kura startup: {error}"))
-            .authenticate_final_wal_startup_authority()
-            .unwrap_or_else(|error| panic!("authenticate pending Kura WAL replay: {error}"));
+            );
+            if marker == 0xB7 {
+                let durable = startup.adapter.reducer.durable_state();
+                assert!(durable.decision().is_some());
+                assert!(
+                    durable
+                        .proposal_intent(reducer::Round::new(round.height, round.view))
+                        .is_some(),
+                    "Decision suppression preserves the durable ProposalIntent history"
+                );
+                assert!(
+                    RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+                        &startup.adapter,
+                    )
+                    .expect("authenticate the decided local Proposal projection")
+                    .is_none(),
+                    "a durable Decision owns the height; no local Proposal attempt may survive into pending Kura"
+                );
+            }
+            let authenticated = startup
+                .bind_pending_kura_apply(expected)
+                .unwrap_or_else(|(error, _startup)| {
+                    panic!("bind exact pending Kura startup: {error}")
+                })
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|error| panic!("authenticate pending Kura WAL replay: {error}"));
             let storage = RecoveredLifecycleStorageAuthorityV1::for_test(
                 kura.as_ref(),
                 &verified,
