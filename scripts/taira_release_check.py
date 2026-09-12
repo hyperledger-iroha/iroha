@@ -564,6 +564,8 @@ TORII_STARTUP_STAGES += (("onboarding DPN grant authority", (
     "tests::onboarding_readiness_dpn_user_rejects_role_derived_admin",
     "tests::onboarding_readiness_default_permissions_do_not_require_dpn_admin",
     "tests::onboarding_readiness_dpn_user_is_pending_while_joining_state_is_empty",
+    "tests::onboarding_readiness_is_pending_while_joining_state_is_empty",
+    "tests::onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is_empty",
 )),)
 TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact route authentication", (
     "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",

@@ -32,7 +32,75 @@ fn onboarding_readiness_is_pending_while_joining_state_is_empty() {
         iroha_data_model::alias_setup::AliasSetupStatusV1::Pending,
         "{report:?}"
     );
-    assert!(!report.diagnostics.is_empty());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "alias.onboarding.payment_asset_missing" })
+    );
+}
+#[test]
+fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is_empty() {
+    let key_pair = checked_torii_test_ed25519_keypair(
+        0xA9,
+        "derive joining payment-asset mismatch fixture key",
+    );
+    let app = mk_app_state_for_tests();
+    let mut policy = iroha_core::sns::policy_by_id(
+        &app.state.world_view(),
+        iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+    )
+    .expect("read seeded account-alias policy")
+    .expect("State initialization seeds the account-alias policy");
+    let other_asset = recipient_lookup_aed_definition_for_test().to_string();
+    assert_ne!(policy.payment_asset_id, other_asset);
+    policy.payment_asset_id = other_asset.clone();
+    for tier in &mut policy.pricing {
+        tier.base_price.asset_id = other_asset.clone();
+    }
+    let header = BlockHeader::new(
+        NonZeroU64::new(1).expect("height>0"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut stx = block.transaction();
+    stx.world_mut_for_testing()
+        .smart_contract_state_mut_for_testing()
+        .insert(
+            iroha_core::sns::policy_storage_key(iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID),
+            norito::codec::Encode::encode(&policy),
+        );
+    stx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("install mismatched policy without finalizing a block");
+    assert!(app.state.view().latest_block().is_none());
+    assert!(app.state.world_view().accounts().iter().next().is_none());
+    assert!(matches!(
+        iroha_core::sns::ensure_namespace_policy_payment_asset_matches_configured(
+            &app.state.world_view(),
+            iroha_core::sns::SnsNamespace::AccountAlias,
+            &app.state.nexus_snapshot().fees.fee_asset_id,
+        ),
+        Err(iroha_core::sns::SnsError::Conflict(_))
+    ));
+    let signer = onboarding_alias_signer_for_test(&key_pair);
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), &signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked,
+        "{report:?}"
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "alias.onboarding.payment_asset_mismatch" })
+    );
 }
 #[test]
 fn onboarding_alias_credential_domain_rejects_missing_exact_manage_authority() {
@@ -205,6 +273,12 @@ fn onboarding_readiness_dpn_user_is_pending_while_joining_state_is_empty() {
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "alias.onboarding.dpn_user_grant_authority_missing"
     }));
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "alias.onboarding.payment_asset_missing" })
+    );
 }
 #[test]
 fn onboarding_alias_credential_domains_accept_exact_direct_permissions() {
