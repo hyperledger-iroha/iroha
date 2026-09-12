@@ -112,7 +112,7 @@ test("browser account admission has no structural validation fallback", async ()
     () => BrowserAddress.fromAccount({ publicKey }),
     () => BrowserAddress.fromCanonicalBytes(canonicalKey(1, publicKey)),
     () => new BrowserAddress(HEADER, { tag: 0, curve: 1, publicKey }),
-  ]) assert.throws(call, /Native binding required;.*unavailable in browser/u);
+  ]) assert.throws(call, { code: "ERR_IROHA_CODEC_NOT_READY" });
 });
 
 test("controller snapshots cannot mutate canonical single-key or multisig ownership", () => {

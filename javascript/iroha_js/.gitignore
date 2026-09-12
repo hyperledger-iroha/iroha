@@ -1,0 +1,8 @@
+# Generated Rust Wasm module and wasm-bindgen web glue; packaged through dist.
+/wasm/
+/.build-wasm.lock
+/.wasm-stage-*/
+/wasm.previous/
+
+# Maintained build admission regression (root test_* ignore is for generated files).
+!/scripts/test_build_wasm.py

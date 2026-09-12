@@ -1,5 +1,6 @@
+use std::ops::Neg;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::{
-    ops::Neg,
     sync::{Mutex, MutexGuard, OnceLock},
     thread,
 };
@@ -8,10 +9,11 @@ use crate::CurveAffine;
 use ff::Field;
 use ff::PrimeField;
 use group::Group;
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator,
-};
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use rayon::slice::ParallelSliceMut;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use rayon::{ThreadPool, ThreadPoolBuilder};
 
 const BATCH_SIZE: usize = 64;
@@ -21,8 +23,11 @@ const BATCH_SIZE: usize = 64;
 // of two long-lived workers retains useful parallelism while bounding both
 // simultaneous bucket storage and per-thread allocator caches across every
 // large MSM in the process.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 const MAX_PARALLEL_WINDOW_SHARDS: usize = 2;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 static LARGE_MSM_WINDOW_POOL: OnceLock<ThreadPool> = OnceLock::new();
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 static LARGE_MSM_ADMISSION: Mutex<()> = Mutex::new(());
 // Cost model weights tuned from `benches/msm.rs` on representative x86_64 and
 // aarch64 hosts. Bucket aggregation is slightly cheaper than per-scalar
@@ -67,13 +72,10 @@ fn optimal_window_size(num_points: usize, scalar_bits: usize) -> usize {
         let windows = (scalar_bits + c - 1) / c;
         let bucket_count = 1usize << (c - 1);
         let per_window_point_cost = POINT_WEIGHT * num_points as f64;
-        let per_window_bucket_cost =
-            (BUCKET_ACC_WEIGHT + SCHEDULE_WEIGHT) * bucket_count as f64;
-        let doubling_cost =
-            DOUBLING_WEIGHT * (c * windows * (windows - 1) / 2) as f64;
+        let per_window_bucket_cost = (BUCKET_ACC_WEIGHT + SCHEDULE_WEIGHT) * bucket_count as f64;
+        let doubling_cost = DOUBLING_WEIGHT * (c * windows * (windows - 1) / 2) as f64;
         let total_cost =
-            windows as f64 * (per_window_point_cost + per_window_bucket_cost)
-                + doubling_cost;
+            windows as f64 * (per_window_point_cost + per_window_bucket_cost) + doubling_cost;
         if total_cost < best_cost {
             best_cost = total_cost;
             best_c = c;
@@ -83,12 +85,14 @@ fn optimal_window_size(num_points: usize, scalar_bits: usize) -> usize {
     best_c
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn parallel_window_shard_len(number_of_windows: usize) -> usize {
     number_of_windows
         .div_ceil(MAX_PARALLEL_WINDOW_SHARDS)
         .max(1)
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn large_msm_window_pool() -> &'static ThreadPool {
     LARGE_MSM_WINDOW_POOL.get_or_init(|| {
         ThreadPoolBuilder::new()
@@ -99,6 +103,7 @@ fn large_msm_window_pool() -> &'static ThreadPool {
     })
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn enter_large_msm() -> MutexGuard<'static, ()> {
     // This mutex protects only admission, not mutable shared state. A panic
     // cannot leave an invariant-corrupt value behind, so poison recovery is
@@ -108,6 +113,7 @@ fn enter_large_msm() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 fn run_large_msm_admitted<R: Send>(operation: impl FnOnce() -> R + Send) -> R {
     // `ThreadPool::install` cooperatively executes work from the caller's
     // Rayon pool while it waits for a different pool. Holding the admission
@@ -546,6 +552,7 @@ pub fn msm_serial<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C], acc: &mut C
 /// This function will panic if coeffs and bases have a different length.
 ///
 /// This will use multithreading if beneficial.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn msm_parallel<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     assert_eq!(coeffs.len(), bases.len());
 
@@ -578,6 +585,7 @@ pub fn msm_parallel<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cur
 /// This function will panic if coeffs and bases have a different length.
 ///
 /// This will use multithreading if beneficial.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     assert_eq!(coeffs.len(), bases.len());
 
@@ -607,11 +615,7 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
             .rev()
             .for_each(|(shard_index, acc_shard)| {
                 let window_offset = shard_index * shard_len;
-                for (shard_window, acc) in acc_shard
-                    .iter_mut()
-                    .enumerate()
-                    .rev()
-                {
+                for (shard_window, acc) in acc_shard.iter_mut().enumerate().rev() {
                     let w = window_offset + shard_window;
 
                     // jacobian buckets for already scheduled points
@@ -662,16 +666,85 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     })
 }
 
+// Browser targets have neither OS worker creation nor a Rayon worker pool.
+// Use the existing complete serial algorithm for every window size, including
+// the large-MSM threshold that dispatches through a scoped OS thread natively.
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+fn msm_without_threads<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    assert_eq!(coeffs.len(), bases.len());
+    let mut acc = C::Curve::identity();
+    msm_serial(coeffs, bases, &mut acc);
+    acc
+}
+
+/// Perform the complete MSM serially on browser targets without OS threads.
+///
+/// Panics if coefficients and bases have different lengths.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn msm_parallel<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    msm_without_threads(coeffs, bases)
+}
+
+/// Perform the complete MSM serially on browser targets without OS threads.
+///
+/// Panics if coefficients and bases have different lengths.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+    msm_without_threads(coeffs, bases)
+}
+
 #[cfg(test)]
 mod test {
     use std::ops::Neg;
 
-    use crate::bn256::{Fr, G1Affine, G1};
+    use crate::bn256::{Fr, G1, G1Affine};
     use ark_std::{end_timer, start_timer};
     use ff::{Field, PrimeField};
     use group::{Curve, Group};
     use pasta_curves::arithmetic::CurveAffine;
     use rand_core::OsRng;
+
+    #[test]
+    fn threadless_msm_matches_group_law_across_large_window_boundary() {
+        use rand::{SeedableRng, rngs::StdRng};
+
+        let mut rng = StdRng::seed_from_u64(0x5741_534d_4d53_4d31);
+        for count in [0, 1, 17, 4096] {
+            if count == 4096 {
+                assert!(super::optimal_window_size(count, Fr::NUM_BITS as usize) >= 10);
+            }
+            let mut expected_scalar = Fr::ZERO;
+            let mut scalars = Vec::with_capacity(count);
+            let mut points = Vec::with_capacity(count);
+            for index in 0..count {
+                let factor = match index % 4 {
+                    0 => Fr::ZERO,
+                    1 => Fr::ONE,
+                    2 => -Fr::ONE,
+                    _ => Fr::from(2),
+                };
+                let scalar = match index % 5 {
+                    0 => Fr::ZERO,
+                    1 => Fr::ONE,
+                    2 => -Fr::ONE,
+                    _ => Fr::random(&mut rng),
+                };
+                expected_scalar += factor * scalar;
+                scalars.push(scalar);
+                points.push((G1::generator() * factor).to_affine());
+            }
+            let expected = G1::generator() * expected_scalar;
+            assert_eq!(super::msm_without_threads(&scalars, &points), expected);
+            assert_eq!(super::msm_best(&scalars, &points), expected);
+            assert_eq!(super::msm_parallel(&scalars, &points), expected);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn threadless_msm_preserves_length_admission() {
+        super::msm_without_threads::<G1Affine>(&[Fr::ONE], &[]);
+    }
 
     #[test]
     fn window_size_heuristic_matches_expected_ranges() {
@@ -686,6 +759,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn bounded_window_shards_match_reference_msm() {
         use rand::{SeedableRng, rngs::StdRng};
 
@@ -695,9 +769,7 @@ mod test {
         let number_of_windows = Fr::NUM_BITS as usize / window_size + 1;
         let shard_len = super::parallel_window_shard_len(number_of_windows);
         assert!(number_of_windows > super::MAX_PARALLEL_WINDOW_SHARDS);
-        assert!(
-            number_of_windows.div_ceil(shard_len) <= super::MAX_PARALLEL_WINDOW_SHARDS
-        );
+        assert!(number_of_windows.div_ceil(shard_len) <= super::MAX_PARALLEL_WINDOW_SHARDS);
 
         let mut rng = StdRng::seed_from_u64(0x4d53_4d42_4154_4348);
         let points = (0..POINTS)
@@ -724,6 +796,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn large_msm_window_pool_has_bounded_width() {
         assert_eq!(
             super::large_msm_window_pool().current_num_threads(),
@@ -732,6 +805,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn large_msm_admission_serializes_concurrent_callers() {
         use std::{
             sync::{
@@ -766,6 +840,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn large_msm_dispatch_does_not_steal_source_pool_work() {
         use std::{
             sync::atomic::{AtomicBool, Ordering},
@@ -784,10 +859,8 @@ mod test {
                 || {
                     super::run_large_msm_admitted(|| {
                         std::thread::sleep(Duration::from_millis(20));
-                        source_work_ran_during_dispatch.store(
-                            source_work_ran.load(Ordering::SeqCst),
-                            Ordering::SeqCst,
-                        );
+                        source_work_ran_during_dispatch
+                            .store(source_work_ran.load(Ordering::SeqCst), Ordering::SeqCst);
                     });
                 },
                 || source_work_ran.store(true, Ordering::SeqCst),

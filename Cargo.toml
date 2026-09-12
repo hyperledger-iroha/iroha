@@ -70,6 +70,7 @@ iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 # request them locally so focused builds do not compile the broadest model.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
 iroha_model_base = { path = "crates/iroha_model_base", default-features = false }
+iroha_js_codec = { path = "crates/iroha_js_codec", default-features = false }
 iroha_service_model = { path = "crates/iroha_service_model" }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 

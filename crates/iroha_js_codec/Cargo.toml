@@ -1,0 +1,19 @@
+[package]
+name = "iroha_js_codec"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Canonical account and strict instruction codecs shared by JavaScript platform adapters"
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha_crypto = { workspace = true, features = ["json", "gost", "sm", "bls", "pqc"] }
+iroha_data_model = { workspace = true, features = ["application-model", "transparent_api", "gost", "sm", "bls"] }
+iroha_model_base = { workspace = true }
+iroha_primitives = { workspace = true }
+norito = { workspace = true, features = ["base-codec"] }
+base64 = { workspace = true }
+hex = { workspace = true }

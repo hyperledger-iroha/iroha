@@ -5272,6 +5272,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_js_codec"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_model_base",
+ "iroha_primitives",
+ "norito",
+]
+
+[[package]]
+name = "iroha_js_codec_wasm"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "iroha_js_codec",
+ "norito",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "iroha_js_host"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5284,6 +5309,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_js_codec",
  "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",

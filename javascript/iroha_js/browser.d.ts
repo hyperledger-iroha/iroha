@@ -1,4 +1,5 @@
 /** Type surface for the tree-shakeable, browser-safe aggregate entry point. */
+export { BrowserCodecError, initializeBrowserCodec } from "./browser-codec.js";
 export type * from "./index.js";
 
 export {

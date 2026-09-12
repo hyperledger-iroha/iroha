@@ -8,8 +8,10 @@ import {
   fsyncSync,
   linkSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   readdirSync,
   renameSync,
@@ -29,6 +31,9 @@ const LOCK_TIMEOUT_MS = 60_000;
 const STALE_LOCK_MS = 5 * 60_000;
 const REQUIRED_OUTPUTS = [
   "address.js",
+  "browserCodec.js",
+  "browserCodecRuntime.js",
+  "public/browserCodec.js",
   "atomicPrivateSettlement.js",
   "browser.js",
   "curveRegistry.js",
@@ -371,9 +376,25 @@ export function validateDistOutputs(directory) {
       throw new Error(`build:dist missing expected output: ${fileName}`);
     }
   }
+  const gluePath = join(directory, "wasm/iroha_js_codec_wasm.js");
+  const wasmPath = join(directory, "wasm/iroha_js_codec_wasm_bg.wasm");
+  if (!existsSync(gluePath) && !existsSync(wasmPath)) return;
+  if (!existsSync(gluePath) || !existsSync(wasmPath) || !lstatSync(gluePath).isFile() || !lstatSync(wasmPath).isFile()) {
+    throw new Error("build:dist requires both generated browser codec artifacts when either is present");
+  }
+  const wasm = openSync(wasmPath, constants.O_RDONLY);
+  try {
+    const header = Buffer.alloc(8);
+    const length = readSync(wasm, header, 0, header.length, 0);
+    if (length !== 8 || !header.equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]))) {
+      throw new Error("build:dist browser codec is not a Wasm V1 module");
+    }
+  } finally {
+    closeSync(wasm);
+  }
 }
 
-export function directoryDigest(directory) {
+export function directoryDigest(directory, { excludeGeneratedBrowserCodec = false } = {}) {
   if (!lstatSync(directory).isDirectory()) {
     throw new Error(`build:dist cannot publish non-directory root: ${directory}`);
   }
@@ -384,6 +405,7 @@ export function directoryDigest(directory) {
     );
     for (const entry of entries) {
       const entryRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      if (excludeGeneratedBrowserCodec && entryRelative === "wasm") continue;
       const entryPath = join(current, entry.name);
       const metadata = lstatSync(entryPath);
       if (metadata.isDirectory()) {
@@ -580,6 +602,19 @@ export async function buildDistribution({ root = ROOT } = {}) {
     lock = await acquireDistLock({ root: resolvedRoot });
     recoverInterruptedPublication(resolvedRoot, lock);
     cpSync(src, staging, { recursive: true, errorOnExist: true });
+    // Source-only distributions remain useful without a Wasm build. Packing
+    // and publishing separately require a real, initialized six-method codec.
+    const codecArtifacts = ["iroha_js_codec_wasm.js", "iroha_js_codec_wasm_bg.wasm"];
+    if (codecArtifacts.some((name) => existsSync(join(resolvedRoot, "wasm", name)))) {
+      mkdirSync(join(staging, "wasm"), { recursive: true });
+      for (const name of codecArtifacts) {
+        const artifact = join(resolvedRoot, "wasm", name);
+        if (!existsSync(artifact) || !lstatSync(artifact).isFile()) {
+          throw new Error(`build:dist browser codec artifact is missing or not a regular file: ${name}`);
+        }
+        cpSync(artifact, join(staging, "wasm", name), { errorOnExist: true, force: false });
+      }
+    }
     validateDistOutputs(staging);
     const stagingDigest = directoryDigest(staging);
     syncTree(staging);

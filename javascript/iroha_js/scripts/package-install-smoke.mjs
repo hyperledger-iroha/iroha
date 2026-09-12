@@ -12,6 +12,7 @@ import {
   releaseDistLock,
   validateDistOutputs,
 } from "./build-dist.mjs";
+import { verifyBrowserCodec } from "./verify-browser-codec.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = resolve(SCRIPT_PATH, "..");
@@ -82,6 +83,7 @@ export function validatePackPaths(metadata) {
   }
   for (const required of [
     "package.json",
+    "browser-codec.d.ts",
     "atomic-private-settlement.d.ts",
     "index.d.ts",
     "ivm-artifact.d.ts",
@@ -91,6 +93,11 @@ export function validatePackPaths(metadata) {
     "repo-agreement.d.ts",
     "sumeragi-typed.d.ts",
     "dist/index.js",
+    "dist/public/browserCodec.js",
+    "dist/browserCodec.js",
+    "dist/browserCodecRuntime.js",
+    "dist/wasm/iroha_js_codec_wasm.js",
+    "dist/wasm/iroha_js_codec_wasm_bg.wasm",
     "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
     "dist/kagemusha.js",
@@ -133,8 +140,9 @@ async function main() {
       const src = join(ROOT, "src");
       const dist = join(ROOT, "dist");
       validateDistOutputs(dist);
+      await verifyBrowserCodec(dist);
       const sourceDigest = directoryDigest(src);
-      const distDigest = directoryDigest(dist);
+      const distDigest = directoryDigest(dist, { excludeGeneratedBrowserCodec: true });
       if (sourceDigest !== distDigest) {
         throw new Error(
           `package smoke requires exact src/dist parity (${sourceDigest} != ${distDigest})`,
