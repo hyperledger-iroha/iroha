@@ -6941,6 +6941,7 @@ dependencies = [
  "iroha_storage_client",
  "ivm",
  "norito",
+ "rustix 1.1.4",
  "sorafs_car",
  "sorafs_manifest",
  "tempfile",

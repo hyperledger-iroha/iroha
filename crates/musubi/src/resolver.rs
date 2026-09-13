@@ -5,7 +5,8 @@
 //! reuse a compatible selection already present in the graph, then a still-valid parent-local lock
 //! edge, then fresh releases in descending `SemVer` order.
 use crate::lockfile::{
-    LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
+    LockContextV1, LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1,
+    MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -536,11 +537,27 @@ impl Solver {
         }
         let mut preserved = BTreeMap::new();
         let mut locked_nodes = BTreeMap::new();
+        if let Some(previous) = &request.previous
+            && matches!(previous.context, LockContextV1::Local { .. })
+        {
+            previous
+                .validate()
+                .map_err(|error| ResolverError::invalid(error.to_string()))?;
+            if request.mode == ResolveModeV1::Locked {
+                return Err(ResolverError::LockChangeRequired);
+            }
+            request.previous = None;
+        }
         if let Some(previous) = &request.previous {
             previous
                 .validate()
                 .map_err(|error| ResolverError::invalid(error.to_string()))?;
-            if previous.network_id != request.network_id {
+            if previous
+                .registry_context()
+                .map_err(|error| ResolverError::invalid(error.to_string()))?
+                .0
+                != request.network_id
+            {
                 return Err(ResolverError::invalid(
                     "existing lock belongs to a different network",
                 ));
@@ -1127,8 +1144,15 @@ impl Solver {
                 }
             })
             .collect();
-        LockfileV1::new(self.network_id, self.snapshot, roots, nodes)
-            .map_err(|error| ResolverError::invalid(error.to_string()))
+        LockfileV1::new(
+            LockContextV1::Registry {
+                network_id: self.network_id,
+                snapshot: self.snapshot,
+            },
+            roots,
+            nodes,
+        )
+        .map_err(|error| ResolverError::invalid(error.to_string()))
     }
 }
 fn prepare_update(
@@ -1702,6 +1726,32 @@ mod tests {
         );
     }
     #[test]
+    fn registry_resolution_replaces_local_context_only_when_lock_changes_are_permitted() {
+        let roots = vec![root(vec![])];
+        let local = LockfileV1::new(
+            LockContextV1::Local {
+                graph_digest: [7; 32],
+            },
+            vec![LockedRootV1 {
+                package: roots[0].package.clone(),
+                dependencies: vec![],
+            }],
+            vec![],
+        )
+        .expect("local lock");
+        let mut fresh = request(roots, vec![], snapshot(4));
+        fresh.previous = Some(local);
+        let mut frozen = fresh.clone();
+        frozen.mode = ResolveModeV1::Locked;
+        assert!(matches!(
+            resolve(frozen),
+            Err(ResolverError::LockChangeRequired)
+        ));
+        let resolved = resolve(fresh).expect("registry transition");
+        assert!(resolved.changed);
+        assert!(resolved.lockfile.registry_context().is_ok());
+    }
+    #[test]
     fn parent_edge_lock_preserves_yanked_below_quorum_release_and_old_snapshot() {
         let old_snapshot = snapshot(3);
         let new_snapshot = snapshot(4);
@@ -1732,7 +1782,14 @@ mod tests {
         let outcome = resolve(next).expect("preserved lock");
         assert!(!outcome.changed);
         assert_eq!(outcome.lockfile, previous);
-        assert_eq!(outcome.lockfile.snapshot, old_snapshot);
+        assert_eq!(
+            outcome
+                .lockfile
+                .registry_context()
+                .expect("registry context")
+                .1,
+            old_snapshot
+        );
     }
     #[test]
     fn publication_resolution_replaces_a_yanked_below_quorum_lock() {
@@ -2897,7 +2954,14 @@ mod tests {
         });
         let updated = resolve(normal).expect("targeted update");
         assert!(updated.changed);
-        assert_eq!(updated.lockfile.snapshot, new_snapshot);
+        assert_eq!(
+            updated
+                .lockfile
+                .registry_context()
+                .expect("registry context")
+                .1,
+            new_snapshot
+        );
         assert_eq!(
             root_selection(&updated.lockfile, "target").version,
             version("2.0.0")

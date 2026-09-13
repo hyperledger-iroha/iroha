@@ -10,11 +10,13 @@
 //! Torii's current finalized query pages do not carry a portable consensus
 //! inclusion proof.  Cache authenticity is therefore rooted in the online
 //! reader's validation plus the private, identity-checked user cache directory; the
-//! domain-separated snapshot commitment detects subsequent corruption. Linux and Android bind
-//! catalog reads to the retained cache-root descriptor through `/proc/self/fd`; other platforms
-//! reject offline catalog reads until an equivalent safe descriptor-rooted primitive is available.
+//! domain-separated snapshot commitment detects subsequent corruption. Qualified Unix hosts bind
+//! catalog reads to the retained cache-root descriptor through native descriptor-relative,
+//! no-follow opens, checking both file and root identity before accepting bytes.
 //! TODO: Verify and retain a portable finalized-state inclusion proof here once the public query
 //! contract exposes one.
+#[cfg(test)]
+use crate::lockfile::LockContextV1;
 use crate::{
     atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
     cache::{CacheError, MusubiCache},
@@ -239,10 +241,13 @@ impl ResolverIndexCacheSnapshotV1 {
         self.validate()
     }
     fn is_not_older_than(&self, lock: &LockfileV1) -> bool {
-        self.network_id == lock.network_id
-            && (self.snapshot == lock.snapshot
-                || (self.snapshot.finalized_height > lock.snapshot.finalized_height
-                    && self.snapshot.index_revision >= lock.snapshot.index_revision))
+        let Ok((network_id, snapshot)) = lock.registry_context() else {
+            return false;
+        };
+        self.network_id == network_id
+            && (self.snapshot == snapshot
+                || (self.snapshot.finalized_height > snapshot.finalized_height
+                    && self.snapshot.index_revision >= snapshot.index_revision))
     }
 }
 /// Snapshot plus its domain-separated local integrity commitment.
@@ -427,6 +432,7 @@ impl ResolverIndexCacheV1 {
     pub(super) fn sources(
         &self,
         previous: Option<&LockfileV1>,
+        expected_binding: Option<(NetworkId, u16)>,
     ) -> Result<Vec<CachedResolverSourceV1>, ResolverIndexCacheErrorV1> {
         let catalog = self.load_catalog()?.ok_or_else(|| {
             ResolverIndexCacheErrorV1::OfflineMiss("resolver cache is empty".to_owned())
@@ -437,6 +443,11 @@ impl ResolverIndexCacheV1 {
             .into_iter()
             .map(|entry| entry.value)
             .filter(|snapshot| {
+                if expected_binding.is_some_and(|binding| {
+                    binding != (snapshot.network_id, snapshot.account_chain_discriminant)
+                }) {
+                    return false;
+                }
                 let compatible = previous.is_none_or(|lock| snapshot.is_not_older_than(lock));
                 if compatible {
                     deployments.insert((snapshot.network_id, snapshot.account_chain_discriminant));
@@ -595,7 +606,7 @@ impl CachedResolverSourceV1 {
         ))
     }
     /// Return the exact finalized anchor represented by this source.
-    #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+    #[cfg(all(test, unix))]
     pub(super) const fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
         self.snapshot.snapshot
     }
@@ -976,9 +987,11 @@ mod tests {
     }
 
     use super::*;
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     use crate::{
-        graph::resolve_workspace_offline_cached, resolver::ResolveModeV1, workspace::load_workspace,
+        graph::{GraphPurposeV1, OfflineGraphOptionsV1, resolve_workspace_offline_cached},
+        resolver::ResolveModeV1,
+        workspace::load_workspace,
     };
     use iroha_data_model::musubi::{
         MusubiNamespaceBindingV1, MusubiNamespaceV1, MusubiOrderedPackageEntryV1,
@@ -991,13 +1004,13 @@ mod tests {
             .parse()
             .expect("network id")
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     fn other_network_id() -> NetworkId {
         "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA"
             .parse()
             .expect("other network id")
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     const APP: &str = r#"manifest-version = 1
 [package]
 namespace = "apps.sora"
@@ -1058,7 +1071,7 @@ exports = []
             resolver_pages: Vec::new(),
         }
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     fn install_cache_ancestor_aba_hooks(
         trusted_root: PathBuf,
         alternate_root: PathBuf,
@@ -1108,7 +1121,7 @@ exports = []
             Err(ResolverIndexCacheErrorV1::Invalid(_))
         ));
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn durable_cache_detects_tampering_and_offline_misses() {
         let temp = TempDir::new().expect("temp root");
@@ -1117,7 +1130,7 @@ exports = []
         cache
             .publish(image("apps.sora", 10, 10))
             .expect("publish cache");
-        let sources = cache.sources(None).expect("load source");
+        let sources = cache.sources(None, None).expect("load source");
         let missing = MusubiOrderedPrefixQueryV1 {
             prefix: MusubiOrderedPrefixV1::new("other.sora/").expect("prefix"),
             page: MusubiPageRequestV1 {
@@ -1135,11 +1148,11 @@ exports = []
         *last ^= 0x80;
         fs::write(&path, bytes).expect("tamper cache");
         assert!(matches!(
-            cache.sources(None),
+            cache.sources(None, None),
             Err(ResolverIndexCacheErrorV1::Codec(_) | ResolverIndexCacheErrorV1::Invalid(_))
         ));
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn descriptor_rooted_read_cannot_load_forged_bytes_from_an_aba_root() {
         let temp = TempDir::new().expect("temp root");
@@ -1152,7 +1165,7 @@ exports = []
             .publish(image("forged.sora", 99, 99))
             .expect("publish structurally valid forged catalog");
         assert_eq!(
-            forged_cache.sources(None).expect("forged source")[0].snapshot(),
+            forged_cache.sources(None, None).expect("forged source")[0].snapshot(),
             snapshot(99, 99),
             "the alternate bytes must be independently admissible"
         );
@@ -1163,12 +1176,12 @@ exports = []
             temp.path().join("trusted-cache-held-for-test"),
         );
         assert!(matches!(
-            cache.sources(None),
+            cache.sources(None, None),
             Err(ResolverIndexCacheErrorV1::OfflineMiss(reason))
                 if reason == "resolver cache is empty"
         ));
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn descriptor_rooted_read_cannot_observe_forged_absence_from_an_aba_root() {
         let temp = TempDir::new().expect("temp root");
@@ -1185,27 +1198,16 @@ exports = []
             temp.path().join("trusted-cache-held-for-test"),
         );
         let sources = cache
-            .sources(None)
+            .sources(None, None)
             .expect("descriptor-rooted read sees retained genuine catalog");
         assert_eq!(sources[0].snapshot(), snapshot(10, 10));
         drop(cache);
         let reopened = ResolverIndexCacheV1::open(&trusted_user_root)
             .expect("restart binds the restored genuine root");
         assert_eq!(
-            reopened.sources(None).expect("restart source")[0].snapshot(),
+            reopened.sources(None, None).expect("restart source")[0].snapshot(),
             snapshot(10, 10)
         );
-    }
-    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
-    #[test]
-    fn offline_cache_read_fails_closed_without_descriptor_rooted_open() {
-        let temp = TempDir::new().expect("temp root");
-        let cache = ResolverIndexCacheV1::open(&temp.path().join("cache")).expect("cache");
-        assert!(matches!(
-            cache.sources(None),
-            Err(ResolverIndexCacheErrorV1::AtomicWrite(error))
-                if error.code() == AtomicWriteErrorCode::UnsupportedPlatform
-        ));
     }
     #[cfg(not(unix))]
     #[test]
@@ -1220,25 +1222,27 @@ exports = []
             _ => panic!("unexpected non-Unix cache-open error: {error}"),
         }
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn newest_snapshot_is_selected_without_mixing() {
         let temp = TempDir::new().expect("temp root");
         let cache = ResolverIndexCacheV1::open(&temp.path().join("cache")).expect("cache");
         cache.publish(image("apps.sora", 10, 10)).expect("older");
         cache.publish(image("apps.sora", 12, 12)).expect("newer");
-        let sources = cache.sources(None).expect("sources");
+        let sources = cache.sources(None, None).expect("sources");
         assert_eq!(sources[0].snapshot(), snapshot(12, 12));
         assert_eq!(sources[0].account_chain_discriminant(), 369);
         assert_eq!(sources[1].snapshot(), snapshot(10, 10));
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn same_finalized_block_requires_the_exact_locked_index_revision() {
         let stable = image("apps.sora", 10, 10);
         let lock = LockfileV1::new(
-            stable.network_id,
-            stable.snapshot,
+            LockContextV1::Registry {
+                network_id: stable.network_id,
+                snapshot: stable.snapshot,
+            },
             vec![crate::lockfile::LockedRootV1 {
                 package: "apps.sora/app".parse().expect("selector"),
                 dependencies: Vec::new(),
@@ -1260,11 +1264,11 @@ exports = []
             .publish(equivocated)
             .expect("internally coherent equivocated fixture");
         assert!(matches!(
-            cache.sources(Some(&lock)),
+            cache.sources(Some(&lock), None),
             Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
         ));
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn higher_finalized_height_cannot_roll_back_the_resolver_index_revision() {
         let temp = TempDir::new().expect("temp root");
@@ -1272,8 +1276,10 @@ exports = []
         let stable = image("apps.sora", 10, 10);
         cache.publish(stable.clone()).expect("stable snapshot");
         let lock = LockfileV1::new(
-            stable.network_id,
-            stable.snapshot,
+            LockContextV1::Registry {
+                network_id: stable.network_id,
+                snapshot: stable.snapshot,
+            },
             vec![crate::lockfile::LockedRootV1 {
                 package: "apps.sora/app".parse().expect("selector"),
                 dependencies: Vec::new(),
@@ -1313,7 +1319,7 @@ exports = []
             "failed rollback publication must not replace the durable catalog"
         );
         let sources = cache
-            .sources(Some(&lock))
+            .sources(Some(&lock), None)
             .expect("rejected rollback leaves durable cache unchanged");
         assert_eq!(sources.len(), MAX_CACHED_SNAPSHOTS_V1);
         assert!(
@@ -1323,7 +1329,7 @@ exports = []
             "pre-retention validation must preserve the oldest stable anchor"
         );
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn offline_fresh_and_frozen_resolution_use_only_complete_cached_pages() {
         let temp = TempDir::new().expect("temp root");
@@ -1342,7 +1348,11 @@ exports = []
             &selected,
             None,
             None,
-            ResolveModeV1::UpdateLock,
+            OfflineGraphOptionsV1 {
+                mode: ResolveModeV1::UpdateLock,
+                purpose: GraphPurposeV1::Publication,
+                expected_binding: None,
+            },
         )
         .expect("fresh offline graph");
         assert!(fresh.outcome.changed);
@@ -1352,13 +1362,59 @@ exports = []
             &selected,
             Some(fresh.outcome.lockfile.clone()),
             None,
-            ResolveModeV1::Locked,
+            OfflineGraphOptionsV1 {
+                mode: ResolveModeV1::Locked,
+                purpose: GraphPurposeV1::Publication,
+                expected_binding: None,
+            },
         )
         .expect("frozen offline graph");
         assert!(!frozen.outcome.changed);
         assert_eq!(frozen.outcome.lockfile, fresh.outcome.lockfile);
+        let local = crate::graph::resolve_workspace_local(
+            &workspace,
+            &selected,
+            None,
+            ResolveModeV1::UpdateLock,
+        )
+        .expect("local graph")
+        .expect("local resolution")
+        .lockfile;
+        assert!(!image("apps.sora", 10, 10).is_not_older_than(&local));
+        let transitioned = resolve_workspace_offline_cached(
+            &cache,
+            &workspace,
+            &selected,
+            Some(local.clone()),
+            None,
+            OfflineGraphOptionsV1 {
+                mode: ResolveModeV1::UpdateLock,
+                purpose: GraphPurposeV1::Publication,
+                expected_binding: None,
+            },
+        )
+        .expect("local lock is not a cache freshness authority");
+        assert!(transitioned.outcome.changed);
+        assert!(transitioned.outcome.lockfile.registry_context().is_ok());
+        assert!(matches!(
+            resolve_workspace_offline_cached(
+                &cache,
+                &workspace,
+                &selected,
+                Some(local),
+                None,
+                OfflineGraphOptionsV1 {
+                    mode: ResolveModeV1::Locked,
+                    purpose: GraphPurposeV1::Publication,
+                    expected_binding: None,
+                },
+            ),
+            Err(GraphErrorV1::Resolver(
+                crate::resolver::ResolverError::LockChangeRequired
+            ))
+        ));
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     #[test]
     fn offline_source_rejects_ambiguous_deployments_and_snapshots_older_than_lock() {
         let temp = TempDir::new().expect("temp root");
@@ -1367,8 +1423,10 @@ exports = []
             .publish(image("apps.sora", 10, 10))
             .expect("first deployment");
         let stale_lock = LockfileV1::new(
-            network_id(),
-            snapshot(20, 20),
+            LockContextV1::Registry {
+                network_id: network_id(),
+                snapshot: snapshot(20, 20),
+            },
             vec![crate::lockfile::LockedRootV1 {
                 package: "apps.sora/app".parse().expect("selector"),
                 dependencies: Vec::new(),
@@ -1378,7 +1436,7 @@ exports = []
         .expect("future lock anchor");
         stale_lock.validate().expect("valid lock");
         assert!(matches!(
-            cache.sources(Some(&stale_lock)),
+            cache.sources(Some(&stale_lock), None),
             Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
         ));
         let mut other = image("apps.sora", 11, 11);
@@ -1386,7 +1444,66 @@ exports = []
         other.ordered_pages[0].response.network_id = other.network_id;
         cache.publish(other).expect("second deployment");
         assert!(matches!(
-            cache.sources(None),
+            cache.sources(None, None),
+            Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn explicit_offline_binding_selects_network_and_profile_before_ambiguity_checks() {
+        let temp = TempDir::new().expect("temp root");
+        let cache = ResolverIndexCacheV1::open(&temp.path().join("cache")).expect("cache");
+        let original = image("apps.sora", 10, 10);
+        let original_binding = (original.network_id, original.account_chain_discriminant);
+        cache
+            .publish(original.clone())
+            .expect("original deployment");
+        let mut other_network = image("apps.sora", 11, 11);
+        other_network.network_id = other_network_id();
+        other_network.ordered_pages[0].response.network_id = other_network_id();
+        cache.publish(other_network).expect("different network");
+        let mut other_profile = original.clone();
+        other_profile.account_chain_discriminant += 1;
+        let profile_binding = (
+            other_profile.network_id,
+            other_profile.account_chain_discriminant,
+        );
+        cache
+            .publish(other_profile)
+            .expect("different address profile");
+        assert!(matches!(
+            cache.sources(None, None),
+            Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
+        ));
+        let exact = cache
+            .sources(None, Some(original_binding))
+            .expect("select original binding");
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].account_chain_discriminant(), original_binding.1);
+        assert_eq!(exact[0].snapshot(), original.snapshot);
+        let alternate = cache
+            .sources(None, Some(profile_binding))
+            .expect("select alternate profile");
+        assert_eq!(alternate.len(), 1);
+        assert_eq!(alternate[0].account_chain_discriminant(), profile_binding.1);
+        let stale = LockfileV1::new(
+            LockContextV1::Registry {
+                network_id: original.network_id,
+                snapshot: snapshot(20, 20),
+            },
+            vec![crate::lockfile::LockedRootV1 {
+                package: "apps.sora/app".parse().expect("selector"),
+                dependencies: vec![],
+            }],
+            vec![],
+        )
+        .expect("newer lock");
+        assert!(matches!(
+            cache.sources(Some(&stale), Some(original_binding)),
+            Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
+        ));
+        assert!(matches!(
+            cache.sources(Some(&stale), Some((other_network_id(), original_binding.1))),
             Err(ResolverIndexCacheErrorV1::OfflineMiss(_))
         ));
     }

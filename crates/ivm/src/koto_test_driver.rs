@@ -49,6 +49,13 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+#[path = "koto_test_driver_source_set.rs"]
+mod source_set;
+use source_set::discover_declared_suite_from_source_set;
+pub use source_set::{
+    declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
+    run_tests_structured_source_set_with_modules_v1,
+};
 const DEFAULT_CALLER: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
 const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
@@ -336,11 +343,7 @@ pub fn run_tests_structured_source_with_modules_v1(
     root: &SourceModuleUnit,
     modules: &KotoTestModuleGraphV1,
 ) -> Result<KotoTestRunReportV1, KotoTestRunErrorV1> {
-    validate_structured_request(request)?;
-    validate_structured_source_request(request, root)?;
-    let suite = discover_declared_suite_from_source(root)
-        .map_err(|error| KotoTestRunErrorV1::new(KotoTestRunPhaseV1::Discovery, error))?;
-    run_discovered_suite_structured(request, suite, Some(modules))
+    run_tests_structured_source_set_with_modules_v1(request, root, None, modules)
 }
 /// Discover test names from one explicitly declared root without ambient files.
 ///
@@ -750,21 +753,7 @@ fn discover_declared_suite(path: &Path) -> Result<DiscoveredSuite, String> {
     finalize_suite(input_path, source, program, Vec::new())
 }
 fn discover_declared_suite_from_source(root: &SourceModuleUnit) -> Result<DiscoveredSuite, String> {
-    validate_structured_source(root)?;
-    let program =
-        parser::parse(&root.source).map_err(|error| format!("{}: {error}", root.source_name))?;
-    if program.test_target.is_some() {
-        return Err(format!(
-            "{} is an indirect koto_test module; exact module graphs require a directly declared test root",
-            root.source_name
-        ));
-    }
-    finalize_suite(
-        PathBuf::from(&root.source_name),
-        root.source.clone(),
-        program,
-        Vec::new(),
-    )
+    discover_declared_suite_from_source_set(root, None)
 }
 fn discover_suite_from_target(
     path: &Path,
@@ -953,6 +942,9 @@ fn validate_standalone_test_program(
             target_path.display()
         ));
     }
+    validate_standalone_test_items(test_path, program)
+}
+fn validate_standalone_test_items(test_path: &Path, program: &Program) -> Result<(), String> {
     if program.unit.kind != SourceUnitKind::Module {
         return Err(format!(
             "{} must declare a non-deployable module in standalone test mode",
@@ -1057,11 +1049,6 @@ fn compile_suite_with_modules_for_chain(
     zk_enabled: bool,
     chain_discriminant: u16,
 ) -> Result<CompiledSuite, String> {
-    if !suite.test_modules.is_empty() {
-        return Err(
-            "exact module-graph test compilation accepts one directly declared root".to_owned(),
-        );
-    }
     let source_name = if suite.target_path.is_absolute() {
         let project_root = suite.target_path.parent().ok_or_else(|| {
             format!(
@@ -1075,7 +1062,7 @@ fn compile_suite_with_modules_for_chain(
         suite.target_path.display().to_string()
     };
     let outputs = ModuleBuildGraph::default()
-        .build_test_project(
+        .build_test_project_with_sources(
             SourceLinkRequest {
                 root: SourceModuleUnit {
                     source_name: source_name.clone(),
@@ -1084,6 +1071,14 @@ fn compile_suite_with_modules_for_chain(
                 imports: modules.imports.clone(),
                 packages: modules.packages.clone(),
             },
+            &suite
+                .test_modules
+                .iter()
+                .map(|module| SourceModuleUnit {
+                    source_name: module.path.display().to_string(),
+                    source: module.source.clone(),
+                })
+                .collect::<Vec<_>>(),
             CompilerOptions {
                 force_zk: zk_enabled,
                 chain_discriminant,

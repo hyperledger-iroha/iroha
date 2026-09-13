@@ -376,7 +376,11 @@ targets expand to a bytewise-sorted, portable set of direct `.ko` roots under
 the package, bounded by the V1 file/source limits. The runner reads each stable
 regular source once through a singly linked, no-follow final-component
 descriptor and passes its text through the structured compiler API; it never
-reopens the diagnostic path or discovers ambient siblings. The named-path and
+reopens the diagnostic path or discovers ambient siblings. A standalone `koto_test` module may target a contract explicitly declared in the same
+package manifest. Its relative target is normalized within the package; undeclared,
+escaping, indirect, or unsafe target paths are rejected. Both sources are read once
+and the compiler receives their immutable source units with the same exact package
+imports. No ambient sibling discovery is performed. The named-path and
 descriptor identities must match before and after the bounded read, so a raced
 regular-file replacement is rejected. Each source is at
 most 16 MiB, the complete declared set is at most 64 MiB and 4,096 filesystem
@@ -447,8 +451,17 @@ schema = "musubi-lock"
 version = 1
 ```
 
-It records one exact genesis-derived `network-id` and the finalized registry
-height/hash and index revision at which the graph last changed. Nodes contain exact structural
+Every lock declares `context = "local"` or `context = "registry"`.
+A local lock records a domain-separated `graph-digest` over the selected roots,
+reachable package identities and versions, ABI/edition, and effective dependency
+aliases, kinds, and local paths. Source edits and manifest formatting do not change
+that graph. Local locks contain no registry nodes, deployment identity, or snapshot.
+They cannot produce publication verification evidence.
+
+A registry lock records one exact genesis-derived `network-id` and the finalized
+registry height/hash and index revision at which the graph last changed. The two
+context field sets are mutually exclusive; there is no compatibility parser for
+unlabelled locks. Nodes contain exact structural
 package id and version, immutable release digest, `ArchiveId`, source and
 interface digests, and ABI binding. Parent-local edges contain the import
 alias, child node, and dependency kind. Aliases are unique within each parent;
@@ -545,8 +558,21 @@ The retired `install`, `pack`, short-alias `set`, cache `import`, and public
 Torii upload workflows are not aliases.
 
 `fetch`, `check`, `build`, and `test` resolve and atomically update the lock
-when permitted, then fetch missing archives. `--locked` forbids graph changes,
-`--offline` uses only cached index and archives, and `--frozen` combines both.
+when permitted, then fetch missing archives. A graph containing only local packages
+and path dependencies needs no signer, client config, resolver cache, or network
+request, including its first `--offline` run. A missing or changed local lock still
+fails under `--locked`/`--frozen`. The compiler revalidates the local graph commitment
+before accepting it. A path dependency's registry publication fallback does not
+replace its local source during workspace development. Registry dependencies retain
+exact finalized resolution and immutable archive authentication. Packaging and
+publication explicitly require registry context, even for dependency-free packages.
+
+Local compilation uses the canonical account-address profile, or the explicitly
+selected client's public account profile. `--chain-discriminant` selects a local
+compiler input and must agree with an explicitly supplied client configuration
+or the authenticated registry profile. Purely local commands never construct a
+signer. `--locked` forbids graph changes; for registry dependencies, `--offline`
+uses only cached index and archives. `--frozen` combines both constraints.
 Workspace selection follows default members, `--workspace`, `--exclude`, and
 `-p`.
 
@@ -693,6 +719,13 @@ finalized commitment and file plan before classifying any local entry as corrupt
 quarantines only structurally validated descendants; invalid registry inputs
 leave the cache untouched. Lock-controlled deletion, arbitrary replacement,
 and cache import do not exist.
+
+Private resolver-catalog reads retain a native directory descriptor and walk each
+ancestor with descriptor-relative, directory-only, no-follow opens on Unix,
+including macOS. The final leaf uses a nonblocking no-follow open, is bounded and
+single-linked, and must retain its identity through the read. Root and ancestor
+identities are revalidated before accepting either bytes or absence. Neither
+procfs nor a pathname fallback participates in the read.
 
 Cache access is qualified only on Unix. Windows and other non-Unix targets
 return `UnsupportedPlatform` before inspecting or creating the requested cache

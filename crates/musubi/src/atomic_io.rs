@@ -4,9 +4,9 @@
 //! a normal relative path. This deliberately prevents a path read from a lockfile or registry
 //! response from becoming an arbitrary filesystem target.
 #[cfg(unix)]
-use iroha_primitives::fs::secure_no_follow_nonblocking_flags;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-use std::os::fd::AsRawFd as _;
+use iroha_primitives::fs::{secure_directory_open_flags, secure_no_follow_nonblocking_flags};
+#[cfg(unix)]
+use rustix::fs::{AtFlags, Mode, OFlags, Stat};
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
@@ -29,14 +29,14 @@ std::thread_local! {
     static TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[cfg(all(test, unix))]
 std::thread_local! {
     static TEST_AFTER_DESCRIPTOR_TARGET_BIND: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
     static TEST_BEFORE_DESCRIPTOR_ROOT_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
 }
-#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[cfg(all(test, unix))]
 pub(crate) fn install_descriptor_root_read_test_hooks(
     after_target_bind: impl FnOnce() + 'static,
     before_revalidation: impl FnOnce() + 'static,
@@ -58,7 +58,7 @@ pub(crate) fn install_descriptor_root_read_test_hooks(
         );
     });
 }
-#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[cfg(all(test, unix))]
 fn run_test_after_descriptor_target_bind() {
     TEST_AFTER_DESCRIPTOR_TARGET_BIND.with(|hook| {
         if let Some(hook) = hook.borrow_mut().take() {
@@ -66,7 +66,7 @@ fn run_test_after_descriptor_target_bind() {
         }
     });
 }
-#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[cfg(all(test, unix))]
 fn run_test_before_descriptor_root_revalidation() {
     TEST_BEFORE_DESCRIPTOR_ROOT_REVALIDATION.with(|hook| {
         if let Some(hook) = hook.borrow_mut().take() {
@@ -208,7 +208,7 @@ impl std::error::Error for AtomicWriteError {
 pub struct AtomicWriteRoot {
     canonical_root: PathBuf,
     root_identity: FileIdentity,
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     root_handle: File,
 }
 impl AtomicWriteRoot {
@@ -285,12 +285,12 @@ impl AtomicWriteRoot {
                 "bind a stable write root",
             ));
         }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(unix)]
         let root_handle = open_directory_no_follow(&canonical_root, &canonical_metadata)?;
         Ok(Self {
             canonical_root,
             root_identity: FileIdentity::from_metadata(&canonical_metadata),
-            #[cfg(any(target_os = "linux", target_os = "android"))]
+            #[cfg(unix)]
             root_handle,
         })
     }
@@ -451,13 +451,11 @@ impl AtomicWriteRoot {
     }
     /// Load one private immutable file through the retained root descriptor.
     ///
-    /// Linux and Android expose an open directory descriptor as
-    /// `/proc/self/fd/<fd>`. Appending the validated relative name makes the final
-    /// file open resolve below the retained directory even if the canonical root pathname is
-    /// temporarily replaced. The descriptor anchor and canonical root identity are checked before
-    /// and after the read. Other platforms fail closed; safe `std` does not expose `openat` or an
-    /// equivalent descriptor-rooted open. This requires a kernel-provided procfs at `/proc`; the
-    /// procfs entry must resolve to the retained directory inode or the read is rejected.
+    /// Native descriptor-relative opens bind every normal path component to the retained root
+    /// directory on Unix, including macOS. Directory components and the final file are opened
+    /// without following symlinks, and a nonblocking final open prevents a substituted FIFO from
+    /// hanging validation. The root, retained parent chain, and immutable file snapshot are
+    /// revalidated before returning bytes. No procfs or descriptor pathname alias is required.
     ///
     /// # Errors
     ///
@@ -469,29 +467,31 @@ impl AtomicWriteRoot {
         max_bytes: usize,
     ) -> Result<Option<Vec<u8>>, AtomicWriteError> {
         validate_relative_path(relative)?;
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(unix))]
         {
             let _ = (self, max_bytes);
-            // TODO: Enable this read on other targets only after safe `std` or an approved
-            // workspace primitive provides a descriptor-rooted, no-follow final open.
             Err(AtomicWriteError::new(
                 AtomicWriteErrorCode::UnsupportedPlatform,
                 relative,
                 "load private bytes through a retained root descriptor",
             ))
         }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(unix)]
         {
             self.validate_retained_root()?;
-            let descriptor_root =
-                PathBuf::from("/proc/self/fd").join(self.root_handle.as_raw_fd().to_string());
-            self.validate_descriptor_root(&descriptor_root)?;
-            let target = descriptor_root.join(relative);
-            let read = read_private_immutable_target_bounded(&target, max_bytes);
+            let target = self.canonical_root.join(relative);
+            let parents = bind_descriptor_parents(&self.root_handle, relative, &target)?;
+            let parent = parents
+                .last()
+                .map_or(&self.root_handle, |parent| &parent.file);
+            let name = relative
+                .file_name()
+                .expect("validated normal relative path");
+            let read = read_private_immutable_target_bounded(parent, name, &target, max_bytes);
             #[cfg(test)]
             run_test_before_descriptor_root_revalidation();
             let revalidation = (|| {
-                self.validate_descriptor_root(&descriptor_root)?;
+                validate_descriptor_parents(&self.root_handle, &parents)?;
                 self.validate_retained_root()
             })();
             preserve_primary_result(read, revalidation)
@@ -511,9 +511,9 @@ impl AtomicWriteRoot {
     /// links, directories, and special files return [`AtomicWriteErrorCode::UnsafeTarget`]. No
     /// existing destination is overwritten.
     ///
-    /// TODO: Qualify this path for production with descriptor-relative
-    /// `renameat`/`linkat`/`unlinkat` no-replace operations once a permitted safe dependency and
-    /// lockfile update are available. The std-only implementation uses the module's existing
+    /// TODO: Move publication and cleanup onto the native descriptor-relative
+    /// `renameat`/`linkat`/`unlinkat` primitives before production qualification. This
+    /// implementation uses the module's existing
     /// identity-checked pathname cleanup model and therefore does not claim protection from a
     /// hostile same-UID substitution between its final metadata check and temporary-name unlink. A
     /// crash before cleanup or a cleanup failure under hostile substitution can leave a recoverable
@@ -703,7 +703,7 @@ impl AtomicWriteRoot {
         }
         Ok(())
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(unix)]
     fn validate_retained_root(&self) -> Result<(), AtomicWriteError> {
         let opened_before = self.root_handle.metadata().map_err(|error| {
             AtomicWriteError::io(
@@ -734,44 +734,6 @@ impl AtomicWriteRoot {
                 AtomicWriteErrorCode::ConcurrentModification,
                 &self.canonical_root,
                 "revalidate the retained write root",
-            ));
-        }
-        Ok(())
-    }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    fn validate_descriptor_root(&self, descriptor_root: &Path) -> Result<(), AtomicWriteError> {
-        let opened_before = self.root_handle.metadata().map_err(|error| {
-            AtomicWriteError::io(
-                descriptor_root,
-                "inspect the retained descriptor root",
-                error,
-            )
-        })?;
-        let anchored = fs::metadata(descriptor_root).map_err(|_| {
-            AtomicWriteError::new(
-                AtomicWriteErrorCode::UnsupportedPlatform,
-                descriptor_root,
-                "resolve the retained descriptor root through procfs",
-            )
-        })?;
-        let opened_after = self.root_handle.metadata().map_err(|error| {
-            AtomicWriteError::io(
-                descriptor_root,
-                "reinspect the retained descriptor root",
-                error,
-            )
-        })?;
-        if !opened_before.is_dir()
-            || !anchored.is_dir()
-            || !opened_after.is_dir()
-            || !self.root_identity.matches(&opened_before)
-            || !self.root_identity.matches(&anchored)
-            || !self.root_identity.matches(&opened_after)
-        {
-            return Err(AtomicWriteError::new(
-                AtomicWriteErrorCode::ConcurrentModification,
-                descriptor_root,
-                "bind the retained descriptor root",
             ));
         }
         Ok(())
@@ -1027,17 +989,12 @@ fn open_private_directory_no_follow(
     }
     Ok(directory)
 }
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(unix)]
 fn open_directory_no_follow(path: &Path, linked: &fs::Metadata) -> Result<File, AtomicWriteError> {
-    let secure_open_flags = PLATFORM_SECURE_OPEN_FLAGS.ok_or_else(|| {
-        AtomicWriteError::new(
-            AtomicWriteErrorCode::UnsupportedPlatform,
-            path,
-            "retain a no-follow write-root directory handle",
-        )
-    })?;
     let mut options = OpenOptions::new();
-    options.read(true).custom_flags(secure_open_flags);
+    options
+        .read(true)
+        .custom_flags(secure_directory_open_flags());
     let directory = options.open(path).map_err(|error| {
         AtomicWriteError::io(path, "retain the write-root directory handle", error)
     })?;
@@ -1431,95 +1388,249 @@ fn read_immutable_target_bounded(
     }
     Ok(ImmutableReadOutcome::Within(observed))
 }
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn read_private_immutable_target_bounded(
+#[cfg(unix)]
+struct DescriptorParent {
+    name: OsString,
+    path: PathBuf,
+    file: File,
+    snapshot: Stat,
+}
+#[cfg(unix)]
+fn bind_descriptor_parents(
+    root: &File,
+    relative: &Path,
     target: &Path,
-    max_bytes: usize,
-) -> Result<Option<Vec<u8>>, AtomicWriteError> {
-    let before = match fs::symlink_metadata(target) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            match fs::symlink_metadata(target) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Ok(_) => {
-                    return Err(AtomicWriteError::new(
-                        AtomicWriteErrorCode::ConcurrentModification,
-                        target,
-                        "revalidate an absent descriptor-rooted target",
-                    ));
+) -> Result<Vec<DescriptorParent>, AtomicWriteError> {
+    let mut parents = Vec::<DescriptorParent>::new();
+    let relative_parent = relative.parent().expect("validated relative path");
+    let mut path = target.to_path_buf();
+    for _ in relative.components() {
+        path.pop();
+    }
+    for component in relative_parent.components() {
+        let Component::Normal(name) = component else {
+            unreachable!("relative path is validated before descriptor traversal")
+        };
+        path.push(name);
+        let parent = parents.last().map_or(root, |parent| &parent.file);
+        let linked =
+            rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+                if error == rustix::io::Errno::NOENT {
+                    AtomicWriteError::new(
+                        AtomicWriteErrorCode::UnsafeParent,
+                        &path,
+                        "bind an existing descriptor-rooted parent",
+                    )
+                } else {
+                    AtomicWriteError::io(&path, "inspect a descriptor-rooted parent", error.into())
                 }
-                Err(error) => {
-                    return Err(AtomicWriteError::io(
-                        target,
-                        "reinspect an absent descriptor-rooted target",
-                        error,
-                    ));
-                }
-            }
-            #[cfg(test)]
-            run_test_after_descriptor_target_bind();
-            return match fs::symlink_metadata(target) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                Ok(_) => Err(AtomicWriteError::new(
-                    AtomicWriteErrorCode::ConcurrentModification,
-                    target,
-                    "verify descriptor-rooted target absence",
-                )),
-                Err(error) => Err(AtomicWriteError::io(
-                    target,
-                    "verify descriptor-rooted target absence",
-                    error,
-                )),
-            };
+            })?;
+        let kind = rustix::fs::FileType::from_raw_mode(linked.st_mode);
+        if !kind.is_dir() {
+            return Err(AtomicWriteError::new(
+                if kind.is_symlink() {
+                    AtomicWriteErrorCode::SymlinkAncestor
+                } else {
+                    AtomicWriteErrorCode::UnsafeParent
+                },
+                &path,
+                "require a real descriptor-rooted parent directory",
+            ));
         }
+        let file = File::from(
+            rustix::fs::openat(
+                parent,
+                name,
+                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY,
+                Mode::empty(),
+            )
+            .map_err(|error| {
+                AtomicWriteError::io(&path, "open a descriptor-rooted parent", error.into())
+            })?,
+        );
+        let opened = rustix::fs::fstat(&file).map_err(|error| {
+            AtomicWriteError::io(&path, "inspect a retained parent directory", error.into())
+        })?;
+        if !same_descriptor_identity(&linked, &opened) {
+            return Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::ConcurrentModification,
+                &path,
+                "bind the retained parent directory identity",
+            ));
+        }
+        parents.push(DescriptorParent {
+            name: name.to_os_string(),
+            path: path.clone(),
+            file,
+            snapshot: opened,
+        });
+    }
+    Ok(parents)
+}
+#[cfg(unix)]
+fn validate_descriptor_parents(
+    root: &File,
+    parents: &[DescriptorParent],
+) -> Result<(), AtomicWriteError> {
+    let mut parent = root;
+    for retained in parents {
+        let linked = rustix::fs::statat(parent, &retained.name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| {
+                AtomicWriteError::io(
+                    &retained.path,
+                    "reinspect a descriptor-rooted parent",
+                    error.into(),
+                )
+            })?;
+        let opened = rustix::fs::fstat(&retained.file).map_err(|error| {
+            AtomicWriteError::io(
+                &retained.path,
+                "reinspect a retained parent directory",
+                error.into(),
+            )
+        })?;
+        if !rustix::fs::FileType::from_raw_mode(linked.st_mode).is_dir()
+            || !same_descriptor_identity(&retained.snapshot, &linked)
+            || !same_descriptor_identity(&retained.snapshot, &opened)
+        {
+            return Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::ConcurrentModification,
+                &retained.path,
+                "revalidate the retained parent directory identity",
+            ));
+        }
+        parent = &retained.file;
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn private_descriptor_snapshot(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    target: &Path,
+) -> Result<Option<Stat>, AtomicWriteError> {
+    let snapshot = match rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(snapshot) => snapshot,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
         Err(error) => {
             return Err(AtomicWriteError::io(
                 target,
-                "inspect the descriptor-rooted target",
-                error,
+                "inspect the private descriptor-rooted target",
+                error.into(),
             ));
         }
     };
-    validate_single_link_immutable_metadata(target, &before)?;
-    if before.permissions().mode() & 0o077 != 0 {
+    if !rustix::fs::FileType::from_raw_mode(snapshot.st_mode).is_file()
+        || snapshot.st_nlink != 1
+        || snapshot.st_mode & 0o077 != 0
+    {
         return Err(AtomicWriteError::new(
             AtomicWriteErrorCode::UnsafeTarget,
             target,
-            "validate private descriptor-rooted target permissions",
+            "require a private single-link descriptor-rooted regular file",
         ));
     }
-    let identity = FileIdentity::from_metadata(&before);
+    Ok(Some(snapshot))
+}
+#[cfg(unix)]
+fn read_private_immutable_target_bounded(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    target: &Path,
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, AtomicWriteError> {
+    let before = private_descriptor_snapshot(parent, name, target)?;
     #[cfg(test)]
     run_test_after_descriptor_target_bind();
-    let read = read_immutable_target_bounded(target, max_bytes, Some(identity))?;
-    let after = inspect_single_link_immutable_target(target)?;
-    if after.permissions().mode() & 0o077 != 0 || !same_immutable_file_snapshot(&before, &after) {
+    let Some(before) = before else {
+        return match private_descriptor_snapshot(parent, name, target)? {
+            None => Ok(None),
+            Some(_) => Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::ConcurrentModification,
+                target,
+                "verify descriptor-rooted target absence",
+            )),
+        };
+    };
+    let mut file = File::from(
+        rustix::fs::openat(
+            parent,
+            name,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            AtomicWriteError::io(
+                target,
+                "open the private descriptor-rooted target",
+                error.into(),
+            )
+        })?,
+    );
+    let opened = rustix::fs::fstat(&file).map_err(|error| {
+        AtomicWriteError::io(target, "inspect the open private target", error.into())
+    })?;
+    if !same_immutable_descriptor_snapshot(&before, &opened) {
+        return Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::ConcurrentModification,
+            target,
+            "bind the open private descriptor-rooted target",
+        ));
+    }
+    let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    let metadata_exceeds_bound = u64::try_from(opened.st_size).unwrap_or(u64::MAX) > max_bytes_u64;
+    let mut observed = Vec::with_capacity(max_bytes.min(64 * 1024));
+    if !metadata_exceeds_bound {
+        (&mut file)
+            .take(max_bytes_u64.saturating_add(1))
+            .read_to_end(&mut observed)
+            .map_err(|error| AtomicWriteError::io(target, "read private immutable bytes", error))?;
+    }
+    let opened_after = rustix::fs::fstat(&file).map_err(|error| {
+        AtomicWriteError::io(target, "reinspect the open private target", error.into())
+    })?;
+    let after = private_descriptor_snapshot(parent, name, target)?;
+    if !same_immutable_descriptor_snapshot(&before, &opened_after)
+        || !after.is_some_and(|after| same_immutable_descriptor_snapshot(&before, &after))
+    {
         return Err(AtomicWriteError::new(
             AtomicWriteErrorCode::ConcurrentModification,
             target,
             "revalidate the private descriptor-rooted target",
         ));
     }
-    match read {
-        ImmutableReadOutcome::Within(bytes) => Ok(Some(bytes)),
-        ImmutableReadOutcome::Exceeded => Err(AtomicWriteError::new(
+    if metadata_exceeds_bound || observed.len() > max_bytes {
+        return Err(AtomicWriteError::new(
             AtomicWriteErrorCode::UnsafeTarget,
             target,
             "enforce the descriptor-rooted target size bound",
-        )),
+        ));
     }
+    if u64::try_from(observed.len()).unwrap_or(u64::MAX)
+        != u64::try_from(opened_after.st_size).unwrap_or(u64::MAX)
+    {
+        return Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::ConcurrentModification,
+            target,
+            "verify the private descriptor-rooted read length",
+        ));
+    }
+    Ok(Some(observed))
 }
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn same_immutable_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-        && left.nlink() == right.nlink()
-        && left.mode() == right.mode()
+#[cfg(unix)]
+fn same_descriptor_identity(left: &Stat, right: &Stat) -> bool {
+    left.st_dev == right.st_dev && left.st_ino == right.st_ino
+}
+#[cfg(unix)]
+fn same_immutable_descriptor_snapshot(left: &Stat, right: &Stat) -> bool {
+    same_descriptor_identity(left, right)
+        && left.st_size == right.st_size
+        && left.st_mtime == right.st_mtime
+        && left.st_mtime_nsec == right.st_mtime_nsec
+        && left.st_ctime == right.st_ctime
+        && left.st_ctime_nsec == right.st_ctime_nsec
+        && left.st_nlink == right.st_nlink
+        && left.st_mode == right.st_mode
 }
 fn inspect_single_link_immutable_target(target: &Path) -> Result<fs::Metadata, AtomicWriteError> {
     let metadata = match fs::symlink_metadata(target) {
@@ -1986,6 +2097,228 @@ mod tests {
     fn inject_directory_sync_failures(count: usize) -> DirectorySyncFailureReset {
         TEST_DIRECTORY_SYNC_FAILURES.with(|remaining| remaining.set(count));
         DirectorySyncFailureReset
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_descriptor_reads_enforce_bounds_and_real_parent_components() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().expect("root");
+        fs::create_dir(root.path().join("nested")).expect("parent");
+        let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
+        let relative = Path::new("nested/catalog");
+        assert_eq!(
+            writer.load_private_descriptor_rooted(relative, 5).unwrap(),
+            None
+        );
+        writer.replace(relative, b"owned").expect("private file");
+        assert_eq!(
+            writer.load_private_descriptor_rooted(relative, 5).unwrap(),
+            Some(b"owned".to_vec())
+        );
+        assert_eq!(
+            writer
+                .load_private_descriptor_rooted(relative, 4)
+                .unwrap_err()
+                .code(),
+            AtomicWriteErrorCode::UnsafeTarget
+        );
+        symlink(root.path().join("nested"), root.path().join("link")).expect("linked parent");
+        for (relative, code) in [
+            ("link/catalog", AtomicWriteErrorCode::SymlinkAncestor),
+            ("missing/catalog", AtomicWriteErrorCode::UnsafeParent),
+            ("nested/catalog/child", AtomicWriteErrorCode::UnsafeParent),
+            ("../catalog", AtomicWriteErrorCode::InvalidRelativePath),
+        ] {
+            assert_eq!(
+                writer
+                    .load_private_descriptor_rooted(Path::new(relative), 5)
+                    .unwrap_err()
+                    .code(),
+                code,
+                "{relative}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_descriptor_reads_reject_unsafe_leaf_entries() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().expect("root");
+        let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
+        writer
+            .replace(Path::new("private"), b"private")
+            .expect("private file");
+        fs::hard_link(root.path().join("private"), root.path().join("hardlink"))
+            .expect("second link");
+        symlink(root.path().join("private"), root.path().join("symlink")).expect("leaf link");
+        fs::create_dir(root.path().join("directory")).expect("directory");
+        fs::write(root.path().join("public"), b"public").expect("public file");
+        fs::set_permissions(
+            root.path().join("public"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .expect("public permissions");
+        for relative in ["private", "hardlink", "symlink", "directory", "public"] {
+            assert_eq!(
+                writer
+                    .load_private_descriptor_rooted(Path::new(relative), 100)
+                    .unwrap_err()
+                    .code(),
+                AtomicWriteErrorCode::UnsafeTarget,
+                "{relative}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_descriptor_reads_preserve_root_identity_during_aba_substitution() {
+        for genuine_bytes in [None, Some(b"genuine".as_slice())] {
+            let holder = tempfile::tempdir().expect("holder");
+            let root = holder.path().join("root");
+            let alternate = holder.path().join("alternate");
+            let held = holder.path().join("held");
+            fs::create_dir(&root).expect("root");
+            fs::create_dir(&alternate).expect("alternate");
+            let writer = AtomicWriteRoot::new(&root).expect("bind root");
+            let relative = Path::new("catalog");
+            if let Some(bytes) = genuine_bytes {
+                writer.replace(relative, bytes).expect("genuine catalog");
+            }
+            AtomicWriteRoot::new(&alternate)
+                .unwrap()
+                .replace(relative, b"forged")
+                .unwrap();
+            let swap_root = root.clone();
+            let swap_alternate = alternate.clone();
+            let swap_held = held.clone();
+            install_descriptor_root_read_test_hooks(
+                move || {
+                    fs::rename(&swap_root, &swap_held).expect("hold real root");
+                    fs::rename(&swap_alternate, &swap_root).expect("substitute root");
+                },
+                move || {
+                    fs::rename(&root, &alternate).expect("remove substitute");
+                    fs::rename(&held, &root).expect("restore root");
+                },
+            );
+            assert_eq!(
+                writer
+                    .load_private_descriptor_rooted(relative, 100)
+                    .expect("retained root"),
+                genuine_bytes.map(<[u8]>::to_vec)
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_descriptor_reads_reject_persistent_root_and_parent_substitution() {
+        for replace_root in [false, true] {
+            let holder = tempfile::tempdir().expect("holder");
+            let root = holder.path().join("root");
+            fs::create_dir_all(root.join("nested")).expect("nested root");
+            let writer = AtomicWriteRoot::new(&root).expect("bind root");
+            writer
+                .replace(Path::new("nested/catalog"), b"genuine")
+                .expect("catalog");
+            let replaced = if replace_root {
+                root
+            } else {
+                root.join("nested")
+            };
+            let held = holder.path().join("held");
+            install_descriptor_root_read_test_hooks(
+                move || {
+                    fs::rename(&replaced, held).expect("hold bound directory");
+                    fs::create_dir(&replaced).expect("substitute directory");
+                },
+                || {},
+            );
+            assert_eq!(
+                writer
+                    .load_private_descriptor_rooted(Path::new("nested/catalog"), 100)
+                    .expect_err("changed directory must be rejected")
+                    .code(),
+                AtomicWriteErrorCode::ConcurrentModification
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_descriptor_reads_keep_nested_parent_handles_during_aba_substitution() {
+        let holder = tempfile::tempdir().expect("holder");
+        let root = holder.path().join("root");
+        let nested = root.join("nested");
+        let alternate = holder.path().join("alternate");
+        let held = holder.path().join("held");
+        fs::create_dir_all(&nested).expect("nested root");
+        fs::create_dir(&alternate).expect("alternate");
+        let writer = AtomicWriteRoot::new(&root).expect("bind root");
+        writer
+            .replace(Path::new("nested/catalog"), b"genuine")
+            .expect("catalog");
+        AtomicWriteRoot::new(&alternate)
+            .unwrap()
+            .replace(Path::new("catalog"), b"forged")
+            .unwrap();
+        let swap_nested = nested.clone();
+        let swap_alternate = alternate.clone();
+        let swap_held = held.clone();
+        install_descriptor_root_read_test_hooks(
+            move || {
+                fs::rename(&swap_nested, &swap_held).expect("hold real parent");
+                fs::rename(&swap_alternate, &swap_nested).expect("substitute parent");
+            },
+            move || {
+                fs::rename(&nested, &alternate).expect("remove substitute");
+                fs::rename(&held, &nested).expect("restore parent");
+            },
+        );
+        assert_eq!(
+            writer
+                .load_private_descriptor_rooted(Path::new("nested/catalog"), 100)
+                .expect("retained parent"),
+            Some(b"genuine".to_vec())
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_descriptor_reads_reject_leaf_and_fifo_substitution_before_reading() {
+        for fifo in [false, true] {
+            let root = tempfile::tempdir().expect("root");
+            let writer = AtomicWriteRoot::new(root.path()).expect("bind root");
+            writer
+                .replace(Path::new("catalog"), b"genuine")
+                .expect("catalog");
+            writer
+                .replace(Path::new("replacement"), b"changed")
+                .expect("substitute");
+            let target = root.path().join("catalog");
+            let replacement = root.path().join("replacement");
+            install_descriptor_root_read_test_hooks(
+                move || {
+                    if fifo {
+                        fs::remove_file(&target).expect("remove regular target");
+                        assert!(
+                            std::process::Command::new("mkfifo")
+                                .arg(&target)
+                                .status()
+                                .expect("mkfifo")
+                                .success()
+                        );
+                    } else {
+                        fs::rename(replacement, target).expect("substitute regular target");
+                    }
+                },
+                || {},
+            );
+            assert_eq!(
+                writer
+                    .load_private_descriptor_rooted(Path::new("catalog"), 100)
+                    .expect_err("substituted descriptor must fail before reading")
+                    .code(),
+                AtomicWriteErrorCode::ConcurrentModification
+            );
+        }
     }
     #[cfg(unix)]
     #[test]

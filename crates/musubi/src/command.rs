@@ -17,11 +17,12 @@ use crate::{
         CompilerActionV1, CompilerBridgeErrorV1, execute_compiler_graph, validate_packaged_plan,
     },
     graph::{
-        GraphErrorV1, GraphUpdateV1, resolve_workspace_offline_cached,
-        resolve_workspace_online_cached, resolve_workspace_online_cached_fresh,
+        GraphErrorV1, GraphPurposeV1, GraphUpdateV1, OfflineGraphOptionsV1,
+        resolve_workspace_local, resolve_workspace_offline_cached, resolve_workspace_online_cached,
+        resolve_workspace_online_cached_fresh,
     },
     local_file::read_bounded_single_link_regular_file_v1,
-    lockfile::{LockfileError, LockfileV1},
+    lockfile::{LockContextV1, LockfileError, LockfileV1},
     manifest::{
         ConcreteDependency, DependencyPath, DependencySection, DependencySpec, MANIFEST_FILE_NAME,
         Manifest, PortablePath, parse_manifest, remove_dependency, upsert_dependency,
@@ -354,6 +355,9 @@ struct BuildArgs {
     /// Select release compiler settings.
     #[arg(long)]
     release: bool,
+    /// Account-address chain discriminant for local compilation. Must match the registry when used.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    chain_discriminant: Option<u16>,
 }
 #[derive(Args, Debug)]
 struct PackageArgs {
@@ -1331,15 +1335,24 @@ fn run_metadata(explicit_manifest: Option<&Path>, args: &MetadataArgs) -> Comman
         values.push(member_json(member, &workspace));
     }
     if let Some(lock) = &lock {
-        writeln!(
-            human,
-            "lock = {}@{} (height {}, index revision {}, {} nodes)",
-            lock.schema,
-            lock.version,
-            lock.snapshot.finalized_height,
-            lock.snapshot.index_revision,
-            lock.nodes.len()
-        )
+        match &lock.context {
+            LockContextV1::Local { .. } => writeln!(
+                human,
+                "lock = {}@{} (local, {} packages)",
+                lock.schema,
+                lock.version,
+                lock.roots.len()
+            ),
+            LockContextV1::Registry { snapshot, .. } => writeln!(
+                human,
+                "lock = {}@{} (registry, height {}, index revision {}, {} nodes)",
+                lock.schema,
+                lock.version,
+                snapshot.finalized_height,
+                snapshot.index_revision,
+                lock.nodes.len()
+            ),
+        }
         .expect("writing to a String cannot fail");
     }
     Ok(Success {
@@ -1679,16 +1692,28 @@ fn lockfile_json(lock: &LockfileV1) -> Value {
     object([
         ("schema", Value::from(lock.schema.clone())),
         ("version", Value::from(u64::from(lock.version))),
-        ("network_id", Value::from(lock.network_id.to_string())),
         (
-            "finalized_height",
-            Value::from(lock.snapshot.finalized_height),
+            "context",
+            match &lock.context {
+                LockContextV1::Local { graph_digest } => object([
+                    ("kind", Value::from("local")),
+                    ("graph_digest", Value::from(hex::encode(graph_digest))),
+                ]),
+                LockContextV1::Registry {
+                    network_id,
+                    snapshot,
+                } => object([
+                    ("kind", Value::from("registry")),
+                    ("network_id", Value::from(network_id.to_string())),
+                    ("finalized_height", Value::from(snapshot.finalized_height)),
+                    (
+                        "finalized_block_hash",
+                        Value::from(hex::encode(snapshot.finalized_block_hash)),
+                    ),
+                    ("index_revision", Value::from(snapshot.index_revision)),
+                ]),
+            },
         ),
-        (
-            "finalized_block_hash",
-            Value::from(hex::encode(lock.snapshot.finalized_block_hash)),
-        ),
-        ("index_revision", Value::from(lock.snapshot.index_revision)),
         (
             "roots",
             Value::Array(
@@ -1781,6 +1806,28 @@ fn load_selected_workspace(
         .collect();
     Ok((workspace, selected_packages))
 }
+#[derive(Clone, Copy)]
+struct WorkspaceResolutionOptionsV1<'a> {
+    mode: GraphModeArgs,
+    config: Option<&'a Path>,
+    fresh_only: bool,
+    purpose: GraphPurposeV1,
+    requested_chain_discriminant: Option<u16>,
+}
+fn select_compiler_chain_discriminant(
+    configured: u16,
+    requested: Option<u16>,
+    bound_to_configuration: bool,
+) -> Result<u16, Diagnostic> {
+    match requested {
+        Some(value) if bound_to_configuration && value != configured => Err(Diagnostic::new(
+            ErrorCode::Usage,
+            "--chain-discriminant must match the selected client configuration",
+        )),
+        Some(value) => Ok(value),
+        None => Ok(configured),
+    }
+}
 struct ResolvedWorkspaceGraphV1 {
     lock: LockfileV1,
     registry: Option<RegistryReadClientV1>,
@@ -1793,6 +1840,19 @@ struct ResolvedWorkspaceGraphV1 {
 impl ResolvedWorkspaceGraphV1 {
     const fn account_chain_discriminant(&self) -> u16 {
         self.account_chain_discriminant
+    }
+    fn registry_context(
+        &self,
+    ) -> Result<
+        (
+            iroha_data_model::NetworkId,
+            iroha_data_model::musubi::MusubiRegistrySnapshotV1,
+        ),
+        Diagnostic,
+    > {
+        self.lock
+            .registry_context()
+            .map_err(|error| Diagnostic::new(ErrorCode::Registry, error.to_string()))
     }
     fn online_registry(&self) -> Result<&RegistryReadClientV1, Diagnostic> {
         self.registry.as_ref().ok_or_else(|| {
@@ -1828,13 +1888,69 @@ impl ResolvedWorkspaceGraphV1 {
 fn resolve_and_update_workspace_lock(
     workspace: &Workspace,
     selected_packages: &[MusubiPackageSelectorV1],
-    mode: GraphModeArgs,
     previous: Option<LockfileV1>,
     update: Option<GraphUpdateV1>,
-    config: Option<&Path>,
-    fresh_only: bool,
+    options: WorkspaceResolutionOptionsV1<'_>,
 ) -> Result<ResolvedWorkspaceGraphV1, Diagnostic> {
+    let WorkspaceResolutionOptionsV1 {
+        mode,
+        config,
+        fresh_only,
+        purpose,
+        requested_chain_discriminant,
+    } = options;
+    let public_config = config
+        .map(|path| RegistryPublicConfigImageV1::load(Some(path)))
+        .transpose()
+        .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?;
     let lock_path = workspace.root().join(LOCK_FILE_NAME);
+    let resolve_mode = if mode.effective_locked() {
+        ResolveModeV1::Locked
+    } else {
+        ResolveModeV1::UpdateLock
+    };
+    if matches!(purpose, GraphPurposeV1::Workspace)
+        && update.is_none()
+        && let Some(outcome) =
+            resolve_workspace_local(workspace, selected_packages, previous.clone(), resolve_mode)
+                .map_err(graph_diagnostic)?
+    {
+        let configured = match &public_config {
+            Some(image) => image
+                .account_chain_discriminant()
+                .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?,
+            None => iroha::config::resolve_account_chain_discriminant(None, None)
+                .expect("the canonical default address profile is valid"),
+        };
+        let account_chain_discriminant = select_compiler_chain_discriminant(
+            configured,
+            requested_chain_discriminant,
+            public_config.is_some(),
+        )?;
+        if outcome.changed {
+            let writer = AtomicWriteRoot::new(workspace.root()).map_err(atomic_diagnostic)?;
+            outcome
+                .lockfile
+                .write_atomic(&writer, Path::new(LOCK_FILE_NAME))
+                .map_err(|error| lockfile_diagnostic(&lock_path, &error))?;
+        }
+        return Ok(ResolvedWorkspaceGraphV1 {
+            lock: outcome.lockfile,
+            registry: None,
+            cached_source: None,
+            prepared_archive_fetch: None,
+            platform_config_provenance: None,
+            account_chain_discriminant,
+        });
+    }
+    let explicit_binding = public_config
+        .as_ref()
+        .map(RegistryPublicConfigImageV1::registry_binding)
+        .transpose()
+        .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?;
+    if let Some((_, profile)) = explicit_binding {
+        select_compiler_chain_discriminant(profile, requested_chain_discriminant, true)?;
+    }
     let cache_root = platform_cache_root_v1().map_err(|error| {
         Diagnostic::new(
             ErrorCode::CacheCorrupt,
@@ -1849,11 +1965,6 @@ fn resolve_and_update_workspace_lock(
         )
         .with_context("reason", error.to_string())
     })?;
-    let resolve_mode = if mode.effective_locked() {
-        ResolveModeV1::Locked
-    } else {
-        ResolveModeV1::UpdateLock
-    };
     let (
         outcome,
         registry,
@@ -1868,10 +1979,29 @@ fn resolve_and_update_workspace_lock(
             selected_packages,
             previous,
             update,
-            resolve_mode,
+            OfflineGraphOptionsV1 {
+                mode: resolve_mode,
+                purpose,
+                expected_binding: explicit_binding,
+            },
         )
         .map_err(graph_diagnostic)?;
-        let account_chain_discriminant = cached.source.account_chain_discriminant();
+        let cached_profile = cached.source.account_chain_discriminant();
+        let (cached_network, _) = cached
+            .outcome
+            .lockfile
+            .registry_context()
+            .map_err(|error| lockfile_diagnostic(&lock_path, &error))?;
+        if let Some((network, profile)) = explicit_binding
+            && (network != cached_network || profile != cached_profile)
+        {
+            return Err(Diagnostic::new(
+                ErrorCode::OfflineMiss,
+                "the cached graph does not match the explicit client network and address profile",
+            ));
+        }
+        let account_chain_discriminant =
+            select_compiler_chain_discriminant(cached_profile, requested_chain_discriminant, true)?;
         (
             cached.outcome,
             None,
@@ -1881,13 +2011,25 @@ fn resolve_and_update_workspace_lock(
             account_chain_discriminant,
         )
     } else {
-        let (registry, config_image) = RegistryReadClientV1::load_with_config_image(config)
-            .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+        let (registry, config_image) = match public_config {
+            Some(image) => {
+                let reader =
+                    RegistryReadClientV1::load_from_config_bytes(image.path(), image.bytes())
+                        .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+                (reader, image)
+            }
+            None => RegistryReadClientV1::load_with_config_image(None)
+                .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?,
+        };
         let prepared_archive_fetch =
             prepare_production_archive_transport_v1(config_image.path(), config_image.bytes());
         let platform_config_provenance = config_image.provenance();
         drop(config_image);
-        let account_chain_discriminant = registry.account_chain_discriminant();
+        let account_chain_discriminant = select_compiler_chain_discriminant(
+            registry.account_chain_discriminant(),
+            requested_chain_discriminant,
+            true,
+        )?;
         let mut snapshot_mismatches = 0_u8;
         let outcome = loop {
             let result = if fresh_only {
@@ -1899,6 +2041,7 @@ fn resolve_and_update_workspace_lock(
                     previous.clone(),
                     update.clone(),
                     resolve_mode,
+                    purpose,
                 )
             } else {
                 resolve_workspace_online_cached(
@@ -1909,6 +2052,7 @@ fn resolve_and_update_workspace_lock(
                     previous.clone(),
                     update.clone(),
                     resolve_mode,
+                    purpose,
                 )
             };
             match result {
@@ -1946,6 +2090,23 @@ fn resolve_and_update_workspace_lock(
 fn graph_diagnostic(error: GraphErrorV1) -> Diagnostic {
     match error {
         GraphErrorV1::Workspace(error) => workspace_diagnostic(error),
+        GraphErrorV1::LocalGraphInvalid(reason) => {
+            Diagnostic::new(ErrorCode::WorkspaceInvalid, reason)
+        }
+        GraphErrorV1::LocalCycle(path) => Diagnostic::new(
+            ErrorCode::DependencyCycle,
+            format!(
+                "local dependency cycle: {}",
+                path.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ),
+        ),
+        GraphErrorV1::LocalDepthExceeded { limit } => Diagnostic::new(
+            ErrorCode::ResolutionConflict,
+            format!("local dependency graph exceeds the maximum depth of {limit}"),
+        ),
         GraphErrorV1::Registry(code) => Diagnostic::new(
             ErrorCode::Registry,
             "finalized Musubi registry query failed",
@@ -2012,14 +2173,21 @@ fn run_fetch(explicit_manifest: Option<&Path>, args: &FetchArgs) -> CommandResul
     let graph = resolve_and_update_workspace_lock(
         &workspace,
         &selected_names,
-        args.mode,
         previous,
         None,
-        args.registry.config.as_deref(),
-        false,
+        WorkspaceResolutionOptionsV1 {
+            mode: args.mode,
+            config: args.registry.config.as_deref(),
+            fresh_only: false,
+            purpose: GraphPurposeV1::Workspace,
+            requested_chain_discriminant: None,
+        },
     )?;
-    let cache = open_user_cache()?;
-    let fetched = ensure_graph_archives(&cache, &graph, args.mode)?;
+    let fetched = if graph.lock.nodes.is_empty() {
+        Vec::new()
+    } else {
+        ensure_graph_archives(&open_user_cache()?, &graph, args.mode)?
+    };
     Ok(Success {
         message: format!("fetched {} archive(s)", fetched.len()),
         data: object([
@@ -2085,7 +2253,7 @@ fn ensure_graph_archives(
             );
         }
         let adapter = MusubiArchiveFetchAdapterV1::new(graph.online_registry()?, cache)
-            .with_expected_deployment(graph.lock.network_id, graph.lock.snapshot);
+            .with_expected_deployment(graph.registry_context()?.0, graph.registry_context()?.1);
         let outcome = adapter
             .fetch_exact(
                 archive_id,
@@ -2160,36 +2328,48 @@ fn run_build(
     let graph = resolve_and_update_workspace_lock(
         &workspace,
         &selected_names,
-        args.mode,
         previous,
         None,
-        args.registry.config.as_deref(),
-        false,
+        WorkspaceResolutionOptionsV1 {
+            mode: args.mode,
+            config: args.registry.config.as_deref(),
+            fresh_only: false,
+            purpose: GraphPurposeV1::Workspace,
+            requested_chain_discriminant: args.chain_discriminant,
+        },
     )?;
-    let cache = open_user_cache()?;
-    let archives = ensure_graph_archives(&cache, &graph, args.mode)?;
+    let cache = if graph.lock.nodes.is_empty() {
+        None
+    } else {
+        Some(open_user_cache()?)
+    };
+    let archives = match &cache {
+        Some(cache) => ensure_graph_archives(cache, &graph, args.mode)?,
+        None => Vec::new(),
+    };
+    let chain_discriminant = graph.account_chain_discriminant();
     let action = if command == "build" {
         CompilerActionV1::Build
     } else {
         CompilerActionV1::Check
     };
     let execution = execute_compiler_graph(
-        &cache,
+        cache.as_ref(),
         &workspace,
         &selected_names,
         &graph.lock,
         action,
         args.release,
-        graph.account_chain_discriminant(),
+        chain_discriminant,
     )
     .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
     if command == "test" {
         let report = execute_workspace_tests_v1(
-            &cache,
+            cache.as_ref(),
             &workspace,
             &selected_names,
             &graph.lock,
-            &WorkspaceTestOptionsV1::new(graph.account_chain_discriminant()),
+            &WorkspaceTestOptionsV1::new(chain_discriminant),
         )
         .map_err(|error| graph_mode_test_diagnostic(&error, args.mode))?;
         if !report.is_success() {
@@ -2396,11 +2576,15 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
     let graph = resolve_and_update_workspace_lock(
         &workspace,
         &selected_names,
-        args.mode,
         previous,
         None,
-        args.registry.config.as_deref(),
-        false,
+        WorkspaceResolutionOptionsV1 {
+            mode: args.mode,
+            config: args.registry.config.as_deref(),
+            fresh_only: false,
+            purpose: GraphPurposeV1::Publication,
+            requested_chain_discriminant: None,
+        },
     )?;
     let (cache, archives) = if args.list {
         (None, Vec::new())
@@ -2473,7 +2657,7 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
         let publication = publication_claim(
             &semantic,
             &archive_commitment,
-            graph.lock.snapshot,
+            graph.registry_context()?.1,
             verification_lock,
         )
         .map_err(|error| package_diagnostic(&error))?;
@@ -2647,11 +2831,15 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let graph = resolve_and_update_workspace_lock(
         &workspace,
         &selected_names,
-        args.mode,
         previous,
         None,
-        args.network.config.as_deref(),
-        true,
+        WorkspaceResolutionOptionsV1 {
+            mode: args.mode,
+            config: args.network.config.as_deref(),
+            fresh_only: true,
+            purpose: GraphPurposeV1::Publication,
+            requested_chain_discriminant: None,
+        },
     )?;
     let member = workspace
         .members()
@@ -2699,7 +2887,7 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let publication = publication_claim(
         &semantic,
         &archive_commitment,
-        graph.lock.snapshot,
+        graph.registry_context()?.1,
         verification_lock,
     )
     .map_err(|error| package_diagnostic(&error))?;
@@ -2733,14 +2921,14 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let registry = loaded.registry_reader();
     let bindings = loaded.bindings().clone();
     let (signing, mut services, _) = loaded.into_parts();
-    if signing.network_id() != graph.lock.network_id {
+    if signing.network_id() != graph.registry_context()?.0 {
         return Err(Diagnostic::new(
             ErrorCode::Publish,
             "signing configuration belongs to a different network than the resolved graph",
         ));
     }
     let request = PublicationRequestV1 {
-        network_id: graph.lock.network_id,
+        network_id: graph.registry_context()?.0,
         publisher: signing.authority().clone(),
         ingress_broker: bindings.ingress_broker,
         seed_provider: bindings.seed_provider,
@@ -2896,8 +3084,10 @@ fn recover_publication_sidecars_at(
     }
     let verification_lock = journal.request.publication.resolution.lock.clone();
     let graph_lock = LockfileV1::new(
-        journal.request.network_id(),
-        journal.request.publication.resolution.snapshot,
+        LockContextV1::Registry {
+            network_id: journal.request.network_id(),
+            snapshot: journal.request.publication.resolution.snapshot,
+        },
         vec![crate::lockfile::LockedRootV1 {
             package: selector.clone(),
             dependencies: verification_lock.root_dependencies.clone(),
@@ -3971,11 +4161,15 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
     let updated = resolve_and_update_workspace_lock(
         &workspace,
         &selected,
-        args.mode,
         previous_for_resolution,
         graph_update,
-        args.registry.config.as_deref(),
-        false,
+        WorkspaceResolutionOptionsV1 {
+            mode: args.mode,
+            config: args.registry.config.as_deref(),
+            fresh_only: false,
+            purpose: GraphPurposeV1::Workspace,
+            requested_chain_discriminant: None,
+        },
     )?;
     Ok(Success {
         message: format!("updated {target}"),

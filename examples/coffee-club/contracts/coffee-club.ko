@@ -1,0 +1,13 @@
+// Earn 10 points for every coffee.
+seiyaku CoffeeClub {
+    fn points(int coffees) -> int {
+        if coffees < 0 {
+            return 0;
+        }
+        return coffees * 10;
+    }
+
+    view fn quote(int coffees) -> int {
+        return points(coffees: coffees);
+    }
+}

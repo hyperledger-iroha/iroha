@@ -139,7 +139,7 @@ fn assert_scaffold_compiler_workflows(root: &Path, cache_root: &Path) {
     let mut interfaces = None;
     for action in [CompilerActionV1::Check, CompilerActionV1::Build] {
         let execution = execute_compiler_graph(
-            &cache,
+            Some(&cache),
             &workspace,
             std::slice::from_ref(&selector),
             &lock,
@@ -672,7 +672,6 @@ fn build_and_install_dependency_fixture(
     edge.validate().expect("valid dependency fixture edge");
     (edge, node)
 }
-#[cfg(unix)]
 fn add_dependency_to_fixture_manifest(manifest_path: &Path) {
     let mut document = fs::read_to_string(manifest_path).expect("read fixture manifest");
     document.push_str(
@@ -1080,12 +1079,11 @@ fn write_test_lock_graph(
     nodes: Vec<MusubiVerificationNodeV1>,
 ) {
     let lock = LockfileV1::new(
-        test_network_id(1),
-        MusubiRegistrySnapshotV1 {
+            LockContextV1::Registry { network_id: test_network_id(1), snapshot: MusubiRegistrySnapshotV1 {
             finalized_height: 7,
             finalized_block_hash: [2; 32],
             index_revision: 3,
-        },
+        } },
         vec![LockedRootV1 {
             package: "apps.sora/demo".parse().expect("root package selector"),
             dependencies: root_dependencies,
@@ -1795,7 +1793,7 @@ fn metadata_and_tree_include_only_the_validated_exact_lock_graph() {
     );
     assert_eq!(
         document
-            .pointer("/data/lock/finalized_height")
+            .pointer("/data/lock/context/finalized_height")
             .and_then(Value::as_u64),
         Some(7)
     );
@@ -1902,12 +1900,11 @@ fn empty_cache_maintenance_is_signer_and_network_free() {
     assert_eq!(repaired.message, "repaired 0 cached archive(s)");
     let graph = ResolvedWorkspaceGraphV1 {
         lock: LockfileV1::new(
-            test_network_id(1),
-            MusubiRegistrySnapshotV1 {
+            LockContextV1::Registry { network_id: test_network_id(1), snapshot: MusubiRegistrySnapshotV1 {
                 finalized_height: 1,
                 finalized_block_hash: [2; 32],
                 index_revision: 1,
-            },
+            } },
             vec![LockedRootV1 {
                 package: "apps.sora/demo".parse().expect("root package"),
                 dependencies: Vec::new(),
@@ -1946,6 +1943,7 @@ fn offline_fetch_with_a_valid_lock_requires_authenticated_cache_inputs() {
     let temp = TempDir::new().expect("temporary directory");
     let (root, manifest_path) = create_test_package(&temp);
     write_test_lock(&root);
+    add_dependency_to_fixture_manifest(&manifest_path);
     let fetch = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1966,6 +1964,7 @@ fn compiler_command_requires_an_authenticated_v1_graph_offline() {
     let temp = TempDir::new().expect("temporary directory");
     let (root, manifest_path) = create_test_package(&temp);
     write_test_lock(&root);
+    add_dependency_to_fixture_manifest(&manifest_path);
     let invocation = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -2815,4 +2814,110 @@ fn publication_compiler_evidence_and_nonce_are_domain_bound() {
     assert!(first.iter().any(|byte| *byte != 0));
     assert!(second.iter().any(|byte| *byte != 0));
     assert_ne!(first, second);
+}
+
+#[test]
+fn cold_local_demo_checks_builds_and_tests_without_registry_configuration() {
+    let temporary = TempDir::new().expect("local demo directory");
+    let root = temporary.path();
+    for (name, source) in [
+        ("Musubi.toml", include_str!("../../../examples/coffee-club/Musubi.toml")),
+        ("src/lib.ko", include_str!("../../../examples/coffee-club/src/lib.ko")),
+        ("contracts/coffee-club.ko", include_str!("../../../examples/coffee-club/contracts/coffee-club.ko")),
+        ("tests/coffee-rewards.test.ko", include_str!("../../../examples/coffee-club/tests/coffee-rewards.test.ko")),
+    ] {
+        let path = root.join(name);
+        fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+        fs::write(path, source).expect("fixture source");
+    }
+    let manifest = root.join(MANIFEST_FILE_NAME);
+    for (command, mode) in [("check", "--offline"), ("build", "--frozen"), ("test", "--frozen"), ("fetch", "--frozen")] {
+        let result = invoke([
+            OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
+            OsString::from(command), OsString::from(mode),
+        ]);
+        let rendered = result.output.render(OutputFormat::Human).expect("render output");
+        assert_eq!(rendered.exit_code(), 0, "{command}: {}", rendered.stderr());
+        if command == "test" {
+            assert!(rendered.stdout().contains("4 passed; 0 failed"));
+        }
+    }
+    let lock = LockfileV1::read(&root.join(LOCK_FILE_NAME)).expect("local lock");
+    assert!(matches!(lock.context, LockContextV1::Local { .. }));
+    assert!(lock.nodes.is_empty());
+    assert!(lock.registry_context().is_err(), "a local build is not registry evidence");
+    let before = fs::read(root.join(LOCK_FILE_NAME)).expect("original lock");
+    let output = invoke([
+        OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
+        OsString::from("metadata"),
+    ]).output.render(OutputFormat::Json).expect("metadata JSON");
+    assert_eq!(output.exit_code(), 0);
+    assert!(output.stdout().contains("\"kind\":\"local\""));
+    assert!(!output.stdout().contains("network_id"));
+    assert_eq!(fs::read(root.join(LOCK_FILE_NAME)).expect("unchanged lock"), before);
+}
+
+#[test]
+fn cold_local_locked_rejects_missing_lock_and_graph_edits() {
+    let temp = TempDir::new().expect("local workspace");
+    let (root, manifest) = create_test_package(&temp);
+    let call = |command: &str, mode: &str| invoke([
+        OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
+        OsString::from(command), OsString::from(mode),
+    ]);
+    assert_eq!(call("check", "--frozen").output.exit_code(), ErrorCode::Locked.exit_code());
+    assert!(!root.join(LOCK_FILE_NAME).exists());
+    assert_eq!(call("check", "--offline").output.exit_code(), 0);
+    let bytes = fs::read(root.join(LOCK_FILE_NAME)).expect("original lock");
+    let source = fs::read_to_string(&manifest).expect("manifest");
+    fs::write(&manifest, source.replace("version = \"0.1.0\"", "version = \"0.2.0\""))
+        .expect("edit package version");
+    assert_eq!(call("check", "--locked").output.exit_code(), ErrorCode::Locked.exit_code());
+    assert_eq!(fs::read(root.join(LOCK_FILE_NAME)).expect("retained lock"), bytes);
+    assert_eq!(call("check", "--offline").output.exit_code(), 0);
+    assert_ne!(fs::read(root.join(LOCK_FILE_NAME)).expect("updated lock"), bytes);
+}
+
+#[test]
+fn local_compiler_profile_uses_only_explicit_public_configuration() {
+    let temp = TempDir::new().expect("local profile directory");
+    let (_, manifest) = create_test_package(&temp);
+    let config = temp.path().join("public.toml");
+    fs::write(&config, "[account]\nchain_discriminant = 369\n").expect("public-only config");
+    for (discriminant, expected) in [(369, 0), (753, ErrorCode::Usage.exit_code())] {
+        let output = invoke([
+            OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
+            OsString::from("check"), OsString::from("--offline"),
+            OsString::from("--config"), config.as_os_str().to_owned(),
+            OsString::from("--chain-discriminant"), OsString::from(discriminant.to_string()),
+        ]).output.render(OutputFormat::Human).expect("render output");
+        assert_eq!(output.exit_code(), expected, "{}", output.stderr());
+    }
+    assert!(Cli::try_parse_from(["musubi", "check", "--chain-discriminant", "0"]).is_err());
+}
+
+#[test]
+fn invalid_local_profile_does_not_create_a_lock() {
+    for config_contents in ["[account]\nchain_discriminant = 0\n", "[account]\nchain_discriminant = 369\n"] {
+        let temp = TempDir::new().expect("invalid profile directory");
+        let (root, manifest) = create_test_package(&temp);
+        let config = temp.path().join("public.toml");
+        fs::write(&config, config_contents).expect("public config");
+        let output = invoke([
+            OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
+            OsString::from("check"), OsString::from("--offline"),
+            OsString::from("--config"), config.as_os_str().to_owned(),
+            OsString::from("--chain-discriminant"), OsString::from("753"),
+        ]).output;
+        assert_ne!(output.exit_code(), 0);
+        assert!(!root.join(LOCK_FILE_NAME).exists(), "invalid options must not publish a lock");
+    }
+}
+
+#[test]
+fn compiler_profile_selection_requires_an_exact_configured_match() {
+    assert_eq!(select_compiler_chain_discriminant(753, None, false).unwrap(), 753);
+    assert_eq!(select_compiler_chain_discriminant(753, Some(369), false).unwrap(), 369);
+    assert_eq!(select_compiler_chain_discriminant(369, Some(369), true).unwrap(), 369);
+    assert_eq!(select_compiler_chain_discriminant(753, Some(369), true).unwrap_err().code(), ErrorCode::Usage);
 }

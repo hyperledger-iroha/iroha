@@ -563,6 +563,84 @@ fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
     assert!(error.message.contains("canonical logical spelling"));
 }
 #[test]
+fn structured_standalone_sources_execute_private_target_and_exact_package() {
+    let target = SourceModuleUnit { source_name: "contracts/app.ko".to_owned(), source: "seiyaku App { fn reward() -> int { return calc::value(); } view fn current() -> int { return reward(); } }".to_owned() };
+    let test = SourceModuleUnit { source_name: "tests/unit.ko".to_owned(), source: r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn exact_reward() { test::assert(reward() == 7); test::assert(calc::value() == 7); } }"#.to_owned() };
+    let modules = KotoTestModuleGraphV1 {
+        imports: vec![ImportBinding {
+            alias: "calc".to_owned(),
+            package: "demo/math@1.0.0".to_owned(),
+        }],
+        packages: vec![SourcePackageUnit {
+            identity: "demo/math@1.0.0".to_owned(),
+            modules: vec![SourceModuleUnit {
+                source_name: "tests/unit.ko".to_owned(),
+                source: "module Math { fn value() -> int { return 7; } }".to_owned(),
+            }],
+            exports: BTreeSet::from(["value".to_owned()]),
+            imports: Vec::new(),
+        }],
+    };
+    assert_eq!(
+        declared_test_target_source_v1(&test).expect("target"),
+        Some(target.source_name.clone())
+    );
+    assert_eq!(
+        discover_declared_test_names_source_set_v1(&test, Some(&target)).expect("names"),
+        ["exact_reward"]
+    );
+    let report = run_tests_structured_source_set_with_modules_v1(
+        &KotoTestRunRequestV1::new(&test.source_name, 753),
+        &test,
+        Some(&target),
+        &modules,
+    )
+    .expect("immutable standalone suite");
+    assert_eq!(report.passed(), 1);
+    assert_eq!(report.target, PathBuf::from("contracts/app.ko"));
+    let mut wrong = test.clone();
+    wrong.source = wrong.source.replace("calc::value()", "missing::value()");
+    let error = run_tests_structured_source_set_with_modules_v1(
+        &KotoTestRunRequestV1::new(&wrong.source_name, 753),
+        &wrong,
+        Some(&target),
+        &modules,
+    )
+    .expect_err("undeclared import");
+    assert_eq!(error.phase, KotoTestRunPhaseV1::Compilation);
+    assert!(error.message.contains("missing"));
+}
+#[test]
+fn structured_standalone_sources_reject_missing_mismatched_and_escaping_targets() {
+    let source = |target: &str| SourceModuleUnit {
+        source_name: "tests/unit.ko".to_owned(),
+        source: format!(
+            "module Tests {{ koto_test {{ target: \"{target}\" }} #[test] fn check() {{ test::assert(true); }} }}"
+        ),
+    };
+    let test = source("../contracts/app.ko");
+    assert!(
+        discover_declared_test_names_source_set_v1(&test, None)
+            .expect_err("missing target")
+            .contains("explicitly supplied")
+    );
+    let wrong = SourceModuleUnit {
+        source_name: "contracts/other.ko".to_owned(),
+        source: "seiyaku Other {}".to_owned(),
+    };
+    assert!(
+        discover_declared_test_names_source_set_v1(&test, Some(&wrong))
+            .expect_err("wrong target")
+            .contains("not supplied")
+    );
+    for path in ["../../outside.ko", "/tmp/outside.ko", "C:/outside.ko"] {
+        assert!(
+            declared_test_target_source_v1(&source(path)).is_err(),
+            "{path}"
+        );
+    }
+}
+#[test]
 fn machine_reports_preserve_failure_details() {
     let results = vec![TestRunResult {
         name: "rejects_bad_input".to_owned(),
