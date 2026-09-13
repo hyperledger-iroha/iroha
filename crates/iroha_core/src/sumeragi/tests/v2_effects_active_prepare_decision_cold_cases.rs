@@ -622,6 +622,9 @@ fn recover_stale_prepare_decision_crash_fixture(
         .path()
         .join("transport-regression-safety.wal");
     let ledger_path = directory.path().join("ledger/lifecycle-ledger-v1.norito");
+    let queued_commit = (previous.is_none() && !fail_publication).then(|| {
+        transport.quorum_certificate(wire::GlobalPhase::Commit, transport.canonical_commitment)
+    });
     planner_io.detach(&mut services);
     drop(services);
     drop(owner);
@@ -941,10 +944,8 @@ fn recover_stale_prepare_decision_crash_fixture(
         );
         return;
     }
-    let queued_completion_cycle = previous.is_none();
-    if queued_completion_cycle {
-        let duplicate_commit =
-            transport.quorum_certificate(wire::GlobalPhase::Commit, transport.canonical_commitment);
+    let queued_completion_cycle = queued_commit.is_some();
+    if let Some(duplicate_commit) = queued_commit {
         launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
             assert_eq!(executor.runtime.queued_commands(), 0);
             executor
