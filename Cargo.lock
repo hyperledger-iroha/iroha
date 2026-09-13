@@ -4889,6 +4889,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_contract_deploy"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "eyre",
+ "hex",
+ "iroha",
+ "iroha_config",
+ "iroha_crypto",
+ "iroha_executor_data_model",
+ "iroha_model_base",
+ "iroha_primitives",
+ "iroha_torii_shared",
+ "iroha_version",
+ "ivm_abi",
+ "ivm_artifact_admission",
+ "kotodama_lang",
+ "norito",
+ "rustix 1.1.4",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "iroha_core"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -6934,6 +6957,7 @@ dependencies = [
  "eyre",
  "hex",
  "iroha",
+ "iroha_contract_deploy",
  "iroha_data_model",
  "iroha_model_base",
  "iroha_musubi_service",

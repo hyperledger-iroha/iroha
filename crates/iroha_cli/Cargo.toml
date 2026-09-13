@@ -63,11 +63,6 @@ path = "src/bin/gov_instruction.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
-name = "ivm_contract_deploy"
-path = "src/bin/ivm_contract_deploy.rs"
-required-features = ["dev-tools"]
-
-[[bin]]
 name = "taira_fee_sponsor_program"
 path = "src/bin/taira_fee_sponsor_program.rs"
 required-features = ["dev-tools"]

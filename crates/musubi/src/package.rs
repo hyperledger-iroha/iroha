@@ -109,7 +109,7 @@ impl PackageLayout {
     pub fn set_library(&mut self, path: impl Into<PathBuf>) {
         self.library = Some(path.into());
     }
-    /// Add one declared local contract file or directory.
+    /// Add one declared local `.ko` contract source file.
     pub fn add_contract(&mut self, path: impl Into<PathBuf>) {
         self.contracts.push(path.into());
     }
@@ -161,6 +161,24 @@ impl PlannedFile {
         &self.bytes
     }
 }
+/// A read-only inventory of selected source files, without registry or publication authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageInventory {
+    files: Vec<PlannedFile>,
+    source_bytes: u64,
+}
+impl PackageInventory {
+    /// Return selected source files in canonical portable path order.
+    #[must_use]
+    pub fn files(&self) -> &[PlannedFile] {
+        &self.files
+    }
+    /// Return the total selected source payload size.
+    #[must_use]
+    pub const fn source_bytes(&self) -> u64 {
+        self.source_bytes
+    }
+}
 /// A bounded, byte-ordered package file plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackagePlan {
@@ -172,11 +190,6 @@ impl PackagePlan {
     #[must_use]
     pub fn files(&self) -> &[PlannedFile] {
         &self.files
-    }
-    /// Return the total regular-file payload size.
-    #[must_use]
-    pub const fn source_bytes(&self) -> u64 {
-        self.source_bytes
     }
     /// Return the generated normalized verification lock bytes.
     #[must_use]
@@ -783,11 +796,53 @@ pub fn plan_package(
     let mut collector = Collector::new(root);
     collector.insert_virtual(MANIFEST_PATH, manifest)?;
     collector.insert_virtual(VERIFICATION_LOCK_PATH, lock)?;
+    collect_package_sources(layout, &mut collector)?;
+    let inventory = collector.finish()?;
+    Ok(PackagePlan {
+        files: inventory.files,
+        source_bytes: inventory.source_bytes,
+    })
+}
+/// Inspect the same bounded positive source set without creating publication evidence or files.
+///
+/// The inventory includes a canonical projection of the supplied manifest, but no generated
+/// verification lock. It neither resolves dependencies nor loads registry configuration.
+///
+/// # Errors
+/// Returns an error for unsafe or sensitive source files, invalid manifests, unsupported platforms,
+/// or the same source size, count, and path limits enforced during packaging.
+pub fn inventory_package(
+    layout: &PackageLayout,
+    manifest_toml: &str,
+) -> Result<PackageInventory, PackageError> {
+    if !cfg!(unix) {
+        return Err(PackageError::UnsupportedPlatform);
+    }
+    let manifest = canonicalize_manifest_toml(manifest_toml)?;
+    let mut collector = Collector::new(validate_root(layout.root())?);
+    collector.insert_virtual(MANIFEST_PATH, manifest)?;
+    collect_package_sources(layout, &mut collector)?;
+    collector.finish()
+}
+fn collect_package_sources(
+    layout: &PackageLayout,
+    collector: &mut Collector,
+) -> Result<(), PackageError> {
     if let Some(path) = &layout.library {
         collector.collect_selector(path, SelectionShape::Directory)?;
     }
     for path in &layout.contracts {
-        collector.collect_selector(path, SelectionShape::Either)?;
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".ko"))
+        {
+            return Err(PackageError::WrongFileKind {
+                path: path.clone(),
+                expected: "one `.ko` contract source file",
+            });
+        }
+        collector.collect_selector(path, SelectionShape::File)?;
     }
     for path in &layout.tests {
         collector.collect_selector(path, SelectionShape::Either)?;
@@ -813,7 +868,7 @@ pub fn plan_package(
             collector.insert(original, file.path, file.components, file.bytes)?;
         }
     }
-    collector.finish()
+    Ok(())
 }
 /// Derive the positive file selection for one fully resolved workspace package.
 ///
@@ -821,12 +876,9 @@ pub fn plan_package(
 /// root and retain their portable manifest spelling in the clean package tree.
 pub fn package_layout_for_member(workspace_root: &Path, member: &WorkspaceMember) -> PackageLayout {
     let mut layout = PackageLayout::new(&member.package_root);
-    let library = member
-        .manifest
-        .library
-        .as_ref()
-        .expect("loaded package members always have a library");
-    layout.set_library(library.source_dir.to_path_buf());
+    if let Some(library) = &member.manifest.library {
+        layout.set_library(library.source_dir.to_path_buf());
+    }
     for target in &member.manifest.contracts {
         layout.add_contract(target.path.to_path_buf());
     }
@@ -929,27 +981,24 @@ pub fn publication_manifest_toml(member: &WorkspaceMember) -> Result<String, Pac
         );
     }
     root.insert("package".to_owned(), toml::Value::Table(package));
-    let library = member
-        .manifest
-        .library
-        .as_ref()
-        .expect("loaded package members always have a library");
-    let mut library_table = toml::Table::new();
-    library_table.insert(
-        "source-dir".to_owned(),
-        toml::Value::String(library.source_dir.to_string()),
-    );
-    library_table.insert(
-        "exports".to_owned(),
-        toml::Value::Array(
-            library
-                .exports
-                .iter()
-                .map(|export| toml::Value::String(export.to_string()))
-                .collect(),
-        ),
-    );
-    root.insert("lib".to_owned(), toml::Value::Table(library_table));
+    if let Some(library) = &member.manifest.library {
+        let mut library_table = toml::Table::new();
+        library_table.insert(
+            "source-dir".to_owned(),
+            toml::Value::String(library.source_dir.to_string()),
+        );
+        library_table.insert(
+            "exports".to_owned(),
+            toml::Value::Array(
+                library
+                    .exports
+                    .iter()
+                    .map(|export| toml::Value::String(export.to_string()))
+                    .collect(),
+            ),
+        );
+        root.insert("lib".to_owned(), toml::Value::Table(library_table));
+    }
     insert_targets(&mut root, "contract", &member.manifest.contracts);
     insert_targets(&mut root, "test", &member.manifest.tests);
     if !member.dependencies.is_empty() {
@@ -1054,9 +1103,7 @@ pub fn semantic_release_manifest(
         .manifest
         .library
         .as_ref()
-        .expect("loaded package members always have a library")
-        .exports
-        .clone();
+        .map_or_else(Vec::new, |library| library.exports.clone());
     let mut semantic = MusubiSemanticReleaseManifestV1 {
         release,
         edition: member.package.edition,
@@ -1433,13 +1480,13 @@ impl Collector {
         self.source_bytes = next_size;
         Ok(())
     }
-    fn finish(self) -> Result<PackagePlan, PackageError> {
+    fn finish(self) -> Result<PackageInventory, PackageError> {
         enforce_file_limit(self.files.len())?;
         enforce_source_limit(self.source_bytes)?;
         let files = self.files.into_values().collect::<Vec<_>>();
         validate_musubi_portable_path_set_v1(files.iter().map(|file| file.components.as_slice()))
             .map_err(|error| PackageError::CarPlan(error.to_string()))?;
-        Ok(PackagePlan {
+        Ok(PackageInventory {
             files,
             source_bytes: self.source_bytes,
         })
@@ -1725,7 +1772,10 @@ pub fn is_excluded_directory(component: &str) -> bool {
 }
 pub fn is_sensitive_component(component: &str) -> bool {
     let lower = component.to_ascii_lowercase();
-    lower == ".env"
+    matches!(
+        lower.as_str(),
+        "musubi.networks.toml" | "musubi.networks.lock"
+    ) || lower == ".env"
         || lower.starts_with(".env.")
         || lower == ".envrc"
         || matches!(
@@ -2871,6 +2921,9 @@ exports = []
     }
     #[test]
     fn rejects_sensitive_paths_and_contents_without_echoing_secrets() {
+        assert!(is_sensitive_component("Musubi.networks.toml"));
+        assert!(is_sensitive_component("Musubi.networks.lock"));
+        assert!(is_sensitive_component("MUSUBI.NETWORKS.TOML"));
         for path in SENSITIVE_PATH_COMPONENTS {
             assert!(is_sensitive_component(path), "{path}");
         }
@@ -3594,5 +3647,72 @@ mod unsupported_platform_tests {
             .expect_err("non-Unix package planning must fail");
         assert!(matches!(error, PackageError::UnsupportedPlatform));
         assert!(!requested.exists());
+    }
+
+    #[test]
+    fn contract_only_inventory_uses_the_positive_source_set_without_a_lock() {
+        let temp = tempdir().expect("package directory");
+        let root = temp.path();
+        let manifest = include_str!("../../../examples/coffee-club/Musubi.toml");
+        for (path, source) in [
+            ("Musubi.toml", manifest),
+            (
+                "contracts/coffee-club.ko",
+                include_str!("../templates/contract.ko"),
+            ),
+            (
+                "tests/coffee-club.test.ko",
+                include_str!("../templates/contract.test.ko"),
+            ),
+            ("unselected.txt", "not in the package"),
+        ] {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().expect("source parent")).expect("source directory");
+            fs::write(path, source).expect("source file");
+        }
+        let workspace = load_workspace(root).expect("contract-only workspace");
+        let member = workspace.members().values().next().expect("root package");
+        let normalized = publication_manifest_toml(member).expect("publication manifest");
+        assert!(
+            crate::manifest::parse_manifest(&normalized)
+                .expect("normalized manifest")
+                .library
+                .is_none()
+        );
+        let layout = package_layout_for_member(workspace.root(), member);
+        let inventory =
+            inventory_package(&layout, &normalized).expect("read-only source inventory");
+        assert_eq!(
+            inventory
+                .files()
+                .iter()
+                .map(PlannedFile::path)
+                .collect::<Vec<_>>(),
+            vec![
+                "Musubi.toml",
+                "contracts/coffee-club.ko",
+                "tests/coffee-club.test.ko"
+            ]
+        );
+        assert_eq!(
+            inventory.source_bytes(),
+            inventory
+                .files()
+                .iter()
+                .map(|file| file.bytes().len() as u64)
+                .sum()
+        );
+        assert!(!root.join("Musubi.lock").exists());
+        assert!(!root.join("target").exists());
+        assert!(!root.join("src").exists());
+        fs::write(
+            root.join("contracts/coffee-club.ko"),
+            "-----BEGIN PRIVATE KEY-----\nfixture",
+        )
+        .expect("unsafe selected source");
+        assert!(matches!(
+            inventory_package(&layout, &normalized),
+            Err(PackageError::SensitiveContent { .. })
+        ));
     }
 }

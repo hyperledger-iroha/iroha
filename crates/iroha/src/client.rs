@@ -24,6 +24,7 @@ pub mod status;
 mod status_http_tests;
 pub(crate) mod subscriptions;
 mod transaction_wait;
+pub use transaction_wait::TransactionFinalityFailure;
 #[cfg(test)]
 mod transaction_wait_tests;
 pub use crate::query::QueryError;
@@ -14062,7 +14063,7 @@ mod evidence_http_tests {
             assert_eq!(snapshot.url.path(), *path);
         }
     }
-    fn assert_status_scope(snapshot: &RequestSnapshot, expected: &str) {
+    pub(super) fn assert_status_scope(snapshot: &RequestSnapshot, expected: &str) {
         assert_eq!(
             snapshot
                 .url
@@ -14572,7 +14573,7 @@ mod evidence_http_tests {
             assert_eq!(snapshots.len(), 1);
         }
     }
-    fn wait_status_case(
+    pub(super) fn wait_status_case(
         seed: u8,
         status: &Value,
         resolved_from: &str,
@@ -14615,17 +14616,6 @@ mod evidence_http_tests {
         assert_eq!(outcome.attempts, 1);
         assert_eq!(snapshots.len(), 1);
         assert_status_scope(&snapshots[0], "global");
-    }
-    #[test]
-    fn wait_for_transaction_applied_rejects_fixed_failures() {
-        for (seed, kind) in [(0x33, "Rejected"), (0x35, "Expired")] {
-            let (result, _, snapshots) =
-                wait_status_case(seed, &norito::json!({ "kind": kind }), "state");
-            let err = result.expect_err("terminal failure must fail the wait");
-            assert!(err.to_string().contains("fixed terminal failure status"));
-            assert_eq!(snapshots.len(), 1);
-            assert_status_scope(&snapshots[0], "global");
-        }
     }
     #[test]
     fn wait_for_transaction_applied_ignores_cached_applied() {

@@ -12,6 +12,63 @@ use super::{
     validate_global_pipeline_status_response,
 };
 
+/// Exact authoritative proof that a signed transaction can no longer become `Applied`.
+///
+/// Only global, state-resolved `Rejected` or `Expired` responses qualify. This retains the full
+/// typed rejection payload so durable consumers never classify errors by display text.
+#[derive(
+    Debug, Clone, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct TransactionFinalityFailure {
+    response: PipelineTransactionStatusResponse,
+}
+impl TransactionFinalityFailure {
+    /// Classify one exact global status response using the SDK's canonical finality rules.
+    ///
+    /// # Errors
+    /// Rejects malformed, hash-mismatched, wrong-scope, or unsupported status responses.
+    pub fn from_response(
+        hash: HashOf<SignedTransaction>,
+        response: PipelineTransactionStatusResponse,
+    ) -> Result<Option<Self>> {
+        let status = validate_global_pipeline_status_response(&response, hash)?;
+        Ok((response.resolved_from == "state"
+            && matches!(
+                status,
+                TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
+            ))
+        .then_some(Self { response }))
+    }
+    /// Return the exact hash, status/reason, scope, resolution source, and optional ledger height.
+    #[must_use]
+    pub const fn response(&self) -> &PipelineTransactionStatusResponse {
+        &self.response
+    }
+    /// Validate retained failure evidence against its exact signed transaction hash.
+    ///
+    /// # Errors
+    /// Rejects retained evidence that is not a canonical state-resolved global fixed failure.
+    pub fn validate_for_hash(&self, hash: HashOf<SignedTransaction>) -> Result<()> {
+        if Self::from_response(hash, self.response.clone())?.is_none() {
+            return Err(eyre!(
+                "retained status is not a global state-resolved fixed terminal failure"
+            ));
+        }
+        Ok(())
+    }
+}
+impl std::fmt::Display for TransactionFinalityFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "transaction {} reached state-resolved fixed terminal failure status `{}`; status={:?}",
+            self.response.hash, self.response.status.kind, self.response.status
+        )
+    }
+}
+impl std::error::Error for TransactionFinalityFailure {}
+
 #[derive(Debug, thiserror::Error)]
 #[error("Failed to get pipeline transaction status: 429 Too Many Requests {body}")]
 struct Backpressure {
@@ -119,10 +176,11 @@ impl PollState {
             TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
                 if response.resolved_from == "state" =>
             {
-                Err(tx_confirmation_final_report(eyre!(
-                    "transaction {} reached state-resolved fixed terminal failure status `{kind}`; last_status={kind}",
-                    response.hash
-                )))
+                let failure = TransactionFinalityFailure::from_response(self.hash, response)?
+                    .ok_or_else(|| {
+                        eyre!("fixed terminal status failed canonical classification")
+                    })?;
+                Err(tx_confirmation_final_report(failure.into()))
             }
             _ => Ok(None),
         }

@@ -769,7 +769,7 @@ compiler result envelopes with HTTP 200; non-success HTTP statuses are reserved
 for service and transport failures.
 
 This one-source API emits one deployable contract. Typed module graphs use the
-project driver behind `koto build` or `iroha contract dev`; the JavaScript
+project drivers behind `koto build` and `musubi build`; the JavaScript
 adapter does not rewrite or flatten modules.
 Kotodama V1 source keeps its branded declaration spellings: deployable units
 use `seiyaku`/`誓約`, public calls use `kotoage`/`言挙げ`, and lifecycle hooks use

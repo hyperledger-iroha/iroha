@@ -679,9 +679,20 @@ fn cached_source_package(
             node.release
         )));
     }
-    let library = manifest.library.as_ref().ok_or_else(|| {
-        WorkspaceTestErrorV1::Cache(format!("cached release `{}` has no library", node.release))
-    })?;
+    let Some(library) = manifest.library.as_ref() else {
+        if !cached.semantic_release.exports.is_empty()
+            || node.interface_digest != crate::compiler::contract_only_interface_digest()
+        {
+            return Err(WorkspaceTestErrorV1::Cache(format!(
+                "contract-only release `{}` has an inconsistent absent-library interface commitment",
+                node.release
+            )));
+        }
+        return Err(WorkspaceTestErrorV1::Cache(format!(
+            "dependency `{}` is a contract-only release and cannot be imported as a library",
+            node.release
+        )));
+    };
     let exports = library
         .exports
         .iter()
@@ -839,10 +850,12 @@ fn declared_contract_for_test_source(
     else {
         return Ok(None);
     };
-    if !member.manifest.contracts.iter().any(|contract| {
-        let declared = contract.path.as_str();
-        declared == target || declared == "." || target.starts_with(&format!("{declared}/"))
-    }) {
+    if !member
+        .manifest
+        .contracts
+        .iter()
+        .any(|contract| contract.path.as_str() == target)
+    {
         return Err(WorkspaceTestErrorV1::Target(format!(
             "test source `{}` targets `{target}`, which is not a manifest-declared contract",
             source.source_name

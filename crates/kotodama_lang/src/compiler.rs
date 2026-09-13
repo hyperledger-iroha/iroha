@@ -1842,12 +1842,8 @@ mod tests {
             "access hints unexpectedly require the global wildcard in {keys:?}"
         );
     }
-    fn assert_test_mode_override_read(keys: &[String]) {
-        assert_eq!(
-            keys,
-            [format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY)],
-            "test-mode entrypoints must disclose their compiler-owned argument-override read"
-        );
+    fn assert_no_ledger_reads(keys: &[String]) {
+        assert!(keys.is_empty(), "unexpected ledger reads in {keys:?}");
     }
     fn assert_conservative_ledger_read(read_keys: &[String], write_keys: &[String]) {
         assert!(
@@ -3194,7 +3190,7 @@ mod tests {
                     "indirect",
                     vec![ir::Instr::InvokeEntrypointAs {
                         dest: Some(ir::Temp(0)),
-                        actor: ir::Temp(1),
+                        actor: Some(ir::Temp(1)),
                         entrypoint: ir::Temp(2),
                         payload: ir::Temp(3),
                         returns_pointer: false,
@@ -3275,11 +3271,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {name} entrypoint"));
             assert_eq!(
                 entrypoint.read_keys,
-                vec![
-                    super::STATE_WILDCARD_KEY.to_owned(),
-                    format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY),
-                ],
-                "the dynamic fallback must not hide the compiler-owned test-input read"
+                vec![super::STATE_WILDCARD_KEY.to_owned()],
+                "the dynamic state path requires the exact state wildcard"
             );
             assert_eq!(entrypoint.access_hints_complete, Some(false));
             assert!(
@@ -4707,7 +4700,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("read_input entrypoint");
         assert_ne!(read_input.access_hints_complete, Some(false));
         assert!(read_input.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&read_input.read_keys);
+        assert_no_ledger_reads(&read_input.read_keys);
         assert!(read_input.write_keys.is_empty());
     }
     #[test]
@@ -4770,7 +4763,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("inspect entrypoint");
         assert_ne!(inspect.access_hints_complete, Some(false));
         assert!(inspect.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&inspect.read_keys);
+        assert_no_ledger_reads(&inspect.read_keys);
         assert!(inspect.write_keys.is_empty());
     }
     #[test]
@@ -4824,7 +4817,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("inspect entrypoint");
         assert_ne!(inspect.access_hints_complete, Some(false));
         assert!(inspect.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&inspect.read_keys);
+        assert_no_ledger_reads(&inspect.read_keys);
         assert!(inspect.write_keys.is_empty());
     }
     #[test]
@@ -5100,7 +5093,7 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("batch entrypoint");
         assert_ne!(batch.access_hints_complete, Some(false));
         assert!(batch.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&batch.read_keys);
+        assert_no_ledger_reads(&batch.read_keys);
         assert!(batch.write_keys.is_empty());
     }
     #[test]
@@ -5269,7 +5262,7 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("check entrypoint");
         assert_ne!(check.access_hints_complete, Some(false));
         assert!(check.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&check.read_keys);
+        assert_no_ledger_reads(&check.read_keys);
         assert!(check.write_keys.is_empty());
     }
     #[test]
@@ -5310,7 +5303,7 @@ kotoage fn apply_batch() authorize("Admin") {{
             .expect("proof entrypoint");
         assert_ne!(proof.access_hints_complete, Some(false));
         assert!(proof.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&proof.read_keys);
+        assert_no_ledger_reads(&proof.read_keys);
         assert!(proof.write_keys.is_empty());
     }
     #[test]
@@ -5863,7 +5856,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("digest entrypoint");
         assert_ne!(digest.access_hints_complete, Some(false));
         assert!(digest.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&digest.read_keys);
+        assert_no_ledger_reads(&digest.read_keys);
         assert!(digest.write_keys.is_empty());
     }
     #[test]
@@ -5928,7 +5921,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("crypt entrypoint");
         assert_ne!(crypt.access_hints_complete, Some(false));
         assert!(crypt.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&crypt.read_keys);
+        assert_no_ledger_reads(&crypt.read_keys);
         assert!(crypt.write_keys.is_empty());
     }
     #[test]
@@ -6125,7 +6118,7 @@ kotoage fn main() authorize("CompilerFixture") {{
             .expect("length entrypoint");
         assert_ne!(entrypoint.access_hints_complete, Some(false));
         assert!(entrypoint.access_hints_skipped.is_empty());
-        assert_test_mode_override_read(&entrypoint.read_keys);
+        assert_no_ledger_reads(&entrypoint.read_keys);
         assert!(entrypoint.write_keys.is_empty());
     }
     #[test]
@@ -7894,13 +7887,7 @@ seiyaku Test {{
             .find(|entry| entry.name == "bad_peer")
             .expect("entrypoint");
         assert_eq!(entry.access_hints_complete, Some(false));
-        assert_eq!(
-            entry.read_keys,
-            [
-                GLOBAL_WILDCARD_KEY.to_owned(),
-                format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY),
-            ]
-        );
+        assert_eq!(entry.read_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
         assert_eq!(entry.write_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
         assert_eq!(
             entry.access_hints_skipped,
@@ -9082,29 +9069,57 @@ mod test_mode_tests {
         );
     }
     #[test]
-    fn test_mode_public_entrypoints_report_the_injected_override_state_read() {
-        let test_mode = Compiler::new_with_options(CompilerOptions {
-            mode: CompilerMode::Test,
-            ..CompilerOptions::default()
-        });
-        let output = test_mode
-            .compile_source_output(
-                "seiyaku Demo { view fn run(int count) -> int { return count + 1; } }",
-                None,
-            )
-            .expect("compile test-mode public wrapper");
-        let run = output
-            .contract_interface
-            .entrypoints
-            .iter()
-            .find(|entrypoint| entrypoint.name == "run")
-            .expect("run descriptor");
-        assert_eq!(
-            run.read_keys,
-            vec![format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY)]
-        );
-        assert!(run.write_keys.is_empty());
-        assert_eq!(run.access_hints_complete, Some(true));
+    fn test_and_production_public_wrappers_use_the_same_argument_boundary() {
+        let source = "seiyaku Demo { view fn run(int count) -> int { return count + 1; } }";
+        let mut schemas = Vec::new();
+        for mode in [CompilerMode::Test, CompilerMode::Production] {
+            let output = Compiler::new_with_options(CompilerOptions {
+                mode,
+                ..CompilerOptions::default()
+            })
+            .compile_source_output(source, None)
+            .expect("compile public wrapper");
+            let run = output
+                .contract_interface
+                .entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == "run")
+                .expect("run descriptor");
+            assert!(run.read_keys.is_empty());
+            assert!(run.write_keys.is_empty());
+            // A pure wrapper emits no ledger-access report in either artifact profile.
+            assert_eq!(run.access_hints_complete, None);
+            assert!(run.access_hints_skipped.is_empty());
+            schemas.push(run.argument_schema.clone().expect("typed argument schema"));
+            let parsed = ProgramMetadata::parse(&output.artifact).expect("artifact metadata");
+            let syscalls = output.artifact[parsed.code_offset..]
+                .chunks_exact(4)
+                .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+                .filter(|word| {
+                    instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                })
+                .map(encoding::wide::decode_syscallx)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                syscalls
+                    .iter()
+                    .filter(|number| **number == syscalls::SYSCALL_DECODE_ARGUMENT_RECORD)
+                    .count(),
+                1,
+                "both modes must decode the canonical public argument record exactly once"
+            );
+            for state_access in [
+                syscalls::SYSCALL_STATE_GET,
+                syscalls::SYSCALL_STATE_SET,
+                syscalls::SYSCALL_STATE_DEL,
+            ] {
+                assert!(
+                    !syscalls.contains(&state_access),
+                    "pure wrappers must not access test argument state"
+                );
+            }
+        }
+        assert_eq!(schemas[0], schemas[1]);
     }
     #[test]
     fn production_rejects_tests_before_resolving_test_only_helpers() {
@@ -10400,12 +10415,9 @@ impl Compiler {
                 message,
             )
         })?;
-        let ir_program = ir::lower_with_cap_and_test_mode_diagnostics(
-            &typed,
-            usize::from(COLLECTION_ITERATION_CAP),
-            self.opts.mode == CompilerMode::Test,
-        )
-        .map_err(|failures| lowering_diagnostic_bundle("K3003", failures, source_name))?;
+        let ir_program =
+            ir::lower_with_cap_diagnostics(&typed, usize::from(COLLECTION_ITERATION_CAP))
+                .map_err(|failures| lowering_diagnostic_bundle("K3003", failures, source_name))?;
         let executable_roots = executable_ir_roots(&typed, self.opts.mode == CompilerMode::Test);
         Ok(LoweredCompilation {
             typed,
@@ -13002,7 +13014,11 @@ impl Compiler {
                             payload,
                             returns_pointer,
                         } => {
-                            load_pointer(actor, 10, scratch1, DataKind::Blob, &mut code)?;
+                            if let Some(actor) = actor {
+                                load_pointer(actor, 10, scratch1, DataKind::Blob, &mut code)?;
+                            } else {
+                                push_word(&mut code, encode_addi(10, 0, 0)?);
+                            }
                             load_pointer(entrypoint, 11, scratch1, DataKind::Blob, &mut code)?;
                             if let Some(payload_raw) = string_map.get(&(func_idx, *payload)) {
                                 if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
@@ -13047,7 +13063,11 @@ impl Compiler {
                                     regalloc::MAX_RETURN_VALUES
                                 ));
                             }
-                            load_pointer(actor, 10, scratch1, DataKind::Blob, &mut code)?;
+                            if let Some(actor) = actor {
+                                load_pointer(actor, 10, scratch1, DataKind::Blob, &mut code)?;
+                            } else {
+                                push_word(&mut code, encode_addi(10, 0, 0)?);
+                            }
                             load_pointer(entrypoint, 11, scratch1, DataKind::Blob, &mut code)?;
                             if let Some(payload_raw) = string_map.get(&(func_idx, *payload)) {
                                 if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
@@ -15737,16 +15757,6 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Test {
-            // Test-mode public wrappers first read the compiler-owned argument
-            // override used by `test::invoke_entrypoint`. Include that injected
-            // state access in every wrapper's exact descriptor so local artifact
-            // verification remains as strict as production verification.
-            let override_read_key = format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY);
-            for entrypoint in &mut entrypoint_descriptors {
-                entrypoint.read_keys.push(override_read_key.clone());
-                entrypoint.read_keys.sort();
-                entrypoint.read_keys.dedup();
-            }
             // Test suites keep their exact compiler-owned interface beside the
             // generic IVM 1.0 image even when the production projection has no
             // public entrypoint. Authenticate the return target through a

@@ -7354,8 +7354,8 @@ fn analyze_invoke_entrypoint_call(
     let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
-            name: format!("__invoke_entrypoint__{target_name}"),
-            args: vec![payload],
+            name: "invoke_entrypoint".to_owned(),
+            args: vec![typed_string_literal(target_name), payload],
         },
         ty: ret_ty,
     })
@@ -17687,11 +17687,11 @@ mod tests {
         );
         assert_eq!(
             replace_identifier_token(
-                "__invoke_entrypoint__run targets invoke_entrypoint",
+                "my_invoke_entrypoint_helper targets invoke_entrypoint",
                 "invoke_entrypoint",
                 "test::invoke_kotoage",
             ),
-            "__invoke_entrypoint__run targets test::invoke_kotoage"
+            "my_invoke_entrypoint_helper targets test::invoke_kotoage"
         );
     }
     #[rustfmt::skip]

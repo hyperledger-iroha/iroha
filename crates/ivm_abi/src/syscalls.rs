@@ -695,7 +695,11 @@ pub const SYSCALL_KOTO_TEST_ACTOR_ACCOUNT: u32 = 0x00FE_0001;
 pub const SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY: u32 = 0x00FE_0002;
 /// Kotodama test-runner helper: sign a message with a fixture actor seed.
 pub const SYSCALL_KOTO_TEST_ACTOR_SIGN: u32 = 0x00FE_0003;
-/// Kotodama test-runner helper: invoke a contract entrypoint as a fixture actor.
+/// Kotodama test-runner helper: invoke a contract entrypoint with canonical argument encoding.
+///
+/// `x10 = 0` selects the current caller; otherwise `x10` is a fixture actor alias TLV.
+/// The remaining operands are entrypoint alias, JSON arguments, return-pointer mask, and arity.
+/// This helper is test-only and does not change the production ABI syscall surface.
 pub const SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS: u32 = 0x00FE_0004;
 /// Kotodama test-runner helper: assert that an actor entrypoint invocation rejects.
 pub const SYSCALL_KOTO_TEST_EXPECT_REJECT_AS: u32 = 0x00FE_0005;

@@ -7,8 +7,11 @@ use std::{
 };
 
 use super::{
-    Client, Hash, HashOf, Response, SignedTransaction, StatusCode, TransactionWaitOptions,
-    evidence_http_tests::{base_url, client_with_base_url, json_response},
+    Client, Hash, HashOf, Response, SignedTransaction, StatusCode, TransactionFinalityFailure,
+    TransactionWaitOptions,
+    evidence_http_tests::{
+        assert_status_scope, base_url, client_with_base_url, json_response, wait_status_case,
+    },
 };
 use crate::{
     http::Method,
@@ -268,5 +271,37 @@ fn transaction_wait_backpressure_preserves_fixed_failure_and_hash_binding() {
             "{error:#}"
         );
         assert_eq!(snapshots.lock().expect("snapshots").len(), 2);
+    }
+}
+
+#[test]
+fn wait_for_transaction_applied_rejects_fixed_failures() {
+    for (seed, kind) in [(0x33, "Rejected"), (0x35, "Expired")] {
+        let (result, expected_hash, snapshots) =
+            wait_status_case(seed, &norito::json!({ "kind": kind }), "state");
+        let err = result.expect_err("terminal failure must fail the wait");
+        assert!(err.to_string().contains("fixed terminal failure status"));
+        let proof = err
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<TransactionFinalityFailure>())
+            .expect("fixed terminal failure remains typed through the SDK error chain");
+        assert_eq!(proof.response().hash, expected_hash);
+        assert_eq!(proof.response().status.kind, kind);
+        proof
+            .validate_for_hash(expected_hash.parse().expect("exact fixture hash"))
+            .expect("canonical failure proof");
+        let encoded = norito::json::to_vec(proof).expect("serialize exact failure evidence");
+        let retained: TransactionFinalityFailure =
+            norito::json::from_slice(&encoded).expect("decode exact failure evidence");
+        assert_eq!(&retained, proof);
+        let mut cached = proof.response().clone();
+        cached.resolved_from = "cache".to_owned();
+        assert!(
+            TransactionFinalityFailure::from_response(expected_hash.parse().unwrap(), cached)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(snapshots.len(), 1);
+        assert_status_scope(&snapshots[0], "global");
     }
 }

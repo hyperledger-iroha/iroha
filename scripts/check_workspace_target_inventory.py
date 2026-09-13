@@ -61,7 +61,6 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("integration_tests", "sorafs-gateway-fixtures"),
         ("iroha_cli", "account_literal_reencode"),
         ("iroha_cli", "gov_instruction"),
-        ("iroha_cli", "ivm_contract_deploy"),
         ("iroha_cli", "ivm_execution_keygen"),
         ("iroha_cli", "taira_fee_sponsor_program"),
         ("iroha_core", "fastpq_fixture_capture"),
@@ -136,7 +135,7 @@ FORBIDDEN_COMPATIBILITY_BINS = frozenset(
 BASELINE_DEFAULT_BIN_COUNT = 92
 MAX_DEFAULT_BIN_COUNT = 24
 BASELINE_DECLARED_BIN_COUNT = 116
-EXPECTED_DECLARED_BIN_COUNT = 103
+EXPECTED_DECLARED_BIN_COUNT = 102
 
 
 def load_metadata(root: Path) -> dict[str, Any]:

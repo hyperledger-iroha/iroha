@@ -1,4 +1,7 @@
 //! In-process Kotodama V1 test runner shared by the unified CLI and SDK tools.
+//!
+//! Public test calls use the production contract artifact and canonical argument-record encoding.
+//! `test::invoke_kotoage` retains the current caller; its `_as` variant selects a fixture actor.
 #[cfg(test)]
 use crate::ProgramMetadata;
 use crate::{
@@ -49,6 +52,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+#[path = "koto_test_return.rs"]
+mod return_transfer;
 #[path = "koto_test_driver_source_set.rs"]
 mod source_set;
 use source_set::discover_declared_suite_from_source_set;
@@ -138,6 +143,7 @@ impl CompiledSuite {
 struct RuntimeEntrypoint {
     pc: u64,
     argument_schema: Option<EntrypointArgumentSchemaV1>,
+    return_schema: ivm_abi::entrypoint::EntrypointValueTypeV1,
     permission: Option<String>,
 }
 #[derive(Clone)]
@@ -1140,6 +1146,10 @@ fn prepare_compiled_suite(
                     RuntimeEntrypoint {
                         pc,
                         argument_schema: entry.argument_schema.clone(),
+                        return_schema: entry
+                            .return_schema
+                            .clone()
+                            .expect("validated runtime return schema"),
                         permission: entry.permission.clone(),
                     },
                 )
@@ -1792,8 +1802,22 @@ impl KotoTestHost {
         } else {
             None
         };
-        let actor_alias =
-            Self::decode_alias_arg(vm, 10, "actor").map_err(|_| crate::VMError::NoritoInvalid)?;
+        let (actor_alias, actor) = if !expect_reject && vm.register(10) == 0 {
+            (
+                "current caller".to_owned(),
+                FixtureActor {
+                    account: self.inner.caller_subject(),
+                    seed: None,
+                },
+            )
+        } else {
+            let alias = Self::decode_alias_arg(vm, 10, "actor")
+                .map_err(|_| crate::VMError::NoritoInvalid)?;
+            let Some(actor) = self.actors.get(&alias).cloned() else {
+                return self.fail_test(format!("unknown actor `{alias}`"));
+            };
+            (alias, actor)
+        };
         let entrypoint =
             Self::decode_alias_arg(vm, 11, "kotoage").map_err(|_| crate::VMError::NoritoInvalid)?;
         let payload = Self::decode_json_arg(vm, 12)?;
@@ -1811,14 +1835,6 @@ impl KotoTestHost {
                 "actor `{actor_alias}` calling kotoage `{entrypoint}` requested unsupported return arity {return_arity}"
             ));
         }
-        let actor = match self.actors.get(&actor_alias).cloned() {
-            Some(actor) => actor,
-            None => {
-                return self.fail_test(format!(
-                    "unknown actor `{actor_alias}` while calling kotoage `{entrypoint}`"
-                ));
-            }
-        };
         let runtime_entrypoint = match self.entrypoints.get(&entrypoint).cloned() {
             Some(entrypoint) => entrypoint,
             None => {
@@ -1934,19 +1950,18 @@ impl KotoTestHost {
                 ))
             }
             Ok(()) => {
+                if let Err(error) = return_transfer::transfer_return(
+                    &nested_vm,
+                    vm,
+                    &runtime_entrypoint.return_schema,
+                    return_arity,
+                    return_pointer_mask,
+                ) {
+                    self.inner.restore(rollback.as_ref())?;
+                    return Err(error);
+                }
                 self.inner.clear_contract_runtime_context(previous_caller);
                 self.restore_public_inputs();
-                for idx in 0..return_arity {
-                    let value = nested_vm.register(10 + idx);
-                    let out_reg = 10 + idx;
-                    if ((return_pointer_mask >> idx) & 1) != 0 && value != 0 {
-                        let tlv = nested_vm.clone_tlv(value)?;
-                        let ptr = vm.alloc_host_tlv(&tlv)?;
-                        vm.set_register(out_reg, ptr);
-                    } else {
-                        vm.set_register(out_reg, value);
-                    }
-                }
                 Ok(0)
             }
             Err(err) if expect_reject => {

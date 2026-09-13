@@ -296,7 +296,7 @@ pub struct LibraryManifest {
 pub struct LocalTarget {
     /// Parent-local target name.
     pub name: Name,
-    /// Source file or directory relative to the package root.
+    /// One `.ko` contract source, or a test source/directory, relative to the package root.
     pub path: PortablePath,
 }
 /// Concrete registry or local path dependency.
@@ -577,11 +577,11 @@ pub fn parse_manifest(source: &str) -> Result<Manifest, ManifestError> {
                 ));
             }
         }
-        (Some(_), _) if library.is_none() => {
+        (Some(_), _) if library.is_none() && contracts.is_empty() => {
             return Err(ManifestError::new(
                 ManifestErrorKind::MissingField,
-                "lib",
-                "package manifests require `[lib]` with an explicit `exports` array",
+                "package",
+                "package manifests require a `[lib]` or at least one `[[contract]]` target",
             ));
         }
         (Some(_), _) => {}
@@ -774,6 +774,13 @@ fn parse_targets(
             required_value(table, "path", &path_location)?,
             &path_location,
         )?;
+        if field == "contract" && !path.as_str().ends_with(".ko") {
+            return Err(ManifestError::new(
+                ManifestErrorKind::InvalidField,
+                &path_location,
+                "each named contract target must identify one `.ko` source file; directory targets are supported only for tests",
+            ));
+        }
         targets.push(LocalTarget { name, path });
     }
     ensure_unique_names(
@@ -1988,5 +1995,44 @@ exports = []
             .expect("append table");
         assert!(edited.starts_with(source));
         assert!(edited.ends_with("[dev-dependencies]\ntool = { path = \"vendor/tool\" }\n"));
+    }
+
+    #[test]
+    fn contract_only_packages_require_an_actual_contract_target() {
+        let source = include_str!("../../../examples/coffee-club/Musubi.toml");
+        let manifest = parse_manifest(source).expect("contract-only package");
+        assert!(manifest.library.is_none());
+        assert_eq!(manifest.contracts.len(), 1);
+        assert_eq!(manifest.tests.len(), 1);
+        let no_targets = source
+            .split("[[contract]]")
+            .next()
+            .expect("package metadata");
+        assert!(
+            parse_manifest(no_targets)
+                .expect_err("no source targets")
+                .to_string()
+                .contains("at least one `[[contract]]`")
+        );
+    }
+
+    #[test]
+    fn named_contract_targets_require_one_ko_source_while_tests_accept_directories() {
+        for invalid in [
+            "contracts",
+            ".",
+            "contracts/router.to",
+            "contracts/router.KO",
+        ] {
+            let source = PACKAGE.replace("contracts/router.ko", invalid);
+            let error = parse_manifest(&source).expect_err("contract targets must name one source");
+            assert!(error.to_string().contains("one `.ko` source file"));
+            assert!(error.to_string().contains("contract[0].path"));
+        }
+        let manifest = parse_manifest(&PACKAGE.replace("tests/router.ko", "tests"))
+            .expect("test directories remain supported");
+        assert_eq!(manifest.contracts[0].name.as_ref(), "router");
+        assert_eq!(manifest.contracts[0].path.as_str(), "contracts/router.ko");
+        assert_eq!(manifest.tests[0].path.as_str(), "tests");
     }
 }

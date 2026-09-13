@@ -5,12 +5,9 @@ Kotodama language support for `.ko` contracts and test modules. The client start
 The extension also ships the canonical TextMate grammar for highlighting.
 
 Install the repository's `koto` executable and put it on `PATH`, or set
-`kotodama.serverPath` to its absolute path. Open the generated project folder:
-
-```sh
-iroha contract dev new counter
-code counter
-```
+`kotodama.serverPath` to its absolute path. Open a workspace containing an explicit `kotodama.project.json` source graph.
+Musubi owns package scaffolding and builds; this extension currently consumes
+the compiler source graph configured below.
 
 To build this extension from source:
 

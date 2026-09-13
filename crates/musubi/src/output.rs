@@ -1,6 +1,6 @@
 //! Stable human and machine output contracts for the Musubi V1 CLI.
 //!
-//! Human success is routed to stdout and human failure to stderr. JSON mode always emits exactly
+//! Human success is routed to stdout; live progress and human failure go to stderr. JSON mode emits exactly
 //! one versioned document on stdout and leaves stderr empty, including for command failures. Exit
 //! status remains independent of the selected presentation mode.
 use norito::json::{Map, Value};
@@ -133,12 +133,13 @@ impl ErrorCode {
     }
 }
 /// One structured, secret-redacted command diagnostic.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Diagnostic {
     code: ErrorCode,
     message: String,
     context: BTreeMap<String, String>,
     help: Option<String>,
+    details: Option<(String, Value)>,
 }
 impl Diagnostic {
     /// Construct a diagnostic with a stable public code.
@@ -149,6 +150,7 @@ impl Diagnostic {
             message: sanitize_diagnostic_text(&message.into()),
             context: BTreeMap::new(),
             help: None,
+            details: None,
         }
     }
     /// Add deterministic key/value context.
@@ -170,6 +172,17 @@ impl Diagnostic {
     #[must_use]
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(sanitize_diagnostic_text(&help.into()));
+        self
+    }
+    /// Preserve a complete operation report on failure in both presentation formats.
+    ///
+    /// Human details and structured data receive the same redaction as successful output.
+    #[must_use]
+    pub fn with_details(mut self, human: impl Into<String>, data: Value) -> Self {
+        self.details = Some((
+            sanitize_diagnostic_text(&human.into()),
+            redact_json_value(&data),
+        ));
         self
     }
     /// Return the stable public code.
@@ -199,10 +212,16 @@ impl Diagnostic {
         if let Some(help) = &self.help {
             diagnostic.insert("help".to_owned(), Value::from(help.clone()));
         }
+        if let Some((_, data)) = &self.details {
+            diagnostic.insert("details".to_owned(), data.clone());
+        }
         Value::Object(diagnostic)
     }
     fn render_human(&self) -> String {
         let mut rendered = format!("error[{}]: {}\n", self.code.as_str(), self.message);
+        if let Some((human, _)) = &self.details {
+            rendered.push_str(&terminated(human));
+        }
         for (key, value) in &self.context {
             rendered.push_str("  ");
             rendered.push_str(key);
@@ -357,13 +376,14 @@ impl RenderedOutput {
 /// Redact secrets and unsafe terminal control characters from diagnostic text.
 #[must_use]
 pub fn sanitize_diagnostic_text(input: &str) -> String {
-    let without_private_blocks = redact_private_key_blocks(input);
-    let without_assignments = redact_secret_assignments(&without_private_blocks);
-    let without_bearer_tokens = redact_bearer_tokens(&without_assignments);
-    without_bearer_tokens
+    // Match credentials against the same control-free text that can reach a terminal.
+    let safe_input = input
         .chars()
         .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
-        .collect()
+        .collect::<String>();
+    let without_private_blocks = redact_private_key_blocks(&safe_input);
+    let without_assignments = redact_secret_assignments(&without_private_blocks);
+    redact_bearer_tokens(&without_assignments)
 }
 fn terminated(message: &str) -> String {
     if message.is_empty() || message.ends_with('\n') {
@@ -500,7 +520,7 @@ fn redact_secret_assignments(input: &str) -> String {
                 .position(|byte| *byte == quote)
                 .map_or(bytes.len(), |offset| content_start + offset);
             (content_start, end)
-        } else if normalize_key(key) == "authorization" {
+        } else if normalize_key(key).ends_with("authorization") {
             let end = bytes[value_start..]
                 .iter()
                 .position(|byte| matches!(byte, b'\n' | b',' | b';'))
@@ -653,6 +673,33 @@ mod tests {
         );
     }
     #[test]
+    fn failure_details_keep_all_cases_and_redact_secrets_in_both_formats() {
+        let details: Value = norito::json::from_str(r#"{"cases":[{"name":"first","failure":"assertion failed: actual 29, expected 30"},{"name":"second","failure":"private_key=secret-test-value"}]}"#).expect("test details");
+        let output = CommandOutput::failure(
+            "test",
+            Diagnostic::new(ErrorCode::Compiler, "tests failed").with_details(
+                "FAIL first: actual 29, expected 30\nFAIL second: private_key=secret-test-value",
+                details,
+            ),
+        );
+        for format in [OutputFormat::Human, OutputFormat::Json] {
+            let rendered = output.render(format).expect("render failure");
+            assert_eq!(rendered.exit_code(), ErrorCode::Compiler.exit_code());
+            let text = format!("{}{}", rendered.stdout(), rendered.stderr());
+            assert!(text.contains("first") && text.contains("second"));
+            assert!(text.contains("actual 29, expected 30"));
+            assert!(!text.contains("secret-test-value"));
+        }
+        let rendered = output.render(OutputFormat::Json).expect("JSON");
+        let value: Value = norito::json::from_str(rendered.stdout()).expect("one document");
+        assert_eq!(
+            value
+                .pointer("/error/details/cases/1/name")
+                .and_then(Value::as_str),
+            Some("second")
+        );
+    }
+    #[test]
     fn diagnostics_redact_assignments_bearer_tokens_private_keys_and_controls() {
         let secret = "private_key=deadbeef stream-token='stream-secret' Authorization: Bearer auth-secret\n-----BEGIN PRIVATE KEY-----\nkey-material\n-----END PRIVATE KEY-----\nunsafe\u{1b}[31m";
         let redacted = sanitize_diagnostic_text(secret);
@@ -664,6 +711,15 @@ mod tests {
         assert!(redacted.contains("stream-token='[REDACTED]'"));
         assert!(redacted.contains("Authorization: [REDACTED]"));
         assert!(redacted.contains("[REDACTED PRIVATE KEY]"));
+        for input in [
+            "\u{1b}[31mAuthorization: Bearer prefixed-secret",
+            "X-Authorization: Bearer prefixed-secret",
+            "private_\u{1b}key=prefixed-secret",
+        ] {
+            let redacted = sanitize_diagnostic_text(input);
+            assert!(!redacted.contains("prefixed-secret"), "leaked: {redacted}");
+            assert!(!redacted.contains('\u{1b}'));
+        }
     }
     #[test]
     fn json_data_and_context_redact_secret_named_fields_recursively() {

@@ -44,6 +44,16 @@ use std::{
 };
 use url::Url;
 use zeroize::Zeroizing;
+#[path = "taira_faucet_pow.rs"]
+mod faucet_pow;
+#[path = "taira_onboarding.rs"]
+mod onboarding;
+#[cfg(test)]
+use faucet_pow::{
+    FAUCET_PUZZLE_V1_FIELDS, build_faucet_challenge, leading_zero_bits, required_nullable_str,
+    solve_faucet_pow, solve_faucet_puzzle, validate_exact_faucet_puzzle_shape,
+};
+use faucet_pow::{solve_account_faucet_claim, validate_taira_puzzle_identity};
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
@@ -158,6 +168,9 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
 /// Taira public testnet helpers.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Prepare, submit, or recover ordinary account onboarding and faucet transactions.
+    #[command(subcommand)]
+    Account(onboarding::AccountCommand),
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
     /// Preflight or execute the strictly authorized compiled public reset.
@@ -176,6 +189,7 @@ pub enum Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Self::Account(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
@@ -2679,9 +2693,7 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
     let discovery_ok = discovery.status == 200 && discovery_error.is_none();
     push_check(
         &mut checks,
-        // Keep this report key stable for the exact public-reset corridor while
-        // its implementation now validates native stateless discovery.
-        "mcp_initialize",
+        "mcp_discovery",
         discovery.status,
         discovery_ok,
         discovery_error.clone(),
@@ -2762,7 +2774,7 @@ pub(super) fn doctor_expected_checks(
         .collect::<Vec<_>>();
     checks.extend([
         ("mcp_get", 405, None),
-        ("mcp_initialize", 200, None),
+        ("mcp_discovery", 200, None),
         ("mcp_tools_list", 200, None),
         (
             "mcp_required_tools",
@@ -7718,233 +7730,6 @@ pub(super) fn canary_alias(public_key: &iroha_crypto::PublicKey) -> String {
     format!("{CANARY_ALIAS_PREFIX}{suffix}@universal")
 }
 
-fn solve_account_faucet_claim(
-    public_root: &str,
-    account_id: &AccountId,
-    expected_network_id: &NetworkId,
-    deadline: Instant,
-) -> Result<AccountFaucetClaimV1> {
-    let http = http_client()?;
-    let puzzle_url = join_url(public_root, "/v1/accounts/faucet/puzzle")?;
-    let response = http
-        .get(puzzle_url)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .timeout(Duration::from_secs(30).min(remaining_prepared_budget(deadline)?))
-        .send()
-        .wrap_err("faucet puzzle request failed")?;
-    let puzzle = decode_http_json_response(response)?;
-    if puzzle.status != 200 {
-        eyre::bail!(
-            "faucet puzzle request failed with HTTP {}; no transaction was prepared",
-            puzzle.status
-        );
-    }
-    let puzzle = puzzle
-        .body
-        .as_ref()
-        .ok_or_else(|| eyre!("faucet puzzle response was not canonical JSON"))?;
-    let claim = solve_faucet_puzzle(
-        &account_id.to_string(),
-        expected_network_id,
-        puzzle,
-        deadline,
-    )?;
-    json::from_value(claim).wrap_err("decode solved faucet claim into its closed V1 schema")
-}
-
-fn solve_faucet_puzzle(
-    account_id: &str,
-    expected_network_id: &NetworkId,
-    puzzle: &Value,
-    deadline: Instant,
-) -> Result<Value> {
-    validate_exact_faucet_puzzle_shape(puzzle)?;
-    let algorithm = required_str(puzzle, "algorithm")?;
-    if algorithm != FAUCET_POW_ALGORITHM {
-        eyre::bail!(
-            "unsupported faucet puzzle algorithm `{algorithm}`; expected `{FAUCET_POW_ALGORITHM}`"
-        );
-    }
-    let network_id = validate_taira_puzzle_identity(puzzle, expected_network_id)?;
-    let difficulty_bits = required_u64(puzzle, "difficulty_bits")?;
-    if difficulty_bits == 0 {
-        eyre::bail!("faucet puzzle difficulty_bits must be positive");
-    }
-    let mut body = Map::new();
-    body.insert("account_id".into(), Value::String(account_id.to_owned()));
-    let anchor_height = required_u64(puzzle, "anchor_height")?;
-    if anchor_height == 0 {
-        eyre::bail!("faucet puzzle anchor_height must be positive");
-    }
-    let anchor_hash_hex = required_str(puzzle, "anchor_block_hash_hex")?;
-    let challenge_salt_hex = required_nullable_str(puzzle, "challenge_salt_hex")?;
-    let log_n = u8::try_from(required_u64(puzzle, "scrypt_log_n")?)
-        .map_err(|_| eyre!("faucet puzzle scrypt_log_n is too large"))?;
-    let r = u32::try_from(required_u64(puzzle, "scrypt_r")?)
-        .map_err(|_| eyre!("faucet puzzle scrypt_r is too large"))?;
-    let p = u32::try_from(required_u64(puzzle, "scrypt_p")?)
-        .map_err(|_| eyre!("faucet puzzle scrypt_p is too large"))?;
-    if required_u64(puzzle, "max_anchor_age_blocks")? == 0 {
-        eyre::bail!("faucet puzzle max_anchor_age_blocks must be positive");
-    }
-    let challenge = build_faucet_challenge(
-        account_id,
-        &network_id,
-        anchor_height,
-        anchor_hash_hex,
-        challenge_salt_hex,
-    )?;
-    let params = ScryptParams::new(log_n, r, p, 32)
-        .map_err(|err| eyre!("invalid faucet scrypt parameters: {err}"))?;
-    let difficulty_bits =
-        u32::try_from(difficulty_bits).map_err(|_| eyre!("faucet difficulty is too large"))?;
-    let nonce = solve_faucet_pow(&challenge, &params, difficulty_bits, deadline)?;
-    body.insert("pow_anchor_height".into(), Value::from(anchor_height));
-    body.insert("pow_nonce_hex".into(), Value::String(hex::encode(nonce)));
-    Ok(Value::Object(body))
-}
-const FAUCET_PUZZLE_V1_FIELDS: [&str; 11] = [
-    "algorithm",
-    "network_id",
-    "chain_discriminant",
-    "difficulty_bits",
-    "anchor_height",
-    "anchor_block_hash_hex",
-    "challenge_salt_hex",
-    "scrypt_log_n",
-    "scrypt_r",
-    "scrypt_p",
-    "max_anchor_age_blocks",
-];
-fn validate_exact_faucet_puzzle_shape(puzzle: &Value) -> Result<()> {
-    let object = puzzle
-        .as_object()
-        .ok_or_else(|| eyre!("faucet puzzle response must be an exact V1 object"))?;
-    if object.len() != FAUCET_PUZZLE_V1_FIELDS.len()
-        || FAUCET_PUZZLE_V1_FIELDS
-            .iter()
-            .any(|field| !object.contains_key(*field))
-    {
-        eyre::bail!("faucet puzzle response violates the exact V1 field set");
-    }
-    Ok(())
-}
-fn validate_taira_puzzle_identity(
-    puzzle: &Value,
-    expected_network_id: &NetworkId,
-) -> Result<NetworkId> {
-    let network_id_literal = required_str(puzzle, "network_id")?;
-    let network_id = network_id_literal
-        .parse::<NetworkId>()
-        .wrap_err("faucet puzzle network_id is not a canonical NetworkId")?;
-    if network_id.to_string() != network_id_literal {
-        eyre::bail!("faucet puzzle network_id is not canonically encoded");
-    }
-    if &network_id != expected_network_id {
-        eyre::bail!(
-            "faucet puzzle network_id `{network_id}` does not match configured network `{expected_network_id}`"
-        );
-    }
-    let chain_discriminant = u16::try_from(required_u64(puzzle, "chain_discriminant")?)
-        .map_err(|_| eyre!("faucet puzzle chain_discriminant is too large"))?;
-    if chain_discriminant != DEFAULT_CHAIN_DISCRIMINANT {
-        eyre::bail!(
-            "faucet puzzle chain_discriminant `{chain_discriminant}` does not match Taira `{DEFAULT_CHAIN_DISCRIMINANT}`"
-        );
-    }
-    Ok(network_id)
-}
-fn required_u64(value: &Value, key: &str) -> Result<u64> {
-    value
-        .as_object()
-        .and_then(|obj| obj.get(key))
-        .and_then(Value::as_u64)
-        .ok_or_else(|| eyre!("faucet puzzle missing numeric `{key}`"))
-}
-fn required_str<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
-    value
-        .as_object()
-        .and_then(|obj| obj.get(key))
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("faucet puzzle missing string `{key}`"))
-}
-fn required_nullable_str<'a>(value: &'a Value, key: &str) -> Result<Option<&'a str>> {
-    let field = value
-        .as_object()
-        .and_then(|obj| obj.get(key))
-        .ok_or_else(|| eyre!("faucet puzzle missing nullable string `{key}`"))?;
-    if field.is_null() {
-        return Ok(None);
-    }
-    field
-        .as_str()
-        .map(Some)
-        .ok_or_else(|| eyre!("faucet puzzle `{key}` must be a string or null"))
-}
-fn build_faucet_challenge(
-    account_id: &str,
-    network_id: &NetworkId,
-    anchor_height: u64,
-    anchor_hash_hex: &str,
-    challenge_salt_hex: Option<&str>,
-) -> Result<[u8; 32]> {
-    // This Torii field is explicitly raw lowercase hex, not the marked `Hash` display form.
-    let anchor_hash = decode_exact_lower_hex(anchor_hash_hex, "anchor_block_hash_hex", 32)?;
-    let mut hasher = Sha256::new();
-    hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
-    hasher.update(network_id.as_bytes());
-    hasher.update(account_id.as_bytes());
-    hasher.update(anchor_height.to_be_bytes());
-    hasher.update(anchor_hash);
-    if let Some(salt) = challenge_salt_hex {
-        let salt = decode_exact_lower_hex(salt, "challenge_salt_hex", 32)?;
-        hasher.update(salt);
-    }
-    Ok(hasher.finalize().into())
-}
-fn decode_exact_lower_hex(value: &str, field: &str, byte_length: usize) -> Result<Vec<u8>> {
-    if value.len() != byte_length.saturating_mul(2)
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        eyre::bail!(
-            "faucet puzzle {field} must be an exact lowercase {byte_length}-byte hex string"
-        );
-    }
-    hex::decode(value).wrap_err_with(|| format!("invalid faucet puzzle {field}"))
-}
-fn solve_faucet_pow(
-    challenge: &[u8; 32],
-    params: &ScryptParams,
-    difficulty_bits: u32,
-    deadline: Instant,
-) -> Result<[u8; 8]> {
-    for nonce in 0_u64..(1_u64 << 63) {
-        remaining_prepared_budget(deadline)?;
-        let nonce_bytes = nonce.to_be_bytes();
-        let mut digest = [0_u8; 32];
-        derive_scrypt(&nonce_bytes, challenge, params, &mut digest)
-            .map_err(|err| eyre!("failed faucet scrypt derivation: {err}"))?;
-        remaining_prepared_budget(deadline)?;
-        if leading_zero_bits(&digest) >= difficulty_bits {
-            return Ok(nonce_bytes);
-        }
-    }
-    eyre::bail!("faucet PoW nonce space exhausted")
-}
-fn leading_zero_bits(bytes: &[u8]) -> u32 {
-    let mut total = 0_u32;
-    for byte in bytes {
-        if *byte == 0 {
-            total += 8;
-            continue;
-        }
-        total += byte.leading_zeros();
-        break;
-    }
-    total
-}
 fn insert_string_metadata(metadata: &mut Metadata, key: &str, value: &str) -> Result<()> {
     metadata.insert(Name::from_str(key)?, IrohaJson::new(value.to_owned()));
     Ok(())
@@ -12698,6 +12483,16 @@ mod tests {
             }
         }
         let checks = report["checks"].as_array().unwrap();
+        assert!(
+            checks
+                .iter()
+                .any(|check| check["name"].as_str() == Some("mcp_discovery"))
+        );
+        assert!(
+            !checks
+                .iter()
+                .any(|check| check["name"].as_str() == Some("mcp_initialize"))
+        );
         let expected = doctor_expected_checks(DoctorScope::Basic);
         assert_eq!(checks.len(), expected.len());
         for (actual, (name, status, detail)) in checks.iter().zip(expected) {

@@ -24,6 +24,15 @@ the standard transaction pipeline.
   - Invoke or read an already registered contract by canonical address or active
     alias.
 
+The curated read-only MCP tool `iroha.contracts.view` forwards only
+`POST /v1/contracts/view`. Its closed arguments contain `body` and `headers`;
+the body requires `authority`, `entrypoint`, `gas_limit`, and exactly one of
+`contract_address` or `contract_alias`, with optional `payload`. Encoding is
+bounded to 65,536 bytes and gas to `1..=10,000,000`. External canonical request
+authentication must authorize that exact method, route and body. Torii matches
+the body authority to the verified signature or witness subject. The tool
+never creates a transaction, signs for a caller, or claims a finality receipt.
+
 `POST /v1/contracts/call` returns an unsigned transaction and is therefore not
 a signing oracle. Before exposing or signing its bytes, a client must decode the
 canonical payload and compare its exact network, authority, resolved address,
@@ -50,9 +59,10 @@ A deployment client must:
 3. Sign the verified manifest locally and submit `RegisterSmartContractCode`.
 4. Read the authority's exact `contract_deploy_nonce` and the current signed
    alias binding.
-5. Derive the canonical address from `(chain_discriminant, authority, nonce,
-   dataspace)` and submit one `CommitContractDeployment` containing the
-   expected nonce and expected previous alias target.
+5. Derive the canonical address from `(NetworkId, authority, nonce,
+   dataspace)`, where `NetworkId` binds the exact genesis identity. Submit one
+   `CommitContractDeployment` containing the expected nonce and expected previous
+   alias target.
 
 `CommitContractDeployment` validates the nonce, derived address, registered
 artifact, and alias compare-and-swap in one consensus transition. Rotation
@@ -162,13 +172,21 @@ The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_has
 ## Security and governance
 
 - Manifest registration, bytecode upload, and unreferenced bytecode removal
-  require `CanRegisterSmartContractCode`. The sole first-release bootstrap
-  exception is an absent transaction authority whose transaction begins with
-  the exact ordered `Register<Account>(self)`,
-  `Grant<CanRegisterSmartContractCode>(self)`, then native upload (or manifest
-  registration when matching code is already stored) prefix. Both executor
-  paths reject that self-grant for a pre-existing account and reject changed
-  destinations, permission payloads, or instruction order.
+  require `CanRegisterSmartContractCode`. After genesis, its grant and revoke
+  lifecycle belongs to the separate `CanManageSmartContractCodeRegistrars`
+  capability, including effective membership in a genesis-seeded manager role.
+  Managers are genesis-rooted; registrars cannot delegate their own permission.
+  Sponsored onboarding uses ordinary account registration and an authorized
+  grant. No upload prefix bypasses grant validation. The onboarding permission
+  allowlist and issued credential scope are additional restrictions, not grant
+  authority. Faucet funding confers neither registrar nor alias permission.
+- Registrar managers are seeded in newly generated genesis. Updating node binaries
+  does not introduce this capability into an existing network. The current closed
+  governance proposal set has no registrar-manager admission action; runtime
+  upgrade proposals do not assign account permissions. A network lacking a seeded
+  manager therefore cannot admit new registrars through this release's grant
+  lifecycle. Operators must qualify their deployed genesis and effective
+  permissions before advertising builder deployment onboarding.
 - Artifact registration does not confer address control. Direct deployment
   creates an account-owned revisioned lifecycle and is rejected for protected
   namespaces. Raw activation and deactivation require that current account

@@ -32,6 +32,7 @@ iroha_torii = { path = "crates/iroha_torii", default-features = false }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 
 iroha = { path = "crates/iroha" }
+iroha_contract_deploy = { path = "crates/iroha_contract_deploy" }
 iroha_storage_client = { path = "crates/iroha_storage_client" }
 iroha_musubi_service = { path = "crates/iroha_musubi_service" }
 
