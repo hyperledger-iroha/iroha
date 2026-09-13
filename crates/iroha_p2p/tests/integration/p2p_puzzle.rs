@@ -25,6 +25,35 @@ const PUZZLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone, Debug, Decode, Encode)]
 struct EmptyMsg;
 impl ClassifyTopic for EmptyMsg {
+    // This explicit synthetic payload has no Availability or sidecar variants.
+    // A positive bound for each empty variant set funds mandatory geometry;
+    // no production payload owner uses these fixture-only declarations.
+    fn availability_frame_maximum(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<usize, norito::core::Error> {
+        Ok(1)
+    }
+    fn recovery_frame_maxima(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<[usize; 2], norito::core::Error> {
+        Ok([1, 1])
+    }
+
+    fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
+        // Unit fixture decode is fixed and performs no dynamic allocation.
+        norito::core::validate_header_flags(flags)?;
+        // A unit struct is bounded by the one-entry nonhybrid offset table.
+        if payload.len() > 8 {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        let (value, used) = norito::core::decode_field_canonical::<Self>(payload)?;
+        if used != payload.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        Ok(Some(value.topic()))
+    }
+
     fn topic(&self) -> Topic {
         Topic::Other
     }
@@ -171,7 +200,7 @@ async fn puzzle_mismatch_rejects_handshake() {
     .await;
     let (net1, _child1) = match started1 {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("puzzle fixture must start: {error}"),
     };
     let started2 = NetworkHandle::<EmptyMsg>::start(
         super::p2p_identity_keys(kp2.clone()),
@@ -184,7 +213,7 @@ async fn puzzle_mismatch_rejects_handshake() {
     .await;
     let (net2, _child2) = match started2 {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("puzzle fixture must start: {error}"),
     };
     let peer1 = Peer::new(addr1, kp1.public_key().clone());
     let peer2 = Peer::new(addr2, kp2.public_key().clone());
@@ -224,4 +253,37 @@ async fn puzzle_mismatch_rejects_handshake() {
         0,
         "exit relay must not mark the mismatched peer online"
     );
+}
+
+#[test]
+fn puzzle_unit_fixture_raw_layout_is_exact() {
+    use norito::core;
+    let value = EmptyMsg;
+    for requested in [
+        0,
+        core::header_flags::COMPACT_LEN,
+        core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
+        core::header_flags::PACKED_STRUCT
+            | core::header_flags::COMPACT_LEN
+            | core::header_flags::FIELD_BITSET,
+    ] {
+        let (bytes, flags) = {
+            let _flags = core::DecodeFlagsGuard::enter(requested);
+            norito::codec::encode_with_header_flags(&value)
+        };
+        let _flags = core::DecodeFlagsGuard::enter(flags);
+        let (decoded, used) = core::decode_field_canonical::<EmptyMsg>(&bytes).unwrap();
+        assert_eq!(used, bytes.len());
+        assert!(bytes.len() <= 8);
+        assert_eq!(
+            EmptyMsg::inbound_topic(&bytes, flags).unwrap(),
+            Some(decoded.topic())
+        );
+        assert_eq!(
+            EmptyMsg::inbound_admission_class(&bytes, flags).unwrap(),
+            decoded.admission_class()
+        );
+        assert!(EmptyMsg::inbound_topic(&[0], flags).is_err());
+        assert!(EmptyMsg::inbound_topic(&bytes, flags | 0x80).is_err());
+    }
 }

@@ -278,9 +278,9 @@ pub mod boilerplate {
             + 'static
     {
     }
-    /// Shorthand for traits required for encryptor type marker.
-    pub trait Enc: Aead + AeadInOut + KeyInit + Clone + Send + 'static {}
-    impl<T> Enc for T where T: Aead + AeadInOut + KeyInit + Clone + Send + 'static {}
+    /// Encryptors shared by the concurrently polled authenticated read/write exchange.
+    pub trait Enc: Aead + AeadInOut + KeyInit + Clone + Send + Sync + 'static {}
+    impl<T> Enc for T where T: Aead + AeadInOut + KeyInit + Clone + Send + Sync + 'static {}
 }
 /// Errors used in [`crate`].
 #[derive(Debug, Error, displaydoc::Display)]

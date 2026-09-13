@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Run one genuine AtomicPrivateSettlementV1 release experiment.
 
-This executable implements the exact three-path contract consumed by
-``private_settlement_release_runner.py``.  Private settlement and its
-transparent Native AMX control and authenticated fault campaign are backed by
-ignored Rust real-process tests. Leakage runs additionally bind one raw
+This executable owns authenticated fault and leakage experiments consumed by
+``private_settlement_release_runner.py``. Benchmarks use the mandatory retained
+session execution owner. Fault experiments use exact ignored Rust real-process
+tests. Leakage runs additionally bind one raw
 loopback capture owned by this process to the Rust-published validator-port
 manifest, then replay the canonical split files before publishing evidence.
 
@@ -38,7 +38,6 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import private_settlement_release_runner as runner
 import private_settlement_capture_split as capture_split
-import private_settlement_attempt_accounting as accounting
 
 REQUEST_FIELDS = {
     "version",
@@ -63,7 +62,6 @@ REQUEST_FIELDS = {
     "configuration",
     "payload",
 }
-BENCHMARK_REQUEST_PAYLOAD_FIELDS = {"profile", "warmup", "stages", "resources"}
 FAULT_REQUEST_PAYLOAD_FIELDS = {
     "loss_phases",
     "loss_percentages",
@@ -98,11 +96,6 @@ RUST_RESULT_FIELDS = {
     "process_inventory",
     "payload",
 }
-BENCHMARK_RESULT_FIELDS = {
-    "stages_ms",
-    *runner.benchmark_report.RESOURCE_FIELDS,
-    *runner.BENCHMARK_CORRECTNESS_FIELDS,
-}
 LEAKAGE_RUST_RESULT_FIELDS = {
     "variant",
     "canaries_injected",
@@ -119,10 +112,6 @@ LEAKAGE_RUST_RESULT_FIELDS = {
     "nonpacket_record_counts",
 }
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
-BENCHMARK_TEST_NAME = (
-    "nexus::atomic_private_settlement_localnet::"
-    "atomic_private_settlement_real_process_benchmark_harness"
-)
 FAULT_TEST_NAME = (
     "nexus::atomic_private_settlement_localnet::"
     "atomic_private_settlement_real_process_fault_harness"
@@ -151,14 +140,6 @@ class HarnessError(ValueError):
     """Raised when the real-process harness cannot prove a requested result."""
 
 
-def benchmark_stages(profile: str) -> tuple[str, ...]:
-    """Return the exact stage inventory for one implemented benchmark profile."""
-
-    if profile == "private":
-        return tuple(runner.benchmark_report.REQUIRED_PRIVATE_STAGES)
-    if profile == "transparent_control":
-        return ("global_finality", "end_to_end")
-    raise HarnessError("unsupported real-process benchmark profile")
 
 
 def _strict_json_loads(raw: str, label: str) -> Any:
@@ -396,15 +377,17 @@ def _configuration_file_bytes(value: Mapping[str, Any]) -> bytes:
 def validate_request(value: Any) -> dict[str, Any]:
     """Validate and canonically bind one supported release request."""
 
+    if isinstance(value, dict) and value.get("kind") == "benchmark":
+        raise HarnessError("benchmarks require the retained session owner")
     try:
         request = runner.exact_fields(value, REQUEST_FIELDS, "harness request")
     except runner.RunnerError as error:
         raise HarnessError(str(error)) from error
     if request["version"] != runner.VERSION or request["protocol"] != runner.PROTOCOL:
         raise HarnessError("request protocol header is invalid")
-    if request["kind"] not in {"benchmark", "fault", "leakage"}:
+    if request["kind"] not in {"fault", "leakage"}:
         raise HarnessError(
-            "real process harness supports benchmark, fault, and leakage requests only"
+            "real process harness supports fault and leakage requests only"
         )
     participants = request["participants"]
     if (
@@ -452,9 +435,7 @@ def validate_request(value: Any) -> dict[str, Any]:
         payload = runner.exact_fields(
             request["payload"],
             (
-                BENCHMARK_REQUEST_PAYLOAD_FIELDS
-                if request["kind"] == "benchmark"
-                else FAULT_REQUEST_PAYLOAD_FIELDS
+                FAULT_REQUEST_PAYLOAD_FIELDS
                 if request["kind"] == "fault"
                 else LEAKAGE_REQUEST_PAYLOAD_FIELDS
             ),
@@ -462,17 +443,7 @@ def validate_request(value: Any) -> dict[str, Any]:
         )
     except runner.RunnerError as error:
         raise HarnessError(str(error)) from error
-    if request["kind"] == "benchmark":
-        profile = payload["profile"]
-        if profile not in runner.PROFILES:
-            raise HarnessError("unsupported real-process benchmark profile")
-        if not isinstance(payload["warmup"], bool):
-            raise HarnessError("benchmark warmup must be a boolean")
-        if payload["stages"] != list(benchmark_stages(profile)):
-            raise HarnessError("benchmark stages differ from the canonical profile")
-        if payload["resources"] != list(runner.benchmark_report.RESOURCE_FIELDS):
-            raise HarnessError("benchmark resource fields differ from the canonical profile")
-    elif request["kind"] == "fault":
+    if request["kind"] == "fault":
         expected_fault = {
             "loss_phases": list(runner.fault_report.REQUIRED_LOSS_PHASES),
             "loss_percentages": list(runner.fault_report.REQUIRED_LOSS_PERCENTAGES),
@@ -529,7 +500,7 @@ def validate_request(value: Any) -> dict[str, Any]:
         expected_configuration = runner.build_configuration(
             participants,
             seeds=seeds,
-            warmups=benchmark["warmups_per_profile"],
+            warmups=benchmark["warmups_per_session"],
             measured=benchmark["measured_bundles_per_profile"],
         )
     except (KeyError, TypeError, runner.RunnerError) as error:
@@ -541,17 +512,7 @@ def validate_request(value: Any) -> dict[str, Any]:
     ).hexdigest()
     if actual_configuration_sha != configuration_sha:
         raise HarnessError("configuration digest does not bind the embedded configuration")
-    run_limit = (
-        (
-            benchmark["warmups_per_profile"]
-            if payload["warmup"]
-            else benchmark["measured_bundles_per_profile"]
-        )
-        if request["kind"] == "benchmark"
-        else len(seeds)
-        if request["kind"] == "fault"
-        else 1
-    )
+    run_limit = len(seeds) if request["kind"] == "fault" else 1
     if request["run"] >= run_limit:
         raise HarnessError("release run index is outside the configured matrix")
     if request["seed"] != seeds[request["run"] % len(seeds)]:
@@ -559,9 +520,7 @@ def validate_request(value: Any) -> dict[str, Any]:
     job_body = {
         "kind": request["kind"],
         **(
-            {"profile": profile, "warmup": payload["warmup"]}
-            if request["kind"] == "benchmark"
-            else {
+            {
                 "variant": payload["variant"],
                 "canary_names": [entry["name"] for entry in payload["canaries"]],
                 "canary_commitments": payload["canary_commitments"],
@@ -1149,10 +1108,8 @@ def run_rust_harness(
     """Build the feature-isolated daemon and run the exact ignored Rust test."""
 
     request_sha = hashlib.sha256(raw_request).hexdigest()
-    if request["kind"] == "benchmark":
-        return run_benchmark_with_retained_terminal(
-            request_path, raw_request, request, evidence_dir
-        )
+    if request["kind"] not in {"fault", "leakage"}:
+        raise HarnessError("one-shot execution supports fault and leakage only")
     with tempfile.TemporaryDirectory(prefix="aps-real-process-") as temporary:
         temporary_root = Path(temporary)
         rust_result = temporary_root / "rust-result.json"
@@ -1192,9 +1149,7 @@ def run_rust_harness(
         validator_sha = _sha256_file(VALIDATOR_EXECUTABLE, "validator executable")
         environment["APS_REAL_PROCESS_VALIDATOR_SHA256"] = validator_sha
         test_name = (
-            BENCHMARK_TEST_NAME
-            if request["kind"] == "benchmark"
-            else FAULT_TEST_NAME
+            FAULT_TEST_NAME
             if request["kind"] == "fault"
             else LEAKAGE_TEST_NAME
         )
@@ -1232,17 +1187,17 @@ def run_rust_harness(
             if capture is not None:
                 tcpdump_statistics = _stop_tcpdump(*capture)
         if not rust_result.exists() or rust_result.is_symlink():
-            raise HarnessError("Rust benchmark did not publish a result")
+            raise HarnessError("Rust experiment did not publish a result")
         raw_result = _regular_file_bytes(
-            rust_result, "Rust benchmark result", runner.MAX_HARNESS_RESPONSE_BYTES
+            rust_result, "Rust experiment result", runner.MAX_HARNESS_RESPONSE_BYTES
         )
         try:
             decoded = raw_result.decode("utf-8")
         except UnicodeDecodeError as error:
-            raise HarnessError("Rust benchmark result is not UTF-8") from error
-        result = _strict_json_loads(decoded, "Rust benchmark result")
+            raise HarnessError("Rust experiment result is not UTF-8") from error
+        result = _strict_json_loads(decoded, "Rust experiment result")
         if hashlib.sha256(raw_request).hexdigest() != request_sha:
-            raise HarnessError("request changed while the Rust benchmark ran")
+            raise HarnessError("request changed while the Rust experiment ran")
         if request["kind"] == "leakage":
             if not isinstance(result, dict):
                 raise HarnessError("Rust leakage result is not an object")
@@ -1266,116 +1221,6 @@ def run_rust_harness(
 
 
 
-def run_benchmark_with_retained_terminal(
-    request_path: Path,
-    raw_request: bytes,
-    request: Mapping[str, Any],
-    evidence_dir: Path,
-) -> dict[str, Any]:
-    """Retain the mandatory Rust terminal even when its process exits nonzero.
-
-    This private transport directory is permanent attempt evidence, separate
-    from complete successful measurements. Missing or invalid terminals never
-    become a synthetic successful result or an inferred timeout.
-    """
-
-    directory = evidence_dir / accounting.BENCHMARK_PROTOCOL_DIRECTORY
-    try:
-        runner.fresh_private_directory(directory)
-    except (OSError, runner.RunnerError) as error:
-        raise HarnessError("benchmark protocol directory must be new and private") from error
-    result_path = directory / accounting.RUST_TERMINAL_FILE
-    request_sha = hashlib.sha256(raw_request).hexdigest()
-    environment = rust_harness_environment(request)
-    environment.update({
-        "IROHA_TEST_SKIP_BUILD": "1",
-        "IROHA_TEST_BUILD_PROFILE": "release",
-        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": str(VALIDATOR_EXECUTABLE),
-        "APS_REAL_PROCESS_REQUEST": str(request_path),
-        "APS_REAL_PROCESS_RESULT": str(result_path),
-        "APS_REAL_PROCESS_REQUEST_SHA256": request_sha,
-        "APS_REAL_PROCESS_EVIDENCE_DIR": str(evidence_dir),
-    })
-    begun = time.monotonic_ns()
-    phase = "validator_build"
-    exit_code = None
-    terminal_binding = None
-    status, reason = "incomplete", "adapter_interrupted"
-    try:
-        build = subprocess.run([
-            "cargo", "build", "--locked", "--offline", "--release", "-p", "irohad",
-            "--bin", "iroha3d", "--features", "test-network-message-control",
-            "--target-dir", str(TARGET_DIR),
-        ], cwd=REPOSITORY_ROOT, env=environment, check=False)
-        exit_code = build.returncode
-        if exit_code != 0:
-            status, reason = "failed", "validator_build_failed"
-            raise HarnessError("benchmark validator build failed; outcome retained")
-        phase = "validator_identity"
-        status, reason = "invalid", "validator_identity_invalid"
-        environment["APS_REAL_PROCESS_VALIDATOR_SHA256"] = _sha256_file(
-            VALIDATOR_EXECUTABLE, "validator executable"
-        )
-        phase = "benchmark_process"
-        status, reason = "incomplete", "adapter_interrupted"
-        exit_code = None
-        child = subprocess.run([
-            "cargo", "test", "--locked", "--offline", "--release", "-p",
-            "integration_tests", "--test", "nexus_and_streaming", "--features",
-            "atomic-private-settlement-release", "--target-dir", str(TARGET_DIR),
-            BENCHMARK_TEST_NAME, "--", "--ignored", "--exact", "--nocapture",
-            "--test-threads=1",
-        ], cwd=REPOSITORY_ROOT, env=environment, check=False)
-        exit_code = child.returncode
-        phase = "terminal_validation"
-        if not result_path.exists() and not result_path.is_symlink():
-            status, reason = "incomplete", "rust_terminal_missing"
-            raise HarnessError("benchmark process published no terminal; attempt is incomplete")
-        status, reason = "invalid", "rust_terminal_invalid"
-        raw = _regular_file_bytes(
-            result_path, "Rust benchmark terminal", runner.MAX_HARNESS_RESPONSE_BYTES
-        )
-        terminal_binding = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
-        try:
-            value = _strict_json_loads(raw.decode("utf-8"), "Rust benchmark terminal")
-            terminal = accounting.validate_benchmark_terminal(
-                value, request=request, request_sha256=request_sha, exit_code=exit_code
-            )
-        except (UnicodeDecodeError, accounting.AccountingError) as error:
-            raise HarnessError("Rust benchmark terminal is invalid") from error
-        status, reason = "invalid", "request_changed"
-        if _regular_file_bytes(request_path, "harness request", MAX_REQUEST_BYTES) != raw_request:
-            raise HarnessError("request changed during benchmark execution")
-        kind = terminal["outcome"]["kind"]
-        if kind != "succeeded":
-            status, reason = kind, "rust_" + kind
-            raise HarnessError("benchmark completed unsuccessfully; typed outcome retained")
-        phase = "measurement_validation"
-        status, reason = "invalid", "measurement_invalid"
-        result = validate_rust_result(
-            terminal["outcome"]["result"], request=request,
-            request_sha=request_sha, evidence_dir=evidence_dir,
-        )
-        status, reason = "succeeded", "rust_succeeded"
-        return result
-    except (KeyboardInterrupt, SystemExit):
-        status, reason = "incomplete", "adapter_interrupted"
-        raise
-    except OSError as error:
-        if phase in ("validator_build", "benchmark_process"):
-            status, reason = "failed", phase + "_spawn_failed"
-        raise HarnessError("benchmark transport failed; evidence retained") from error
-    finally:
-        receipt = {
-            "version": accounting.VERSION, "protocol": accounting.PROTOCOL,
-            "request_id": request["request_id"], "invocation_nonce": request["invocation_nonce"],
-            "request_sha256": request_sha, "commit": request["commit"],
-            "participants": request["participants"],
-            "elapsed_ms": (time.monotonic_ns() - begun) // 1_000_000,
-            "phase": phase, "exit_code": exit_code, "rust_terminal": terminal_binding,
-            "status": status, "reason": reason,
-        }
-        publish_response(directory / accounting.ADAPTER_OUTCOME_FILE, receipt)
 
 
 def validate_rust_result(
@@ -1387,6 +1232,8 @@ def validate_rust_result(
 ) -> dict[str, Any]:
     """Validate an exact, fresh Rust measurement with no response reuse."""
 
+    if request["kind"] not in {"fault", "leakage"}:
+        raise HarnessError("one-shot result supports fault and leakage only")
     try:
         result = runner.exact_fields(value, RUST_RESULT_FIELDS, "Rust result")
     except runner.RunnerError as error:
@@ -1419,10 +1266,6 @@ def validate_rust_result(
         )
         payload = (
             runner.exact_fields(
-                result["payload"], BENCHMARK_RESULT_FIELDS, "Rust result.payload"
-            )
-            if request["kind"] == "benchmark"
-            else runner.exact_fields(
                 result["payload"], runner.FAULT_PAYLOAD_FIELDS, "Rust result.payload"
             )
             if request["kind"] == "fault"
@@ -1448,11 +1291,6 @@ def validate_rust_result(
         "kind": request["kind"],
         **(
             {
-                "profile": request["payload"]["profile"],
-                "warmup": request["payload"]["warmup"],
-            }
-            if request["kind"] == "benchmark"
-            else {
                 "variant": request["payload"]["variant"],
                 "canary_names": [
                     entry["name"] for entry in request["payload"]["canaries"]
@@ -1468,9 +1306,7 @@ def validate_rust_result(
         "configuration_sha256": request["configuration_sha256"],
     }
     try:
-        if request["kind"] == "benchmark":
-            runner.materialize_benchmark_response(envelope, plan=plan, job=job)
-        elif request["kind"] == "fault":
+        if request["kind"] == "fault":
             if evidence_dir is None:
                 raise HarnessError("fault result validation requires its evidence directory")
             with tempfile.TemporaryDirectory(prefix="aps-fault-validation-") as publication:
@@ -1598,14 +1434,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_rust_harness(request_path, raw_request, request, evidence_dir)
         if _regular_file_bytes(request_path, "harness request", MAX_REQUEST_BYTES) != raw_request:
             raise HarnessError("request changed during real-process execution")
-        if request["kind"] == "benchmark":
-            try:
-                runner.validate_benchmark_transport(
-                    evidence_dir, request=request,
-                    request_sha256=hashlib.sha256(raw_request).hexdigest(),
-                )
-            except runner.RunnerError as error:
-                raise HarnessError("benchmark transport evidence is invalid") from error
         if request["kind"] == "fault" and {
             entry.name for entry in evidence_dir.iterdir()
         } != {

@@ -9,6 +9,7 @@ use crate::{
     plonk::{ConstraintSystem, FirstPhase, SecondPhase, ThirdPhase},
     poly::{
         EvaluationDomain,
+        commitment::ParamsProver as _,
         stored_advice::{
             StoredLookupSideV1, StoredPastaFieldV1, StoredPolynomialProviderV1,
             StoredPolynomialWriterV1,

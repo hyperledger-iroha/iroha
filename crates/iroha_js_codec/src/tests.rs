@@ -276,7 +276,11 @@ fn register_account_requires_canonical_fields_and_rejects_unknown_envelopes() {
         .expect("canonical account registration archive");
     for field in ["id", "metadata", "label", "uaid", "opaque_ids"] {
         let mut incomplete = account_json.clone();
-        incomplete.as_object_mut().unwrap().remove(field);
+        incomplete
+            .as_object_mut()
+            .expect("account object")
+            .remove(field)
+            .expect("required canonical field");
         let payload = text(&object([("Register", object([("Account", incomplete)]))]));
         for encode in [encode_instruction_frame, encode_instruction_archive] {
             let error = encode(&payload, FIXTURE_NETWORK_PREFIX)

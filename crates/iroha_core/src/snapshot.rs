@@ -2062,6 +2062,8 @@ enum CanonicalWsvPath {
 #[derive(Clone, Copy, Default)]
 struct CanonicalWsvOverrides<'a> {
     committed_external_event_buf: Option<&'a str>,
+    committed_axt_replay_ledger: Option<&'a str>,
+    committed_smart_contract_state: Option<&'a str>,
 }
 struct BorrowedJsonMember<'a> {
     key: String,
@@ -2250,14 +2252,20 @@ fn update_snapshot_wsv_object_hash<'a>(
         let canonical_key = canonical_json_fragment(member.encoded_key)?;
         Digest::update(hasher, canonical_key.as_bytes());
         Digest::update(hasher, b":");
-        let serialized_value =
-            if path == CanonicalWsvPath::World && member.key == "external_event_buf" {
-                overrides
-                    .committed_external_event_buf
-                    .unwrap_or(member.value)
-            } else {
-                member.value
-            };
+        // State owns each exact post-commit projection, including MV undo
+        // history. Do not move its finality-time mutations into execution or
+        // omit them from the immutable pre-WSV recovery checkpoint.
+        let serialized_value = if path == CanonicalWsvPath::World {
+            match member.key.as_str() {
+                "external_event_buf" => overrides.committed_external_event_buf,
+                "axt_replay_ledger" => overrides.committed_axt_replay_ledger,
+                "smart_contract_state" => overrides.committed_smart_contract_state,
+                _ => None,
+            }
+            .unwrap_or(member.value)
+        } else {
+            member.value
+        };
         let value = canonical_wsv_cell_value(path, &member.key, serialized_value)?;
         if path == CanonicalWsvPath::Sumeragi && member.key == "key_allowed_algorithms" {
             update_sorted_string_set_hash(hasher, value)?;
@@ -4699,11 +4707,27 @@ pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>
     state_block.json_serialize_committed_external_event_buffer(&mut event_buffer_json);
     let event_buffer = json::from_str(&event_buffer_json)
         .expect("committed event buffer serialization must produce valid JSON");
-    value
+    let world = value
         .get_mut("world")
         .and_then(json::Value::as_object_mut)
-        .expect("staged state snapshot world must be an object")
-        .insert("external_event_buf".to_owned(), event_buffer);
+        .expect("staged state snapshot world must be an object");
+    world.insert("external_event_buf".to_owned(), event_buffer);
+    for (field, projection) in [
+        (
+            "axt_replay_ledger",
+            state_block.json_serialize_committed_axt_replay_ledger(),
+        ),
+        (
+            "smart_contract_state",
+            state_block.json_serialize_committed_smart_contract_state(),
+        ),
+    ] {
+        if let Some(projection) = projection {
+            let projected_value = json::from_str(&projection)
+                .expect("committed storage projection must produce valid JSON");
+            world.insert(field.to_owned(), projected_value);
+        }
+    }
     normalize_mv_cell_fields_in_state_value(&mut value);
     normalize_set_like_parameter_fields_in_state_value(&mut value);
     redact_consensus_sidecars_from_state_value(&mut value);
@@ -4722,10 +4746,15 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
     serialize_staged_state_snapshot(state_block, &mut snapshot_json);
     let mut committed_external_event_buf = String::new();
     state_block.json_serialize_committed_external_event_buffer(&mut committed_external_event_buf);
+    let committed_axt_replay_ledger = state_block.json_serialize_committed_axt_replay_ledger();
+    let committed_smart_contract_state =
+        state_block.json_serialize_committed_smart_contract_state();
     canonical_snapshot_wsv_hash_with_overrides(
         snapshot_json.as_bytes(),
         CanonicalWsvOverrides {
             committed_external_event_buf: Some(&committed_external_event_buf),
+            committed_axt_replay_ledger: committed_axt_replay_ledger.as_deref(),
+            committed_smart_contract_state: committed_smart_contract_state.as_deref(),
         },
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")

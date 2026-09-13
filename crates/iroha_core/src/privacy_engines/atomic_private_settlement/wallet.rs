@@ -1138,6 +1138,7 @@ pub fn inspect_atomic_private_settlement_wallet_bundle_v1(
 /// failed proof self-verification.
 #[allow(clippy::too_many_arguments)]
 pub fn consume_atomic_private_settlement_wallet_bundle_v1(
+    options: super::facade::AtomicPrivateSettlementProverOptionsV1,
     material: &mut [u8],
     expected_wallet_id: &str,
     manifest: &AtomicPrivateSettlementV1,
@@ -1182,6 +1183,7 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
     ];
     let witness = AtomicPrivateSettlementProverWitnessV1::new(decoded.audit_plaintext, inputs);
     let proof = prove_atomic_private_settlement_v1(
+        options,
         manifest,
         statement,
         canonical_genesis_hash,
@@ -1198,6 +1200,7 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::atomic_private_settlement::AtomicPrivateSettlementProverOptionsV1;
     use crate::{
         privacy_engines::{
             atomic_private_settlement::relation::{
@@ -1544,6 +1547,7 @@ mod tests {
         .expect("owner bundle");
         let mut material = encoded.to_vec();
         let prepared = consume_atomic_private_settlement_wallet_bundle_v1(
+            AtomicPrivateSettlementProverOptionsV1::CPU,
             &mut material,
             "bank-a-wallet-positive",
             &manifest,
@@ -1691,6 +1695,7 @@ mod tests {
         .expect("owner bundle");
         let mut material = encoded.to_vec();
         let result = consume_atomic_private_settlement_wallet_bundle_v1(
+            AtomicPrivateSettlementProverOptionsV1::CPU,
             &mut material,
             "bank-a-wallet-7",
             &sidecar.manifest,
@@ -1722,6 +1727,7 @@ mod tests {
         let mut substituted = sidecar.payload.statement.clone();
         substituted.old_epoch += 1;
         let result = consume_atomic_private_settlement_wallet_bundle_v1(
+            AtomicPrivateSettlementProverOptionsV1::CPU,
             &mut material,
             "bank-a-wallet-7",
             &sidecar.manifest,

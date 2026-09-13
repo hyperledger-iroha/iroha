@@ -119,9 +119,13 @@ pub(crate) enum AggregateStarkErrorV1 {
     /// A checked implementation invariant failed.
     #[error("aggregate STARK internal invariant failed")]
     InternalInvariant,
+    /// The selected digest executor failed without backend substitution.
+    #[error("aggregate STARK digest execution failed")]
+    DigestExecution,
 }
 fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
     match error {
+        TransparentStarkErrorV1::DigestExecution => AggregateStarkErrorV1::DigestExecution,
         TransparentStarkErrorV1::RandomnessUnavailable => {
             AggregateStarkErrorV1::RandomnessUnavailable
         }
@@ -1260,21 +1264,27 @@ fn fri_mask_leaf_hash_v1(
     .map_err(map_transparent_error_v1)
 }
 fn fri_mask_tree_v1(
+    execution: fastpq_prover::DigestExecutionV1,
     domains: AggregateStarkDomainsV1,
     lane: usize,
     evaluations: &[E],
 ) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
-    if evaluations.is_empty() || !evaluations.len().is_power_of_two() {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let leaves = evaluations
-        .par_iter()
-        .copied()
-        .enumerate()
-        .map(|(index, value)| fri_mask_leaf_hash_v1(domains, lane, index, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    GoldilocksMerkleTreeV1::from_leaves(leaves, domains.digest_context, FRI_MASK_NODE_DOMAIN_V1)
-        .map_err(map_transparent_error_v1)
+    let lane = u16::try_from(lane)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    commit_serialized_rows_v1(
+        execution,
+        domains.digest_context,
+        FRI_MASK_LEAF_DOMAIN_V1,
+        FRI_MASK_NODE_DOMAIN_V1,
+        b"fri-mask-leaf",
+        0,
+        u64::from(u16::from_be_bytes(lane)),
+        &[&lane],
+        evaluations.len(),
+        32,
+        |row, bytes| bytes.extend_from_slice(&evaluations[row].to_be_bytes()),
+    )
 }
 /// Sample and commit all independent Protocol-2 FRI mask polynomials.
 ///
@@ -1284,6 +1294,7 @@ fn fri_mask_tree_v1(
 /// transcript-bound before any challenge that batches the lane's trace and
 /// composition polynomials.
 pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
+    execution: fastpq_prover::DigestExecutionV1,
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
     layout: &AggregateProofLayoutV1,
@@ -1320,7 +1331,7 @@ pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
             )
             .map_err(map_transparent_error_v1)?,
         );
-        let tree = fri_mask_tree_v1(domains, lane, &evaluations)?;
+        let tree = fri_mask_tree_v1(execution, domains, lane, &evaluations)?;
         oracles.push(AggregateFriMaskOracleMaterialV1 {
             evaluations: evaluations.into_vec_v1(),
             tree,
@@ -1365,8 +1376,177 @@ fn fri_leaf_hash_unchecked_v1(
     )
     .map_err(map_transparent_error_v1)
 }
+/// Maximum live serialized private-row payload bytes before canonical framing.
+const PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1: usize = 32 * 1024 * 1024;
+
+fn private_row_preparation_rows_v1(
+    domain: fastpq_isi::GoldilocksDigestDomainV1<'_>,
+    prefix_fields: &[&[u8]],
+    payload_bytes: usize,
+    frame_limit: usize,
+) -> Result<usize, AggregateStarkErrorV1> {
+    if payload_bytes == 0
+        || frame_limit == 0
+        || frame_limit > fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1
+    {
+        return Err(AggregateStarkErrorV1::InvalidLayout);
+    }
+    let field_count = prefix_fields
+        .len()
+        .checked_add(1)
+        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let mut lengths = Vec::new();
+    lengths
+        .try_reserve_exact(field_count)
+        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+    lengths.extend(prefix_fields.iter().map(|field| field.len()));
+    lengths.push(payload_bytes);
+    let words =
+        fastpq_isi::GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(domain, &lengths)
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let word_rows = fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1
+        .checked_div(words)
+        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let rows = (PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1 / payload_bytes)
+        .min(frame_limit)
+        .min(word_rows);
+    if rows == 0 {
+        return Err(AggregateStarkErrorV1::AllocationFailure);
+    }
+    Ok(rows)
+}
+
+/// Serialize bounded private rows into canonical frames and use one explicit executor.
+/// The caller fixes the exact ordered non-payload fields; this helper appends one payload.
+fn commit_serialized_rows_v1(
+    execution: fastpq_prover::DigestExecutionV1,
+    context: TransparentStarkDigestContextV1,
+    leaf_role: &[u8],
+    node_role: &'static [u8],
+    phase: &[u8],
+    level: u64,
+    counter: u64,
+    prefix_fields: &[&[u8]],
+    rows: usize,
+    payload_bytes: usize,
+    serialize_row: impl FnMut(usize, &mut Vec<u8>),
+) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+    commit_serialized_rows_with_preparation_limit_v1(
+        execution,
+        context,
+        leaf_role,
+        node_role,
+        phase,
+        level,
+        counter,
+        prefix_fields,
+        rows,
+        payload_bytes,
+        fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1,
+        serialize_row,
+    )
+}
+
+fn commit_serialized_rows_with_preparation_limit_v1(
+    execution: fastpq_prover::DigestExecutionV1,
+    context: TransparentStarkDigestContextV1,
+    leaf_role: &[u8],
+    node_role: &'static [u8],
+    phase: &[u8],
+    level: u64,
+    counter: u64,
+    prefix_fields: &[&[u8]],
+    rows: usize,
+    payload_bytes: usize,
+    preparation_frame_limit: usize,
+    mut serialize_row: impl FnMut(usize, &mut Vec<u8>),
+) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+    if rows == 0 || !rows.is_power_of_two() || payload_bytes == 0 {
+        return Err(AggregateStarkErrorV1::InvalidLayout);
+    }
+    context.validate().map_err(map_transparent_error_v1)?;
+    let catalog = context.catalog_v1();
+    let leaf_domain = context
+        .domain_v1(&catalog, leaf_role, phase, level, 0, counter)
+        .map_err(map_transparent_error_v1)?;
+    let batch_rows = private_row_preparation_rows_v1(
+        leaf_domain,
+        prefix_fields,
+        payload_bytes,
+        preparation_frame_limit,
+    )?;
+    let mut leaves = Vec::new();
+    leaves
+        .try_reserve_exact(rows)
+        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+    for start in (0..rows).step_by(batch_rows) {
+        let end = start.saturating_add(batch_rows).min(rows);
+        let mut payloads = zeroize::Zeroizing::new(Vec::<Vec<u8>>::new());
+        payloads
+            .try_reserve_exact(end - start)
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        for row in start..end {
+            let mut bytes = zeroize::Zeroizing::new(Vec::new());
+            bytes
+                .try_reserve_exact(payload_bytes)
+                .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+            serialize_row(row, &mut bytes);
+            if bytes.len() != payload_bytes {
+                return Err(AggregateStarkErrorV1::InvalidLayout);
+            }
+            payloads.push(core::mem::take(&mut *bytes));
+        }
+        let mut fields = Vec::new();
+        fields
+            .try_reserve_exact(payloads.len())
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        for payload in payloads.iter() {
+            let mut row_fields = Vec::new();
+            row_fields
+                .try_reserve_exact(
+                    prefix_fields
+                        .len()
+                        .checked_add(1)
+                        .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
+                )
+                .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+            row_fields.extend_from_slice(prefix_fields);
+            row_fields.push(payload.as_slice());
+            fields.push(row_fields);
+        }
+        let mut frames = Vec::new();
+        frames
+            .try_reserve_exact(fields.len())
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        for (local, row_fields) in fields.iter().enumerate() {
+            let domain = context
+                .domain_v1(
+                    &catalog,
+                    leaf_role,
+                    phase,
+                    level,
+                    u64::try_from(start + local)
+                        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
+                    counter,
+                )
+                .map_err(map_transparent_error_v1)?;
+            frames.push(
+                fastpq_isi::GoldilocksDigest384FrameV1::new(domain, row_fields)
+                    .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
+            );
+        }
+        leaves.extend(
+            fastpq_prover::execute_digest384_frames_v1(&frames, execution)
+                .map_err(|_| AggregateStarkErrorV1::DigestExecution)?,
+        );
+    }
+    GoldilocksMerkleTreeV1::from_leaves(execution, leaves, context, node_role)
+        .map_err(map_transparent_error_v1)
+}
+
 /// Commit vector-row columns on a common power-of-two domain.
 pub(crate) fn row_tree_v1(
+    execution: fastpq_prover::DigestExecutionV1,
     context: TransparentStarkDigestContextV1,
     leaf_role: &[u8],
     node_role: &'static [u8],
@@ -1381,20 +1561,33 @@ pub(crate) fn row_tree_v1(
     {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
-    let leaves = (0..rows)
-        .into_par_iter()
-        .map(|index| {
-            row_leaf_hash_v1(
-                context,
-                leaf_role,
-                group,
-                index,
-                &row_at_v1(columns, index)?,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    GoldilocksMerkleTreeV1::from_leaves(leaves, context, node_role)
-        .map_err(map_transparent_error_v1)
+    let group = u16::try_from(group)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let width = u16::try_from(columns.len())
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let payload_bytes = columns
+        .len()
+        .checked_mul(8)
+        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    commit_serialized_rows_v1(
+        execution,
+        context,
+        leaf_role,
+        node_role,
+        b"vector-row-leaf",
+        0,
+        u64::from(u16::from_be_bytes(group)),
+        &[&group, &width],
+        rows,
+        payload_bytes,
+        |row, bytes| {
+            for column in columns {
+                bytes.extend_from_slice(&column[row].0.to_be_bytes());
+            }
+        },
+    )
 }
 /// Root and canonical minimal frontier produced without retaining a Merkle tree.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2244,6 +2437,7 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
 }
 /// Commit one aggregate composition lane.
 pub(crate) fn composition_tree_v1(
+    execution: fastpq_prover::DigestExecutionV1,
     domains: AggregateStarkDomainsV1,
     lane: usize,
     chunks: &[Vec<E>],
@@ -2257,15 +2451,33 @@ pub(crate) fn composition_tree_v1(
     if chunks.iter().any(|chunk| chunk.len() != rows) {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
-    let leaves = (0..rows)
-        .into_par_iter()
-        .map(|index| {
-            let values = chunks.iter().map(|chunk| chunk[index]).collect::<Vec<_>>();
-            composition_leaf_hash_unchecked_v1(domains, lane, index, &values)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    GoldilocksMerkleTreeV1::from_leaves(leaves, domains.digest_context, domains.composition_node)
-        .map_err(map_transparent_error_v1)
+    let lane = u16::try_from(lane)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let width = u16::try_from(chunks.len())
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let payload_bytes = chunks
+        .len()
+        .checked_mul(32)
+        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    commit_serialized_rows_v1(
+        execution,
+        domains.digest_context,
+        domains.composition_leaf,
+        domains.composition_node,
+        b"composition-vector-leaf",
+        0,
+        u64::from(u16::from_be_bytes(lane)),
+        &[&lane, &width],
+        rows,
+        payload_bytes,
+        |row, bytes| {
+            for chunk in chunks {
+                bytes.extend_from_slice(&chunk[row].to_be_bytes());
+            }
+        },
+    )
 }
 /// Commit one aggregate composition lane without retaining a Merkle tree.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -3016,20 +3228,32 @@ pub(crate) fn deep_ali_mixed_opening_v1(
 }
 /// Commit one shared FRI layer.
 pub(crate) fn fri_tree_v1(
+    execution: fastpq_prover::DigestExecutionV1,
     domains: AggregateStarkDomainsV1,
     lane: usize,
     round: usize,
     values: &[E],
 ) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
     domains.validate()?;
-    let leaves = values
-        .par_iter()
-        .copied()
-        .enumerate()
-        .map(|(index, value)| fri_leaf_hash_unchecked_v1(domains, lane, round, index, value))
-        .collect::<Result<Vec<_>, _>>()?;
-    GoldilocksMerkleTreeV1::from_leaves(leaves, domains.digest_context, domains.fri_node)
-        .map_err(map_transparent_error_v1)
+    let lane = u16::try_from(lane)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    let round = u16::try_from(round)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
+        .to_be_bytes();
+    commit_serialized_rows_v1(
+        execution,
+        domains.digest_context,
+        domains.fri_leaf,
+        domains.fri_node,
+        b"fri-layer-leaf",
+        u64::from(u16::from_be_bytes(round)),
+        u64::from(u16::from_be_bytes(lane)),
+        &[&lane, &round],
+        values.len(),
+        32,
+        |row, bytes| bytes.extend_from_slice(&values[row].to_be_bytes()),
+    )
 }
 /// Commit one FRI layer without retaining a Merkle tree.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -3855,8 +4079,8 @@ fn encoded_non_frontier_bytes_v1(
         .checked_add(query_bytes)
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-/// Exact encoded byte length for one validated proof object.
-pub(crate) fn exact_encoded_proof_bytes_v1(
+/// Exact occupied prefix length before canonical public-profile zero padding.
+fn minimal_encoded_proof_bytes_v1(
     proof: &AggregateStarkProofV1,
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
@@ -3910,6 +4134,22 @@ pub(crate) fn exact_encoded_proof_bytes_v1(
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
         )
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
+}
+/// Exact canonical wire length for one validated proof object.
+///
+/// Query-dependent minimal frontiers occupy a prefix of the public layout's
+/// maximum; the remaining bytes are canonical zeros, never optional suffixes.
+pub(crate) fn exact_encoded_proof_bytes_v1(
+    proof: &AggregateStarkProofV1,
+    parameters: AggregateStarkParametersV1,
+    layout: &AggregateProofLayoutV1,
+) -> Result<usize, AggregateStarkErrorV1> {
+    let used = minimal_encoded_proof_bytes_v1(proof, parameters, layout)?;
+    let expected = maximum_encoded_proof_bytes_v1(parameters, layout)?;
+    if used > expected {
+        return Err(AggregateStarkErrorV1::InternalInvariant);
+    }
+    Ok(expected)
 }
 /// Exact encoded byte length of one validated DEEP-enabled proof.
 pub(crate) fn exact_encoded_proof_with_deep_bytes_v1(
@@ -4060,9 +4300,10 @@ pub(crate) fn encode_proof_v1(
             append_hashes_v1(&mut bytes, frontier);
         }
     }
-    if bytes.len() != expected {
+    if bytes.len() != minimal_encoded_proof_bytes_v1(proof, parameters, layout)? {
         return Err(AggregateStarkErrorV1::InternalInvariant);
     }
+    bytes.resize(expected, 0);
     Ok(bytes)
 }
 /// Encode the sole canonical DEEP-enabled aggregate wire.
@@ -4134,18 +4375,37 @@ fn take_fp4_fields_v1(
         })
         .collect()
 }
-/// Decode one exact statement-shaped proof and reject every suffix.
+/// Consume only the required canonical zero tail, then require exact end-of-input.
+fn finish_zero_padding_v1(
+    mut reader: ExactProofReaderV1<'_>,
+    mut padding: usize,
+) -> Result<(), AggregateStarkErrorV1> {
+    while padding >= 64 {
+        if reader.take::<64>().map_err(reader_error_v1)? != [0; 64] {
+            return Err(AggregateStarkErrorV1::MalformedProof);
+        }
+        padding -= 64;
+    }
+    for _ in 0..padding {
+        if reader.take::<1>().map_err(reader_error_v1)? != [0] {
+            return Err(AggregateStarkErrorV1::MalformedProof);
+        }
+    }
+    reader.finish().map_err(reader_error_v1)
+}
+/// Decode the exact public-profile wire and reject nonzero padding or any suffix.
 pub(crate) fn decode_proof_v1(
     bytes: &[u8],
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
 ) -> Result<AggregateStarkProofV1, AggregateStarkErrorV1> {
     layout.validate(parameters)?;
-    if bytes.is_empty() {
-        return Err(AggregateStarkErrorV1::MalformedProof);
-    }
-    if bytes.len() > parameters.maximum_proof_bytes {
+    let expected = maximum_encoded_proof_bytes_v1(parameters, layout)?;
+    if expected > parameters.maximum_proof_bytes || bytes.len() > parameters.maximum_proof_bytes {
         return Err(AggregateStarkErrorV1::ProofTooLarge);
+    }
+    if bytes.len() != expected {
+        return Err(AggregateStarkErrorV1::MalformedProof);
     }
     let mut reader = ExactProofReaderV1::new(bytes);
     if reader.take::<4>().map_err(reader_error_v1)? != parameters.proof_magic {
@@ -4229,13 +4489,13 @@ pub(crate) fn decode_proof_v1(
             })
         })
         .collect::<Result<Vec<_>, AggregateStarkErrorV1>>()?;
+    let composition_indices = composition_opening_indices_v1(&queries, layout)?;
     for (group_index, group) in trace_groups.iter_mut().enumerate() {
         let indices = trace_group_opening_indices_v1(&queries, layout, group_index)?;
         let count = multiproof_frontier_len_v1(layout.common_lde_size(), &indices)?;
         group.base_frontier = take_hashes_v1(&mut reader, count)?;
         group.aux_frontier = take_hashes_v1(&mut reader, count)?;
     }
-    let composition_indices = composition_opening_indices_v1(&queries, layout)?;
     let composition_count =
         multiproof_frontier_len_v1(layout.common_lde_size(), &composition_indices)?;
     let composition_frontiers = (0..parameters.security_lanes)
@@ -4254,7 +4514,6 @@ pub(crate) fn decode_proof_v1(
             })
             .collect::<Result<Vec<_>, _>>()?;
     }
-    reader.finish().map_err(reader_error_v1)?;
     let proof = AggregateStarkProofV1 {
         version,
         trace_groups,
@@ -4266,10 +4525,11 @@ pub(crate) fn decode_proof_v1(
         queries,
         grinding_nonce,
     };
-    validate_proof_shape_v1(&proof, parameters, layout)?;
-    if exact_encoded_proof_bytes_v1(&proof, parameters, layout)? != bytes.len() {
-        return Err(AggregateStarkErrorV1::MalformedProof);
-    }
+    let used = minimal_encoded_proof_bytes_v1(&proof, parameters, layout)?;
+    let padding = expected
+        .checked_sub(used)
+        .ok_or(AggregateStarkErrorV1::MalformedProof)?;
+    finish_zero_padding_v1(reader, padding)?;
     Ok(proof)
 }
 /// Decode the sole canonical DEEP-enabled aggregate wire.
@@ -4279,11 +4539,12 @@ pub(crate) fn decode_proof_with_deep_v1(
     layout: &AggregateProofLayoutV1,
 ) -> Result<(AggregateStarkProofV1, AggregateDeepProofV1), AggregateStarkErrorV1> {
     layout.validate(parameters)?;
-    if bytes.is_empty() {
-        return Err(AggregateStarkErrorV1::MalformedProof);
-    }
-    if bytes.len() > parameters.maximum_proof_bytes {
+    let expected = maximum_encoded_proof_with_deep_bytes_v1(parameters, layout)?;
+    if expected > parameters.maximum_proof_bytes || bytes.len() > parameters.maximum_proof_bytes {
         return Err(AggregateStarkErrorV1::ProofTooLarge);
+    }
+    if bytes.len() != expected {
+        return Err(AggregateStarkErrorV1::MalformedProof);
     }
     let insertion = deep_insertion_offset_v1(parameters, layout)?;
     let deep_len = exact_deep_opening_bytes_v1(parameters, layout)?;
@@ -4306,9 +4567,6 @@ pub(crate) fn decode_proof_with_deep_v1(
     base_bytes.extend_from_slice(&bytes[deep_end..]);
     let proof = decode_proof_v1(&base_bytes, parameters, layout)?;
     let deep = decode_deep_openings_raw_v1(&bytes[insertion..deep_end], parameters, layout)?;
-    if exact_encoded_proof_with_deep_bytes_v1(&proof, &deep, parameters, layout)? != bytes.len() {
-        return Err(AggregateStarkErrorV1::MalformedProof);
-    }
     Ok((proof, deep))
 }
 /// Prover material for one ordered trace group on the common LDE domain.
@@ -4400,6 +4658,7 @@ fn fold_fri_layer_v1(
 }
 /// Build and transcript-bind one complete shared binary-FRI lane.
 pub(crate) fn build_fri_lane_v1(
+    execution: fastpq_prover::DigestExecutionV1,
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
     layout: &AggregateProofLayoutV1,
@@ -4432,7 +4691,7 @@ pub(crate) fn build_fri_lane_v1(
         let current = layers
             .last()
             .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-        let tree = fri_tree_v1(domains, lane, round, current)?;
+        let tree = fri_tree_v1(execution, domains, lane, round, current)?;
         let root = tree.root();
         absorb_fri_root_v1(transcript, domains, lane, round, &root)?;
         let beta = transcript
@@ -4463,7 +4722,7 @@ pub(crate) fn build_fri_lane_v1(
         parameters.terminal_degree_bound,
     )
     .map_err(map_transparent_error_v1)?;
-    let terminal_tree = fri_tree_v1(domains, lane, fri_rounds, &terminal_values)?;
+    let terminal_tree = fri_tree_v1(execution, domains, lane, fri_rounds, &terminal_values)?;
     let terminal_root = terminal_tree.root();
     absorb_fri_root_v1(transcript, domains, lane, fri_rounds, &terminal_root)?;
     roots.push(terminal_root);
@@ -4849,6 +5108,172 @@ pub(crate) fn build_all_frontiers_v1(
         fri_frontiers,
     ))
 }
+/// Bound public query leaf-hash scratch independently of the supplied Rayon pool.
+const OPENED_QUERY_HASH_BATCH_V1: usize = 8;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenedLeafTargetV1 {
+    Base(usize),
+    Auxiliary(usize),
+    Composition(usize),
+    FriMask(usize),
+    Fri { lane: usize, round: usize },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OpenedQueryLeafV1 {
+    target: OpenedLeafTargetV1,
+    index: usize,
+    digest: GoldilocksDigest384V1,
+}
+/// Only disclosed proof openings and public hashes enter this package.
+/// Earlier leaf events survive a later hash/validation error so ordered map
+/// insertion can report an earlier duplicate mismatch before that later error.
+#[derive(Debug, PartialEq, Eq)]
+struct OpenedQueryHashesV1 {
+    leaves: Vec<OpenedQueryLeafV1>,
+    outcome: Result<(), AggregateStarkErrorV1>,
+}
+/// Called only after complete proof-shape and domain validation by the verifier.
+fn hash_opened_query_leaves_v1(
+    query: &AggregateQueryProofV1,
+    expected_index: Option<usize>,
+    parameters: AggregateStarkParametersV1,
+    domains: AggregateStarkDomainsV1,
+    layout: &AggregateProofLayoutV1,
+    fri_rounds: usize,
+) -> OpenedQueryHashesV1 {
+    let mut leaves = Vec::new();
+    let outcome = (|| {
+        let index =
+            usize::try_from(query.index).map_err(|_| AggregateStarkErrorV1::TranscriptMismatch)?;
+        if expected_index != Some(index) || index >= layout.common_lde_size() {
+            return Err(AggregateStarkErrorV1::TranscriptMismatch);
+        }
+        let leaves_per_lane = fri_rounds
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(2))
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+        let leaf_capacity = parameters
+            .security_lanes
+            .checked_mul(leaves_per_lane)
+            .and_then(|count| {
+                layout
+                    .trace_groups
+                    .len()
+                    .checked_mul(4)
+                    .and_then(|trace_count| count.checked_add(trace_count))
+            })
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+        leaves
+            .try_reserve_exact(leaf_capacity)
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        for (group_index, (opening, descriptor)) in query
+            .trace_groups
+            .iter()
+            .zip(&layout.trace_groups)
+            .enumerate()
+        {
+            let next = (index + descriptor.next_stride(layout.common_lde_log2)?)
+                % layout.common_lde_size();
+            let base_current = canonical_fields_v1(&opening.base_current, descriptor.base_width)?;
+            let base_next = canonical_fields_v1(&opening.base_next, descriptor.base_width)?;
+            let aux_current = canonical_fields_v1(&opening.aux_current, descriptor.aux_width)?;
+            let aux_next = canonical_fields_v1(&opening.aux_next, descriptor.aux_width)?;
+            leaves.push(OpenedQueryLeafV1 {
+                target: OpenedLeafTargetV1::Base(group_index),
+                index,
+                digest: row_leaf_hash_v1(
+                    domains.digest_context,
+                    domains.base_leaf,
+                    group_index,
+                    index,
+                    &base_current,
+                )?,
+            });
+            leaves.push(OpenedQueryLeafV1 {
+                target: OpenedLeafTargetV1::Base(group_index),
+                index: next,
+                digest: row_leaf_hash_v1(
+                    domains.digest_context,
+                    domains.base_leaf,
+                    group_index,
+                    next,
+                    &base_next,
+                )?,
+            });
+            leaves.push(OpenedQueryLeafV1 {
+                target: OpenedLeafTargetV1::Auxiliary(group_index),
+                index,
+                digest: row_leaf_hash_v1(
+                    domains.digest_context,
+                    domains.aux_leaf,
+                    group_index,
+                    index,
+                    &aux_current,
+                )?,
+            });
+            leaves.push(OpenedQueryLeafV1 {
+                target: OpenedLeafTargetV1::Auxiliary(group_index),
+                index: next,
+                digest: row_leaf_hash_v1(
+                    domains.digest_context,
+                    domains.aux_leaf,
+                    group_index,
+                    next,
+                    &aux_next,
+                )?,
+            });
+        }
+        for lane in 0..parameters.security_lanes {
+            let composition = canonical_fp4_fields_v1(
+                &query.composition_values[lane],
+                parameters.composition_degree_chunks,
+            )?;
+            leaves.push(OpenedQueryLeafV1 {
+                target: OpenedLeafTargetV1::Composition(lane),
+                index,
+                digest: composition_leaf_hash_unchecked_v1(domains, lane, index, &composition)?,
+            });
+            let fri_mask = E::canonical(query.fri_mask_values[lane])
+                .ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
+            leaves.push(OpenedQueryLeafV1 {
+                target: OpenedLeafTargetV1::FriMask(lane),
+                index,
+                digest: fri_mask_leaf_hash_v1(domains, lane, index, fri_mask)?,
+            });
+            let mut layer_index = index;
+            let mut layer_size = layout.common_lde_size();
+            for round in 0..fri_rounds {
+                let opening = query.fri_lanes[lane].rounds[round];
+                let low =
+                    E::canonical(opening.low).ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
+                let high =
+                    E::canonical(opening.high).ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
+                let half = layer_size / 2;
+                let low_index = layer_index % half;
+                leaves.push(OpenedQueryLeafV1 {
+                    target: OpenedLeafTargetV1::Fri { lane, round },
+                    index: low_index,
+                    digest: fri_leaf_hash_unchecked_v1(domains, lane, round, low_index, low)?,
+                });
+                leaves.push(OpenedQueryLeafV1 {
+                    target: OpenedLeafTargetV1::Fri { lane, round },
+                    index: low_index + half,
+                    digest: fri_leaf_hash_unchecked_v1(
+                        domains,
+                        lane,
+                        round,
+                        low_index + half,
+                        high,
+                    )?,
+                });
+                layer_index = low_index;
+                layer_size = half;
+            }
+        }
+        Ok(())
+    })();
+    OpenedQueryHashesV1 { leaves, outcome }
+}
 /// Verify all base, auxiliary, composition, and non-terminal FRI multiproofs.
 pub(crate) fn verify_all_merkle_openings_v1(
     proof: &AggregateStarkProofV1,
@@ -4878,164 +5303,132 @@ pub(crate) fn verify_all_merkle_openings_v1(
     let mut fri_leaves = (0..parameters.security_lanes)
         .map(|_| (0..fri_rounds).map(|_| BTreeMap::new()).collect::<Vec<_>>())
         .collect::<Vec<_>>();
-    for (position, query) in proof.queries.iter().enumerate() {
-        let index =
-            usize::try_from(query.index).map_err(|_| AggregateStarkErrorV1::TranscriptMismatch)?;
-        if expected_indices.get(position).copied() != Some(index)
-            || index >= layout.common_lde_size()
-        {
-            return Err(AggregateStarkErrorV1::TranscriptMismatch);
-        }
-        for (group_index, (opening, descriptor)) in query
-            .trace_groups
-            .iter()
-            .zip(&layout.trace_groups)
+    // Hash at most eight public query packages on the caller's Rayon pool.
+    // Retain the original query/group/lane/round insertion order and first error.
+    for (batch_number, queries) in proof.queries.chunks(OPENED_QUERY_HASH_BATCH_V1).enumerate() {
+        let batch_start = batch_number * OPENED_QUERY_HASH_BATCH_V1;
+        let hashed = queries
+            .par_iter()
             .enumerate()
-        {
-            let next = (index + descriptor.next_stride(layout.common_lde_log2)?)
-                % layout.common_lde_size();
-            let base_current = canonical_fields_v1(&opening.base_current, descriptor.base_width)?;
-            let base_next = canonical_fields_v1(&opening.base_next, descriptor.base_width)?;
-            let aux_current = canonical_fields_v1(&opening.aux_current, descriptor.aux_width)?;
-            let aux_next = canonical_fields_v1(&opening.aux_next, descriptor.aux_width)?;
-            insert_opened_leaf_v1(
-                &mut base_leaves[group_index],
-                index,
-                row_leaf_hash_v1(
-                    domains.digest_context,
-                    domains.base_leaf,
-                    group_index,
-                    index,
-                    &base_current,
-                )?,
-            )?;
-            insert_opened_leaf_v1(
-                &mut base_leaves[group_index],
-                next,
-                row_leaf_hash_v1(
-                    domains.digest_context,
-                    domains.base_leaf,
-                    group_index,
-                    next,
-                    &base_next,
-                )?,
-            )?;
-            insert_opened_leaf_v1(
-                &mut aux_leaves[group_index],
-                index,
-                row_leaf_hash_v1(
-                    domains.digest_context,
-                    domains.aux_leaf,
-                    group_index,
-                    index,
-                    &aux_current,
-                )?,
-            )?;
-            insert_opened_leaf_v1(
-                &mut aux_leaves[group_index],
-                next,
-                row_leaf_hash_v1(
-                    domains.digest_context,
-                    domains.aux_leaf,
-                    group_index,
-                    next,
-                    &aux_next,
-                )?,
-            )?;
-        }
-        for lane in 0..parameters.security_lanes {
-            let composition = canonical_fp4_fields_v1(
-                &query.composition_values[lane],
-                parameters.composition_degree_chunks,
-            )?;
-            insert_opened_leaf_v1(
-                &mut composition_leaves[lane],
-                index,
-                composition_leaf_hash_unchecked_v1(domains, lane, index, &composition)?,
-            )
-            .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-            let fri_mask = E::canonical(query.fri_mask_values[lane])
-                .ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
-            insert_opened_leaf_v1(
-                &mut fri_mask_leaves[lane],
-                index,
-                fri_mask_leaf_hash_v1(domains, lane, index, fri_mask)?,
-            )
-            .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
-            let mut layer_index = index;
-            let mut layer_size = layout.common_lde_size();
-            for round in 0..fri_rounds {
-                let opening = query.fri_lanes[lane].rounds[round];
-                let low =
-                    E::canonical(opening.low).ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
-                let high =
-                    E::canonical(opening.high).ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
-                let half = layer_size / 2;
-                let low_index = layer_index % half;
-                insert_opened_leaf_v1(
-                    &mut fri_leaves[lane][round],
-                    low_index,
-                    fri_leaf_hash_unchecked_v1(domains, lane, round, low_index, low)?,
+            .map(|(offset, query)| {
+                hash_opened_query_leaves_v1(
+                    query,
+                    expected_indices.get(batch_start + offset).copied(),
+                    parameters,
+                    domains,
+                    layout,
+                    fri_rounds,
                 )
-                .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
-                insert_opened_leaf_v1(
-                    &mut fri_leaves[lane][round],
-                    low_index + half,
-                    fri_leaf_hash_unchecked_v1(domains, lane, round, low_index + half, high)?,
-                )
-                .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
-                layer_index = low_index;
-                layer_size = half;
+            })
+            .collect::<Vec<_>>();
+        for query in hashed {
+            for leaf in query.leaves {
+                let (target, error_mapping) = match leaf.target {
+                    OpenedLeafTargetV1::Base(group) => (&mut base_leaves[group], None),
+                    OpenedLeafTargetV1::Auxiliary(group) => (&mut aux_leaves[group], None),
+                    OpenedLeafTargetV1::Composition(lane) => (
+                        &mut composition_leaves[lane],
+                        Some(AggregateStarkErrorV1::ConstraintOpening),
+                    ),
+                    OpenedLeafTargetV1::FriMask(lane) => (
+                        &mut fri_mask_leaves[lane],
+                        Some(AggregateStarkErrorV1::FriOpening),
+                    ),
+                    OpenedLeafTargetV1::Fri { lane, round } => (
+                        &mut fri_leaves[lane][round],
+                        Some(AggregateStarkErrorV1::FriOpening),
+                    ),
+                };
+                insert_opened_leaf_v1(target, leaf.index, leaf.digest)
+                    .map_err(|error| error_mapping.unwrap_or(error))?;
             }
+            query.outcome?;
         }
     }
+    let mut jobs = Vec::new();
     for group in 0..layout.trace_groups.len() {
-        verify_canonical_multiproof_v1(
-            domains.digest_context,
-            domains.base_node,
-            &proof.trace_groups[group].base_root,
-            layout.common_lde_size(),
-            &base_leaves[group],
-            &proof.trace_groups[group].base_frontier,
-        )?;
-        verify_canonical_multiproof_v1(
-            domains.digest_context,
-            domains.aux_node,
-            &proof.trace_groups[group].aux_root,
-            layout.common_lde_size(),
-            &aux_leaves[group],
-            &proof.trace_groups[group].aux_frontier,
-        )?;
+        jobs.push(MerkleVerificationJobV1 {
+            node_role: domains.base_node,
+            root: &proof.trace_groups[group].base_root,
+            leaf_count: layout.common_lde_size(),
+            leaves: &base_leaves[group],
+            frontier: &proof.trace_groups[group].base_frontier,
+            error_mapping: None,
+        });
+        jobs.push(MerkleVerificationJobV1 {
+            node_role: domains.aux_node,
+            root: &proof.trace_groups[group].aux_root,
+            leaf_count: layout.common_lde_size(),
+            leaves: &aux_leaves[group],
+            frontier: &proof.trace_groups[group].aux_frontier,
+            error_mapping: None,
+        });
     }
     for lane in 0..parameters.security_lanes {
-        verify_canonical_multiproof_v1(
-            domains.digest_context,
-            domains.composition_node,
-            &proof.composition_roots[lane],
-            layout.common_lde_size(),
-            &composition_leaves[lane],
-            &proof.composition_frontiers[lane],
-        )
-        .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
-        verify_canonical_multiproof_v1(
-            domains.digest_context,
-            FRI_MASK_NODE_DOMAIN_V1,
-            &proof.fri_mask_roots[lane],
-            layout.common_lde_size(),
-            &fri_mask_leaves[lane],
-            &proof.fri_mask_frontiers[lane],
-        )
-        .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
+        jobs.push(MerkleVerificationJobV1 {
+            node_role: domains.composition_node,
+            root: &proof.composition_roots[lane],
+            leaf_count: layout.common_lde_size(),
+            leaves: &composition_leaves[lane],
+            frontier: &proof.composition_frontiers[lane],
+            error_mapping: Some(AggregateStarkErrorV1::ConstraintOpening),
+        });
+        jobs.push(MerkleVerificationJobV1 {
+            node_role: FRI_MASK_NODE_DOMAIN_V1,
+            root: &proof.fri_mask_roots[lane],
+            leaf_count: layout.common_lde_size(),
+            leaves: &fri_mask_leaves[lane],
+            frontier: &proof.fri_mask_frontiers[lane],
+            error_mapping: Some(AggregateStarkErrorV1::FriOpening),
+        });
         for round in 0..fri_rounds {
-            verify_canonical_multiproof_v1(
-                domains.digest_context,
-                domains.fri_node,
-                &proof.fri_lanes[lane].roots[round],
-                layout.common_lde_size() >> round,
-                &fri_leaves[lane][round],
-                &proof.fri_lanes[lane].round_frontiers[round],
-            )
-            .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
+            jobs.push(MerkleVerificationJobV1 {
+                node_role: domains.fri_node,
+                root: &proof.fri_lanes[lane].roots[round],
+                leaf_count: layout.common_lde_size() >> round,
+                leaves: &fri_leaves[lane][round],
+                frontier: &proof.fri_lanes[lane].round_frontiers[round],
+                error_mapping: Some(AggregateStarkErrorV1::FriOpening),
+            });
+        }
+    }
+    verify_merkle_jobs_v1(domains.digest_context, &jobs)
+}
+/// One independently checkable canonical Merkle multiproof.
+struct MerkleVerificationJobV1<'a> {
+    node_role: &'a [u8],
+    root: &'a GoldilocksDigest384V1,
+    leaf_count: usize,
+    leaves: &'a BTreeMap<usize, GoldilocksDigest384V1>,
+    frontier: &'a [GoldilocksDigest384V1],
+    error_mapping: Option<AggregateStarkErrorV1>,
+}
+/// Bound concurrent cloned frontier maps independently of the host worker count.
+const MERKLE_VERIFICATION_BATCH_V1: usize = 8;
+/// Check every multiproof in each bounded batch and return its first ordered error.
+fn verify_merkle_jobs_v1(
+    context: TransparentStarkDigestContextV1,
+    jobs: &[MerkleVerificationJobV1<'_>],
+) -> Result<(), AggregateStarkErrorV1> {
+    for batch in jobs.chunks(MERKLE_VERIFICATION_BATCH_V1) {
+        // Indexed parallel collection preserves the serial protocol order.
+        // Do not use try_for_each: its first reported error depends on scheduling.
+        let results = batch
+            .par_iter()
+            .map(|job| {
+                verify_canonical_multiproof_v1(
+                    context,
+                    job.node_role,
+                    job.root,
+                    job.leaf_count,
+                    job.leaves,
+                    job.frontier,
+                )
+                .map_err(|error| job.error_mapping.unwrap_or(error))
+            })
+            .collect::<Vec<_>>();
+        for result in results {
+            result?;
         }
     }
     Ok(())
@@ -5056,7 +5449,13 @@ pub(crate) fn verify_fri_commitments_v1(
         let lane_proof = &proof.fri_lanes[lane];
         let terminal =
             canonical_fp4_fields_v1(&lane_proof.terminal_values, parameters.terminal_size()?)?;
-        let terminal_tree = fri_tree_v1(domains, lane, fri_rounds, &terminal)?;
+        let terminal_tree = fri_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            domains,
+            lane,
+            fri_rounds,
+            &terminal,
+        )?;
         if terminal_tree.root() != lane_proof.roots[fri_rounds] {
             return Err(AggregateStarkErrorV1::FriOpening);
         }
@@ -5363,6 +5762,310 @@ mod tests {
         fri_beta_label: b"aggregate-test-fri-beta-label",
         query_seed: b"aggregate-test-query-seed",
     };
+    fn assert_scalar_commitment_parity_v1(
+        tree: GoldilocksMerkleTreeV1,
+        leaves: Vec<GoldilocksDigest384V1>,
+        node: &'static [u8],
+    ) {
+        let expected = GoldilocksMerkleTreeV1::from_leaves(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            leaves,
+            DOMAINS.digest_context,
+            node,
+        )
+        .expect("scalar leaf tree");
+        assert_eq!(tree.root(), expected.root());
+        for row in [0, 4095, 4096, 8191] {
+            assert_eq!(
+                tree.path(row).expect("path"),
+                expected.path(row).expect("scalar path")
+            );
+        }
+    }
+    #[test]
+    fn explicit_commitment_preparation_geometry_retains_payload_and_frame_bounds() {
+        let limit = fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1;
+        let budget = PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1;
+        let catalog = DOMAINS.digest_context.catalog_v1();
+        let domain = DOMAINS
+            .digest_context
+            .domain_v1(&catalog, DOMAINS.base_leaf, b"vector-row-leaf", 0, 0, 0)
+            .unwrap();
+        for payload in [1, 512, 513, 4448] {
+            let words = fastpq_isi::GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(
+                domain,
+                &[payload],
+            )
+            .unwrap();
+            let rows = private_row_preparation_rows_v1(domain, &[], payload, limit).unwrap();
+            assert_eq!(
+                rows,
+                (budget / payload)
+                    .min(limit)
+                    .min(fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1 / words)
+            );
+            assert!(rows * payload <= budget);
+            assert!(rows * words <= fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1);
+        }
+        assert_eq!(private_row_preparation_rows_v1(domain, &[], 8, 3), Ok(3));
+        for payload in [budget, budget + 1] {
+            assert_eq!(
+                private_row_preparation_rows_v1(domain, &[], payload, limit),
+                Err(AggregateStarkErrorV1::AllocationFailure)
+            );
+        }
+        for (payload, cap) in [(0, limit), (8, 0), (8, limit + 1)] {
+            assert_eq!(
+                private_row_preparation_rows_v1(domain, &[], payload, cap),
+                Err(AggregateStarkErrorV1::InvalidLayout)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_commitment_556_column_geometry_aligns_host_and_device_batches() {
+        let context = TransparentStarkDigestContextV1::new(
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            b"atomic-private-settlement-stark-profile-v1",
+        );
+        let catalog = context.catalog_v1();
+        let domain = context
+            .domain_v1(
+                &catalog,
+                b"atomic-private-settlement-stark-base-leaf-v1",
+                b"vector-row-leaf",
+                0,
+                0,
+                0,
+            )
+            .unwrap();
+        let group = 0_u16.to_be_bytes();
+        let width = 556_u16.to_be_bytes();
+        let payload_bytes = 556 * 8;
+        let words = fastpq_isi::GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(
+            domain,
+            &[group.len(), width.len(), payload_bytes],
+        )
+        .unwrap();
+        assert_eq!(words, 712, "actual APS domain/prefix/payload geometry");
+        let rows = private_row_preparation_rows_v1(
+            domain,
+            &[&group, &width],
+            payload_bytes,
+            fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1,
+        )
+        .unwrap();
+        assert_eq!(rows, 5890);
+        assert_eq!(131_072_usize.div_ceil(rows), 23);
+        assert!(rows * payload_bytes <= PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1);
+        assert!(rows * words <= fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1);
+        assert!((rows + 1) * words > fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1);
+    }
+
+    #[test]
+    fn explicit_commitment_small_preparation_chunks_preserve_scalar_root_and_paths() {
+        let cpu = fastpq_prover::DigestExecutionV1::Cpu;
+        let columns: Vec<Vec<F>> = (0..3)
+            .map(|column| (0..8).map(|row| F(column * 101 + row * 17)).collect())
+            .collect();
+        let leaves = (0..8)
+            .map(|row| {
+                row_leaf_hash_v1(
+                    DOMAINS.digest_context,
+                    DOMAINS.base_leaf,
+                    7,
+                    row,
+                    &row_at_v1(&columns, row).unwrap(),
+                )
+                .unwrap()
+            })
+            .collect();
+        let expected = GoldilocksMerkleTreeV1::from_leaves(
+            cpu,
+            leaves,
+            DOMAINS.digest_context,
+            DOMAINS.base_node,
+        )
+        .unwrap();
+        let group = 7_u16.to_be_bytes();
+        let width = 3_u16.to_be_bytes();
+        for cap in [1, 3, fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1] {
+            let mut serialized = Vec::new();
+            let tree = commit_serialized_rows_with_preparation_limit_v1(
+                cpu,
+                DOMAINS.digest_context,
+                DOMAINS.base_leaf,
+                DOMAINS.base_node,
+                b"vector-row-leaf",
+                0,
+                7,
+                &[&group, &width],
+                8,
+                24,
+                cap,
+                |row, bytes| {
+                    serialized.push(row);
+                    for column in &columns {
+                        bytes.extend_from_slice(&column[row].0.to_be_bytes());
+                    }
+                },
+            )
+            .unwrap();
+            assert_eq!(serialized, (0..8).collect::<Vec<_>>());
+            assert_eq!(tree.root(), expected.root());
+            for row in 0..8 {
+                assert_eq!(tree.path(row).unwrap(), expected.path(row).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_commitment_rows_match_scalar_across_batch_boundary() {
+        let columns = (0..3)
+            .map(|column| {
+                (0..8192)
+                    .map(|row| F((column * 101 + row * 17) as u64))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let tree = row_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            DOMAINS.digest_context,
+            DOMAINS.base_leaf,
+            DOMAINS.base_node,
+            7,
+            &columns,
+            8192,
+        )
+        .expect("batched rows");
+        let leaves = (0..8192)
+            .into_par_iter()
+            .map(|row| {
+                row_leaf_hash_v1(
+                    DOMAINS.digest_context,
+                    DOMAINS.base_leaf,
+                    7,
+                    row,
+                    &row_at_v1(&columns, row).expect("row"),
+                )
+                .expect("scalar leaf")
+            })
+            .collect();
+        assert_scalar_commitment_parity_v1(tree, leaves, DOMAINS.base_node);
+    }
+    #[test]
+    fn explicit_commitment_composition_matches_scalar_across_batch_boundary() {
+        let chunks = (0..3)
+            .map(|column| {
+                (0..8192)
+                    .map(|row| E::canonical([row as u64, column + 1, 3, 7]).expect("field"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let tree = composition_tree_v1(fastpq_prover::DigestExecutionV1::Cpu, DOMAINS, 3, &chunks)
+            .expect("batched composition");
+        let leaves = (0..8192)
+            .into_par_iter()
+            .map(|row| {
+                let values = chunks.iter().map(|chunk| chunk[row]).collect::<Vec<_>>();
+                composition_leaf_hash_unchecked_v1(DOMAINS, 3, row, &values)
+                    .expect("scalar composition")
+            })
+            .collect();
+        assert_scalar_commitment_parity_v1(tree, leaves, DOMAINS.composition_node);
+    }
+    #[test]
+    fn explicit_commitment_fri_and_mask_match_scalar_across_batch_boundary() {
+        let values = (0..8192)
+            .map(|row| E::canonical([row, 2, 3, 7]).expect("field"))
+            .collect::<Vec<_>>();
+        let tree = fri_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            DOMAINS,
+            3,
+            5,
+            &values,
+        )
+        .expect("batched FRI");
+        let leaves = values
+            .par_iter()
+            .enumerate()
+            .map(|(row, value)| {
+                fri_leaf_hash_unchecked_v1(DOMAINS, 3, 5, row, *value).expect("scalar FRI")
+            })
+            .collect();
+        assert_scalar_commitment_parity_v1(tree, leaves, DOMAINS.fri_node);
+        let tree = fri_mask_tree_v1(fastpq_prover::DigestExecutionV1::Cpu, DOMAINS, 3, &values)
+            .expect("batched mask");
+        let leaves = values
+            .par_iter()
+            .enumerate()
+            .map(|(row, value)| {
+                fri_mask_leaf_hash_v1(DOMAINS, 3, row, *value).expect("scalar mask")
+            })
+            .collect();
+        assert_scalar_commitment_parity_v1(tree, leaves, FRI_MASK_NODE_DOMAIN_V1);
+    }
+    #[test]
+    fn explicit_commitment_staging_rejects_invalid_geometry_and_payload_before_hashing() {
+        let cpu = fastpq_prover::DigestExecutionV1::Cpu;
+        for rows in [0, 3] {
+            assert!(
+                commit_serialized_rows_v1(
+                    cpu,
+                    DOMAINS.digest_context,
+                    DOMAINS.base_leaf,
+                    DOMAINS.base_node,
+                    b"vector-row-leaf",
+                    0,
+                    0,
+                    &[],
+                    rows,
+                    8,
+                    |_, _| panic!("must preflight")
+                )
+                .is_err()
+            );
+        }
+        for bytes in [0, 32 * 1024 * 1024 + 1] {
+            assert!(
+                commit_serialized_rows_v1(
+                    cpu,
+                    DOMAINS.digest_context,
+                    DOMAINS.base_leaf,
+                    DOMAINS.base_node,
+                    b"vector-row-leaf",
+                    0,
+                    0,
+                    &[],
+                    2,
+                    bytes,
+                    |_, _| panic!("must preflight")
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            commit_serialized_rows_v1(
+                cpu,
+                DOMAINS.digest_context,
+                DOMAINS.base_leaf,
+                DOMAINS.base_node,
+                b"vector-row-leaf",
+                0,
+                0,
+                &[],
+                2,
+                8,
+                |_, bytes| bytes.push(0)
+            )
+            .is_err()
+        );
+        assert!(composition_tree_v1(cpu, DOMAINS, usize::MAX, &[vec![E::ZERO; 2]]).is_err());
+        assert!(fri_tree_v1(cpu, DOMAINS, 0, usize::MAX, &[E::ZERO; 2]).is_err());
+        assert!(fri_mask_tree_v1(cpu, DOMAINS, 0, &[]).is_err());
+    }
+
     fn transcript() -> TransparentTranscriptV1 {
         let profile = GoldilocksDigest384V1::new([7; 6]).expect("profile digest");
         let public = GoldilocksDigest384V1::new([9; 6]).expect("public digest");
@@ -5593,6 +6296,7 @@ mod tests {
                 .collect(),
         ];
         let base_tree = row_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             DOMAINS.base_leaf,
             DOMAINS.base_node,
@@ -5602,6 +6306,7 @@ mod tests {
         )
         .expect("base tree");
         let aux_tree = row_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             DOMAINS.aux_leaf,
             DOMAINS.aux_node,
@@ -5621,7 +6326,14 @@ mod tests {
             PARAMETERS.security_lanes
         ];
         let composition_trees = (0..PARAMETERS.security_lanes)
-            .map(|lane| composition_tree_v1(DOMAINS, lane, &compositions[lane]))
+            .map(|lane| {
+                composition_tree_v1(
+                    fastpq_prover::DigestExecutionV1::Cpu,
+                    DOMAINS,
+                    lane,
+                    &compositions[lane],
+                )
+            })
             .collect::<Result<Vec<_>, _>>()
             .expect("composition trees");
         let composition_roots = composition_trees
@@ -5629,8 +6341,14 @@ mod tests {
             .map(GoldilocksMerkleTreeV1::root)
             .collect::<Vec<_>>();
         let mut fri_mask_rng = StdRng::seed_from_u64(0x4652_494d_4153_4b31);
-        let fri_masks = build_fri_mask_oracles_v1(PARAMETERS, DOMAINS, &layout, &mut fri_mask_rng)
-            .expect("FRI mask oracles");
+        let fri_masks = build_fri_mask_oracles_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            PARAMETERS,
+            DOMAINS,
+            &layout,
+            &mut fri_mask_rng,
+        )
+        .expect("FRI mask oracles");
         let fri_mask_roots = fri_masks
             .iter()
             .map(|mask| mask.tree.root())
@@ -5662,6 +6380,7 @@ mod tests {
                 let mut fri_base = vec![E::ZERO; rows];
                 add_fri_mask_oracle_v1(&mut fri_base, &fri_masks[lane]).expect("add FRI mask");
                 build_fri_lane_v1(
+                    fastpq_prover::DigestExecutionV1::Cpu,
                     PARAMETERS,
                     DOMAINS,
                     &layout,
@@ -5955,6 +6674,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let tree = GoldilocksMerkleTreeV1::from_leaves(
+            fastpq_prover::DigestExecutionV1::Cpu,
             leaves.clone(),
             DOMAINS.digest_context,
             b"aggregate-streaming-node",
@@ -6076,6 +6796,7 @@ mod tests {
             .collect::<Vec<_>>();
         let indices = vec![0, 1, 7, 31, 63];
         let tree = row_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             b"aggregate-streaming-row-leaf",
             b"aggregate-streaming-row-node",
@@ -6225,6 +6946,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let tree = row_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             b"aggregate-streaming-masked-leaf",
             b"aggregate-streaming-masked-node",
@@ -6783,8 +7505,13 @@ mod tests {
             .map(|index| index * 3 + 1)
             .collect::<Vec<_>>();
         let composition_chunks = vec![values.clone()];
-        let composition_tree =
-            composition_tree_v1(DOMAINS, 0, &composition_chunks).expect("composition tree");
+        let composition_tree = composition_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            DOMAINS,
+            0,
+            &composition_chunks,
+        )
+        .expect("composition tree");
         let streamed_composition =
             streaming_composition_commitment_v1(DOMAINS, 0, &composition_chunks, &indices)
                 .expect("streaming composition");
@@ -6796,6 +7523,7 @@ mod tests {
         );
         let mut materialized_transcript = transcript();
         let materialized = build_fri_lane_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             PARAMETERS,
             DOMAINS,
             &layout,
@@ -6951,6 +7679,733 @@ mod tests {
             );
         }
     }
+
+    fn opened_leaf_fixture_v1() -> &'static (AggregateProofLayoutV1, AggregateStarkProofV1) {
+        static FIXTURE: std::sync::OnceLock<(AggregateProofLayoutV1, AggregateStarkProofV1)> =
+            std::sync::OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let (layout, proof, _, _) = fixture();
+            (layout, proof)
+        })
+    }
+
+    #[test]
+    fn opened_query_hashes_match_sequential_bytes_and_bound_each_batch() {
+        let (layout, proof) = opened_leaf_fixture_v1();
+        let indices = proof_query_indices_v1(proof);
+        let rounds = layout.fri_rounds(PARAMETERS).expect("fixture rounds");
+        let count = OPENED_QUERY_HASH_BATCH_V1 + 1;
+        assert!(proof.queries.len() >= count);
+        let sequential = proof.queries[..count]
+            .iter()
+            .enumerate()
+            .map(|(position, query)| {
+                hash_opened_query_leaves_v1(
+                    query,
+                    Some(indices[position]),
+                    PARAMETERS,
+                    DOMAINS,
+                    layout,
+                    rounds,
+                )
+            })
+            .collect::<Vec<_>>();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build()
+            .expect("eight-worker pool");
+        let mut parallel = Vec::new();
+        for (batch_number, queries) in proof.queries[..count]
+            .chunks(OPENED_QUERY_HASH_BATCH_V1)
+            .enumerate()
+        {
+            assert!(queries.len() <= 8);
+            let batch_start = batch_number * OPENED_QUERY_HASH_BATCH_V1;
+            let batch = pool.install(|| {
+                queries
+                    .par_iter()
+                    .enumerate()
+                    .map(|(offset, query)| {
+                        hash_opened_query_leaves_v1(
+                            query,
+                            Some(indices[batch_start + offset]),
+                            PARAMETERS,
+                            DOMAINS,
+                            layout,
+                            rounds,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
+            parallel.extend(batch);
+        }
+        assert_eq!(parallel, sequential);
+        let expected_per_query =
+            layout.trace_groups.len() * 4 + PARAMETERS.security_lanes * (2 + 2 * rounds);
+        for query in &parallel {
+            assert_eq!(query.outcome, Ok(()));
+            assert_eq!(query.leaves.len(), expected_per_query);
+        }
+        assert!(
+            parallel
+                .iter()
+                .flat_map(|query| &query.leaves)
+                .any(|leaf| matches!(leaf.target, OpenedLeafTargetV1::Base(_)))
+        );
+        assert!(
+            parallel
+                .iter()
+                .flat_map(|query| &query.leaves)
+                .any(|leaf| matches!(leaf.target, OpenedLeafTargetV1::Auxiliary(_)))
+        );
+        assert!(
+            parallel
+                .iter()
+                .flat_map(|query| &query.leaves)
+                .any(|leaf| matches!(leaf.target, OpenedLeafTargetV1::Composition(_)))
+        );
+        assert!(
+            parallel
+                .iter()
+                .flat_map(|query| &query.leaves)
+                .any(|leaf| matches!(leaf.target, OpenedLeafTargetV1::FriMask(_)))
+        );
+        assert!(
+            parallel
+                .iter()
+                .flat_map(|query| &query.leaves)
+                .any(|leaf| matches!(leaf.target, OpenedLeafTargetV1::Fri { .. }))
+        );
+    }
+
+    #[test]
+    fn opened_leaf_parallel_verifier_matches_original_on_valid_and_malformed_proofs() {
+        let (layout, proof) = opened_leaf_fixture_v1();
+        let indices = proof_query_indices_v1(proof);
+        let pools = [1, 8].map(|threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("verifier test pool")
+        });
+        let compare =
+            |candidate: &AggregateStarkProofV1, expected_indices: &[usize], expected_error| {
+                let original = verify_all_merkle_openings_serial_reference_v1(
+                    candidate,
+                    PARAMETERS,
+                    DOMAINS,
+                    layout,
+                    expected_indices,
+                );
+                assert_eq!(original, expected_error);
+                for pool in &pools {
+                    assert_eq!(
+                        pool.install(|| verify_all_merkle_openings_v1(
+                            candidate,
+                            PARAMETERS,
+                            DOMAINS,
+                            layout,
+                            expected_indices,
+                        )),
+                        original
+                    );
+                }
+            };
+        compare(proof, &indices, Ok(()));
+        compare(
+            proof,
+            &indices[..indices.len() - 1],
+            Err(AggregateStarkErrorV1::TranscriptMismatch),
+        );
+        let mut wrong_indices = indices.clone();
+        wrong_indices[0] = (wrong_indices[0] + 1) % layout.common_lde_size();
+        compare(
+            proof,
+            &wrong_indices,
+            Err(AggregateStarkErrorV1::TranscriptMismatch),
+        );
+        let mut changed = proof.clone();
+        changed.queries[0].trace_groups[0].base_current.pop();
+        compare(
+            &changed,
+            &wrong_indices,
+            Err(AggregateStarkErrorV1::InvalidProofShape),
+        );
+        let mut changed = proof.clone();
+        changed.queries.last_mut().expect("queries").fri_lanes[0].rounds[0].high[0] =
+            crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+        compare(
+            &changed,
+            &wrong_indices,
+            Err(AggregateStarkErrorV1::NonCanonicalField),
+        );
+    }
+
+    #[test]
+    fn opened_leaf_duplicate_error_precedes_a_later_parallel_query_error() {
+        let (layout, proof) = opened_leaf_fixture_v1();
+        let indices = proof_query_indices_v1(proof);
+        let rounds = layout.fri_rounds(PARAMETERS).expect("rounds");
+        let round = rounds - 1;
+        let half = layout.common_lde_size() >> (round + 1);
+        let mut seen = BTreeSet::new();
+        let duplicate_position = proof
+            .queries
+            .iter()
+            .enumerate()
+            .find_map(|(position, query)| {
+                let low_index = usize::try_from(query.index).expect("fixture index") % half;
+                (!seen.insert(low_index)).then_some(position)
+            })
+            .expect("more queries than final low indices guarantee a duplicate");
+        assert!(duplicate_position + 1 < proof.queries.len());
+        let mut changed = proof.clone();
+        let value = &mut changed.queries[duplicate_position].fri_lanes[0].rounds[round].low[0];
+        *value = F::canonical(*value)
+            .expect("canonical original")
+            .add(F::ONE)
+            .value();
+        let mut changed_indices = indices;
+        changed_indices[duplicate_position + 1] =
+            (changed_indices[duplicate_position + 1] + 1) % layout.common_lde_size();
+        assert_eq!(
+            verify_all_merkle_openings_serial_reference_v1(
+                &changed,
+                PARAMETERS,
+                DOMAINS,
+                layout,
+                &changed_indices,
+            ),
+            Err(AggregateStarkErrorV1::FriOpening)
+        );
+        for threads in [1, 8] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("pool");
+            assert_eq!(
+                pool.install(|| verify_all_merkle_openings_v1(
+                    &changed,
+                    PARAMETERS,
+                    DOMAINS,
+                    layout,
+                    &changed_indices,
+                )),
+                Err(AggregateStarkErrorV1::FriOpening)
+            );
+        }
+    }
+
+    fn verify_all_merkle_openings_serial_reference_v1(
+        proof: &AggregateStarkProofV1,
+        parameters: AggregateStarkParametersV1,
+        domains: AggregateStarkDomainsV1,
+        layout: &AggregateProofLayoutV1,
+        expected_indices: &[usize],
+    ) -> Result<(), AggregateStarkErrorV1> {
+        validate_proof_shape_v1(proof, parameters, layout)?;
+        domains.validate()?;
+        if expected_indices.len() != parameters.query_count {
+            return Err(AggregateStarkErrorV1::TranscriptMismatch);
+        }
+        let mut base_leaves = (0..layout.trace_groups.len())
+            .map(|_| BTreeMap::new())
+            .collect::<Vec<_>>();
+        let mut aux_leaves = (0..layout.trace_groups.len())
+            .map(|_| BTreeMap::new())
+            .collect::<Vec<_>>();
+        let mut composition_leaves = (0..parameters.security_lanes)
+            .map(|_| BTreeMap::new())
+            .collect::<Vec<_>>();
+        let mut fri_mask_leaves = (0..parameters.security_lanes)
+            .map(|_| BTreeMap::new())
+            .collect::<Vec<_>>();
+        let fri_rounds = layout.fri_rounds(parameters)?;
+        let mut fri_leaves = (0..parameters.security_lanes)
+            .map(|_| (0..fri_rounds).map(|_| BTreeMap::new()).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        for (position, query) in proof.queries.iter().enumerate() {
+            let index = usize::try_from(query.index)
+                .map_err(|_| AggregateStarkErrorV1::TranscriptMismatch)?;
+            if expected_indices.get(position).copied() != Some(index)
+                || index >= layout.common_lde_size()
+            {
+                return Err(AggregateStarkErrorV1::TranscriptMismatch);
+            }
+            for (group_index, (opening, descriptor)) in query
+                .trace_groups
+                .iter()
+                .zip(&layout.trace_groups)
+                .enumerate()
+            {
+                let next = (index + descriptor.next_stride(layout.common_lde_log2)?)
+                    % layout.common_lde_size();
+                let base_current =
+                    canonical_fields_v1(&opening.base_current, descriptor.base_width)?;
+                let base_next = canonical_fields_v1(&opening.base_next, descriptor.base_width)?;
+                let aux_current = canonical_fields_v1(&opening.aux_current, descriptor.aux_width)?;
+                let aux_next = canonical_fields_v1(&opening.aux_next, descriptor.aux_width)?;
+                insert_opened_leaf_v1(
+                    &mut base_leaves[group_index],
+                    index,
+                    row_leaf_hash_v1(
+                        domains.digest_context,
+                        domains.base_leaf,
+                        group_index,
+                        index,
+                        &base_current,
+                    )?,
+                )?;
+                insert_opened_leaf_v1(
+                    &mut base_leaves[group_index],
+                    next,
+                    row_leaf_hash_v1(
+                        domains.digest_context,
+                        domains.base_leaf,
+                        group_index,
+                        next,
+                        &base_next,
+                    )?,
+                )?;
+                insert_opened_leaf_v1(
+                    &mut aux_leaves[group_index],
+                    index,
+                    row_leaf_hash_v1(
+                        domains.digest_context,
+                        domains.aux_leaf,
+                        group_index,
+                        index,
+                        &aux_current,
+                    )?,
+                )?;
+                insert_opened_leaf_v1(
+                    &mut aux_leaves[group_index],
+                    next,
+                    row_leaf_hash_v1(
+                        domains.digest_context,
+                        domains.aux_leaf,
+                        group_index,
+                        next,
+                        &aux_next,
+                    )?,
+                )?;
+            }
+            for lane in 0..parameters.security_lanes {
+                let composition = canonical_fp4_fields_v1(
+                    &query.composition_values[lane],
+                    parameters.composition_degree_chunks,
+                )?;
+                insert_opened_leaf_v1(
+                    &mut composition_leaves[lane],
+                    index,
+                    composition_leaf_hash_unchecked_v1(domains, lane, index, &composition)?,
+                )
+                .map_err(|_| AggregateStarkErrorV1::ConstraintOpening)?;
+                let fri_mask = E::canonical(query.fri_mask_values[lane])
+                    .ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
+                insert_opened_leaf_v1(
+                    &mut fri_mask_leaves[lane],
+                    index,
+                    fri_mask_leaf_hash_v1(domains, lane, index, fri_mask)?,
+                )
+                .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
+                let mut layer_index = index;
+                let mut layer_size = layout.common_lde_size();
+                for round in 0..fri_rounds {
+                    let opening = query.fri_lanes[lane].rounds[round];
+                    let low = E::canonical(opening.low)
+                        .ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
+                    let high = E::canonical(opening.high)
+                        .ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
+                    let half = layer_size / 2;
+                    let low_index = layer_index % half;
+                    insert_opened_leaf_v1(
+                        &mut fri_leaves[lane][round],
+                        low_index,
+                        fri_leaf_hash_unchecked_v1(domains, lane, round, low_index, low)?,
+                    )
+                    .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
+                    insert_opened_leaf_v1(
+                        &mut fri_leaves[lane][round],
+                        low_index + half,
+                        fri_leaf_hash_unchecked_v1(domains, lane, round, low_index + half, high)?,
+                    )
+                    .map_err(|_| AggregateStarkErrorV1::FriOpening)?;
+                    layer_index = low_index;
+                    layer_size = half;
+                }
+            }
+        }
+        let mut jobs = Vec::new();
+        for group in 0..layout.trace_groups.len() {
+            jobs.push(MerkleVerificationJobV1 {
+                node_role: domains.base_node,
+                root: &proof.trace_groups[group].base_root,
+                leaf_count: layout.common_lde_size(),
+                leaves: &base_leaves[group],
+                frontier: &proof.trace_groups[group].base_frontier,
+                error_mapping: None,
+            });
+            jobs.push(MerkleVerificationJobV1 {
+                node_role: domains.aux_node,
+                root: &proof.trace_groups[group].aux_root,
+                leaf_count: layout.common_lde_size(),
+                leaves: &aux_leaves[group],
+                frontier: &proof.trace_groups[group].aux_frontier,
+                error_mapping: None,
+            });
+        }
+        for lane in 0..parameters.security_lanes {
+            jobs.push(MerkleVerificationJobV1 {
+                node_role: domains.composition_node,
+                root: &proof.composition_roots[lane],
+                leaf_count: layout.common_lde_size(),
+                leaves: &composition_leaves[lane],
+                frontier: &proof.composition_frontiers[lane],
+                error_mapping: Some(AggregateStarkErrorV1::ConstraintOpening),
+            });
+            jobs.push(MerkleVerificationJobV1 {
+                node_role: FRI_MASK_NODE_DOMAIN_V1,
+                root: &proof.fri_mask_roots[lane],
+                leaf_count: layout.common_lde_size(),
+                leaves: &fri_mask_leaves[lane],
+                frontier: &proof.fri_mask_frontiers[lane],
+                error_mapping: Some(AggregateStarkErrorV1::FriOpening),
+            });
+            for round in 0..fri_rounds {
+                jobs.push(MerkleVerificationJobV1 {
+                    node_role: domains.fri_node,
+                    root: &proof.fri_lanes[lane].roots[round],
+                    leaf_count: layout.common_lde_size() >> round,
+                    leaves: &fri_leaves[lane][round],
+                    frontier: &proof.fri_lanes[lane].round_frontiers[round],
+                    error_mapping: Some(AggregateStarkErrorV1::FriOpening),
+                });
+            }
+        }
+        verify_merkle_jobs_v1(domains.digest_context, &jobs)
+    }
+
+    #[test]
+    fn merkle_verification_jobs_preserve_validity_and_first_error_across_workers() {
+        let (layout, proof, _, _) = fixture();
+        let indices = proof_query_indices_v1(&proof);
+        let pools = [1, 2, 4].map(|threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("test pool")
+        });
+        for pool in &pools {
+            assert_eq!(
+                pool.install(|| verify_all_merkle_openings_v1(
+                    &proof, PARAMETERS, DOMAINS, &layout, &indices
+                )),
+                Ok(())
+            );
+        }
+        let mut changed = proof.clone();
+        changed.trace_groups[0].base_root = GoldilocksDigest384V1::default();
+        changed.composition_roots[0] = GoldilocksDigest384V1::default();
+        for pool in &pools {
+            assert_eq!(
+                pool.install(|| verify_all_merkle_openings_v1(
+                    &changed, PARAMETERS, DOMAINS, &layout, &indices
+                )),
+                Err(AggregateStarkErrorV1::TraceOpening)
+            );
+        }
+        changed = proof.clone();
+        changed.composition_roots[0] = GoldilocksDigest384V1::default();
+        changed.fri_mask_roots[0] = GoldilocksDigest384V1::default();
+        for pool in &pools {
+            assert_eq!(
+                pool.install(|| verify_all_merkle_openings_v1(
+                    &changed, PARAMETERS, DOMAINS, &layout, &indices
+                )),
+                Err(AggregateStarkErrorV1::ConstraintOpening)
+            );
+        }
+        changed = proof;
+        changed.fri_mask_roots[0] = GoldilocksDigest384V1::default();
+        for pool in &pools {
+            assert_eq!(
+                pool.install(|| verify_all_merkle_openings_v1(
+                    &changed, PARAMETERS, DOMAINS, &layout, &indices
+                )),
+                Err(AggregateStarkErrorV1::FriOpening)
+            );
+        }
+    }
+    // Codec-shape fixtures deliberately retain no claim of transcript validity;
+    // the existing full Merkle/FRI/callback roundtrip verifies the real fixture.
+    fn codec_shape_with_query_stride_v1(
+        template: &AggregateStarkProofV1,
+        layout: &AggregateProofLayoutV1,
+        stride: usize,
+    ) -> AggregateStarkProofV1 {
+        let mut proof = template.clone();
+        for (index, query) in proof.queries.iter_mut().enumerate() {
+            query.index = u32::try_from(index * stride).expect("bounded fixture index");
+        }
+        for (index, group) in proof.trace_groups.iter_mut().enumerate() {
+            let indices = trace_group_opening_indices_v1(&proof.queries, layout, index)
+                .expect("canonical fixture indices");
+            let count = multiproof_frontier_len_v1(layout.common_lde_size(), &indices)
+                .expect("canonical fixture frontier");
+            group.base_frontier.resize(count, group.base_root);
+            group.aux_frontier.resize(count, group.aux_root);
+        }
+        let indices = composition_opening_indices_v1(&proof.queries, layout)
+            .expect("canonical composition indices");
+        let count = multiproof_frontier_len_v1(layout.common_lde_size(), &indices)
+            .expect("canonical composition frontier");
+        for (frontier, root) in proof
+            .composition_frontiers
+            .iter_mut()
+            .zip(&proof.composition_roots)
+        {
+            frontier.resize(count, *root);
+        }
+        for (frontier, root) in proof
+            .fri_mask_frontiers
+            .iter_mut()
+            .zip(&proof.fri_mask_roots)
+        {
+            frontier.resize(count, *root);
+        }
+        for lane in &mut proof.fri_lanes {
+            for (round, frontier) in lane.round_frontiers.iter_mut().enumerate() {
+                let indices = fri_opening_indices_v1(&proof.queries, PARAMETERS, layout, round)
+                    .expect("canonical FRI indices");
+                let count = multiproof_frontier_len_v1(layout.common_lde_size() >> round, &indices)
+                    .expect("canonical FRI frontier");
+                frontier.resize(count, lane.roots[round]);
+            }
+        }
+        validate_proof_shape_v1(&proof, PARAMETERS, layout).expect("valid codec shape");
+        proof
+    }
+    #[test]
+    fn fixed_wire_length_preserves_distinct_minimal_frontier_shapes() {
+        let (layout, template, _, _) = fixture();
+        let clustered = codec_shape_with_query_stride_v1(&template, &layout, 1);
+        let scattered = codec_shape_with_query_stride_v1(
+            &template,
+            &layout,
+            layout.common_lde_size() / PARAMETERS.query_count,
+        );
+        let clustered_used = minimal_encoded_proof_bytes_v1(&clustered, PARAMETERS, &layout)
+            .expect("clustered prefix");
+        let scattered_used = minimal_encoded_proof_bytes_v1(&scattered, PARAMETERS, &layout)
+            .expect("scattered prefix");
+        assert_ne!(clustered_used, scattered_used);
+        let deep = deep_fixture(&layout);
+        for proof in [&clustered, &scattered] {
+            let base = encode_proof_v1(proof, PARAMETERS, &layout).expect("base wire");
+            assert_eq!(
+                base.len(),
+                maximum_encoded_proof_bytes_v1(PARAMETERS, &layout).unwrap()
+            );
+            assert_eq!(decode_proof_v1(&base, PARAMETERS, &layout).unwrap(), *proof);
+            let wire = encode_proof_with_deep_v1(proof, &deep, PARAMETERS, &layout).unwrap();
+            assert_eq!(
+                wire.len(),
+                maximum_encoded_proof_with_deep_bytes_v1(PARAMETERS, &layout).unwrap()
+            );
+            assert_eq!(
+                decode_proof_with_deep_v1(&wire, PARAMETERS, &layout).unwrap(),
+                (proof.clone(), deep.clone())
+            );
+        }
+    }
+    #[test]
+    fn fixed_base_wire_rejects_short_form_and_nonzero_padding() {
+        let (layout, proof, _, _) = fixture();
+        let wire = encode_proof_v1(&proof, PARAMETERS, &layout).expect("base wire");
+        let used = minimal_encoded_proof_bytes_v1(&proof, PARAMETERS, &layout).unwrap();
+        assert!(used < wire.len(), "fixture must exercise padding");
+        assert!(wire[used..].iter().all(|byte| *byte == 0));
+        assert!(decode_proof_v1(&wire[..used], PARAMETERS, &layout).is_err());
+        for offset in [used, used + (wire.len() - used) / 2, wire.len() - 1] {
+            let mut nonzero = wire.clone();
+            nonzero[offset] = 1;
+            assert_eq!(
+                decode_proof_v1(&nonzero, PARAMETERS, &layout),
+                Err(AggregateStarkErrorV1::MalformedProof)
+            );
+        }
+        assert_eq!(
+            encode_proof_v1(
+                &decode_proof_v1(&wire, PARAMETERS, &layout).unwrap(),
+                PARAMETERS,
+                &layout
+            )
+            .unwrap(),
+            wire
+        );
+    }
+    #[test]
+    fn fixed_deep_wire_rejects_short_form_nonzero_and_extra_tail() {
+        let (layout, proof, _, _) = fixture();
+        let deep = deep_fixture(&layout);
+        let wire = encode_proof_with_deep_v1(&proof, &deep, PARAMETERS, &layout).unwrap();
+        let used = minimal_encoded_proof_bytes_v1(&proof, PARAMETERS, &layout).unwrap()
+            + exact_deep_opening_bytes_v1(PARAMETERS, &layout).unwrap();
+        assert!(used < wire.len());
+        assert!(wire[used..].iter().all(|byte| *byte == 0));
+        for size in [0, used, wire.len() - 1] {
+            assert!(decode_proof_with_deep_v1(&wire[..size], PARAMETERS, &layout).is_err());
+        }
+        for offset in [used, used + (wire.len() - used) / 2, wire.len() - 1] {
+            let mut nonzero = wire.clone();
+            nonzero[offset] = 1;
+            assert_eq!(
+                decode_proof_with_deep_v1(&nonzero, PARAMETERS, &layout),
+                Err(AggregateStarkErrorV1::MalformedProof)
+            );
+        }
+        let mut extra = wire.clone();
+        extra.push(0);
+        assert!(decode_proof_with_deep_v1(&extra, PARAMETERS, &layout).is_err());
+        let (decoded, decoded_deep) =
+            decode_proof_with_deep_v1(&wire, PARAMETERS, &layout).unwrap();
+        assert_eq!(
+            encode_proof_with_deep_v1(&decoded, &decoded_deep, PARAMETERS, &layout).unwrap(),
+            wire
+        );
+    }
+    #[test]
+    fn fixed_wire_refuses_a_budget_that_only_fits_minimal_frontiers() {
+        let (layout, proof, _, _) = fixture();
+        let deep = deep_fixture(&layout);
+        let base = encode_proof_v1(&proof, PARAMETERS, &layout).unwrap();
+        let wire = encode_proof_with_deep_v1(&proof, &deep, PARAMETERS, &layout).unwrap();
+        let mut bounded = PARAMETERS;
+        bounded.maximum_proof_bytes = base.len() - 1;
+        assert!(
+            minimal_encoded_proof_bytes_v1(&proof, bounded, &layout).unwrap()
+                <= bounded.maximum_proof_bytes
+        );
+        assert_eq!(
+            encode_proof_v1(&proof, bounded, &layout),
+            Err(AggregateStarkErrorV1::ProofTooLarge)
+        );
+        assert_eq!(
+            decode_proof_v1(&base, bounded, &layout),
+            Err(AggregateStarkErrorV1::ProofTooLarge)
+        );
+        bounded.maximum_proof_bytes = wire.len() - 1;
+        assert_eq!(
+            encode_proof_with_deep_v1(&proof, &deep, bounded, &layout),
+            Err(AggregateStarkErrorV1::ProofTooLarge)
+        );
+        assert_eq!(
+            decode_proof_with_deep_v1(&wire, bounded, &layout),
+            Err(AggregateStarkErrorV1::ProofTooLarge)
+        );
+    }
+    #[test]
+    fn fixed_wire_rejects_duplicate_and_out_of_range_query_indices() {
+        let (layout, proof, _, _) = fixture();
+        let deep = deep_fixture(&layout);
+        let rounds = layout.fri_rounds(PARAMETERS).unwrap();
+        let roots = layout.trace_groups.len() * 2 + PARAMETERS.security_lanes * (2 + rounds + 1);
+        let first_query = 8
+            + roots * GOLDILOCKS_DIGEST384_BYTES_V1
+            + PARAMETERS.security_lanes * PARAMETERS.terminal_size().unwrap() * 32
+            + 8;
+        let stride = (encoded_non_frontier_bytes_v1(PARAMETERS, &layout).unwrap() - first_query)
+            / PARAMETERS.query_count;
+        let base = encode_proof_v1(&proof, PARAMETERS, &layout).unwrap();
+        let deep_wire = encode_proof_with_deep_v1(&proof, &deep, PARAMETERS, &layout).unwrap();
+        for with_deep in [false, true] {
+            let (wire, offset) = if with_deep {
+                (
+                    &deep_wire,
+                    first_query + exact_deep_opening_bytes_v1(PARAMETERS, &layout).unwrap(),
+                )
+            } else {
+                (&base, first_query)
+            };
+            let mut duplicate = wire.clone();
+            duplicate[offset + stride..offset + stride + 4]
+                .copy_from_slice(&wire[offset..offset + 4]);
+            let mut outside = wire.clone();
+            outside[offset..offset + 4].copy_from_slice(
+                &u32::try_from(layout.common_lde_size())
+                    .unwrap()
+                    .to_be_bytes(),
+            );
+            for invalid in [duplicate, outside] {
+                let error = if with_deep {
+                    decode_proof_with_deep_v1(&invalid, PARAMETERS, &layout).unwrap_err()
+                } else {
+                    decode_proof_v1(&invalid, PARAMETERS, &layout).unwrap_err()
+                };
+                assert_eq!(error, AggregateStarkErrorV1::InvalidProofShape);
+            }
+        }
+    }
+    #[test]
+    fn required_zero_tail_checks_cursor_length_and_every_chunk_boundary() {
+        for padding in [0, 1, 63, 64, 65, 128] {
+            let mut bytes = vec![7];
+            bytes.resize(padding + 1, 0);
+            let mut reader = ExactProofReaderV1::new(&bytes);
+            assert_eq!(reader.take::<1>().unwrap(), [7]);
+            finish_zero_padding_v1(reader, padding).expect("exact zero padding");
+            assert!(finish_zero_padding_v1(ExactProofReaderV1::new(&bytes), padding).is_err());
+            let mut reader = ExactProofReaderV1::new(&bytes);
+            reader.take::<1>().unwrap();
+            assert!(finish_zero_padding_v1(reader, padding + 1).is_err());
+        }
+    }
+    #[test]
+    fn settlement_fixed_wire_bound_is_derived_from_the_public_profile() {
+        use crate::privacy_engines::{
+            ivm_private_note as note, proof_managed_note_stark as shared,
+        };
+        let parameters = AggregateStarkParametersV1 {
+            proof_magic: *b"APZ1",
+            proof_version: 1,
+            security_lanes: shared::PROOF_MANAGED_NOTE_SECURITY_LANES_V1,
+            query_count: shared::PROOF_MANAGED_NOTE_QUERY_COUNT_V1,
+            blowup_log2: shared::PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1,
+            terminal_log2: shared::PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1,
+            terminal_degree_bound: shared::PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1,
+            composition_degree_chunks: shared::PROOF_MANAGED_NOTE_COMPOSITION_DEGREE_CHUNKS_V1,
+            minimum_trace_log2: note::PRIVATE_NOTE_TRACE_LOG2_V1,
+            maximum_trace_log2: note::PRIVATE_NOTE_TRACE_LOG2_V1,
+            maximum_trace_groups: 1,
+            maximum_segment_instances: 1,
+            maximum_base_columns_per_instance: note::PRIVATE_NOTE_BASE_WIDTH_V1,
+            maximum_aux_columns_per_instance: shared::NOTE_COPY_AUX_WIDTH_V1
+                + note::PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1,
+            maximum_proof_bytes: note::IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1,
+        };
+        let layout = AggregateProofLayoutV1::new(
+            parameters,
+            vec![AggregateTraceGroupLayoutV1 {
+                native_trace_log2: note::PRIVATE_NOTE_TRACE_LOG2_V1,
+                segment_instances: 1,
+                base_width: note::PRIVATE_NOTE_BASE_WIDTH_V1,
+                aux_width: shared::NOTE_COPY_AUX_WIDTH_V1 + note::PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1,
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            maximum_encoded_proof_bytes_v1(parameters, &layout).unwrap(),
+            2_483_952
+        );
+        assert_eq!(
+            exact_deep_opening_bytes_v1(parameters, &layout).unwrap(),
+            43_328
+        );
+        let fixed = maximum_encoded_proof_with_deep_bytes_v1(parameters, &layout).unwrap();
+        assert_eq!(fixed, 2_527_280);
+        assert!(fixed < parameters.maximum_proof_bytes);
+    }
     #[test]
     fn exact_codec_multiproofs_fri_and_callback_roundtrip() {
         let (layout, proof, _, _) = fixture();
@@ -6959,9 +8414,9 @@ mod tests {
             encoded.len(),
             exact_encoded_proof_bytes_v1(&proof, PARAMETERS, &layout).expect("exact size")
         );
-        assert!(
-            encoded.len()
-                <= maximum_encoded_proof_bytes_v1(PARAMETERS, &layout).expect("maximum size")
+        assert_eq!(
+            encoded.len(),
+            maximum_encoded_proof_bytes_v1(PARAMETERS, &layout).expect("public-profile size")
         );
         let decoded = decode_proof_v1(&encoded, PARAMETERS, &layout).expect("decode");
         assert_eq!(decoded, proof);

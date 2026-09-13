@@ -9,6 +9,7 @@ mod ordinary_memory;
 mod ordinary_stored;
 #[cfg(test)]
 mod payload_sort_tests;
+mod settlement_receipts;
 mod singular_memory;
 use crate::{
     prelude::ValidSingularQuery,
@@ -859,6 +860,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindFeeSponsorProgramById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSettlementReceiptById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindFxCorridorPolicyRegistry(q) => {

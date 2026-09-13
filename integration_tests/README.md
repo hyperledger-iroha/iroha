@@ -68,6 +68,21 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.
 
 ## Notes
+- The ignored N=3 Metal smoke requires `atomic-private-settlement-metal-smoke`.
+  This test capability enables the common release harness and Core GPU backend;
+  it retains every native proof and committee check. The ordinary
+  `atomic-private-settlement-release` feature supports the explicit CPU fault,
+  leakage and benchmark workloads without compiling the Metal smoke entrypoint.
+- The retained benchmark session harness owns one warmed network per
+  profile/topology/seed. Its control-channel, economic-vector and measurement
+  boundary tests are ordinary tests under
+  `nexus::atomic_private_settlement_localnet` with the
+  `atomic-private-settlement-release` feature. Run that module without
+  `--ignored` for the in-process checks. The ignored
+  `atomic_private_settlement_real_process_benchmark_session_harness` requires
+  the admitted session runner and is not a standalone one-shot benchmark.
+  Both profiles use the same N+1 economic movements, including sponsor
+  reimbursement; see [native_atomic_settlement.md](../specs/native_atomic_settlement.md).
 - The five `nexus::atomic_private_settlement_localnet::benchmark_terminal_`
   regressions in `nexus_and_streaming` exercise the canonical Norito outcome
   envelope, typed completion deadlines, retained request identity and durable

@@ -794,6 +794,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         )
         .map_err(map_aggregate_error_v1)?;
         let fri_masks = aggregate::build_fri_mask_oracles_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             AGGREGATE_PARAMETERS_V1,
             AGGREGATE_DOMAINS_V1,
             &shared_layout,
@@ -916,6 +917,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         }
         let grinding_state = self.transcript.state();
         let grinding_nonce = grind_nonce_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             ZK_X509_DIGEST_CONTEXT_V1,
             &grinding_state,
             ZK_X509_GRINDING_BITS_V1,

@@ -15,7 +15,7 @@ use tokio::{
 };
 
 /// Normalize equivalent socket source identities before applying resource bounds.
-pub(crate) fn canonical_remote_ip(ip: IpAddr) -> IpAddr {
+pub fn canonical_remote_ip(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(IpAddr::V6(ip), IpAddr::V4),
         IpAddr::V4(ip) => IpAddr::V4(ip),
@@ -23,7 +23,7 @@ pub(crate) fn canonical_remote_ip(ip: IpAddr) -> IpAddr {
 }
 
 /// Shared concurrent source bound spanning every inbound transport listener.
-pub(crate) struct PreauthSourceGate {
+pub struct PreauthSourceGate {
     max_per_ip: NonZeroUsize,
     counts: Mutex<HashMap<IpAddr, usize>>,
 }
@@ -72,7 +72,7 @@ impl PreauthSourceGate {
 }
 
 /// Exact RAII ownership of one accepted transport's source reservation.
-pub(crate) struct PreauthSourcePermit {
+pub struct PreauthSourcePermit {
     gate: Arc<PreauthSourceGate>,
     remote_ip: IpAddr,
 }
@@ -102,7 +102,7 @@ impl Drop for PreauthSourcePermit {
 
 /// Identifies which bound expired while running one pre-authentication stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DeadlineElapsed {
+pub enum DeadlineElapsed {
     /// The accepted transport exhausted its total authentication tenure.
     Absolute,
     /// The current stage exhausted its existing, shorter idle bound.
@@ -111,7 +111,7 @@ pub(crate) enum DeadlineElapsed {
 
 /// Immutable total deadline shared by every stage of one accepted transport.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PreauthDeadline(Instant);
+pub struct PreauthDeadline(Instant);
 
 impl PreauthDeadline {
     /// Create a deadline relative to now, returning `None` when it cannot be represented.
@@ -166,7 +166,7 @@ impl PreauthDeadline {
         (
             InboundAuthCompletion {
                 deadline: self,
-                sender,
+                sender: Some(sender),
             },
             receiver,
         )
@@ -176,7 +176,7 @@ impl PreauthDeadline {
     pub(crate) async fn wait_for_authentication(
         self,
         mut receiver: oneshot::Receiver<AuthOutcome>,
-    ) -> bool {
+    ) -> AuthenticationWaitOutcome {
         let timer = sleep_until(self.0);
         tokio::pin!(timer);
         let outcome = tokio::select! {
@@ -184,17 +184,23 @@ impl PreauthDeadline {
             outcome = &mut receiver => outcome.ok(),
             () = &mut timer => receiver.try_recv().ok(),
         };
-        matches!(
-            outcome,
-            Some(AuthOutcome::Authenticated { completed_at }) if completed_at < self.0
-        )
+        match outcome {
+            Some(AuthOutcome::Authenticated { completed_at }) if completed_at < self.0 => {
+                AuthenticationWaitOutcome::Authenticated
+            }
+            Some(AuthOutcome::Ended { ended_at }) if ended_at < self.0 => {
+                AuthenticationWaitOutcome::PeerEnded
+            }
+            None if Instant::now() < self.0 => AuthenticationWaitOutcome::PeerEnded,
+            _ => AuthenticationWaitOutcome::DeadlineElapsed,
+        }
     }
 }
 
 /// One-shot authority to acknowledge successful inbound application authentication.
-pub(crate) struct InboundAuthCompletion {
+pub struct InboundAuthCompletion {
     deadline: PreauthDeadline,
-    sender: oneshot::Sender<AuthOutcome>,
+    sender: Option<oneshot::Sender<AuthOutcome>>,
 }
 
 impl InboundAuthCompletion {
@@ -204,23 +210,51 @@ impl InboundAuthCompletion {
     }
 
     /// Publish a timely authentication result while the listener still owns the receiver.
-    pub(crate) fn complete(self) -> bool {
+    pub(crate) fn complete(mut self) -> bool {
         let completed_at = Instant::now();
-        completed_at < self.deadline.0
-            && self
-                .sender
+        if completed_at >= self.deadline.0 {
+            return false;
+        }
+        self.sender.take().is_some_and(|sender| {
+            sender
                 .send(AuthOutcome::Authenticated { completed_at })
                 .is_ok()
+        })
     }
+}
+impl Drop for InboundAuthCompletion {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(AuthOutcome::Ended {
+                ended_at: Instant::now(),
+            });
+        }
+    }
+}
+
+/// Exact terminal classification of the original authentication tenure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthenticationWaitOutcome {
+    /// Identity and geometry completed before the original deadline.
+    Authenticated,
+    /// The peer operation ended before authentication and before its deadline.
+    PeerEnded,
+    /// Authentication did not complete within the original deadline.
+    DeadlineElapsed,
 }
 
 /// Timestamped result used to prevent a late sender from winning a timer scheduling race.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AuthOutcome {
+pub enum AuthOutcome {
     /// The signed peer identity and all configured capability gates passed.
     Authenticated {
         /// Local monotonic time at which authentication completed.
         completed_at: Instant,
+    },
+    /// The operation ended without completing all authentication stages.
+    Ended {
+        /// Local monotonic time at which the completion authority was dropped.
+        ended_at: Instant,
     },
 }
 
@@ -310,7 +344,10 @@ mod tests {
         let (completion, receiver) = deadline.completion_channel();
         assert!(completion.complete());
         tokio::time::advance(Duration::from_millis(11)).await;
-        assert!(deadline.wait_for_authentication(receiver).await);
+        assert_eq!(
+            deadline.wait_for_authentication(receiver).await,
+            AuthenticationWaitOutcome::Authenticated
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -319,7 +356,52 @@ mod tests {
         let (completion, receiver) = deadline.completion_channel();
         tokio::time::advance(Duration::from_millis(10)).await;
         assert!(!completion.complete());
-        assert!(!deadline.wait_for_authentication(receiver).await);
+        assert_eq!(
+            deadline.wait_for_authentication(receiver).await,
+            AuthenticationWaitOutcome::DeadlineElapsed
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn early_peer_end_is_not_an_authentication_timeout() {
+        let started = Instant::now();
+        let deadline = PreauthDeadline::from_now(Duration::from_secs(30)).unwrap();
+        let (completion, receiver) = deadline.completion_channel();
+        drop(completion);
+        assert_eq!(
+            deadline.wait_for_authentication(receiver).await,
+            AuthenticationWaitOutcome::PeerEnded
+        );
+        assert_eq!(
+            Instant::now(),
+            started,
+            "an early end does not consume the deadline"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn early_peer_end_retains_its_reason_after_delayed_listener_poll() {
+        let deadline = PreauthDeadline::from_now(Duration::from_millis(10)).unwrap();
+        let (completion, receiver) = deadline.completion_channel();
+        drop(completion);
+        tokio::time::advance(Duration::from_millis(11)).await;
+        assert_eq!(
+            deadline.wait_for_authentication(receiver).await,
+            AuthenticationWaitOutcome::PeerEnded
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn live_incomplete_peer_exhausts_the_unchanged_deadline() {
+        let started = Instant::now();
+        let deadline = PreauthDeadline::from_now(Duration::from_millis(10)).unwrap();
+        let (completion, receiver) = deadline.completion_channel();
+        assert_eq!(
+            deadline.wait_for_authentication(receiver).await,
+            AuthenticationWaitOutcome::DeadlineElapsed
+        );
+        assert_eq!(Instant::now() - started, Duration::from_millis(10));
+        assert!(!completion.complete());
     }
 
     #[test]

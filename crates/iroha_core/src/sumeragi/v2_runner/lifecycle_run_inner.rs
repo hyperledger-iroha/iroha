@@ -162,7 +162,81 @@ enum CanonicalRecoveryControlV1 {
     Shutdown,
 }
 
+/// Fixed diagnostic stages of one uninterrupted predecessor-to-successor handoff.
+#[derive(Clone, Copy, Debug)]
+enum SuccessorTimingStage {
+    FinalityObserved,
+    ExecutorReady,
+    LifecycleReady,
+    LaneRolloverReady,
+    ClosedIngressDrained,
+    ConstructionStarted,
+    ContextAndStorageReady,
+    PredecessorRetired,
+    SuccessorServicesReady,
+    SuccessorLaneReady,
+    Activated,
+}
+impl SuccessorTimingStage {
+    const COUNT: usize = 11;
+}
+
+/// First observations on the existing predecessor-height monotonic clock.
+///
+/// This owns no protocol state, deadline, guard or retry permission. In particular,
+/// `FinalityObserved` is the runner's first observation of the Kura completion;
+/// it is not an invented timestamp for reducer `Applied`. Missing observations
+/// remain absent, and repeated readiness turns cannot refresh an earlier sample.
+#[derive(Debug)]
+struct SuccessorStageTimings {
+    predecessor_height: u64,
+    height_started_at: Instant,
+    observations: [Option<Duration>; SuccessorTimingStage::COUNT],
+}
+impl SuccessorStageTimings {
+    fn new(predecessor_height: u64, height_started_at: Instant) -> Self {
+        Self {
+            predecessor_height,
+            height_started_at,
+            observations: [None; SuccessorTimingStage::COUNT],
+        }
+    }
+
+    fn record_first(&mut self, stage: SuccessorTimingStage, now: Instant) {
+        if let Some(elapsed) = now.checked_duration_since(self.height_started_at) {
+            self.observations[stage as usize].get_or_insert(elapsed);
+        }
+    }
+
+    fn offset_micros(&self, stage: SuccessorTimingStage) -> Option<u128> {
+        self.observations[stage as usize].map(|elapsed| elapsed.as_micros())
+    }
+
+    /// Emit once, after activation and the initial beacon handoff have completed.
+    /// A failed or shutdown handoff emits no success summary. Each timestamp is
+    /// an offset from predecessor activation, so differences retain queued work.
+    fn report(self) {
+        use SuccessorTimingStage::*;
+        iroha_logger::info!(
+            predecessor_height = self.predecessor_height,
+            finality_observed_us = ?self.offset_micros(FinalityObserved),
+            executor_ready_us = ?self.offset_micros(ExecutorReady),
+            lifecycle_ready_us = ?self.offset_micros(LifecycleReady),
+            lane_rollover_ready_us = ?self.offset_micros(LaneRolloverReady),
+            closed_ingress_drained_us = ?self.offset_micros(ClosedIngressDrained),
+            construction_started_us = ?self.offset_micros(ConstructionStarted),
+            context_and_storage_ready_us = ?self.offset_micros(ContextAndStorageReady),
+            predecessor_retired_us = ?self.offset_micros(PredecessorRetired),
+            successor_services_ready_us = ?self.offset_micros(SuccessorServicesReady),
+            successor_lane_ready_us = ?self.offset_micros(SuccessorLaneReady),
+            activated_us = ?self.offset_micros(Activated),
+            "Sumeragi v2 successor handoff stage timings"
+        );
+    }
+}
+
 struct FinalizedLifecycleHeightV1 {
+    successor_timings: SuccessorStageTimings,
     verified_context: crate::sumeragi::v2::VerifiedHeightContext,
     lifecycle_storage_authority: crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1,
     pending_successor_activation: PendingSuccessorActivation,
@@ -744,6 +818,7 @@ fn run_lifecycle_active_height(
     first_height_genesis: Option<&SignedBlock>,
     genesis_account: &AccountId,
 ) -> Result<HeightRunOutcome<FinalizedLifecycleHeightV1>, V2RunnerError> {
+    let mut successor_timings = SuccessorStageTimings::new(context.height, height_started_at);
     let mut next_block_sync_attempt =
         initial_block_sync_deadline(height_started_at, round_timeout, *eager_block_sync);
     let mut next_recovered_decision_fetch_retransmit =
@@ -811,6 +886,10 @@ fn run_lifecycle_active_height(
         let (decided_subject_present, executor_ready_to_finish) = activated.with_runner_runtime(
             &mut active_runner,
             |_owner, executor, _services, _local_proposal| {
+                if executor.durable_finality().is_some() {
+                    successor_timings
+                        .record_first(SuccessorTimingStage::FinalityObserved, Instant::now());
+                }
                 Ok::<_, V2RunnerError>((
                     executor
                         .local_proposal_directive()?
@@ -820,6 +899,9 @@ fn run_lifecycle_active_height(
                 ))
             },
         )?;
+        if executor_ready_to_finish {
+            successor_timings.record_first(SuccessorTimingStage::ExecutorReady, Instant::now());
+        }
         if terminal_finalization_cut.is_none() {
             terminal_finalization_cut = producer_claim
                 .terminal_finalization_cut(executor_ready_to_finish, decided_subject_present);
@@ -1539,6 +1621,12 @@ fn run_lifecycle_active_height(
             }
         }
 
+        if ready_to_finish {
+            // This pass may have consumed the first application completion.
+            let observed_at = Instant::now();
+            successor_timings.record_first(SuccessorTimingStage::FinalityObserved, observed_at);
+            successor_timings.record_first(SuccessorTimingStage::ExecutorReady, observed_at);
+        }
         let finalization_ready =
             if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {
                 activated.ready_for_finalized_rollover(&mut active_runner)?
@@ -1550,6 +1638,9 @@ fn run_lifecycle_active_height(
             continue;
         }
 
+        if finalization_ready {
+            successor_timings.record_first(SuccessorTimingStage::LifecycleReady, Instant::now());
+        }
         let rollover_ready = if finalization_ready {
             activated.with_runner_runtime(
                 &mut active_runner,
@@ -1570,6 +1661,9 @@ fn run_lifecycle_active_height(
         } else {
             false
         };
+        if rollover_ready {
+            successor_timings.record_first(SuccessorTimingStage::LaneRolloverReady, Instant::now());
+        }
         if finalization_ready && !rollover_ready {
             // Canonical-body recovery performed by preflight can create the
             // local lane votes needed to make the finalized bundle independently
@@ -1726,6 +1820,8 @@ fn run_lifecycle_active_height(
             receiver
                 .ensure_closed_drained_cut()
                 .map_err(V2RunnerError::Service)?;
+            successor_timings
+                .record_first(SuccessorTimingStage::ClosedIngressDrained, Instant::now());
         }
 
         if rollover_ready {
@@ -1800,6 +1896,8 @@ fn run_lifecycle_active_height(
                     };
                     let _authorized_application = checked_application.into_projection();
                     let activation = PendingSuccessorConstruction::begin(predecessor)?;
+                    successor_timings
+                        .record_first(SuccessorTimingStage::ConstructionStarted, Instant::now());
                     let successor_construction = output_guard
                         .begin_fail_stop_operation()
                         .ok_or(V2RunnerError::RestartRequired)?;
@@ -1816,6 +1914,8 @@ fn run_lifecycle_active_height(
                     )?;
                     let next_context = next_verified_context.context().clone();
                     let pending_activation = activation.bind(successor_authority)?;
+                    successor_timings
+                        .record_first(SuccessorTimingStage::ContextAndStorageReady, Instant::now());
                     Ok((
                         next_context,
                         PreparedLifecycleSuccessorV1 {
@@ -1839,6 +1939,8 @@ fn run_lifecycle_active_height(
             } = prepared_successor;
             let (cleanup, lifecycle_storage_authority) =
                 cleanup.bind_successor_storage(lifecycle_storage_authority)?;
+            successor_timings
+                .record_first(SuccessorTimingStage::PredecessorRetired, Instant::now());
             let prepared_successor = PreparedLifecycleSuccessorV1 {
                 verified_context,
                 lifecycle_storage_authority,
@@ -1869,6 +1971,7 @@ fn run_lifecycle_active_height(
             }
             *eager_block_sync = retain_eager_block_sync(false, admitted_discovered_commit_qc);
             return Ok(HeightRunOutcome::Successor(FinalizedLifecycleHeightV1 {
+                successor_timings,
                 verified_context: prepared_successor.verified_context,
                 lifecycle_storage_authority: prepared_successor.lifecycle_storage_authority,
                 pending_successor_activation: prepared_successor.pending_activation,
@@ -1945,6 +2048,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
     mut block_sync_server: Option<V2BlockSyncServer>,
 ) -> Result<(), V2RunnerError> {
     let local_peer = common_config.peer.id().clone();
+    let mut pending_successor_timings: Option<SuccessorStageTimings> = None;
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
@@ -2120,6 +2224,9 @@ pub(super) fn run_non_pending_lifecycle_loop(
             &ingress_ready,
             &block_rx,
         )?;
+        if let Some(timings) = pending_successor_timings.as_mut() {
+            timings.record_first(SuccessorTimingStage::SuccessorServicesReady, Instant::now());
+        }
         let mut setup_runner =
             ProductionLifecyclePreActivationRunnerBorrowV1::mint_for_recovered_runner();
 
@@ -2389,11 +2496,17 @@ pub(super) fn run_non_pending_lifecycle_loop(
             })?;
         let (initial_directive, local_proposal) =
             preactivation.initialize_recovered_local_proposal(setup_runner)?;
+        if let Some(timings) = pending_successor_timings.as_mut() {
+            timings.record_first(SuccessorTimingStage::SuccessorLaneReady, Instant::now());
+        }
         // Startup repair is not live-height cadence. Arm activation, proposal,
         // and discovery deadlines only after every closed-ingress recovery and
         // lane setup transaction has completed.
         let height_started_at = Instant::now();
         let mut activated = preactivation.activate(height_started_at, local_proposal)?;
+        if let Some(timings) = pending_successor_timings.as_mut() {
+            timings.record_first(SuccessorTimingStage::Activated, Instant::now());
+        }
         let mut active_runner =
             ProductionLifecycleActiveRunnerBorrowV1::mint_for_recovered_runner();
         npos_beacon
@@ -2410,6 +2523,10 @@ pub(super) fn run_non_pending_lifecycle_loop(
             },
         )?;
 
+        // Preserve activation/readiness and beacon handoff before diagnostic I/O.
+        if let Some(timings) = pending_successor_timings.take() {
+            timings.report();
+        }
         let finalized = run_lifecycle_active_height(
             activated,
             active_runner,
@@ -2462,6 +2579,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             }
             HeightRunOutcome::Shutdown => return Ok(()),
         };
+        pending_successor_timings = Some(finalized.successor_timings);
         verified_context = finalized.verified_context;
         lifecycle_storage_authority = finalized.lifecycle_storage_authority;
         pending_successor_activation = Some(finalized.pending_successor_activation);
@@ -2471,5 +2589,101 @@ pub(super) fn run_non_pending_lifecycle_loop(
         first_height_authenticated_genesis = None;
         first_height_genesis = None;
         staged_genesis_nexus_amx_context = None;
+    }
+}
+
+#[cfg(test)]
+mod successor_stage_timing_tests {
+    use super::{SuccessorStageTimings, SuccessorTimingStage};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn repeated_readiness_does_not_refresh_the_first_stage_observation() {
+        let origin = Instant::now();
+        let mut timings = SuccessorStageTimings::new(85, origin);
+        timings.record_first(
+            SuccessorTimingStage::LifecycleReady,
+            origin + Duration::from_millis(10),
+        );
+        timings.record_first(
+            SuccessorTimingStage::LifecycleReady,
+            origin + Duration::from_secs(3),
+        );
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::LifecycleReady),
+            Some(10_000)
+        );
+    }
+
+    #[test]
+    fn missing_stage_is_absent_instead_of_a_zero_duration() {
+        let origin = Instant::now();
+        let mut timings = SuccessorStageTimings::new(85, origin);
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::FinalityObserved),
+            None
+        );
+        timings.record_first(SuccessorTimingStage::ExecutorReady, origin);
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::ExecutorReady),
+            Some(0)
+        );
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::FinalityObserved),
+            None
+        );
+    }
+
+    #[test]
+    fn successor_offsets_preserve_the_predecessor_clock_across_setup() {
+        let origin = Instant::now();
+        let mut timings = SuccessorStageTimings::new(85, origin);
+        timings.record_first(
+            SuccessorTimingStage::FinalityObserved,
+            origin + Duration::from_secs(10),
+        );
+        timings.record_first(
+            SuccessorTimingStage::ConstructionStarted,
+            origin + Duration::from_secs(12),
+        );
+        let mut pending_successor = Some(timings);
+        let mut timings = pending_successor
+            .take()
+            .expect("one retained predecessor clock");
+        timings.record_first(
+            SuccessorTimingStage::Activated,
+            origin + Duration::from_millis(13_280),
+        );
+        assert!(pending_successor.is_none());
+        assert_eq!(timings.predecessor_height, 85);
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::ConstructionStarted),
+            Some(12_000_000)
+        );
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::Activated),
+            Some(13_280_000)
+        );
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::FinalityObserved),
+            Some(10_000_000)
+        );
+    }
+
+    #[test]
+    fn observation_before_the_clock_origin_cannot_fabricate_a_stage() {
+        let before = Instant::now();
+        let origin = before + Duration::from_secs(1);
+        let mut timings = SuccessorStageTimings::new(85, origin);
+        timings.record_first(SuccessorTimingStage::FinalityObserved, before);
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::FinalityObserved),
+            None
+        );
+        timings.record_first(SuccessorTimingStage::FinalityObserved, origin);
+        assert_eq!(
+            timings.offset_micros(SuccessorTimingStage::FinalityObserved),
+            Some(0)
+        );
     }
 }

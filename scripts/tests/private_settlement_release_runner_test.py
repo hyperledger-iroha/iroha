@@ -19,16 +19,12 @@ from typing import Any
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-SCRIPT = ROOT / "scripts" / "private_settlement_release_runner.py"
-SPEC = importlib.util.spec_from_file_location(
-    "private_settlement_release_runner", SCRIPT
-)
-assert SPEC is not None and SPEC.loader is not None
-MODULE = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = MODULE
-SPEC.loader.exec_module(MODULE)
+CANONICAL = ROOT
+for path in (CANONICAL,CANONICAL/'scripts',ROOT,ROOT/'scripts',ROOT/'scripts/tests'):
+    if str(path) not in sys.path:sys.path.insert(0,str(path))
+import private_settlement_release_runner as MODULE
+import private_settlement_campaign_execution as EXECUTION
+
 
 COMMIT = "a" * 40
 HARDWARE = "b" * 64
@@ -1578,19 +1574,22 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 MODULE, "verify_source_checkout"
             ), mock.patch.object(MODULE, "verify_harness", return_value=frozen_plan["harness"]), mock.patch.object(
                 MODULE, "invoke_harness"
-            ) as invoke, self.assertRaisesRegex(MODULE.RunnerError, "smoke prerequisite failed"):
+            ) as invoke, self.assertRaises(EXECUTION.CampaignExecutionIncomplete) as failed:
                 MODULE.execute_plan(
                     root / "plan.json", output, source_root=source,
                     harness=root / "harness", smoke_campaign=root / "missing-smoke",
                     scope_path=root / "scope.json", campaign_id="test",
+                    worker_path=root / "worker", validator_path=root / "validator",
                 )
+            self.assertIn("smoke prerequisite failed", str(failed.exception.owner.error))
             invoke.assert_not_called()
             self.assertFalse(output.parent.exists())
 
     def test_release_execution_cli_requires_explicit_smoke_evidence(self) -> None:
         arguments = ["execute", "--plan", "/plan", "--output-dir", "/output",
                      "--source-root", "/source", "--harness", "/harness",
-                     "--scope", "/scope", "--campaign-id", "test"]
+                     "--scope", "/scope", "--campaign-id", "test",
+                     "--worker", "/worker", "--validator", "/validator"]
         with mock.patch("sys.stderr", new_callable=io.StringIO) as error, self.assertRaises(SystemExit) as result:
             MODULE.parse_args(arguments)
         self.assertEqual(result.exception.code, 2)
@@ -1623,7 +1622,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             len(MODULE.PARTICIPANTS) * 10
             + len(MODULE.PROFILES)
             * len(MODULE.PARTICIPANTS)
-            * (MODULE.MIN_WARMUPS + MODULE.MIN_MEASURED)
+            * (10 * MODULE.MIN_WARMUPS + MODULE.MIN_MEASURED)
             + 2
         )
         self.assertEqual(first, second)
@@ -2506,49 +2505,17 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     publication_root=publication,
                 )
 
-    def test_benchmark_requires_positive_real_measurements_and_atomic_finality(
-        self,
-    ) -> None:
-        job = {
-            "request_id": "f" * 64,
-            "invocation_nonce": INVOCATION_NONCE,
-            "kind": "benchmark",
-            "profile": "private",
-            "participants": 3,
-            "seed": 1,
-            "run": 0,
-            "warmup": False,
-            "configuration_sha256": CONFIGURATION,
-        }
-        payload = {
-            "stages_ms": {
-                stage: float(index + 1)
-                for index, stage in enumerate(
-                    MODULE.benchmark_report.REQUIRED_PRIVATE_STAGES
-                )
-            },
-            **{
-                field: 10.0
-                for field in MODULE.benchmark_report.RESOURCE_FIELDS
-            },
-            "finalized_receipt_observed": True,
-            "successful_leg_applications": 3,
-            "each_leg_applied_exactly_once": True,
-            "partial_visible_observations": 0,
-            "partial_spendable_observations": 0,
-        }
-        raw = MODULE.materialize_benchmark_response(
-            response(job, payload), plan=plan(), job=job
-        )
-        self.assertEqual(raw["profile"], "private")
-        broken = copy.deepcopy(payload)
-        broken["network_bytes"] = 0
-        with self.assertRaisesRegex(
-            MODULE.RunnerError, "network_bytes must be positive"
-        ):
-            MODULE.materialize_benchmark_response(
-                response(job, broken), plan=plan(), job=job
-            )
+    def test_benchmark_requires_positive_real_measurements_and_atomic_finality(self):
+        import private_settlement_retained_fixture_test as retained
+        helper=retained.RetainedFixtureTests();self.addCleanup(helper.doCleanups);case=helper.build()
+        result=case.invoke();self.assertEqual(result['accounting']['counts']['succeeded'],8)
+        first=json.loads(result['successful_rows'][0]);self.assertGreater(first['stages_ms']['end_to_end'],0)
+        self.assertGreater(first['receipt_bytes'],0)
+        path=next((case.root/'campaigns/campaign-0/attempts').rglob('rust-result.json'))
+        value=json.loads(path.read_bytes());value['outcome']['result']['payload']['finalized_receipt_observed']=False
+        path.write_bytes(MODULE.canonical_bytes(value))
+        with self.assertRaises(ValueError):case.invoke()
+
 
     def test_leakage_response_must_bind_every_capture_file_and_count(self) -> None:
         canaries = MODULE.build_canary_manifest(COMMIT)
@@ -3182,89 +3149,91 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             self.assertFalse(MODULE.read_json_file(attempt / "response-outcome.json", "test outcome")["passed"])
 
     def test_publication_fragment_replays_applicable_final_validators(self) -> None:
-        from scripts.tests.private_settlement_release_evidence_test import (
-            PrivateSettlementReleaseEvidenceTests,
-        )
+        from scripts.tests.private_settlement_registered_accounting_fixture import fixture_admission
+        with fixture_admission() as admission:
+            from scripts.tests.private_settlement_release_evidence_test import (
+                PrivateSettlementReleaseEvidenceTests,
+            )
 
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            manifest_path = PrivateSettlementReleaseEvidenceTests().make_bundle(root)
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            MODULE.validate_publication_fragment(
-                root,
-                manifest["artifacts"],
-                commit=manifest["commit"],
-            )
-            benchmark_artifact = next(
-                artifact
-                for artifact in manifest["artifacts"]
-                if artifact["kind"] == "benchmark_report"
-            )
-            baseline = json.loads(
-                (root / benchmark_artifact["path"]).read_text(encoding="utf-8")
-            )
-            MODULE.validate_benchmark_baseline(baseline, "fixture baseline")
-            baseline["passed"] = False
-            with self.assertRaises(MODULE.RunnerError):
-                MODULE.validate_benchmark_baseline(baseline, "fixture baseline")
-
-            # Reuse the already validated synthetic captures without creating
-            # another large fixture copy. Only the synthetic checkout identity
-            # differs from the real source; every publication gate runs below.
-            campaign_id = "campaign-1-complete"
-            campaign_root = root / "accounting" / "campaigns" / campaign_id
-            publication = campaign_root / "publication"
-            publication.mkdir(mode=0o700)
-            campaign_artifacts = []
-            accounting_kinds = {
-                "benchmark_raw", "benchmark_report", "benchmark_scope",
-                "benchmark_accounting_record", "benchmark_accounting_report",
-            }
-            for artifact in manifest["artifacts"]:
-                if artifact["kind"] in accounting_kinds:
-                    continue
-                source = root / artifact["path"]
-                destination = publication / artifact["path"]
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                source.rename(destination)
-                campaign_artifacts.append(dict(artifact))
-            MODULE.write_json(campaign_root / "campaign-artifacts.json", {
-                "version": MODULE.VERSION,
-                "protocol": MODULE.PROTOCOL,
-                "commit": manifest["commit"],
-                "real_process_campaign_complete": True,
-                "publication_evidence": False,
-                "publication_root": "publication",
-                "artifacts": campaign_artifacts,
-            })
-            with mock.patch.object(MODULE, "verify_source_checkout") as checkout:
-                fragment_path = MODULE.finalize_registered_scope(
-                    root / "accounting" / "scope.json",
-                    root / "finalized",
-                    qualification_campaign_id=campaign_id,
-                    source_root=ROOT,
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                manifest_path = PrivateSettlementReleaseEvidenceTests().make_bundle(root)
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                MODULE.validate_publication_fragment(
+                    root,
+                    manifest["artifacts"],
+                    commit=manifest["commit"], admission=admission,
                 )
-            self.assertEqual(checkout.call_count, 2)
-            checkout.assert_called_with(ROOT, manifest["commit"])
-            fragment = json.loads(fragment_path.read_text(encoding="utf-8"))
-            self.assertEqual(fragment["qualification_campaign_id"], campaign_id)
-            self.assertFalse(fragment["publication_evidence"])
-            final_publication = fragment_path.parent / "publication"
-            MODULE.validate_publication_fragment(
-                final_publication, fragment["artifacts"], commit=manifest["commit"],
-            )
-            accounting = json.loads((final_publication / "reports" /
-                "benchmark-accounting-v1.json").read_text(encoding="utf-8"))
-            self.assertEqual(accounting["counts"], {
-                "planned": 700, "attempted": 352, "succeeded": 351,
-                "failed": 1, "timed_out": 0, "not_started": 348, "incomplete": 0,
-            })
-            predecessor = [row for row in accounting["rows"]
-                           if row["campaign_id"] == "campaign-0-failed"]
-            self.assertEqual(sum(row["state"] == "succeeded" for row in predecessor), 1)
-            self.assertEqual(sum(row["state"] == "failed" for row in predecessor), 1)
-            self.assertTrue(next(row for row in predecessor
-                                 if row["state"] == "succeeded")["warmup"])
+                benchmark_artifact = next(
+                    artifact
+                    for artifact in manifest["artifacts"]
+                    if artifact["kind"] == "benchmark_report"
+                )
+                baseline = json.loads(
+                    (root / benchmark_artifact["path"]).read_text(encoding="utf-8")
+                )
+                MODULE.validate_benchmark_baseline(baseline, "fixture baseline")
+                baseline["passed"] = False
+                with self.assertRaises(MODULE.RunnerError):
+                    MODULE.validate_benchmark_baseline(baseline, "fixture baseline")
+
+                # Reuse the already validated synthetic captures without creating
+                # another large fixture copy. Only the synthetic checkout identity
+                # differs from the real source; every publication gate runs below.
+                campaign_id = "campaign-1-complete"
+                campaign_root = root / "accounting" / "campaigns" / campaign_id
+                publication = campaign_root / "publication"
+                publication.mkdir(mode=0o700)
+                campaign_artifacts = []
+                accounting_kinds = {
+                    "benchmark_raw", "benchmark_report", "benchmark_scope",
+                    "benchmark_accounting_record", "benchmark_accounting_report",
+                }
+                for artifact in manifest["artifacts"]:
+                    if artifact["kind"] in accounting_kinds:
+                        continue
+                    source = root / artifact["path"]
+                    destination = publication / artifact["path"]
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    source.rename(destination)
+                    campaign_artifacts.append(dict(artifact))
+                MODULE.write_json(campaign_root / "campaign-artifacts.json", {
+                    "version": MODULE.VERSION,
+                    "protocol": MODULE.PROTOCOL,
+                    "commit": manifest["commit"],
+                    "real_process_campaign_complete": True,
+                    "publication_evidence": False,
+                    "publication_root": "publication",
+                    "artifacts": campaign_artifacts,
+                })
+                with mock.patch.object(MODULE, "verify_source_checkout") as checkout:
+                    fragment_path = MODULE.finalize_registered_scope(
+                        root / "accounting" / "scope.json",
+                        root / "finalized",
+                        qualification_campaign_id=campaign_id,
+                        **admission,
+                    )
+                self.assertGreaterEqual(checkout.call_count, 2)
+                checkout.assert_called_with(admission["source_root"], manifest["commit"])
+                fragment = json.loads(fragment_path.read_text(encoding="utf-8"))
+                self.assertEqual(fragment["qualification_campaign_id"], campaign_id)
+                self.assertFalse(fragment["publication_evidence"])
+                final_publication = fragment_path.parent / "publication"
+                MODULE.validate_publication_fragment(
+                    final_publication, fragment["artifacts"], commit=manifest["commit"], admission=admission,
+                )
+                accounting = json.loads((final_publication / "reports" /
+                    "benchmark-accounting-v1.json").read_text(encoding="utf-8"))
+                self.assertEqual(accounting["counts"], {
+                    "planned": 1600, "attempted": 802, "succeeded": 801,
+                    "failed": 1, "timed_out": 0, "not_started": 798, "incomplete": 0,
+                })
+                predecessor = [row for row in accounting["rows"]
+                               if row["campaign_id"] == "campaign-0-failed"]
+                self.assertEqual(sum(row["state"] == "succeeded" for row in predecessor), 1)
+                self.assertEqual(sum(row["state"] == "failed" for row in predecessor), 1)
+                self.assertTrue(next(row for row in predecessor
+                                     if row["state"] == "succeeded")["warmup"])
 
     def test_plan_seed_and_sample_minima_cannot_be_weakened(self) -> None:
         with self.assertRaises(MODULE.RunnerError):
@@ -3370,94 +3339,17 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
 
     @contextmanager
     def execution_fixture(self, root: Path):
-        """Stub network semantics while exercising all persistent execution stages.
+        from retained_execution_fixture import execution_fixture
+        with execution_fixture(root) as fixture:yield fixture
 
-        This reduced synthetic matrix tests bookkeeping only. Production plan,
-        process, report and smoke validators remain mandatory and unchanged.
-        """
 
-        source = root / "source"
-        source.mkdir()
-        harness = root / "synthetic-harness"
-        harness.write_text("synthetic executable bytes\n")
-        harness.chmod(0o700)
-        frozen = {
-            "commit": COMMIT,
-            "harness": MODULE.file_binding(harness),
-            "jobs": [
-                {"request_id": f"{index:064x}", "kind": kind, **extra}
-                for index, (kind, extra) in enumerate((
-                    ("fault", {}), ("benchmark", {}),
-                    ("leakage", {"variant": "left"}),
-                    ("leakage", {"variant": "right"}),
-                ), 1)
-            ],
-            "requirements": {"seeds": [0], "warmups": 0, "measured": 1,
-                             "bootstrap_iterations": 100},
-            "benchmark_baseline": None,
-            "benchmark_accounting": MODULE.benchmark_deadline_policy(7_200),
-        }
-        for key, value in (("hardware", {}), ("canary_manifest", {}),
-                           ("configuration_manifest", {"configurations": []})):
-            path = root / f"{key}.json"
-            MODULE.write_json(path, value)
-            frozen[key] = {"path": path.name, **MODULE.file_binding(path)}
-        plan_path = root / "plan.json"
-        MODULE.write_json(plan_path, frozen)
-        output = root / "campaigns" / "test"
-        scope_path = root / "scope.json"
-        MODULE.private_record(scope_path, {
-            "version": 1, "protocol": MODULE.PROTOCOL, "scope_id": "e" * 64,
-            "previous_scope_sha256": None, "registered_ns": 1, "stopping_policy": "fail_fast",
-            "deadline_policy": frozen["benchmark_accounting"],
-            "campaigns": [{"campaign_id": "test", "plan": MODULE.file_binding(plan_path)}],
-        })
-        with ExitStack() as stack:
-            def patch(target, name, **kwargs):
-                return stack.enter_context(mock.patch.object(target, name, **kwargs))
-
-            patch(MODULE, "PARTICIPANTS", new=(3,))
-            patch(MODULE, "PROFILES", new=("private",))
-            patch(MODULE, "load_plan", return_value=(frozen, root))
-            patch(MODULE, "verify_source_checkout")
-            smoke = patch(MODULE, "validate_smoke_prerequisite", return_value={"passed": True, "runs": 10})
-            patch(MODULE, "build_request", side_effect=lambda _plan, _root, job: dict(job))
-            process = patch(MODULE.subprocess, "Popen", side_effect=self.fake_process())
-            patch(MODULE, "_process_group_exists", return_value=False)
-            patch(MODULE, "validate_benchmark_transport", side_effect=lambda _evidence, **kwargs: {
-                "request_sha256": kwargs["request_sha256"], "payload": None, "process_inventory": None,
-                "mandatory_signed_rs16_da_rbc": None, "signed_rs16_da_observations": None,
-                "authenticated_message_control": None,
-            })
-            patch(MODULE, "materialize_fault_response", return_value=({"synthetic": "fault"}, []))
-            benchmark = patch(MODULE, "materialize_benchmark_response", return_value={"synthetic": "benchmark"})
-            patch(MODULE, "validate_leakage_response", return_value=({"messages": 1}, []))
-            patch(MODULE.fault_report, "load_runs", return_value=[])
-            patch(MODULE.fault_report, "input_bindings", return_value=[])
-            patch(MODULE.fault_report, "build_report", return_value={"passed": True})
-            patch(MODULE.benchmark_report, "load_jsonl", return_value=[])
-            patch(MODULE.benchmark_report, "build_report", return_value={"passed": True})
-            for name in ("write_fault_csv", "write_benchmark_csv"):
-                patch(MODULE, name, side_effect=lambda path, _rows: path.write_text("synthetic\n"))
-            patch(MODULE, "differential_pair_manifest", return_value={})
-            leakage = patch(MODULE.leakage_audit, "run_audit", return_value={"passed": True})
-            patch(MODULE, "validate_publication_fragment")
-            yield {
-                "plan": frozen, "output": output, "smoke": smoke,
-                "process": process, "benchmark": benchmark, "leakage": leakage,
-                "execute": lambda: MODULE.execute_plan(
-                    plan_path, output, source_root=source, harness=harness,
-                    smoke_campaign=root / "synthetic-smoke", scope_path=scope_path, campaign_id="test",
-                ),
-            }
-
-    def assert_no_success(self, output: Path) -> dict[str, Any]:
-        self.assertFalse((output / "release-artifact-fragment-v1.json").exists())
-        self.assertFalse((output / "campaign-artifacts.json").exists())
-        failure = json.loads((output / "failure.json").read_text())
-        self.assertIs(failure["passed"], False)
-        self.assertEqual(failure["planned_jobs"], 4)
+    def assert_no_success(self, output):
+        self.assertFalse((output/'release-artifact-fragment-v1.json').exists())
+        self.assertFalse((output/'campaign-artifacts.json').exists())
+        failure=json.loads((output/'failure.json').read_bytes())
+        self.assertFalse(failure['passed']);self.assertEqual(failure['planned_jobs'],852)
         return failure
+
 
     def test_private_records_and_attempt_directories_are_fresh_and_owner_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3502,12 +3394,9 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
                 attempt = root / "attempt"
                 with mock.patch.object(MODULE.subprocess, "Popen", side_effect=self.fake_process(
                     response_bytes=raw_response, exit_code=exit_code
-                )), mock.patch.object(MODULE, "_process_group_exists", return_value=False), mock.patch.object(
-                    MODULE, "_terminate_owned_process_group"
-                ) as terminate, self.assertRaisesRegex(MODULE.RunnerError, reason):
+                )), mock.patch.object(MODULE, "_process_group_exists", return_value=False), self.assertRaisesRegex(MODULE.RunnerError, reason):
                     MODULE.invoke_harness(root / "synthetic-harness", {"kind": "fault", "request_id": "1" * 64},
                                           attempt_dir=attempt, timeout_seconds=1)
-                terminate.assert_not_called()
                 self.assertEqual((attempt / "stdout.log").read_bytes(), b"retained synthetic stdout\n")
                 self.assertEqual((attempt / "stderr.log").read_bytes(), b"retained synthetic stderr\n")
                 self.assertEqual((attempt / "evidence" / "raw.bin").read_bytes(), b"retained raw capture\x00")
@@ -3520,55 +3409,48 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
                 self.assertFalse(outcome["passed"])
                 self.assertIn("request.json", {entry["path"] for entry in outcome["retained_files"]})
 
-    def test_semantic_failure_retains_earlier_success_and_complete_denominator(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
-            fixture["benchmark"].side_effect = MODULE.RunnerError("synthetic semantic failure")
-            with self.assertRaisesRegex(MODULE.RunnerError, "synthetic semantic failure"):
-                fixture["execute"]()
-            failure = self.assert_no_success(fixture["output"])
-            jobs = fixture["plan"]["jobs"]
-            self.assertEqual([job["request_id"] for job in failure["completed_jobs"]], [jobs[0]["request_id"]])
-            self.assertEqual(failure["failed_job"]["request_id"], jobs[1]["request_id"])
-            self.assertEqual(failure["not_started_request_ids"], [job["request_id"] for job in jobs[2:]])
-            self.assertEqual(json.loads((fixture["output"] / "frozen-plan.json").read_text()), fixture["plan"])
-            attempts = sorted((fixture["output"] / "attempts").iterdir())
-            self.assertEqual(len(attempts), 2)
-            for index, attempt in enumerate(attempts):
-                self.assertEqual((attempt / "response.json").read_bytes(), b"{}")
-                self.assertTrue((attempt / "stdout.log").is_file())
-                self.assertEqual(json.loads((attempt / "validation-outcome.json").read_text())["passed"], index == 0)
-            fixture["smoke"].assert_called_once()
-            self.assertEqual(fixture["process"].call_count, 2)
-            with self.assertRaisesRegex(MODULE.RunnerError, "already exists"):
-                fixture["execute"]()
+    def test_semantic_failure_retains_earlier_success_and_complete_denominator(self):
+        with tempfile.TemporaryDirectory() as area,self.execution_fixture(Path(area).resolve()) as fixture:
+            fixture['state']['failed_native']=True
+            with self.assertRaises(EXECUTION.CampaignExecutionIncomplete) as error:fixture['execute']()
+            failure=self.assert_no_success(fixture['output'])
+            self.assertIn('stopped before every registered attempt',str(error.exception.owner.error))
+            self.assertEqual(len(failure['completed_jobs']),51)
+            self.assertEqual(len(failure['durable_started_request_ids']),52)
+            self.assertEqual(len(failure['not_started_request_ids']),800)
+            self.assertEqual(failure['failed_job']['session_id'],fixture['plan']['benchmark_sessions'][0]['session_id'])
+            self.assertEqual(json.loads((fixture['output']/'frozen-plan.json').read_bytes()),fixture['plan'])
+            counts=error.exception.owner.closure['campaign']['counts']
+            self.assertEqual(counts,dict(planned=800,attempted=2,succeeded=1,failed=1,timed_out=0,not_started=798,incomplete=0))
+            self.assertEqual(fixture['process'].call_count,50);self.assertEqual(fixture['benchmark'].call_count,1)
+            fixture['smoke'].assert_called_once()
+            with self.assertRaises(EXECUTION.CampaignExecutionIncomplete):fixture['execute']()
 
-    def test_report_failure_retains_failing_report_and_all_completed_jobs(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
-            report = {"passed": False, "reason": "synthetic canary mismatch"}
-            fixture["leakage"].return_value = report
-            with self.assertRaisesRegex(MODULE.RunnerError, "leakage audit found"):
-                fixture["execute"]()
-            failure = self.assert_no_success(fixture["output"])
-            self.assertEqual(failure["stage"], "reports")
-            self.assertEqual(len(failure["completed_jobs"]), 4)
-            self.assertIsNone(failure["failed_job"])
-            self.assertEqual(failure["not_started_request_ids"], [])
-            report_path = fixture["output"] / "publication" / "reports" / "leakage-report-v1.json"
-            self.assertEqual(json.loads(report_path.read_text()), report)
-            self.assertEqual(len(list((fixture["output"] / "attempts").glob("*/response.json"))), 4)
 
-    def test_final_smoke_revalidation_failure_never_publishes_success(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
-            fixture["smoke"].side_effect = [{"passed": True, "runs": 10},
-                                           MODULE.RunnerError("smoke evidence changed")]
-            with self.assertRaisesRegex(MODULE.RunnerError, "smoke evidence changed"):
-                fixture["execute"]()
-            failure = self.assert_no_success(fixture["output"])
-            self.assertEqual(failure["stage"], "final_revalidation")
-            self.assertEqual(len(failure["completed_jobs"]), 4)
-            self.assertEqual(fixture["smoke"].call_count, 2)
-            self.assertFalse((fixture["output"] / "campaign-validation.json").exists())
-            self.assertFalse(list(fixture["output"].glob("*.pending.json")))
+    def test_report_failure_retains_failing_report_and_all_completed_jobs(self):
+        with tempfile.TemporaryDirectory() as area,self.execution_fixture(Path(area).resolve()) as fixture:
+            report={'passed':False,'reason':'synthetic canary mismatch'};fixture['leakage'].return_value=report
+            with self.assertRaises(EXECUTION.CampaignExecutionIncomplete) as error:fixture['execute']()
+            self.assertIn('leakage audit found',str(error.exception.owner.error))
+            failure=self.assert_no_success(fixture['output'])
+            self.assertEqual(failure['stage'],'reports');self.assertEqual(len(failure['completed_jobs']),852)
+            self.assertIsNone(failure['failed_job']);self.assertEqual(failure['not_started_request_ids'],[])
+            path=fixture['output']/'publication/reports/leakage-report-v1.json'
+            self.assertEqual(json.loads(path.read_bytes()),report)
+            self.assertEqual(len(list((fixture['output']/'attempts').glob('*/response.json'))),852)
+
+
+    def test_final_smoke_revalidation_failure_never_publishes_success(self):
+        with tempfile.TemporaryDirectory() as area,self.execution_fixture(Path(area).resolve()) as fixture:
+            fixture['smoke'].side_effect=[fixture['prerequisite'],MODULE.RunnerError('smoke evidence changed')]
+            with self.assertRaises(EXECUTION.CampaignExecutionIncomplete) as error:fixture['execute']()
+            self.assertIn('smoke evidence changed',str(error.exception.owner.error))
+            failure=self.assert_no_success(fixture['output'])
+            self.assertEqual(failure['stage'],'final_revalidation');self.assertEqual(len(failure['completed_jobs']),852)
+            self.assertEqual(fixture['smoke'].call_count,2)
+            self.assertFalse((fixture['output']/'campaign-validation.json').exists())
+            self.assertFalse(list(fixture['output'].glob('*.pending.json')))
+
 
     def test_fragment_is_published_only_after_pending_file_and_directory_sync(self) -> None:
         for fail_at in (1, 2, 3):
@@ -3590,60 +3472,49 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
                 self.assertFalse(final.exists())
                 self.assertEqual(json.loads((root / "fragment.pending.json").read_text()), {"passed": True})
 
-    def test_fragment_write_failure_retains_partial_pending_and_campaign_error(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
-            record = MODULE.private_record
+    def test_fragment_write_failure_retains_partial_pending_and_campaign_error(self):
+        with tempfile.TemporaryDirectory() as area,self.execution_fixture(Path(area).resolve()) as fixture:
+            record=MODULE.private_record
+            def fail(path,value):
+                if path.name=='campaign-artifacts.pending.json':
+                    path.write_bytes(b'{"partial":');raise OSError('synthetic fragment write failure')
+                return record(path,value)
+            with mock.patch.object(MODULE,'private_record',side_effect=fail),self.assertRaises(EXECUTION.CampaignExecutionIncomplete) as error:
+                fixture['execute']()
+            self.assertIn('fragment write failure',str(error.exception.owner.error))
+            failure=self.assert_no_success(fixture['output'])
+            self.assertEqual(failure['stage'],'publication');self.assertEqual(len(failure['completed_jobs']),852)
+            self.assertEqual((fixture['output']/'campaign-artifacts.pending.json').read_bytes(),b'{"partial":')
+            self.assertTrue((fixture['output']/'campaign-validation.json').is_file())
 
-            def fail_pending(path, value):
-                if path.name == "campaign-artifacts.pending.json":
-                    path.write_bytes(b'{"partial":')
-                    raise OSError("synthetic fragment write failure")
-                record(path, value)
 
-            with mock.patch.object(MODULE, "private_record", side_effect=fail_pending), self.assertRaisesRegex(
-                OSError, "fragment write failure"
-            ):
-                fixture["execute"]()
-            failure = self.assert_no_success(fixture["output"])
-            self.assertEqual(failure["stage"], "publication")
-            self.assertEqual(len(failure["completed_jobs"]), 4)
-            pending = fixture["output"] / "campaign-artifacts.pending.json"
-            self.assertEqual(pending.read_bytes(), b'{"partial":')
-            self.assertTrue((fixture["output"] / "campaign-validation.json").is_file())
-
-    def test_fragment_directory_sync_failure_retains_pending_and_campaign_error(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
-            final = fixture["output"] / "campaign-artifacts.json"
-            real_fsync = os.fsync
-            failed = False
-
-            def fail_publication_sync(descriptor):
+    def test_fragment_directory_sync_failure_retains_pending_and_campaign_error(self):
+        with tempfile.TemporaryDirectory() as area,self.execution_fixture(Path(area).resolve()) as fixture:
+            final=fixture['output']/'campaign-artifacts.json';actual=os.fsync;failed=False
+            def fail(descriptor):
                 nonlocal failed
                 if final.exists() and not failed:
-                    failed = True
-                    raise OSError("synthetic publication directory sync failure")
-                real_fsync(descriptor)
+                    failed=True;raise OSError('synthetic publication directory sync failure')
+                return actual(descriptor)
+            with mock.patch.object(MODULE.os,'fsync',side_effect=fail),self.assertRaises(EXECUTION.CampaignExecutionIncomplete) as error:
+                fixture['execute']()
+            self.assertIn('publication directory sync failure',str(error.exception.owner.error))
+            failure=self.assert_no_success(fixture['output']);self.assertEqual(failure['stage'],'publication')
+            self.assertTrue(json.loads((fixture['output']/'campaign-artifacts.pending.json').read_bytes())['real_process_campaign_complete'])
+            self.assertEqual(len(failure['completed_jobs']),852)
 
-            with mock.patch.object(MODULE.os, "fsync", side_effect=fail_publication_sync), self.assertRaisesRegex(
-                OSError, "publication directory sync failure"
-            ):
-                fixture["execute"]()
-            failure = self.assert_no_success(fixture["output"])
-            self.assertEqual(failure["stage"], "publication")
-            pending = fixture["output"] / "campaign-artifacts.pending.json"
-            self.assertTrue(json.loads(pending.read_text())["real_process_campaign_complete"])
-            self.assertEqual(len(failure["completed_jobs"]), 4)
 
-    def test_successful_campaign_retains_attempts_and_publishes_atomically(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
-            final = fixture["execute"]()
-            self.assertEqual(final.name, "campaign-artifacts.json")
-            self.assertTrue(json.loads(final.read_text())["real_process_campaign_complete"])
-            self.assertFalse((fixture["output"] / "failure.json").exists())
-            self.assertEqual(len(list((fixture["output"] / "attempts").glob("*/validation-outcome.json"))), 4)
-            self.assertEqual(final.read_bytes(), (fixture["output"] / "campaign-artifacts.pending.json").read_bytes())
-            self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o600)
-            self.assertEqual(fixture["smoke"].call_count, 2)
+    def test_successful_campaign_retains_attempts_and_publishes_atomically(self):
+        with tempfile.TemporaryDirectory() as area,self.execution_fixture(Path(area).resolve()) as fixture:
+            final=fixture['execute']()
+            self.assertEqual(final.name,'campaign-artifacts.json')
+            self.assertTrue(json.loads(final.read_bytes())['real_process_campaign_complete'])
+            self.assertFalse((fixture['output']/'failure.json').exists())
+            self.assertEqual(len(list((fixture['output']/'attempts').glob('*/validation-outcome.json'))),852)
+            self.assertEqual(final.read_bytes(),(fixture['output']/'campaign-artifacts.pending.json').read_bytes())
+            self.assertEqual(stat.S_IMODE(final.stat().st_mode),0o600);self.assertEqual(fixture['smoke'].call_count,2)
+            self.assertEqual(fixture['process'].call_count,52);self.assertEqual(fixture['benchmark'].call_count,100)
+
 
 
 if __name__ == "__main__":

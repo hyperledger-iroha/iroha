@@ -1,6 +1,9 @@
 //! Tokio actor Peer
+pub(crate) mod post_admission;
 #[cfg(feature = "quic")]
 mod quic_datagram;
+pub(crate) mod receive_credit;
+pub(crate) mod tenure;
 
 #[cfg(feature = "quic")]
 pub(crate) use quic_datagram::QuicDatagramIngress;
@@ -1724,14 +1727,14 @@ impl SharedByteBudget {
             released.await;
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn retained(&self) -> SharedRetainedBytes {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retained
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn retained_total(&self) -> usize {
         self.retained().total
     }
@@ -1822,6 +1825,7 @@ struct AuthenticatedSourceOwnerRegistry {
 /// application path.
 #[derive(Clone, Debug)]
 pub(crate) struct OutboundPostByteBudgets {
+    semantic: Arc<Mutex<Weak<post_admission::Pool>>>,
     high: Arc<SharedByteBudget>,
     low: Arc<SharedByteBudget>,
     progress_reserve_bytes_per_peer: usize,
@@ -1851,6 +1855,29 @@ impl OutboundHighByteBudget {
     }
 }
 impl OutboundPostByteBudgets {
+    pub(crate) fn install_semantic(
+        &self,
+        maximum: [usize; crate::TransportAdmissionClass::COUNT],
+    ) -> Result<Arc<post_admission::Pool>, Error> {
+        let mut slot = self
+            .semantic
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.upgrade().is_some() {
+            return Err(Error::Format);
+        }
+        let pool = post_admission::Pool::new(self.clone(), maximum)?;
+        *slot = Arc::downgrade(&pool);
+        Ok(pool)
+    }
+    fn semantic(&self) -> Result<Arc<post_admission::Pool>, Error> {
+        self.semantic
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade()
+            .ok_or(Error::Format)
+    }
+
     pub(crate) fn new(
         high_max_bytes: usize,
         low_max_bytes: usize,
@@ -1875,6 +1902,7 @@ impl OutboundPostByteBudgets {
             .and_then(|reserve| reserve.checked_add(high_max_bytes))
             .and_then(|high| high.checked_add(low_max_bytes))?;
         Some(Self {
+            semantic: Arc::new(Mutex::new(Weak::new())),
             high: SharedByteBudget::new(high_max_bytes, 0)?,
             low: SharedByteBudget::new(low_max_bytes, 0)?,
             progress_reserve_bytes_per_peer,
@@ -1968,6 +1996,7 @@ impl Drop for SharedByteLease {
 /// byte ceilings.
 #[derive(Clone, Debug)]
 pub(crate) struct InboundFrameByteBudgets {
+    receive_credit_pool: Arc<Mutex<Weak<receive_credit::Pool>>>,
     high: Arc<SharedByteBudget>,
     low: Arc<SharedByteBudget>,
     high_decode_scratch: Arc<SharedByteBudget>,
@@ -1977,6 +2006,7 @@ pub(crate) struct InboundFrameByteBudgets {
 }
 #[derive(Debug)]
 struct AuthenticatedSourceCreditOwner {
+    receive_partition: Mutex<Option<Arc<receive_credit::SourcePartition>>>,
     per_lane_capacity: usize,
     safety: Arc<Semaphore>,
     high: Arc<Semaphore>,
@@ -1990,6 +2020,7 @@ impl AuthenticatedSourceCreditOwner {
         );
         Self {
             per_lane_capacity,
+            receive_partition: Mutex::new(None),
             safety: Arc::new(Semaphore::new(per_lane_capacity)),
             high: Arc::new(Semaphore::new(per_lane_capacity)),
             low: Arc::new(Semaphore::new(per_lane_capacity)),
@@ -2213,6 +2244,14 @@ impl InboundSourceByteBudget {
     }
 }
 impl InboundFrameByteBudgets {
+    fn admitted_receive_credit_pool(&self) -> Result<Arc<receive_credit::Pool>, Error> {
+        self.receive_credit_pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade()
+            .ok_or(Error::Format)
+    }
+
     pub(crate) fn new(
         high_max_bytes: usize,
         low_max_bytes: usize,
@@ -2243,6 +2282,7 @@ impl InboundFrameByteBudgets {
         Some(Self {
             high: SharedByteBudget::new(high_max_bytes, 0)?,
             low: SharedByteBudget::new(low_max_bytes, 0)?,
+            receive_credit_pool: Arc::new(Mutex::new(Weak::new())),
             high_decode_scratch: SharedByteBudget::new(high_max_bytes, 0)?,
             low_decode_scratch: SharedByteBudget::new(low_max_bytes, 0)?,
             progress_reserve_bytes_per_peer,
@@ -2436,6 +2476,7 @@ impl DispatchRetention {
 }
 #[derive(Debug)]
 enum PeerMessageRetention {
+    Granted(receive_credit::GrantRetention),
     Source(InboundFrameRetention),
     Dispatch(DispatchRetention),
 }
@@ -2454,14 +2495,23 @@ enum PeerMessageRetention {
 /// deduplicate authenticated message identities.
 #[derive(Debug)]
 struct OutboundPostOwnership {
-    _byte_lease: SharedByteLease,
+    _byte_lease: Option<SharedByteLease>,
+    _semantic_lease: Option<post_admission::Lease>,
     flush_ack: Option<oneshot::Sender<()>>,
 }
 impl OutboundPostOwnership {
     fn new(byte_lease: SharedByteLease, flush_ack: Option<oneshot::Sender<()>>) -> Self {
         Self {
-            _byte_lease: byte_lease,
+            _byte_lease: Some(byte_lease),
+            _semantic_lease: None,
             flush_ack,
+        }
+    }
+    fn granted(lease: post_admission::Lease) -> Self {
+        Self {
+            _byte_lease: None,
+            _semantic_lease: Some(lease),
+            flush_ack: None,
         }
     }
     fn acknowledge_flush(mut self) {
@@ -3362,18 +3412,31 @@ pub mod handles {
         };
         tokio::task::spawn(run::run::<T, E, _>(peer).in_current_span())
     }
-    /// Per-topic senders for peer substreams.
-    pub(super) struct TopicSenders<T> {
-        pub(super) hi_consensus_safety: post_channel::Sender<RetainedPost<T>>,
-        pub(super) hi_consensus: post_channel::Sender<RetainedPost<T>>,
-        pub(super) hi_consensus_payload: post_channel::Sender<RetainedPost<T>>,
-        pub(super) hi_consensus_chunk: post_channel::Sender<RetainedPost<T>>,
-        pub(super) hi_control: post_channel::Sender<RetainedPost<T>>,
-        pub(super) lo_block_sync: post_channel::Sender<RetainedPost<T>>,
-        pub(super) lo_tx_gossip: post_channel::Sender<RetainedPost<T>>,
-        pub(super) lo_peer_gossip: post_channel::Sender<RetainedPost<T>>,
-        pub(super) lo_health: post_channel::Sender<RetainedPost<T>>,
-        pub(super) lo_other: post_channel::Sender<RetainedPost<T>>,
+    /// One FIFO sender per semantic class, independent of caller priority and Topic.
+    pub(super) struct ClassSenders<T> {
+        pub(super) classes:
+            [post_channel::Sender<RetainedPost<T>>; crate::TransportAdmissionClass::COUNT],
+    }
+    pub(super) fn class_channels<T>(
+        capacity: usize,
+    ) -> (
+        ClassSenders<T>,
+        [post_channel::Receiver<RetainedPost<T>>; crate::TransportAdmissionClass::COUNT],
+    ) {
+        let pairs = std::array::from_fn::<_, { crate::TransportAdmissionClass::COUNT }, _>(|_| {
+            post_channel::channel(capacity)
+        });
+        let (senders, receivers): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+        (
+            ClassSenders {
+                classes: senders
+                    .try_into()
+                    .unwrap_or_else(|_| unreachable!("one pair per semantic class")),
+            },
+            receivers
+                .try_into()
+                .unwrap_or_else(|_| unreachable!("one pair per semantic class")),
+        )
     }
     /// Post error reason for bounded per‑peer channels.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3405,7 +3468,7 @@ pub mod handles {
     }
     /// Peer actor handle.
     pub struct PeerHandle<T: Pload> {
-        pub(super) senders: TopicSenders<T>,
+        pub(super) senders: ClassSenders<T>,
         /// Explicit cancellation for this exact authenticated transport tenure.
         ///
         /// Merely dropping the handle still lets the peer actor drain already-admitted
@@ -3413,14 +3476,15 @@ pub mod handles {
         /// when that connection has been replaced or must be disconnected, so a
         /// blocked socket cannot retain its byte-budget leases indefinitely.
         pub(super) termination_sender: watch::Sender<bool>,
-        /// Process-wide owner shared by every connected high/safety topic channel.
-        pub(super) high_post_byte_budget: OutboundHighByteBudget,
-        /// Process-wide owner shared by every connected low topic channel.
-        pub(super) low_post_byte_budget: Arc<SharedByteBudget>,
-        /// Length prefix plus AEAD expansion for the negotiated encryptor.
-        pub(super) frame_queue_overhead_bytes: usize,
+        /// Mandatory pre-grant semantic source ownership, retained through flush.
+        pub(super) post_admission: post_admission::Admission,
     }
     impl<T: Pload> PeerHandle<T> {
+        /// Bind a logical actor fixture to this exact handle's cancellation watch.
+        #[cfg(test)]
+        pub(crate) fn termination_sender_for_test(&self) -> watch::Sender<bool> {
+            self.termination_sender.clone()
+        }
         /// Request prompt teardown of this exact transport tenure.
         pub(crate) fn request_termination(&self) {
             self.termination_sender.send_replace(true);
@@ -3480,9 +3544,7 @@ pub mod handles {
             let priority = msg.priority();
             let progress =
                 crate::network::is_reliable_progress_route(topic, msg.subscriber_route());
-            let use_high_budget =
-                progress || matches!(priority, crate::network::message::Priority::High);
-            let sender = self.sender_for(topic, priority);
+            let sender = &self.senders.classes[msg.admission_class().index()];
             let plaintext_frame_bytes = match checked_data_message_wire_len(&msg) {
                 Ok(bytes) => bytes,
                 Err(error) => {
@@ -3490,35 +3552,20 @@ pub mod handles {
                     return Err(RecoverPostError::Full(msg));
                 }
             };
-            let Some(stream_wire_bytes) =
-                plaintext_frame_bytes.checked_add(self.frame_queue_overhead_bytes)
+            let Some(mut ownership) =
+                self.post_admission
+                    .reserve(msg.admission_class(), plaintext_frame_bytes, progress)
             else {
                 iroha_logger::warn!(
                     ?topic,
-                    plaintext_frame_bytes,
-                    "Outbound peer post stream charge overflowed"
-                );
-                return Err(RecoverPostError::Full(msg));
-            };
-            let byte_lease = if use_high_budget {
-                self.high_post_byte_budget
-                    .try_reserve(stream_wire_bytes, progress)
-            } else {
-                self.low_post_byte_budget
-                    .try_reserve(stream_wire_bytes, false)
-            };
-            let Some(byte_lease) = byte_lease else {
-                iroha_logger::warn!(
-                    ?topic,
                     ?priority,
-                    progress,
-                    stream_wire_bytes,
-                    "Process-wide connected outbound post byte budget is full"
+                    plaintext_frame_bytes,
+                    "Semantic outbound post byte admission is full"
                 );
                 return Err(RecoverPostError::Full(msg));
             };
-            let retained =
-                RetainedPost::new(msg, OutboundPostOwnership::new(byte_lease, flush_ack));
+            ownership.flush_ack = flush_ack;
+            let retained = RetainedPost::new(msg, ownership);
             sender.try_send(retained).map_err(|error| match error {
                 TrySendError::Full(retained) => {
                     let (message, _released_lease) = retained.into_parts();
@@ -3530,210 +3577,108 @@ pub mod handles {
                 }
             })
         }
-        fn sender_for(
-            &self,
-            topic: crate::network::message::Topic,
-            priority: crate::network::message::Priority,
-        ) -> &post_channel::Sender<RetainedPost<T>> {
-            match topic {
-                crate::network::message::Topic::ConsensusSafety => {
-                    &self.senders.hi_consensus_safety
-                }
-                crate::network::message::Topic::Consensus => &self.senders.hi_consensus,
-                crate::network::message::Topic::ConsensusPayload => {
-                    &self.senders.hi_consensus_payload
-                }
-                crate::network::message::Topic::ConsensusChunk => &self.senders.hi_consensus_chunk,
-                crate::network::message::Topic::Control => &self.senders.hi_control,
-                crate::network::message::Topic::BlockSync
-                | crate::network::message::Topic::TxGossip
-                | crate::network::message::Topic::TxGossipRestricted
-                | crate::network::message::Topic::PeerGossip
-                | crate::network::message::Topic::TrustGossip
-                | crate::network::message::Topic::Health
-                | crate::network::message::Topic::Connect
-                | crate::network::message::Topic::Other
-                    if matches!(priority, crate::network::message::Priority::High) =>
-                {
-                    &self.senders.hi_control
-                }
-                crate::network::message::Topic::BlockSync => &self.senders.lo_block_sync,
-                crate::network::message::Topic::TxGossip
-                | crate::network::message::Topic::TxGossipRestricted => &self.senders.lo_tx_gossip,
-                crate::network::message::Topic::PeerGossip
-                | crate::network::message::Topic::TrustGossip => &self.senders.lo_peer_gossip,
-                crate::network::message::Topic::Health => &self.senders.lo_health,
-                crate::network::message::Topic::Connect | crate::network::message::Topic::Other => {
-                    &self.senders.lo_other
-                }
-            }
-        }
     }
     /// Receiver set kept alive by network tests that need a synthetic peer handle.
     #[cfg(test)]
     pub(crate) struct TestPeerHandleReceivers<T: Pload> {
         termination_receiver: watch::Receiver<bool>,
-        hi_consensus_safety: post_channel::Receiver<RetainedPost<T>>,
-        hi_consensus: post_channel::Receiver<RetainedPost<T>>,
-        hi_consensus_payload: post_channel::Receiver<RetainedPost<T>>,
-        hi_consensus_chunk: post_channel::Receiver<RetainedPost<T>>,
-        hi_control: post_channel::Receiver<RetainedPost<T>>,
-        lo_block_sync: post_channel::Receiver<RetainedPost<T>>,
-        lo_tx_gossip: post_channel::Receiver<RetainedPost<T>>,
-        lo_peer_gossip: post_channel::Receiver<RetainedPost<T>>,
-        lo_health: post_channel::Receiver<RetainedPost<T>>,
-        lo_other: post_channel::Receiver<RetainedPost<T>>,
+        classes: [post_channel::Receiver<RetainedPost<T>>; crate::TransportAdmissionClass::COUNT],
     }
     #[cfg(test)]
     impl<T: Pload> TestPeerHandleReceivers<T> {
-        /// Return whether the owning network explicitly terminated this handle.
         pub(crate) fn termination_requested(&self) -> bool {
             *self.termination_receiver.borrow()
         }
-        /// Receive the next authoritative-consensus safety message, if any.
         pub(crate) fn try_recv_consensus_safety(
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
-            self.hi_consensus_safety
+            self.classes[crate::TransportAdmissionClass::Safety.index()]
                 .try_recv()
                 .map(RetainedPost::into_inner)
         }
-        /// Simulate a successful consensus-lane peer-writer flush and return
-        /// the flushed payload.
         pub(crate) fn try_recv_consensus_and_acknowledge_flush(
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
-            self.hi_consensus
+            self.classes[crate::TransportAdmissionClass::Lane.index()]
                 .try_recv()
                 .map(RetainedPost::into_inner_and_acknowledge_flush)
         }
-        /// Receive the next block-sync message, if any.
         pub(crate) fn try_recv_block_sync(
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
-            self.lo_block_sync.try_recv().map(RetainedPost::into_inner)
+            self.classes[crate::TransportAdmissionClass::BlockSync.index()]
+                .try_recv()
+                .map(RetainedPost::into_inner)
         }
-        /// Receive the next high-priority control-lane message, if any.
         pub(crate) fn try_recv_high_control(
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
-            self.hi_control.try_recv().map(RetainedPost::into_inner)
+            self.classes[crate::TransportAdmissionClass::Control.index()]
+                .try_recv()
+                .map(RetainedPost::into_inner)
         }
-        /// Receive the next generic-lane message, if any.
         pub(crate) fn try_recv_other(
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
-            self.lo_other.try_recv().map(RetainedPost::into_inner)
+            self.classes[crate::TransportAdmissionClass::Low.index()]
+                .try_recv()
+                .map(RetainedPost::into_inner)
         }
-        /// Receive the next message from any synthetic lane, if any.
         pub(crate) fn try_recv_any(&mut self) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
             use tokio::sync::mpsc::error::TryRecvError;
-            macro_rules! try_lane {
-                ($lane:expr) => {
-                    match $lane.try_recv() {
-                        Ok(message) => return Ok(message.into_inner()),
-                        Err(TryRecvError::Empty) => {}
-                        Err(error) => return Err(error),
-                    }
-                };
+            for receiver in &mut self.classes {
+                match receiver.try_recv() {
+                    Ok(message) => return Ok(message.into_inner()),
+                    Err(TryRecvError::Empty) => {}
+                    Err(error) => return Err(error),
+                }
             }
-            try_lane!(self.hi_consensus_safety);
-            try_lane!(self.hi_consensus);
-            try_lane!(self.hi_consensus_payload);
-            try_lane!(self.hi_consensus_chunk);
-            try_lane!(self.hi_control);
-            try_lane!(self.lo_block_sync);
-            try_lane!(self.lo_tx_gossip);
-            try_lane!(self.lo_peer_gossip);
-            try_lane!(self.lo_health);
-            try_lane!(self.lo_other);
             Err(TryRecvError::Empty)
         }
-        /// Simulate a successful peer-writer flush for the next synthetic
-        /// message and return its payload.
         pub(crate) fn try_recv_any_and_acknowledge_flush(
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
             use tokio::sync::mpsc::error::TryRecvError;
-            macro_rules! try_lane {
-                ($lane:expr) => {
-                    match $lane.try_recv() {
-                        Ok(message) => {
-                            return Ok(message.into_inner_and_acknowledge_flush());
-                        }
-                        Err(TryRecvError::Empty) => {}
-                        Err(error) => return Err(error),
-                    }
-                };
+            for receiver in &mut self.classes {
+                match receiver.try_recv() {
+                    Ok(message) => return Ok(message.into_inner_and_acknowledge_flush()),
+                    Err(TryRecvError::Empty) => {}
+                    Err(error) => return Err(error),
+                }
             }
-            try_lane!(self.hi_consensus_safety);
-            try_lane!(self.hi_consensus);
-            try_lane!(self.hi_consensus_payload);
-            try_lane!(self.hi_consensus_chunk);
-            try_lane!(self.hi_control);
-            try_lane!(self.lo_block_sync);
-            try_lane!(self.lo_tx_gossip);
-            try_lane!(self.lo_peer_gossip);
-            try_lane!(self.lo_health);
-            try_lane!(self.lo_other);
             Err(TryRecvError::Empty)
         }
     }
-    /// Build a synthetic peer handle for network unit tests.
+    /// Explicit synthetic construction; production uses the admitted shared budgets.
     #[cfg(test)]
     pub(crate) fn test_peer_handle<T: Pload>(
         cap: usize,
     ) -> (PeerHandle<T>, TestPeerHandleReceivers<T>) {
         let (termination_sender, termination_receiver) = watch::channel(false);
-        let (hi_consensus_safety_tx, hi_consensus_safety_rx) = post_channel::channel(cap);
-        let (hi_consensus_tx, hi_consensus_rx) = post_channel::channel(cap);
-        let (hi_consensus_payload_tx, hi_consensus_payload_rx) = post_channel::channel(cap);
-        let (hi_consensus_chunk_tx, hi_consensus_chunk_rx) = post_channel::channel(cap);
-        let (hi_control_tx, hi_control_rx) = post_channel::channel(cap);
-        let (lo_block_sync_tx, lo_block_sync_rx) = post_channel::channel(cap);
-        let (lo_tx_gossip_tx, lo_tx_gossip_rx) = post_channel::channel(cap);
-        let (lo_peer_gossip_tx, lo_peer_gossip_rx) = post_channel::channel(cap);
-        let (lo_health_tx, lo_health_rx) = post_channel::channel(cap);
-        let (lo_other_tx, lo_other_rx) = post_channel::channel(cap);
+        let (senders, classes) = class_channels(cap);
         (
             PeerHandle {
-                senders: TopicSenders {
-                    hi_consensus_safety: hi_consensus_safety_tx,
-                    hi_consensus: hi_consensus_tx,
-                    hi_consensus_payload: hi_consensus_payload_tx,
-                    hi_consensus_chunk: hi_consensus_chunk_tx,
-                    hi_control: hi_control_tx,
-                    lo_block_sync: lo_block_sync_tx,
-                    lo_tx_gossip: lo_tx_gossip_tx,
-                    lo_peer_gossip: lo_peer_gossip_tx,
-                    lo_health: lo_health_tx,
-                    lo_other: lo_other_tx,
-                },
+                senders,
                 termination_sender,
-                high_post_byte_budget: OutboundHighByteBudget::shared_only(
-                    SharedByteBudget::new(OutboundFrameQueueLimits::default().high_max_bytes, 0)
-                        .expect("default per-peer high post budget must fit"),
-                ),
-                low_post_byte_budget: SharedByteBudget::new(
-                    OutboundFrameQueueLimits::default().low_max_bytes,
-                    0,
-                )
-                .expect("default per-peer low post budget must fit"),
-                frame_queue_overhead_bytes: crate::frame_queue_charge(0)
-                    .expect("default frame overhead must fit"),
+                post_admission: post_admission::Admission::Synthetic {
+                    high: OutboundHighByteBudget::shared_only(
+                        SharedByteBudget::new(
+                            OutboundFrameQueueLimits::default().high_max_bytes,
+                            0,
+                        )
+                        .expect("test high budget"),
+                    ),
+                    low: SharedByteBudget::new(
+                        OutboundFrameQueueLimits::default().low_max_bytes,
+                        0,
+                    )
+                    .expect("test low budget"),
+                    overhead: crate::frame_queue_charge(0).expect("test frame overhead"),
+                },
             },
             TestPeerHandleReceivers {
                 termination_receiver,
-                hi_consensus_safety: hi_consensus_safety_rx,
-                hi_consensus: hi_consensus_rx,
-                hi_consensus_payload: hi_consensus_payload_rx,
-                hi_consensus_chunk: hi_consensus_chunk_rx,
-                hi_control: hi_control_rx,
-                lo_block_sync: lo_block_sync_rx,
-                lo_tx_gossip: lo_tx_gossip_rx,
-                lo_peer_gossip: lo_peer_gossip_rx,
-                lo_health: lo_health_rx,
-                lo_other: lo_other_rx,
+                classes,
             },
         )
     }
@@ -3868,234 +3813,55 @@ pub mod handles {
         }
         #[test]
         fn consensus_chunk_routes_to_high_queue() {
-            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) = post_channel::channel(1);
-            let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
-            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
-            let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
-            let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
-            let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
-            let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(1);
-            let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(1);
-            let (lo_health_tx, mut lo_health_rx) = post_channel::channel(1);
-            let (lo_other_tx, mut lo_other_rx) = post_channel::channel(1);
-            let handle = PeerHandle {
-                senders: TopicSenders {
-                    hi_consensus_safety: hi_consensus_safety_tx,
-                    hi_consensus: hi_consensus_tx,
-                    hi_consensus_payload: hi_consensus_payload_tx,
-                    hi_consensus_chunk: hi_consensus_chunk_tx,
-                    hi_control: hi_control_tx,
-                    lo_block_sync: lo_block_sync_tx,
-                    lo_tx_gossip: lo_tx_gossip_tx,
-                    lo_peer_gossip: lo_peer_gossip_tx,
-                    lo_health: lo_health_tx,
-                    lo_other: lo_other_tx,
-                },
-                termination_sender: watch::channel(false).0,
-                high_post_byte_budget: OutboundHighByteBudget::shared_only(
-                    SharedByteBudget::new(OutboundFrameQueueLimits::default().high_max_bytes, 0)
-                        .expect("default test high post budget must fit"),
-                ),
-                low_post_byte_budget: SharedByteBudget::new(
-                    OutboundFrameQueueLimits::default().low_max_bytes,
-                    0,
-                )
-                .expect("default test low post budget must fit"),
-                frame_queue_overhead_bytes: crate::frame_queue_charge(0)
-                    .expect("default frame overhead must fit"),
-            };
+            let (handle, mut receivers) = test_peer_handle::<ConsensusChunkMsg>(1);
             handle
                 .post(ConsensusChunkMsg)
-                .expect("consensus chunk post should succeed");
+                .expect("post preserves semantic classification");
             assert!(matches!(
-                hi_consensus_chunk_rx
+                receivers.classes[crate::TransportAdmissionClass::Availability.index()]
                     .try_recv()
                     .map(RetainedPost::into_inner),
                 Ok(ConsensusChunkMsg)
             ));
-            assert!(matches!(
-                hi_consensus_safety_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                hi_consensus_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                hi_consensus_payload_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(
-                lo_block_sync_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                lo_tx_gossip_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                lo_peer_gossip_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(lo_health_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(lo_other_rx.try_recv(), Err(TryRecvError::Empty)));
+            for receiver in &mut receivers.classes {
+                assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+            }
         }
         #[test]
         fn consensus_payload_routes_to_dedicated_high_queue() {
-            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) = post_channel::channel(1);
-            let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
-            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
-            let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
-            let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
-            let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
-            let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(1);
-            let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(1);
-            let (lo_health_tx, mut lo_health_rx) = post_channel::channel(1);
-            let (lo_other_tx, mut lo_other_rx) = post_channel::channel(1);
-            let handle = PeerHandle {
-                senders: TopicSenders {
-                    hi_consensus_safety: hi_consensus_safety_tx,
-                    hi_consensus: hi_consensus_tx,
-                    hi_consensus_payload: hi_consensus_payload_tx,
-                    hi_consensus_chunk: hi_consensus_chunk_tx,
-                    hi_control: hi_control_tx,
-                    lo_block_sync: lo_block_sync_tx,
-                    lo_tx_gossip: lo_tx_gossip_tx,
-                    lo_peer_gossip: lo_peer_gossip_tx,
-                    lo_health: lo_health_tx,
-                    lo_other: lo_other_tx,
-                },
-                termination_sender: watch::channel(false).0,
-                high_post_byte_budget: OutboundHighByteBudget::shared_only(
-                    SharedByteBudget::new(OutboundFrameQueueLimits::default().high_max_bytes, 0)
-                        .expect("default test high post budget must fit"),
-                ),
-                low_post_byte_budget: SharedByteBudget::new(
-                    OutboundFrameQueueLimits::default().low_max_bytes,
-                    0,
-                )
-                .expect("default test low post budget must fit"),
-                frame_queue_overhead_bytes: crate::frame_queue_charge(0)
-                    .expect("default frame overhead must fit"),
-            };
+            let (handle, mut receivers) = test_peer_handle::<ConsensusPayloadMsg>(1);
             handle
                 .post(ConsensusPayloadMsg)
-                .expect("consensus payload post should succeed");
+                .expect("post preserves semantic classification");
             assert!(matches!(
-                hi_consensus_payload_rx
+                receivers.classes[crate::TransportAdmissionClass::Payload.index()]
                     .try_recv()
                     .map(RetainedPost::into_inner),
                 Ok(ConsensusPayloadMsg)
             ));
-            assert!(matches!(
-                hi_consensus_safety_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                hi_consensus_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                hi_consensus_chunk_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(
-                lo_block_sync_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                lo_tx_gossip_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                lo_peer_gossip_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(lo_health_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(lo_other_rx.try_recv(), Err(TryRecvError::Empty)));
+            for receiver in &mut receivers.classes {
+                assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+            }
         }
         #[test]
-        fn high_priority_tx_gossip_routes_to_high_queue() {
-            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) = post_channel::channel(1);
-            let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
-            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
-            let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
-            let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
-            let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
-            let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(1);
-            let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(1);
-            let (lo_health_tx, mut lo_health_rx) = post_channel::channel(1);
-            let (lo_other_tx, mut lo_other_rx) = post_channel::channel(1);
-            let handle = PeerHandle {
-                senders: TopicSenders {
-                    hi_consensus_safety: hi_consensus_safety_tx,
-                    hi_consensus: hi_consensus_tx,
-                    hi_consensus_payload: hi_consensus_payload_tx,
-                    hi_consensus_chunk: hi_consensus_chunk_tx,
-                    hi_control: hi_control_tx,
-                    lo_block_sync: lo_block_sync_tx,
-                    lo_tx_gossip: lo_tx_gossip_tx,
-                    lo_peer_gossip: lo_peer_gossip_tx,
-                    lo_health: lo_health_tx,
-                    lo_other: lo_other_tx,
-                },
-                termination_sender: watch::channel(false).0,
-                high_post_byte_budget: OutboundHighByteBudget::shared_only(
-                    SharedByteBudget::new(OutboundFrameQueueLimits::default().high_max_bytes, 0)
-                        .expect("default test high post budget must fit"),
-                ),
-                low_post_byte_budget: SharedByteBudget::new(
-                    OutboundFrameQueueLimits::default().low_max_bytes,
-                    0,
-                )
-                .expect("default test low post budget must fit"),
-                frame_queue_overhead_bytes: crate::frame_queue_charge(0)
-                    .expect("default frame overhead must fit"),
-            };
-            let msg = PriorityMsg {
-                priority: Priority::High,
-            };
+        fn caller_priority_cannot_move_tx_gossip_out_of_low_lane() {
+            let (handle, mut receivers) = test_peer_handle::<PriorityMsg>(1);
             handle
-                .post(msg)
-                .expect("high-priority transaction gossip post should succeed");
+                .post(PriorityMsg {
+                    priority: Priority::High,
+                })
+                .expect("post preserves semantic classification");
             assert!(matches!(
-                hi_control_rx.try_recv().map(RetainedPost::into_inner),
+                receivers.classes[crate::TransportAdmissionClass::Low.index()]
+                    .try_recv()
+                    .map(RetainedPost::into_inner),
                 Ok(PriorityMsg {
                     priority: Priority::High
                 })
             ));
-            assert!(matches!(
-                hi_consensus_safety_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                hi_consensus_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                hi_consensus_payload_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                hi_consensus_chunk_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                lo_block_sync_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                lo_tx_gossip_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(
-                lo_peer_gossip_rx.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            assert!(matches!(lo_health_rx.try_recv(), Err(TryRecvError::Empty)));
-            assert!(matches!(lo_other_rx.try_recv(), Err(TryRecvError::Empty)));
+            for receiver in &mut receivers.classes {
+                assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+            }
         }
         #[test]
         fn high_priority_gossip_cannot_consume_the_peer_progress_reserve() {
@@ -4116,7 +3882,13 @@ pub mod handles {
                 .expect("saturate shared high budget");
             let peer_reserve =
                 SharedByteBudget::new(progress_charge, 0).expect("test progress reserve");
-            handle.high_post_byte_budget = OutboundHighByteBudget {
+            let post_admission::Admission::Synthetic { high, low, .. } = &mut handle.post_admission
+            else {
+                unreachable!()
+            };
+            *low = SharedByteBudget::new(gossip_charge, 0).unwrap();
+            let held_low = low.try_reserve(gossip_charge, false).unwrap();
+            *high = OutboundHighByteBudget {
                 shared,
                 peer_reserve: Some(peer_reserve),
             };
@@ -4129,7 +3901,7 @@ pub mod handles {
                 .post(BudgetRouteMsg::Chunk)
                 .expect("semantic progress must use the disjoint peer reserve");
             assert_eq!(receivers.try_recv_any(), Ok(BudgetRouteMsg::Chunk));
-            drop(held);
+            drop((held, held_low));
         }
     }
 }
@@ -4929,33 +4701,29 @@ mod run {
         // an API-requested priority before the message reaches this boundary.
         inbound_priority_from_topic(message.topic())
     }
-    const INBOUND_HEALTH_FRAME_BURST: u8 = 2;
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum InboundHealthFrame {
-        Ping,
-        Pong,
-    }
+    const INBOUND_PING_BURST: u8 = 2;
+    /// Remote Ping requests own this budget; correlated Pongs retire local probes.
     #[derive(Clone, Copy, Debug)]
-    struct InboundHealthFrameLimiter {
+    pub(super) struct InboundPingLimiter {
         tokens: u8,
         last_refill: Instant,
         refill_period: Duration,
     }
-    impl InboundHealthFrameLimiter {
-        fn new(now: Instant, idle_timeout: Duration) -> Self {
+    impl InboundPingLimiter {
+        pub(super) fn new(now: Instant, idle_timeout: Duration) -> Self {
             Self {
-                tokens: INBOUND_HEALTH_FRAME_BURST,
+                tokens: INBOUND_PING_BURST,
                 last_refill: now,
                 refill_period: (idle_timeout / 2).max(Duration::from_nanos(1)),
             }
         }
-        fn admit_at(&mut self, _frame: InboundHealthFrame, now: Instant) -> bool {
+        pub(super) fn admit_at(&mut self, now: Instant) -> bool {
             let elapsed = now.saturating_duration_since(self.last_refill);
             let whole_periods = elapsed.as_nanos() / self.refill_period.as_nanos();
             if whole_periods != 0 {
-                let missing = INBOUND_HEALTH_FRAME_BURST.saturating_sub(self.tokens);
+                let missing = INBOUND_PING_BURST.saturating_sub(self.tokens);
                 let replenished = u8::try_from(whole_periods.min(u128::from(missing)))
-                    .expect("health-frame refill is bounded by its two-token burst");
+                    .expect("remote Ping refill is bounded by its two-token burst");
                 self.tokens = self.tokens.saturating_add(replenished);
                 if replenished != 0 {
                     self.last_refill = self
@@ -4967,7 +4735,7 @@ mod run {
             if self.tokens == 0 {
                 return false;
             }
-            if self.tokens == INBOUND_HEALTH_FRAME_BURST {
+            if self.tokens == INBOUND_PING_BURST {
                 // Time spent at capacity cannot become credit for a later burst.
                 self.last_refill = now;
             }
@@ -5157,6 +4925,7 @@ mod run {
             }
         }
     }
+    mod granted;
     /// Peer task.
     #[allow(clippy::too_many_lines)]
     #[log(skip_all, fields(connection = &peer.log_description(), conn_id = peer.connection_id(), peer, disambiguator))]
@@ -5176,1346 +4945,21 @@ mod run {
             quic_datagram_max_payload_bytes,
         }: RunPeerArgs<T, P>,
     ) {
-        let conn_id = peer.connection_id();
-        let mut termination_guard =
-            PeerTaskTerminationGuard::new(service_message_sender.clone(), conn_id);
-        iroha_logger::trace!("Peer created");
-        // Insure proper termination from every execution path.
-        async {
-            // Try to do handshake process
-            let hs_start = Instant::now();
-            let handshake_result = authentication_deadline
-                .run(None, peer.handshake())
-                .await;
-            let ready_peer = match handshake_result {
-                Ok(Ok(ready)) => {
-                    let ms = u64::try_from(hs_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    observe_handshake_ms(ms);
-                    ready
-                }
-                Ok(Err(error)) => {
-                    iroha_logger::warn!(?error, "Failure during handshake.");
-                    HANDSHAKE_FAILURES.fetch_add(1, Ordering::Relaxed);
-                    match error {
-                        Error::HandshakeBadPreface => { HSE_PREFACE.fetch_add(1, Ordering::Relaxed); },
-                        Error::Keys(_)
-                        | Error::HandshakePeerMismatch { .. }
-                        | Error::HandshakeNodeAlgorithmMismatch { .. }
-                        | Error::HandshakeSoranetDelegation(_) => {
-                            HSE_VERIFY.fetch_add(1, Ordering::Relaxed);
-                        },
-                        Error::SymmetricEncryption(_) => { HSE_DECRYPT.fetch_add(1, Ordering::Relaxed); },
-                        Error::NoritoCodec(_) => { HSE_CODEC.fetch_add(1, Ordering::Relaxed); },
-                        Error::Io(_) => { HSE_IO.fetch_add(1, Ordering::Relaxed); },
-                        _ => { HSE_OTHER.fetch_add(1, Ordering::Relaxed); },
-                    }
-                    return;
-                },
-                Err(_) => {
-                    iroha_logger::warn!(?authentication_deadline, "Peer exhausted its authentication deadline");
-                    HANDSHAKE_FAILURES.fetch_add(1, Ordering::Relaxed);
-                    HSE_TIMEOUT.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-            };
-            let Ready {
-                peer: new_peer_id,
-                connection:
-                    Connection {
-                        read,
-                        write,
-                        read_low,
-                        write_low,
-                        quic,
-                        #[cfg(feature = "quic")]
-                        quic_datagrams,
-                        id: connection_id,
-                        ..
-                    },
-                cryptographer,
-                relay_role,
-                scion_supported,
-                trust_gossip,
-            } = ready_peer;
-            termination_guard.set_peer(new_peer_id.clone());
-            if let Some(completion) = inbound_auth_completion {
-                if !completion.complete() {
-                    iroha_logger::warn!(
-                        "Inbound peer authenticated after its pre-authentication ownership expired"
-                    );
-                    return;
-                }
-            }
-            let peer_id = new_peer_id;
-            let disambiguator = cryptographer.disambiguator;
-            tracing::Span::current().record("peer", peer_id.to_string());
-            tracing::Span::current().record("disambiguator", disambiguator);
-            // Create per-topic substreams (bounded or unbounded depending on feature).
-            let (hi_consensus_safety_tx, mut hi_consensus_safety_rx) =
-                post_channel::channel(post_capacity);
-            let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(post_capacity);
-            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) =
-                post_channel::channel(post_capacity);
-            let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) =
-                post_channel::channel(post_capacity);
-            let (hi_control_tx, mut hi_control_rx) = post_channel::channel(post_capacity);
-            let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(post_capacity);
-            let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(post_capacity);
-            let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(post_capacity);
-            let (lo_health_tx, mut lo_health_rx) = post_channel::channel(post_capacity);
-            let (lo_other_tx, mut lo_other_rx) = post_channel::channel(post_capacity);
-            let Some(inbound_high_source_budget) = inbound_frame_byte_budgets.high(peer_id.id())
-            else {
-                iroha_logger::error!(
-                    peer = %peer_id,
-                    "Authenticated peer exceeds the configured inbound source-reserve bound"
-                );
-                return;
-            };
-            let Some(high_post_byte_budget) = outbound_post_byte_budgets.high(peer_id.id()) else {
-                iroha_logger::error!(
-                    peer = %peer_id,
-                    "Authenticated peer exceeds the configured outbound safety-reserve bound"
-                );
-                return;
-            };
-            let (termination_sender, mut termination_receiver) = watch::channel(false);
-            let (peer_message_sender, peer_message_receiver) = oneshot::channel();
-            let delivery_drain = Arc::new(InboundDeliveryDrain::new());
-            termination_guard.set_delivery_drain(Arc::clone(&delivery_drain));
-            let ready_peer_handle = handles::PeerHandle {
-                senders: handles::TopicSenders {
-                    hi_consensus_safety: hi_consensus_safety_tx,
-                    hi_consensus: hi_consensus_tx,
-                    hi_consensus_payload: hi_consensus_payload_tx,
-                    hi_consensus_chunk: hi_consensus_chunk_tx,
-                    hi_control: hi_control_tx,
-                    lo_block_sync: lo_block_sync_tx,
-                    lo_tx_gossip: lo_tx_gossip_tx,
-                    lo_peer_gossip: lo_peer_gossip_tx,
-                    lo_health: lo_health_tx,
-                    lo_other: lo_other_tx,
-                },
-                termination_sender,
-                high_post_byte_budget,
-                low_post_byte_budget: outbound_post_byte_budgets.low(),
-                frame_queue_overhead_bytes: crate::frame_queue_charge_for::<E>(0)
-                    .expect("AEAD frame overhead must fit usize"),
-            };
-            if service_message_sender
-                .send(ServiceMessage::Connected(Connected {
-                    connection_id,
-                    peer: peer_id.clone(),
-                    ready_peer_handle,
-                    peer_message_sender,
-                    delivery_drain: Arc::clone(&delivery_drain),
-                    disambiguator,
-                    relay_role,
-                    scion_supported,
-                    trust_gossip,
-                }))
-                .await
-                .is_err()
-            {
-                iroha_logger::error!(
-                    "Peer is ready, but network dropped connection sender."
-                );
-                return;
-            }
-            let Ok(peer_message_senders) = peer_message_receiver.await else {
-                // NOTE: this is not considered as error, because network might decide not to connect peer.
-                iroha_logger::debug!(
-                    "Network decide not to connect peer."
-                );
-                return;
-            };
-            let shared_outbound_high_budget = outbound_post_byte_budgets.shared_high();
-            iroha_logger::trace!("Peer connected");
-            // Reliable inbound lanes transfer byte ownership and wait for the
-            // network actor independently. The peer I/O loop only enqueues an
-            // already source-budgeted message, so a saturated low/control lane
-            // cannot stop safety reads or outbound socket service.
-            let (inbound_safety_tx, inbound_safety_rx) = mpsc::unbounded_channel();
-            let (inbound_high_tx, inbound_high_rx) = mpsc::unbounded_channel();
-            let (inbound_low_tx, inbound_low_rx) = mpsc::unbounded_channel();
-            let inbound_dispatch_workers = InboundDispatchWorkers(vec![
-                tokio::spawn(run_inbound_dispatch_lane(
-                    inbound_safety_rx,
-                    peer_message_senders.clone(),
-                    InboundDispatchLane::Safety,
-                )),
-                tokio::spawn(run_inbound_dispatch_lane(
-                    inbound_high_rx,
-                    peer_message_senders.clone(),
-                    InboundDispatchLane::High,
-                )),
-                tokio::spawn(run_inbound_dispatch_lane(
-                    inbound_low_rx,
-                    peer_message_senders.clone(),
-                    InboundDispatchLane::Low,
-                )),
-            ]);
-            termination_guard.set_dispatch_workers(
-                vec![
-                    inbound_safety_tx.clone(),
-                    inbound_high_tx.clone(),
-                    inbound_low_tx.clone(),
-                ],
-                inbound_dispatch_workers,
-            );
-            let mut message_reader = MessageReader::new_with_source_budget(
-                read,
-                cryptographer.clone(),
-                max_frame_bytes,
-                peer_message_senders.topic_frame_caps,
-                inbound_high_source_budget,
-            );
-            let mut message_reader_low = read_low.map(|read| {
-                MessageReader::new_with_source_budget(
-                    read,
-                    cryptographer.clone(),
-                    max_frame_bytes,
-                    peer_message_senders.topic_frame_caps,
-                    inbound_frame_byte_budgets.low(),
-                )
-            });
-            // Sampler for repeated read/parse errors to avoid log floods from malformed peers
-            let mut read_err_sampler = LogSampler::new();
-            let mut message_sender_hi = MessageSender::with_limits(
-                write,
-                cryptographer.clone(),
-                max_frame_bytes,
-                outbound_frame_queue_limits,
-            );
-            let mut message_sender_low =
-                write_low.map(|write| MessageSender::with_limits(
-                    write,
-                    cryptographer.clone(),
-                    max_frame_bytes,
-                    outbound_frame_queue_limits,
-                ));
-            #[cfg(feature = "quic")]
-            let mut datagram_sender: Option<DatagramSender<E>> = None;
-            #[cfg(not(feature = "quic"))]
-            let datagram_sender: Option<DatagramSender<E>> = None;
-            let mut datagram_receiver: Option<DatagramReceiver<E, T>> = None;
-            #[cfg(feature = "quic")]
-            if quic_datagrams_enabled {
-                if let Some(conn) = quic.clone() {
-                    if let Some(ingress) = quic_datagrams {
-                        let receiver = QuicDatagramReceiver::<E, T>::new(
-                            ingress,
-                            cryptographer.clone(),
-                            max_frame_bytes,
-                            peer_message_senders.topic_frame_caps,
-                            inbound_frame_byte_budgets.low(),
-                        )
-                        .await;
-                        let Ok(receiver) = receiver else {
-                            iroha_logger::warn!(
-                                conn_id,
-                                "QUIC DATAGRAM ingress failed during authentication"
-                            );
-                            return;
-                        };
-                        datagram_receiver = Some(receiver);
-                    }
-                    // Sender requires that the peer negotiated datagram support.
-                    if conn.max_datagram_size().is_some() && quic_datagram_max_payload_bytes > 0 {
-                        datagram_sender = Some(QuicDatagramSender::new(
-                            conn,
-                            cryptographer.clone(),
-                            max_frame_bytes,
-                            quic_datagram_max_payload_bytes,
-                        ));
-                    }
-                }
-            }
-            #[cfg(not(feature = "quic"))]
-            let _ = (
-                &datagram_sender,
-                quic_datagrams_enabled,
-                quic_datagram_max_payload_bytes,
-                quic,
-            );
-            let mut idle_interval = tokio::time::interval_at(Instant::now() + idle_timeout, idle_timeout);
-            let mut ping_interval = tokio::time::interval_at(Instant::now() + idle_timeout / 2, idle_timeout / 2);
-            idle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            let mut inbound_health_frames =
-                InboundHealthFrameLimiter::new(Instant::now(), idle_timeout);
-            // Fairness scheduler: opportunistically service one low-priority topic
-            // after processing a burst of high-priority posts. This avoids starving
-            // low topics during sustained consensus traffic.
-            let mut hi_budget: u8 = HI_BUDGET_RESET;
-            let mut low_rr: u8 = 0;
-            let mut hi_safety_burst: u8 = 0;
-            let mut hi_control_burst: u8 = 0;
-            let mut hi_consensus_burst: u8 = 0;
-            let mut hi_payload_burst: u8 = 0;
-            let mut hi_availability_burst: u8 = 0;
-            let mut prefer_low_send = false;
-            let mut prefer_low_read = false;
-            let mut prefer_inbound_io = true;
-            let mut direct_post_budget = DIRECT_POST_BURST_MAX;
-            let mut termination_open = true;
-            loop {
-                if *termination_receiver.borrow_and_update() {
-                    iroha_logger::debug!(
-                        conn_id,
-                        "Terminating peer connection on explicit lifecycle request"
-                    );
-                    break;
-                }
-                let low_pending = low_outbound_pending(
-                    &lo_block_sync_rx,
-                    &lo_tx_gossip_rx,
-                    &lo_peer_gossip_rx,
-                    &lo_health_rx,
-                    &lo_other_rx,
-                );
-                let low_pool_open = message_sender_low.as_ref().map_or_else(
-                    || message_sender_hi.can_prepare(Priority::Low, None),
-                    |sender| sender.can_prepare(Priority::Low, None),
-                );
-                if direct_post_budget > 0
-                    && low_pool_open
-                    && let Some((topic, msg)) = maybe_take_low_after_hi(
-                    &mut hi_budget,
-                    &mut low_rr,
-                    &mut lo_block_sync_rx,
-                    &mut lo_tx_gossip_rx,
-                    &mut lo_peer_gossip_rx,
-                    &mut lo_health_rx,
-                    &mut lo_other_rx,
-                    )
-                {
-                    let (msg, post_byte_lease) = msg.into_parts();
-                    direct_post_budget = direct_post_budget.saturating_sub(1);
-                    iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                    #[cfg(feature = "quic")]
-                    let sent_datagram = {
-                        let net_topic = msg.topic();
-                        if net_topic.is_best_effort() {
-                            if let Some(sender) = datagram_sender.as_mut() {
-                                match sender.try_send(&msg) {
-                                    Ok(DatagramSend::Sent { .. }) => true,
-                                    Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
-                                        datagram_sender = None;
-                                        false
-                                    }
-                                    Ok(DatagramSend::TooLarge) => false,
-                                    Err(error) => {
-                                        iroha_logger::error!(
-                                            %error,
-                                            "Failed to send peer datagram."
-                                        );
-                                        break;
-                                    }
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    };
-                    #[cfg(not(feature = "quic"))]
-                    let sent_datagram = false;
-                    if !sent_datagram {
-                        let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                            sender.prepare_owned_or_defer(
-                                &Message::Data(msg),
-                                Priority::Low,
-                                post_byte_lease,
-                            )
-                        } else {
-                            message_sender_hi.prepare_owned_or_defer(
-                                &Message::Data(msg),
-                                Priority::Low,
-                                post_byte_lease,
-                            )
-                        };
-                        if let Err(error) = prepared {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                // Drain additional ready outbound posts without awaiting, so that a burst of
-                // queued messages can be coalesced into fewer encrypted frames before the next
-                // `message_sender.send()` step. This reduces per-connection frame rate and tokio
-                // I/O driver churn under load.
-                let mut drained_hi = 0usize;
-                if direct_post_budget > 0
-                    && hi_budget > 0
-                    && high_outbound_pending(
-                        &hi_consensus_safety_rx,
-                        &hi_control_rx,
-                        &hi_consensus_rx,
-                        &hi_consensus_payload_rx,
-                        &hi_consensus_chunk_rx,
-                    )
-                {
-                    while drained_hi < OUTBOUND_DRAIN_HI_MAX
-                        && direct_post_budget > 0
-                        && hi_budget > 0
-                    {
-                        let safety_pool_open = message_sender_hi.can_prepare(
-                            Priority::High,
-                            Some(HighBatchClass::ConsensusSafety),
-                        );
-                        let high_pool_open = message_sender_hi
-                            .can_prepare(Priority::High, Some(HighBatchClass::Consensus));
-                        let Some((topic, msg)) = try_recv_high_fair(
-                            &mut hi_safety_burst,
-                            &mut hi_control_burst,
-                            &mut hi_consensus_burst,
-                            &mut hi_payload_burst,
-                            &mut hi_availability_burst,
-                            safety_pool_open,
-                            high_pool_open,
-                            &mut hi_consensus_safety_rx,
-                            &mut hi_control_rx,
-                            &mut hi_consensus_rx,
-                            &mut hi_consensus_payload_rx,
-                            &mut hi_consensus_chunk_rx,
-                        ) else {
-                            break;
-                        };
-                        let (msg, post_byte_lease) = msg.into_parts();
-                        iroha_logger::trace!("Post message ({}/drain)", high_topic_label(topic));
-                        if let Err(error) =
-                            message_sender_hi.prepare_owned_or_defer(
-                                &Message::Data(msg),
-                                Priority::High,
-                                post_byte_lease,
-                            )
-                        {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                        direct_post_budget = direct_post_budget.saturating_sub(1);
-                        hi_budget = hi_budget.saturating_sub(1);
-                        drained_hi = drained_hi.saturating_add(1);
-                    }
-                }
-                let mut drained_lo = 0usize;
-                if direct_post_budget > 0 && low_pending {
-                    while drained_lo < OUTBOUND_DRAIN_LO_MAX && direct_post_budget > 0 {
-                        let low_pool_open = message_sender_low.as_ref().map_or_else(
-                            || message_sender_hi.can_prepare(Priority::Low, None),
-                            |sender| sender.can_prepare(Priority::Low, None),
-                        );
-                        if !low_pool_open {
-                            break;
-                        }
-                        let Some((topic, m)) = try_recv_low_rr(
-                            &mut low_rr,
-                            &mut lo_block_sync_rx,
-                            &mut lo_tx_gossip_rx,
-                            &mut lo_peer_gossip_rx,
-                            &mut lo_health_rx,
-                            &mut lo_other_rx,
-                        ) else {
-                            break;
-                        };
-                        let (m, post_byte_lease) = m.into_parts();
-                        iroha_logger::trace!("Post message ({}/drain)", low_topic_label(topic));
-                        #[cfg(feature = "quic")]
-                        let sent_datagram = {
-                            let net_topic = m.topic();
-                            if net_topic.is_best_effort() {
-                                if let Some(sender) = datagram_sender.as_mut() {
-                                    match sender.try_send(&m) {
-                                        Ok(DatagramSend::Sent { .. }) => true,
-                                        Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
-                                            datagram_sender = None;
-                                            false
-                                        }
-                                        Ok(DatagramSend::TooLarge) => false,
-                                        Err(error) => {
-                                            iroha_logger::error!(
-                                                %error,
-                                                "Failed to send peer datagram."
-                                            );
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        };
-                        #[cfg(not(feature = "quic"))]
-                        let sent_datagram = false;
-                        if !sent_datagram {
-                            let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                                sender.prepare_owned_or_defer(
-                                    &Message::Data(m),
-                                    Priority::Low,
-                                    post_byte_lease,
-                                )
-                            } else {
-                                message_sender_hi.prepare_owned_or_defer(
-                                    &Message::Data(m),
-                                    Priority::Low,
-                                    post_byte_lease,
-                                )
-                            };
-                            if let Err(error) = prepared {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                        }
-                        direct_post_budget = direct_post_budget.saturating_sub(1);
-                        hi_budget = HI_BUDGET_RESET;
-                        drained_lo = drained_lo.saturating_add(1);
-                    }
-                }
-                let hi_consensus_safety_can_yield =
-                    outbound_receiver_can_yield(&hi_consensus_safety_rx);
-                let hi_control_can_yield = outbound_receiver_can_yield(&hi_control_rx);
-                let hi_consensus_can_yield = outbound_receiver_can_yield(&hi_consensus_rx);
-                let hi_consensus_payload_can_yield =
-                    outbound_receiver_can_yield(&hi_consensus_payload_rx);
-                let hi_consensus_chunk_can_yield =
-                    outbound_receiver_can_yield(&hi_consensus_chunk_rx);
-                let low_outbound_can_yield = any_outbound_receiver_can_yield([
-                    &lo_block_sync_rx,
-                    &lo_tx_gossip_rx,
-                    &lo_peer_gossip_rx,
-                    &lo_health_rx,
-                    &lo_other_rx,
-                ]);
-                let safety_pool_open = message_sender_hi.can_prepare(
-                    Priority::High,
-                    Some(HighBatchClass::ConsensusSafety),
-                );
-                let high_pool_open = message_sender_hi
-                    .can_prepare(Priority::High, Some(HighBatchClass::Consensus));
-                let low_pool_open = message_sender_low.as_ref().map_or_else(
-                    || message_sender_hi.can_prepare(Priority::Low, None),
-                    |sender| sender.can_prepare(Priority::Low, None),
-                );
-                let outbound_ready = message_sender_hi.ready()
-                    || message_sender_low.as_ref().is_some_and(MessageSender::ready);
-                if !(hi_consensus_safety_can_yield
-                    || hi_control_can_yield
-                    || hi_consensus_can_yield
-                    || hi_consensus_payload_can_yield
-                    || hi_consensus_chunk_can_yield
-                    || low_outbound_can_yield
-                    || outbound_ready)
-                {
-                    iroha_logger::trace!(
-                        "Peer handle dropped and all per-topic outbound queues drained"
-                    );
-                    break;
-                }
-                let consensus_direct_pending = high_pool_open && !hi_consensus_rx.is_empty();
-                let non_safety_direct_pending = high_pool_open
-                    && (!hi_control_rx.is_empty()
-                        || consensus_direct_pending
-                        || !hi_consensus_payload_rx.is_empty()
-                        || !hi_consensus_chunk_rx.is_empty());
-                let availability_direct_allowed = !consensus_direct_pending
-                    || hi_consensus_burst >= HI_CONSENSUS_BURST_MAX
-                    || (hi_availability_burst > 0
-                        && hi_availability_burst < HI_AVAILABILITY_BURST_MAX);
-                let prefer_low_send_now = prefer_low_send;
-                tokio::select! {
-                    biased;
-                    changed = termination_receiver.changed(), if termination_open => {
-                        match changed {
-                            Ok(()) if *termination_receiver.borrow_and_update() => {
-                                iroha_logger::debug!(
-                                    conn_id,
-                                    "Terminating peer connection on explicit lifecycle request"
-                                );
-                                break;
-                            }
-                            Ok(()) => {}
-                            Err(_) => {
-                                // Ordinary handle drop closes the outbound topic senders.
-                                // Preserve the existing contract that already-admitted frames
-                                // drain; only an explicit `true` cancels a blocked writer.
-                                termination_open = false;
-                            }
-                        }
-                    }
-                    // High-priority topics first (budgeted to avoid starvation).
-                    _ = ping_interval.tick(), if high_pool_open => {
-                        iroha_logger::trace!(
-                            ping_period=?ping_interval.period(),
-                            "The connection has been idle, pinging to check if it's alive"
-                        );
-                        match message_sender_hi.prepare_internal_or_defer(
-                            &Message::<T>::Ping,
-                            Priority::High,
-                            &shared_outbound_high_budget,
-                        ) {
-                            Ok(true) => {}
-                            Ok(false) => iroha_logger::trace!(
-                                "Skipping peer ping while the process-wide outbound owner is full"
-                            ),
-                            Err(error) => {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                        }
-                    }
-                    _ = idle_interval.tick() => {
-                        iroha_logger::error!(
-                            timeout=?idle_interval.period(),
-                            "Didn't receive anything from the peer within given timeout, abandoning this connection"
-                        );
-                        break;
-                    }
-                    msg = hi_consensus_safety_rx.recv(), if direct_post_budget > 0
-                        && hi_budget > 0
-                        && hi_consensus_safety_can_yield
-                        && safety_pool_open
-                        && (hi_safety_burst < HI_SAFETY_BURST_MAX || !non_safety_direct_pending) => {
-                        if let Some(m) = msg {
-                            let (m, post_byte_lease) = m.into_parts();
-                            direct_post_budget = direct_post_budget.saturating_sub(1);
-                            note_high_topic_served(
-                                &mut hi_safety_burst,
-                                &mut hi_control_burst,
-                                &mut hi_consensus_burst,
-                                &mut hi_payload_burst,
-                                &mut hi_availability_burst,
-                                HighTopic::ConsensusSafety,
-                            );
-                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusSafety));
-                            if let Err(error) = message_sender_hi.prepare_owned_or_defer(
-                                &Message::Data(m),
-                                Priority::High,
-                                post_byte_lease,
-                            ) {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                            hi_budget = hi_budget.saturating_sub(1);
-                        }
-                    }
-                    msg = hi_control_rx.recv(), if direct_post_budget > 0
-                        && hi_budget > 0 && hi_control_can_yield
-                        && high_pool_open => {
-                        if let Some(m) = msg {
-                            let (m, post_byte_lease) = m.into_parts();
-                            direct_post_budget = direct_post_budget.saturating_sub(1);
-                            note_high_topic_served(
-                                &mut hi_safety_burst,
-                                &mut hi_control_burst,
-                                &mut hi_consensus_burst,
-                                &mut hi_payload_burst,
-                                &mut hi_availability_burst,
-                                HighTopic::Control,
-                            );
-                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Control));
-                            if let Err(error) = message_sender_hi.prepare_owned_or_defer(
-                                &Message::Data(m),
-                                Priority::High,
-                                post_byte_lease,
-                            ) {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                            hi_budget = hi_budget.saturating_sub(1);
-                        }
-                    }
-                    msg = hi_consensus_rx.recv(), if direct_post_budget > 0
-                        && hi_budget > 0 && hi_consensus_can_yield
-                        && high_pool_open => {
-                        if let Some(m) = msg {
-                            let (m, post_byte_lease) = m.into_parts();
-                            direct_post_budget = direct_post_budget.saturating_sub(1);
-                            note_high_topic_served(
-                                &mut hi_safety_burst,
-                                &mut hi_control_burst,
-                                &mut hi_consensus_burst,
-                                &mut hi_payload_burst,
-                                &mut hi_availability_burst,
-                                HighTopic::Consensus,
-                            );
-                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Consensus));
-                            if let Err(error) = message_sender_hi.prepare_owned_or_defer(
-                                &Message::Data(m),
-                                Priority::High,
-                                post_byte_lease,
-                            ) {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                            hi_budget = hi_budget.saturating_sub(1);
-                        }
-                    }
-                    msg = hi_consensus_payload_rx.recv(), if direct_post_budget > 0
-                        && hi_budget > 0
-                        && hi_consensus_payload_can_yield && high_pool_open
-                        && availability_direct_allowed => {
-                        if let Some(m) = msg {
-                            let (m, post_byte_lease) = m.into_parts();
-                            direct_post_budget = direct_post_budget.saturating_sub(1);
-                            note_high_topic_served(
-                                &mut hi_safety_burst,
-                                &mut hi_control_burst,
-                                &mut hi_consensus_burst,
-                                &mut hi_payload_burst,
-                                &mut hi_availability_burst,
-                                HighTopic::ConsensusPayload,
-                            );
-                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusPayload));
-                            if let Err(error) = message_sender_hi.prepare_owned_or_defer(
-                                &Message::Data(m),
-                                Priority::High,
-                                post_byte_lease,
-                            ) {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                            hi_budget = hi_budget.saturating_sub(1);
-                        }
-                    }
-                    msg = hi_consensus_chunk_rx.recv(), if direct_post_budget > 0
-                        && hi_budget > 0
-                        && hi_consensus_chunk_can_yield && high_pool_open
-                        && availability_direct_allowed => {
-                        if let Some(m) = msg {
-                            let (m, post_byte_lease) = m.into_parts();
-                            direct_post_budget = direct_post_budget.saturating_sub(1);
-                            note_high_topic_served(
-                                &mut hi_safety_burst,
-                                &mut hi_control_burst,
-                                &mut hi_consensus_burst,
-                                &mut hi_payload_burst,
-                                &mut hi_availability_burst,
-                                HighTopic::ConsensusChunk,
-                            );
-                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusChunk));
-                            if let Err(error) = message_sender_hi.prepare_owned_or_defer(
-                                &Message::Data(m),
-                                Priority::High,
-                                post_byte_lease,
-                            ) {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                            hi_budget = hi_budget.saturating_sub(1);
-                        }
-                    }
-                    // Low-priority topics
-                    low = recv_low_rr(
-                        &mut low_rr,
-                        &mut lo_block_sync_rx,
-                        &mut lo_tx_gossip_rx,
-                        &mut lo_peer_gossip_rx,
-                        &mut lo_health_rx,
-                        &mut lo_other_rx,
-	                    ), if direct_post_budget > 0
-	                            && low_outbound_can_yield && low_pool_open => {
-	                        if let Some((topic, msg)) = low {
-                                let (msg, post_byte_lease) = msg.into_parts();
-	                                direct_post_budget = direct_post_budget.saturating_sub(1);
-	                            iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-	                            #[cfg(feature = "quic")]
-	                            let sent_datagram = {
-	                                let net_topic = msg.topic();
-	                                if net_topic.is_best_effort() {
-	                                    if let Some(sender) = datagram_sender.as_mut() {
-	                                        match sender.try_send(&msg) {
-	                                            Ok(DatagramSend::Sent { .. }) => true,
-	                                            Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
-	                                                datagram_sender = None;
-	                                                false
-	                                            }
-	                                            Ok(DatagramSend::TooLarge) => false,
-	                                            Err(error) => {
-	                                                iroha_logger::error!(
-	                                                    %error,
-	                                                    "Failed to send peer datagram."
-	                                                );
-	                                                break;
-	                                            }
-	                                        }
-	                                    } else {
-	                                        false
-	                                    }
-	                                } else {
-	                                    false
-	                                }
-	                            };
-	                            #[cfg(not(feature = "quic"))]
-	                            let sent_datagram = false;
-	                            if !sent_datagram {
-	                                let prepared = if let Some(sender) = message_sender_low.as_mut() {
-	                                    sender.prepare_owned_or_defer(
-                                            &Message::Data(msg),
-                                            Priority::Low,
-                                            post_byte_lease,
-                                        )
-	                                } else {
-	                                    message_sender_hi.prepare_owned_or_defer(
-                                            &Message::Data(msg),
-                                            Priority::Low,
-                                            post_byte_lease,
-                                        )
-	                                };
-                                if let Err(error) = prepared {
-                                    iroha_logger::error!(%error, "Failed to encrypt message.");
-                                    break;
-                                }
-                            }
-                            hi_budget = HI_BUDGET_RESET;
-                        }
-                    }
-                    stream_io = next_peer_stream_io(
-                        &mut message_reader,
-                        message_reader_low.as_mut(),
-                        &mut message_sender_hi,
-                        message_sender_low.as_mut(),
-                        prefer_inbound_io,
-                        prefer_low_read,
-                        prefer_low_send_now,
-                    ) => {
-                        direct_post_budget = DIRECT_POST_BURST_MAX;
-                        match stream_io {
-                            PeerStreamIo::Read(PeerStreamRead::High(msg)) => {
-                                prefer_inbound_io = false;
-                                prefer_low_read = true;
-                                let (message, encoded_len, frame_retention): (
-                                    Message<T>,
-                                    usize,
-                                    InboundFrameRetention,
-                                ) = match msg {
-                            Ok(Some((msg, encoded_len, frame_retention))) => {
-                                (msg, encoded_len, frame_retention)
-                            }
-                            Ok(None) => {
-                                iroha_logger::debug!("Peer send whole message and close connection");
-                                break;
-                            }
-                            Err(Error::InboundTopicCapExceeded) => {
-                                if let Some(violation) = message_reader.take_topic_cap_violation() {
-                                    crate::network::record_inbound_cap_violation(violation.topic);
-                                    iroha_logger::warn!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        topic = ?violation.topic,
-                                        payload_bytes = violation.framed_len,
-                                        cap = violation.cap,
-                                        "Disconnecting peer whose raw-classified frame exceeds its topic cap"
-                                    );
-                                } else {
-                                    iroha_logger::error!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        "Inbound topic-cap rejection lost its diagnostic witness"
-                                    );
-                                }
-                                break;
-                            }
-                            Err(Error::MalformedPayloadFrame) => {
-                                let context = message_reader.take_malformed_payload_context();
-                                let malformed_reason =
-                                    context.map_or("unknown", |ctx| ctx.reason.as_str());
-                                let encrypted_frame_bytes =
-                                    context.map(|ctx| ctx.encrypted_frame_bytes);
-                                let decrypted_payload_bytes =
-                                    context.and_then(|ctx| ctx.decrypted_payload_bytes);
-                                let decode_offset = context.map(|ctx| ctx.decode_offset);
-                                let remaining_bytes = context.map(|ctx| ctx.remaining_bytes);
-                                let decoded_messages = context.map(|ctx| ctx.decoded_messages);
-                                iroha_logger::warn!(
-                                    peer = %peer_id,
-                                    conn_id,
-                                    stream = "high",
-                                    malformed_reason,
-                                    ?encrypted_frame_bytes,
-                                    ?decrypted_payload_bytes,
-                                    ?decode_offset,
-                                    ?remaining_bytes,
-                                    ?decoded_messages,
-                                    "Disconnecting peer after authenticated malformed payload frame"
-                                );
-                                break;
-                            }
-                            Err(error) => {
-                                if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
-                                    iroha_logger::error!(
-                                        ?error,
-                                        suppressed=supp,
-                                        "Error while reading message from peer."
-                                    );
-                                }
-                                break;
-                            }
-                        };
-                        let refresh_liveness = match message {
-                            Message::Ping if !inbound_health_frames.admit_at(
-                                InboundHealthFrame::Ping,
-                                Instant::now(),
-                            ) => false,
-                            Message::Ping => {
-                                iroha_logger::trace!("Received peer ping");
-                                if message_sender_hi.can_prepare(
-                                    Priority::High,
-                                    Some(HighBatchClass::Other),
-                                ) {
-                                    match message_sender_hi.prepare_internal_or_defer(
-                                        &Message::<T>::Pong,
-                                        Priority::High,
-                                        &shared_outbound_high_budget,
-                                    ) {
-                                        Ok(true) => {}
-                                        Ok(false) => iroha_logger::trace!(
-                                            "Skipping peer pong while the process-wide outbound owner is full"
-                                        ),
-                                        Err(error) => {
-                                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    iroha_logger::trace!(
-                                        "Skipping peer pong while its outbound pool is backpressured"
-                                    );
-                                }
-                                true
-                            },
-                            Message::Pong if !inbound_health_frames.admit_at(
-                                InboundHealthFrame::Pong,
-                                Instant::now(),
-                            ) => false,
-                            Message::Pong => {
-                                iroha_logger::trace!("Received peer pong");
-                                true
-                            }
-                            Message::Data(payload) => {
-                                iroha_logger::trace!("Received peer message");
-                                let topic = payload.topic();
-                                let inbound_priority = inbound_priority_from_message(&payload);
-                                let peer_message = PeerMessage::from_inbound_frame(
-                                    peer_id.clone(),
-                                    payload,
-                                    encoded_len,
-                                    conn_id,
-                                    frame_retention,
-                                );
-                                let cap = peer_message_senders.topic_frame_caps.for_topic(topic);
-                                if encoded_len > cap {
-                                    crate::network::record_inbound_cap_violation(topic);
-                                    iroha_logger::warn!(peer = %peer_id, conn_id, ?topic, payload_bytes = encoded_len, cap, "Disconnecting peer whose frame exceeds its topic cap");
-                                    break;
-                                }
-                                let pending = PendingInbound {
-                                    message: peer_message,
-                                    topic,
-                                    priority: inbound_priority,
-                                };
-                                let queued = match (topic, inbound_priority) {
-                                    (Topic::ConsensusSafety, _) => inbound_safety_tx.send(pending),
-                                    (Topic::Control, _) | (_, Priority::High) => {
-                                        inbound_high_tx.send(pending)
-                                    }
-                                    (_, Priority::Low) => inbound_low_tx.send(pending),
-                                };
-                                if queued.is_err() {
-                                    iroha_logger::error!("Inbound dispatch worker terminated.");
-                                    break;
-                                }
-                                true
-                            }
-                        };
-                        if refresh_liveness {
-                            // Valid health cadence and all application data prove liveness.
-                            idle_interval.reset();
-                            ping_interval.reset();
-                        }
-                            }
-                            PeerStreamIo::Read(PeerStreamRead::Low(msg)) => {
-                                prefer_inbound_io = false;
-                                prefer_low_read = false;
-                                let (message, encoded_len, frame_retention): (
-                                    Message<T>,
-                                    usize,
-                                    InboundFrameRetention,
-                                ) = match msg {
-                            Ok(Some((msg, encoded_len, frame_retention))) => {
-                                (msg, encoded_len, frame_retention)
-                            }
-                            Ok(None) => {
-                                iroha_logger::debug!("Peer closed low-priority stream");
-                                message_reader_low = None;
-                                continue;
-                            }
-                            Err(Error::InboundTopicCapExceeded) => {
-                                let violation = message_reader_low
-                                    .as_mut()
-                                    .and_then(MessageReader::take_topic_cap_violation);
-                                if let Some(violation) = violation {
-                                    crate::network::record_inbound_cap_violation(violation.topic);
-                                    iroha_logger::warn!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        topic = ?violation.topic,
-                                        payload_bytes = violation.framed_len,
-                                        cap = violation.cap,
-                                        "Disconnecting peer whose raw-classified frame exceeds its topic cap"
-                                    );
-                                } else {
-                                    iroha_logger::error!(
-                                        peer = %peer_id,
-                                        conn_id,
-                                        "Inbound topic-cap rejection lost its diagnostic witness"
-                                    );
-                                }
-                                break;
-                            }
-                            Err(Error::MalformedPayloadFrame) => {
-                                let context = message_reader_low
-                                    .as_mut()
-                                    .and_then(MessageReader::take_malformed_payload_context);
-                                let malformed_reason =
-                                    context.map_or("unknown", |ctx| ctx.reason.as_str());
-                                let encrypted_frame_bytes =
-                                    context.map(|ctx| ctx.encrypted_frame_bytes);
-                                let decrypted_payload_bytes =
-                                    context.and_then(|ctx| ctx.decrypted_payload_bytes);
-                                let decode_offset = context.map(|ctx| ctx.decode_offset);
-                                let remaining_bytes = context.map(|ctx| ctx.remaining_bytes);
-                                let decoded_messages = context.map(|ctx| ctx.decoded_messages);
-                                iroha_logger::warn!(
-                                    peer = %peer_id,
-                                    conn_id,
-                                    stream = "low",
-                                    malformed_reason,
-                                    ?encrypted_frame_bytes,
-                                    ?decrypted_payload_bytes,
-                                    ?decode_offset,
-                                    ?remaining_bytes,
-                                    ?decoded_messages,
-                                    "Disconnecting peer after authenticated malformed payload frame"
-                                );
-                                break;
-                            }
-                            Err(error) => {
-                                if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
-                                    iroha_logger::debug!(
-                                        ?error,
-                                        suppressed=supp,
-                                        "Error while reading message from peer (low stream)."
-                                    );
-                                }
-                                message_reader_low = None;
-                                continue;
-                            }
-                        };
-                        let refresh_liveness = match message {
-                            Message::Ping if !inbound_health_frames.admit_at(
-                                InboundHealthFrame::Ping,
-                                Instant::now(),
-                            ) => false,
-                            Message::Ping => {
-                                iroha_logger::trace!("Received peer ping (low stream)");
-                                if message_sender_hi.can_prepare(
-                                    Priority::High,
-                                    Some(HighBatchClass::Other),
-                                ) {
-                                    match message_sender_hi.prepare_internal_or_defer(
-                                        &Message::<T>::Pong,
-                                        Priority::High,
-                                        &shared_outbound_high_budget,
-                                    ) {
-                                        Ok(true) => {}
-                                        Ok(false) => iroha_logger::trace!(
-                                            "Skipping peer pong while the process-wide outbound owner is full"
-                                        ),
-                                        Err(error) => {
-                                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    iroha_logger::trace!(
-                                        "Skipping peer pong while its outbound pool is backpressured"
-                                    );
-                                }
-                                true
-                            },
-                            Message::Pong if !inbound_health_frames.admit_at(
-                                InboundHealthFrame::Pong,
-                                Instant::now(),
-                            ) => false,
-                            Message::Pong => {
-                                iroha_logger::trace!("Received peer pong (low stream)");
-                                true
-                            }
-                            Message::Data(payload) => {
-                                iroha_logger::trace!("Received peer message (low stream)");
-                                let topic = payload.topic();
-                                let inbound_priority = inbound_priority_from_message(&payload);
-                                let peer_message = PeerMessage::from_inbound_frame(
-                                    peer_id.clone(),
-                                    payload,
-                                    encoded_len,
-                                    conn_id,
-                                    frame_retention,
-                                );
-                                let cap = peer_message_senders.topic_frame_caps.for_topic(topic);
-                                if encoded_len > cap {
-                                    crate::network::record_inbound_cap_violation(topic);
-                                    iroha_logger::warn!(peer = %peer_id, conn_id, ?topic, payload_bytes = encoded_len, cap, "Disconnecting peer whose frame exceeds its topic cap");
-                                    break;
-                                }
-                                let pending = PendingInbound {
-                                    message: peer_message,
-                                    topic,
-                                    priority: inbound_priority,
-                                };
-                                let queued = match (topic, inbound_priority) {
-                                    (Topic::ConsensusSafety, _) => inbound_safety_tx.send(pending),
-                                    (Topic::Control, _) | (_, Priority::High) => {
-                                        inbound_high_tx.send(pending)
-                                    }
-                                    (_, Priority::Low) => inbound_low_tx.send(pending),
-                                };
-                                if queued.is_err() {
-                                    iroha_logger::error!("Inbound dispatch worker terminated.");
-                                    break;
-                                }
-                                true
-                            }
-                        };
-                        if refresh_liveness {
-                            // The limiter is shared with the high stream.
-                            idle_interval.reset();
-                            ping_interval.reset();
-                        }
-                            }
-                            PeerStreamIo::Outbound { sent_low, result } => {
-                                if let Err(error) = result {
-                                    if sent_low {
-                                        iroha_logger::error!(%error, "Failed to send message to peer (low stream); reconnecting rather than discarding accepted outbound work.");
-                                    } else {
-                                        iroha_logger::error!(%error, "Failed to send message to peer (hi stream).");
-                                    }
-                                    break;
-                                }
-                                // Alternate ready streams so sustained consensus traffic cannot
-                                // indefinitely strand an admitted low-stream frame, then prefer
-                                // inbound service without disabling a pending write fallback.
-                                prefer_low_send = !sent_low;
-                                prefer_inbound_io = true;
-                            }
-                        }
-                    }
-                    // Once direct post intake spends its finite burst, poll reliable stream I/O
-                    // first. If every stream operation is pending, yield once and reopen intake;
-                    // this prevents both best-effort datagram starvation and an idle deadlock.
-                    () = std::future::ready(()), if direct_post_budget == 0 => {
-                        direct_post_budget = DIRECT_POST_BURST_MAX;
-                        tokio::task::yield_now().await;
-                    }
-                    // QUIC datagrams are explicitly best-effort, so reliable stream I/O gets
-                    // first refusal. The branch still runs whenever all stream futures are
-                    // pending and therefore cannot block the actor.
-                    datagram = recv_best_effort_datagram::<E, T>(&mut datagram_receiver), if datagram_receiver.is_some() => {
-                        match datagram {
-                            Ok((payload, encoded_len)) => {
-                                let topic = payload.topic();
-                                if !topic.is_best_effort() {
-                                    iroha_logger::debug!(
-                                        conn_id,
-                                        ?topic,
-                                        "Dropping non-best-effort payload received via QUIC datagram"
-                                    );
-                                    continue;
-                                }
-                                let Some(source_bytes) = encoded_len.checked_add(
-                                    crate::frame_queue_charge_for::<E>(0)
-                                        .expect("AEAD frame overhead must fit usize"),
-                                ) else {
-                                    continue;
-                                };
-                                let Some(source_lease) = inbound_frame_byte_budgets
-                                    .low()
-                                    .try_reserve(source_bytes)
-                                else {
-                                    // QUIC datagrams are explicitly best effort.
-                                    continue;
-                                };
-                                let mut peer_message = PeerMessage::from_inbound_frame(
-                                    peer_id.clone(),
-                                    payload,
-                                    encoded_len,
-                                    conn_id,
-                                    InboundFrameRetention::new(
-                                        source_lease,
-                                        crate::frame_queue_charge_for::<E>(0)
-                                            .expect("AEAD frame overhead must fit usize"),
-                                    ),
-                                );
-                                match peer_message_senders
-                                    .transfer_before_send(
-                                        &mut peer_message,
-                                        topic,
-                                        Priority::Low,
-                                        false,
-                                    )
-                                    .await
-                                {
-                                    InboundDispatchAdmission::Admitted => {}
-                                    InboundDispatchAdmission::OverTopicCap { cap } => {
-                                        crate::network::record_inbound_cap_violation(topic);
-                                        iroha_logger::warn!(peer = %peer_id, conn_id, ?topic, payload_bytes = encoded_len, cap, "Disconnecting peer whose datagram exceeds its topic cap");
-                                        break;
-                                    }
-                                    InboundDispatchAdmission::ByteBudgetFull => continue,
-                                }
-                                match peer_message_senders.low.try_send(peer_message) {
-                                    Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                        // Best-effort delivery: drop when the network can't keep up.
-                                    }
-                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                        iroha_logger::error!(
-                                            "Network dropped peer message channel (datagram)."
-                                        );
-                                        break;
-                                    }
-                                }
-                                idle_interval.reset();
-                                ping_interval.reset();
-                            }
-                            Err(Error::InboundTopicCapExceeded) => {
-                                iroha_logger::warn!(
-                                    peer = %peer_id,
-                                    conn_id,
-                                    "Disconnecting peer whose raw-classified datagram exceeds its topic cap"
-                                );
-                                break;
-                            }
-                            Err(Error::Io(_)) => {
-                                iroha_logger::debug!(
-                                    conn_id,
-                                    "QUIC datagram receive failed; disabling datagram receiver"
-                                );
-                                datagram_receiver = None;
-                            }
-                            Err(error) => {
-                                iroha_logger::debug!(
-                                    conn_id,
-                                    %error,
-                                    "Dropping malformed QUIC datagram payload"
-                                );
-                            }
-                        }
-                    }
-                    else => break,
-                }
-                // Opportunistically allow a low-priority message through after bursts of high-priority posts.
-                if hi_budget == 0 && low_pending && low_pool_open {
-                    if let Some((topic, m)) = try_recv_low_rr(
-                        &mut low_rr,
-                        &mut lo_block_sync_rx,
-                        &mut lo_tx_gossip_rx,
-                        &mut lo_peer_gossip_rx,
-                        &mut lo_health_rx,
-                        &mut lo_other_rx,
-                    ) {
-                        let (m, post_byte_lease) = m.into_parts();
-                        #[cfg(feature = "quic")]
-                        let sent_datagram = {
-                            let net_topic = m.topic();
-                            if net_topic.is_best_effort() {
-                                if let Some(sender) = datagram_sender.as_mut() {
-                                    match sender.try_send(&m) {
-                                        Ok(DatagramSend::Sent { .. }) => true,
-                                        Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
-                                            datagram_sender = None;
-                                            false
-                                        }
-                                        Ok(DatagramSend::TooLarge) => false,
-                                        Err(error) => {
-                                            iroha_logger::error!(
-                                                %error,
-                                                "Failed to send peer datagram."
-                                            );
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        };
-                        #[cfg(not(feature = "quic"))]
-                        let sent_datagram = false;
-                        if !sent_datagram {
-                            let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                                sender.prepare_owned_or_defer(
-                                    &Message::Data(m),
-                                    Priority::Low,
-                                    post_byte_lease,
-                                )
-                            } else {
-                                message_sender_hi.prepare_owned_or_defer(
-                                    &Message::Data(m),
-                                    Priority::Low,
-                                    post_byte_lease,
-                                )
-                            };
-                            if let Err(error) = prepared {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                        }
-                        hi_budget = HI_BUDGET_RESET;
-                        iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                    }
-                }
-                if drained_hi > 0 || drained_lo > 0 {
-                    tokio::task::yield_now().await;
-                }
-            }
-            // Release this connection's source and outbound progress reserves
-            // before waiting for auxiliary worker teardown.  A replacement
-            // connection shares the same per-peer reserve and must not depend on
-            // an obsolete remote draining its socket.
-            drop(message_reader);
-            drop(message_reader_low);
-            drop(message_sender_hi);
-            drop(message_sender_low);
-            drop(hi_consensus_safety_rx);
-            drop(hi_consensus_rx);
-            drop(hi_consensus_payload_rx);
-            drop(hi_consensus_chunk_rx);
-            drop(hi_control_rx);
-            drop(lo_block_sync_rx);
-            drop(lo_tx_gossip_rx);
-            drop(lo_peer_gossip_rx);
-            drop(lo_health_rx);
-            drop(lo_other_rx);
-            // Close this connection's dispatch producers before joining their
-            // workers. Queued authenticated reliable progress must reach the
-            // network actor rather than disappear when a replacement connection
-            // replaces this connection.
-            drop(inbound_safety_tx);
-            drop(inbound_high_tx);
-            drop(inbound_low_tx);
-        }.await;
-        // Natural exit uses the same detached cleanup path as cancellation.
-        // Awaiting it here preserves ordinary shutdown ordering, while a later
-        // abort of this peer future merely drops the JoinHandle and leaves the
-        // exact cleanup task running.
-        termination_guard.finish().await;
+        granted::run::<T, E, P>(RunPeerArgs {
+            peer,
+            service_message_sender,
+            idle_timeout,
+            authentication_deadline,
+            inbound_auth_completion,
+            post_capacity,
+            outbound_frame_queue_limits,
+            outbound_post_byte_budgets,
+            inbound_frame_byte_budgets,
+            max_frame_bytes,
+            quic_datagrams_enabled,
+            quic_datagram_max_payload_bytes,
+        })
+        .await;
     }
     // Traits to unify bounded/unbounded try_recv across feature flags at module scope
     pub(super) trait TryRecvExt<T> {
@@ -8353,7 +6797,7 @@ mod run {
         }
     }
     #[cfg(test)]
-    pub(crate) fn assert_captured_p2p_message<T>(owner: &str, variant: &str, value: T)
+    pub fn assert_captured_p2p_message<T>(owner: &str, variant: &str, value: T)
     where
         T: Clone + ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
     {
@@ -8367,6 +6811,8 @@ mod run {
         assert_captured_p2p_message("message_u32", "scalar", 0x12345678_u32);
         assert_captured_p2p_message("message_u64", "scalar", 0x0123456789abcdef_u64);
     }
+    #[cfg(test)]
+    mod admission_class_tests;
     #[cfg(test)]
     mod payload_codec_tests;
     /// Either message or ping
@@ -8401,6 +6847,13 @@ mod run {
         Ok(u32::from_le_bytes(bytes))
     }
     impl<T: ClassifyTopic> ClassifyTopic for Message<T> {
+        fn availability_frame_maximum(local_peer: &PeerId) -> Result<usize, ncore::Error> {
+            T::availability_frame_maximum(local_peer)
+        }
+        fn recovery_frame_maxima(local_peer: &PeerId) -> Result<[usize; 2], ncore::Error> {
+            T::recovery_frame_maxima(local_peer)
+        }
+
         const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
         fn topic(&self) -> Topic {
             match self {
@@ -8408,6 +6861,29 @@ mod run {
                 // Pings are internal to the peer and should not block other
                 // traffic. Classify them as `Health` to keep them low-impact.
                 Self::Ping | Self::Pong => Topic::Health,
+            }
+        }
+        fn admission_class(&self) -> crate::network::message::TransportAdmissionClass {
+            use crate::network::message::TransportAdmissionClass;
+            match self {
+                Self::Data(payload) => payload.admission_class(),
+                Self::Ping | Self::Pong => TransportAdmissionClass::Low,
+            }
+        }
+        fn inbound_admission_class(
+            payload: &[u8],
+            flags: u8,
+        ) -> Result<crate::network::message::TransportAdmissionClass, ncore::Error> {
+            use crate::network::message::TransportAdmissionClass;
+            match inbound_message_discriminant(payload)? {
+                0 => T::inbound_admission_class(inbound_data_message_field(payload, flags)?, flags),
+                1 | 2 if payload.len() == core::mem::size_of::<u32>() => {
+                    Ok(TransportAdmissionClass::Low)
+                }
+                1 | 2 => Err(ncore::Error::LengthMismatch),
+                _ => Err(ncore::Error::Message(
+                    "unknown inbound P2P message discriminant".to_owned(),
+                )),
             }
         }
         fn subscriber_route(&self) -> crate::network::message::SubscriberRoute {
@@ -8496,7 +6972,7 @@ mod run {
     pub fn data_message_wire_len<T: ncore::NoritoSerialize>(payload: &T) -> usize {
         checked_data_message_wire_len(payload).unwrap_or(usize::MAX)
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     /// Materialize one data frame so tests can compare the allocation-free counter.
     pub fn materialized_data_message_wire_len<T: ncore::NoritoSerialize>(
         payload: T,
@@ -8526,6 +7002,57 @@ mod run {
         let flags = ncore::default_encode_flags();
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         ncore::to_bytes_in(msg, out)
+    }
+    pub(super) fn receive_credit_encoded_len<T: Pload, E: Enc>(
+        message: &T,
+        max_plaintext: usize,
+    ) -> Result<usize, Error> {
+        let max_encrypted = super::receive_credit::record::encrypted_len::<E>(max_plaintext)?;
+        checked_encoded_frame_len::<T, E>(message, max_encrypted)
+    }
+    pub(super) fn receive_credit_encode<T: Pload>(
+        message: &T,
+        output: &mut Vec<u8>,
+    ) -> Result<(), Error> {
+        encode_wire_message(message, output).map_err(Error::NoritoCodec)
+    }
+    pub(super) fn receive_credit_decode<T: Pload + ClassifyTopic, E: Enc>(
+        frame: &[u8],
+        admitted: crate::TransportAdmissionClass,
+        caps: crate::network::TopicFrameCaps,
+    ) -> Result<T, Error> {
+        let alignment = ncore::archived_payload_align::<T>();
+        if !alignment.is_power_of_two() || alignment > super::receive_credit::ENVELOPE_BYTES {
+            return Err(Error::Format);
+        }
+        let padding = (alignment - ncore::Header::SIZE % alignment) % alignment;
+        let length =
+            framed_message_len::<T>(frame, norito::schema::identity::frame_hash::<T>(), padding)
+                .map_err(|_| Error::Format)?;
+        if length != frame.len() {
+            return Err(Error::Format);
+        } // exactly one inner frame
+        let flags = *frame.get(ncore::Header::SIZE - 1).ok_or(Error::Format)?;
+        let payload = frame
+            .get(ncore::Header::SIZE + padding..)
+            .ok_or(Error::Format)?;
+        if T::inbound_admission_class(payload, flags).map_err(Error::NoritoCodec)? != admitted {
+            return Err(Error::Format);
+        }
+        let raw_topic = T::inbound_topic(payload, flags)
+            .map_err(Error::NoritoCodec)?
+            .ok_or(Error::Format)?;
+        let limits =
+            inbound_frame_decode_limits::<T>(frame, padding, caps).map_err(|_| Error::Format)?;
+        let mut scratch = Vec::new();
+        let aligned =
+            MessageReader::<E, T>::copy_to_aligned_scratch(&mut scratch, frame, alignment);
+        let decoded =
+            decode_inbound_frame_with_limits::<T>(aligned, limits).map_err(Error::NoritoCodec)?;
+        if decoded.admission_class() != admitted || decoded.topic() != raw_topic {
+            return Err(Error::Format);
+        }
+        Ok(decoded)
     }
     fn inbound_frame_decode_limits<T: Pload + ClassifyTopic>(
         frame: &[u8],
@@ -8821,6 +7348,12 @@ mod run {
             let (high, _high_rx) = mpsc::channel(1);
             let (low, _low_rx) = mpsc::channel(1);
             let senders = PeerMessageSenders {
+                payload: mpsc::channel(1).0,
+                availability: mpsc::channel(1).0,
+                block_sync: mpsc::channel(1).0,
+                recovery_control: mpsc::channel(1).0,
+                recovery_data: mpsc::channel(1).0,
+                control: mpsc::channel(1).0,
                 safety,
                 high,
                 low,
@@ -8903,6 +7436,12 @@ mod run {
             let source_credits = AuthenticatedSourceCredits::new(1);
             let source_credit_probe = source_credits.clone();
             let senders = PeerMessageSenders {
+                payload: mpsc::channel(1).0,
+                availability: mpsc::channel(1).0,
+                block_sync: mpsc::channel(1).0,
+                recovery_control: mpsc::channel(1).0,
+                recovery_data: mpsc::channel(1).0,
+                control: mpsc::channel(1).0,
                 safety,
                 high,
                 low,
@@ -9012,6 +7551,12 @@ mod run {
             let source_credit_probe = source_credits.clone();
             let delivery_drain = Arc::new(InboundDeliveryDrain::new());
             let senders = PeerMessageSenders {
+                payload: mpsc::channel(1).0,
+                availability: mpsc::channel(1).0,
+                block_sync: mpsc::channel(1).0,
+                recovery_control: mpsc::channel(1).0,
+                recovery_data: mpsc::channel(1).0,
+                control: mpsc::channel(1).0,
                 safety,
                 high,
                 low,
@@ -9189,6 +7734,12 @@ mod run {
             let (low, _low_rx) = mpsc::channel(1);
             drop(high_rx);
             let senders = PeerMessageSenders {
+                payload: mpsc::channel(1).0,
+                availability: mpsc::channel(1).0,
+                block_sync: mpsc::channel(1).0,
+                recovery_control: mpsc::channel(1).0,
+                recovery_data: mpsc::channel(1).0,
+                control: mpsc::channel(1).0,
                 safety,
                 high,
                 low,
@@ -9249,6 +7800,12 @@ mod run {
             let (high, mut high_rx) = mpsc::channel(2);
             let (low, _low_rx) = mpsc::channel(2);
             let senders = PeerMessageSenders {
+                payload: mpsc::channel(1).0,
+                availability: mpsc::channel(1).0,
+                block_sync: mpsc::channel(1).0,
+                recovery_control: mpsc::channel(1).0,
+                recovery_data: mpsc::channel(1).0,
+                control: mpsc::channel(1).0,
                 safety,
                 high,
                 low,
@@ -9399,16 +7956,8 @@ mod run {
         }
         struct TestOutboundReceivers<T> {
             termination_receiver: watch::Receiver<bool>,
-            hi_consensus_safety: post_channel::Receiver<RetainedPost<T>>,
-            hi_consensus: post_channel::Receiver<RetainedPost<T>>,
-            hi_consensus_payload: post_channel::Receiver<RetainedPost<T>>,
-            hi_consensus_chunk: post_channel::Receiver<RetainedPost<T>>,
-            hi_control: post_channel::Receiver<RetainedPost<T>>,
-            lo_block_sync: post_channel::Receiver<RetainedPost<T>>,
-            lo_tx_gossip: post_channel::Receiver<RetainedPost<T>>,
-            lo_peer_gossip: post_channel::Receiver<RetainedPost<T>>,
-            lo_health: post_channel::Receiver<RetainedPost<T>>,
-            lo_other: post_channel::Receiver<RetainedPost<T>>,
+            classes:
+                [post_channel::Receiver<RetainedPost<T>>; crate::TransportAdmissionClass::COUNT],
         }
         impl<T> TestOutboundReceivers<T> {
             async fn drop_on_explicit_termination(mut self) {
@@ -9419,38 +7968,14 @@ mod run {
                     self.termination_receiver
                         .changed()
                         .await
-                        .expect("test peer handle must request termination before it is dropped");
+                        .expect("explicit test termination");
                 }
             }
             fn all_closed(&self) -> bool {
-                [
-                    &self.hi_consensus_safety,
-                    &self.hi_consensus,
-                    &self.hi_consensus_payload,
-                    &self.hi_consensus_chunk,
-                    &self.hi_control,
-                    &self.lo_block_sync,
-                    &self.lo_tx_gossip,
-                    &self.lo_peer_gossip,
-                    &self.lo_health,
-                    &self.lo_other,
-                ]
-                .into_iter()
-                .all(post_channel::Receiver::is_closed)
+                self.classes.iter().all(post_channel::Receiver::is_closed)
             }
             fn can_yield(&self) -> bool {
-                any_outbound_receiver_can_yield([
-                    &self.hi_consensus_safety,
-                    &self.hi_consensus,
-                    &self.hi_consensus_payload,
-                    &self.hi_consensus_chunk,
-                    &self.hi_control,
-                    &self.lo_block_sync,
-                    &self.lo_tx_gossip,
-                    &self.lo_peer_gossip,
-                    &self.lo_health,
-                    &self.lo_other,
-                ])
+                self.classes.iter().any(outbound_receiver_can_yield)
             }
             async fn drain_after_handle_drop(&mut self) -> Vec<T> {
                 assert!(
@@ -9458,65 +7983,15 @@ mod run {
                     "test requires every sender to be dropped"
                 );
                 let mut drained = Vec::new();
-                let mut low_rr = 0;
-                loop {
-                    let hi_consensus_safety_can_yield =
-                        outbound_receiver_can_yield(&self.hi_consensus_safety);
-                    let hi_control_can_yield = outbound_receiver_can_yield(&self.hi_control);
-                    let hi_consensus_can_yield = outbound_receiver_can_yield(&self.hi_consensus);
-                    let hi_consensus_payload_can_yield =
-                        outbound_receiver_can_yield(&self.hi_consensus_payload);
-                    let hi_consensus_chunk_can_yield =
-                        outbound_receiver_can_yield(&self.hi_consensus_chunk);
-                    let low_outbound_can_yield = any_outbound_receiver_can_yield([
-                        &self.lo_block_sync,
-                        &self.lo_tx_gossip,
-                        &self.lo_peer_gossip,
-                        &self.lo_health,
-                        &self.lo_other,
-                    ]);
-                    if !(hi_consensus_safety_can_yield
-                        || hi_control_can_yield
-                        || hi_consensus_can_yield
-                        || hi_consensus_payload_can_yield
-                        || hi_consensus_chunk_can_yield
-                        || low_outbound_can_yield)
-                    {
-                        break;
-                    }
-                    // Mirror the actor's biased direct-receive order. Closed-and-drained
-                    // receivers ahead of live buffered receivers must not win with `None`.
-                    tokio::select! {
-                        biased;
-                        message = self.hi_consensus_safety.recv(), if hi_consensus_safety_can_yield => {
-                            drained.push(message.expect("active safety receiver must be buffered after handle drop").into_inner());
-                        }
-                        message = self.hi_control.recv(), if hi_control_can_yield => {
-                            drained.push(message.expect("active control receiver must be buffered after handle drop").into_inner());
-                        }
-                        message = self.hi_consensus.recv(), if hi_consensus_can_yield => {
-                            drained.push(message.expect("active consensus receiver must be buffered after handle drop").into_inner());
-                        }
-                        message = self.hi_consensus_payload.recv(), if hi_consensus_payload_can_yield => {
-                            drained.push(message.expect("active payload receiver must be buffered after handle drop").into_inner());
-                        }
-                        message = self.hi_consensus_chunk.recv(), if hi_consensus_chunk_can_yield => {
-                            drained.push(message.expect("active chunk receiver must be buffered after handle drop").into_inner());
-                        }
-                        message = recv_low_rr(
-                            &mut low_rr,
-                            &mut self.lo_block_sync,
-                            &mut self.lo_tx_gossip,
-                            &mut self.lo_peer_gossip,
-                            &mut self.lo_health,
-                            &mut self.lo_other,
-                        ), if low_outbound_can_yield => {
-                            let (_, message) = message
-                                .expect("active low receiver set must be buffered after handle drop");
-                            drained.push(message.into_inner());
-                        }
-                        else => panic!("at least one outbound receiver is active"),
-                    }
+                let mut cursor = 0;
+                while let Some(post) = granted::next_post(
+                    &mut self.classes,
+                    [true; crate::TransportAdmissionClass::COUNT],
+                    &mut cursor,
+                )
+                .await
+                {
+                    drained.push(post.into_inner());
                 }
                 drained
             }
@@ -9546,51 +8021,24 @@ mod run {
                         .install_protected_sources(HashSet::new())
                 );
             }
-            let (hi_consensus_safety_tx, hi_consensus_safety) = post_channel::channel(capacity);
-            let (hi_consensus_tx, hi_consensus) = post_channel::channel(capacity);
-            let (hi_consensus_payload_tx, hi_consensus_payload) = post_channel::channel(capacity);
-            let (hi_consensus_chunk_tx, hi_consensus_chunk) = post_channel::channel(capacity);
-            let (hi_control_tx, hi_control) = post_channel::channel(capacity);
-            let (lo_block_sync_tx, lo_block_sync) = post_channel::channel(capacity);
-            let (lo_tx_gossip_tx, lo_tx_gossip) = post_channel::channel(capacity);
-            let (lo_peer_gossip_tx, lo_peer_gossip) = post_channel::channel(capacity);
-            let (lo_health_tx, lo_health) = post_channel::channel(capacity);
-            let (lo_other_tx, lo_other) = post_channel::channel(capacity);
+            let (senders, classes) = handles::class_channels(capacity);
             let (termination_sender, termination_receiver) = watch::channel(false);
             (
                 handles::PeerHandle {
-                    senders: handles::TopicSenders {
-                        hi_consensus_safety: hi_consensus_safety_tx,
-                        hi_consensus: hi_consensus_tx,
-                        hi_consensus_payload: hi_consensus_payload_tx,
-                        hi_consensus_chunk: hi_consensus_chunk_tx,
-                        hi_control: hi_control_tx,
-                        lo_block_sync: lo_block_sync_tx,
-                        lo_tx_gossip: lo_tx_gossip_tx,
-                        lo_peer_gossip: lo_peer_gossip_tx,
-                        lo_health: lo_health_tx,
-                        lo_other: lo_other_tx,
-                    },
+                    senders,
                     termination_sender,
-                    high_post_byte_budget: budgets
-                        .high(peer_id)
-                        .expect("test peer reserve must fit the configured peer bound"),
-                    low_post_byte_budget: budgets.low(),
-                    frame_queue_overhead_bytes: crate::frame_queue_charge(0)
-                        .expect("default frame overhead must fit"),
+                    post_admission: post_admission::Admission::Synthetic {
+                        high: budgets
+                            .high(peer_id)
+                            .expect("test peer reserve must fit the configured peer bound"),
+                        low: budgets.low(),
+                        overhead: crate::frame_queue_charge(0)
+                            .expect("default frame overhead must fit"),
+                    },
                 },
                 TestOutboundReceivers {
                     termination_receiver,
-                    hi_consensus_safety,
-                    hi_consensus,
-                    hi_consensus_payload,
-                    hi_consensus_chunk,
-                    hi_control,
-                    lo_block_sync,
-                    lo_tx_gossip,
-                    lo_peer_gossip,
-                    lo_health,
-                    lo_other,
+                    classes,
                 },
             )
         }
@@ -9798,8 +8246,7 @@ mod run {
                 Err(handles::PostError::Full),
                 "the process owner, not a peer-local channel, must reject the next byte"
             );
-            let retained = receivers
-                .hi_consensus
+            let retained = receivers.classes[crate::TransportAdmissionClass::Lane.index()]
                 .recv()
                 .await
                 .expect("admitted post remains in the consensus channel");
@@ -9876,8 +8323,7 @@ mod run {
                 Err(oneshot::error::TryRecvError::Empty),
                 "mailbox admission is not a socket completion"
             );
-            let retained = receivers
-                .hi_consensus
+            let retained = receivers.classes[crate::TransportAdmissionClass::Lane.index()]
                 .recv()
                 .await
                 .expect("admitted post remains in the consensus channel");
@@ -9971,8 +8417,7 @@ mod run {
                         error.kind()
                     )
                 });
-            let retained = original_receivers
-                .hi_consensus
+            let retained = original_receivers.classes[crate::TransportAdmissionClass::Lane.index()]
                 .recv()
                 .await
                 .expect("original writer owns the admitted post");
@@ -10039,11 +8484,11 @@ mod run {
                         error.kind()
                     )
                 });
-            let retained = replacement_receivers
-                .hi_consensus
-                .recv()
-                .await
-                .expect("replacement writer owns the retry");
+            let retained = replacement_receivers.classes
+                [crate::TransportAdmissionClass::Lane.index()]
+            .recv()
+            .await
+            .expect("replacement writer owns the retry");
             let (replacement_message, replacement_ownership) = retained.into_parts();
             assert_eq!(replacement_message, RoutedMsg::Consensus(12));
             let replacement_wire = Arc::new(Mutex::new(Vec::new()));
@@ -11918,7 +10363,9 @@ mod run {
             drop(handle);
             assert!(receivers.all_closed());
             assert!(
-                !outbound_receiver_can_yield(&receivers.hi_consensus_safety),
+                !outbound_receiver_can_yield(
+                    &receivers.classes[crate::TransportAdmissionClass::Safety.index()]
+                ),
                 "the first biased branch starts closed and drained in this adversarial case"
             );
             assert!(
@@ -11931,7 +10378,18 @@ mod run {
             )
             .await
             .expect("closed empty safety queue must not spin ahead of buffered queues");
-            assert_eq!(drained.as_slice(), queued.as_slice());
+            // Independent semantic queues preserve per-class FIFO and follow
+            // the weighted service order; cross-class enqueue order is not FIFO.
+            assert_eq!(
+                drained,
+                [
+                    RoutedMsg::Consensus(2),
+                    RoutedMsg::ConsensusPayload(3),
+                    RoutedMsg::ConsensusChunk(4),
+                    RoutedMsg::Control(1),
+                    RoutedMsg::TxGossip(5),
+                ]
+            );
             assert!(!receivers.can_yield());
         }
         #[tokio::test(flavor = "current_thread")]
@@ -11948,7 +10406,9 @@ mod run {
             drop(handle);
             assert!(receivers.all_closed());
             assert!(
-                outbound_receiver_can_yield(&receivers.hi_consensus_safety),
+                outbound_receiver_can_yield(
+                    &receivers.classes[crate::TransportAdmissionClass::Safety.index()]
+                ),
                 "closed safety queue must remain eligible while buffered"
             );
             let drained = tokio::time::timeout(
@@ -12500,44 +10960,41 @@ mod run {
         #[test]
         fn inbound_health_limiter_allows_only_the_initial_burst() {
             let now = Instant::now();
-            let mut limiter = InboundHealthFrameLimiter::new(now, Duration::from_secs(20));
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
-            assert!(!limiter.admit_at(InboundHealthFrame::Ping, now));
+            let mut limiter = InboundPingLimiter::new(now, Duration::from_secs(20));
+            assert!(limiter.admit_at(now));
+            assert!(limiter.admit_at(now));
+            assert!(!limiter.admit_at(now));
         }
         #[test]
         fn inbound_health_limiter_refills_one_token_per_period_and_caps_credit() {
             let now = Instant::now();
             let period = Duration::from_secs(10);
-            let mut limiter = InboundHealthFrameLimiter::new(now, period * 2);
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
-            assert!(!limiter.admit_at(InboundHealthFrame::Ping, now));
+            let mut limiter = InboundPingLimiter::new(now, period * 2);
+            assert!(limiter.admit_at(now));
+            assert!(limiter.admit_at(now));
+            assert!(!limiter.admit_at(now));
 
             let one_period = now + period;
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, one_period));
-            assert!(!limiter.admit_at(InboundHealthFrame::Ping, one_period));
+            assert!(limiter.admit_at(one_period));
+            assert!(!limiter.admit_at(one_period));
 
             let fully_refilled = one_period + period * 20;
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, fully_refilled));
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, fully_refilled));
-            assert!(!limiter.admit_at(InboundHealthFrame::Ping, fully_refilled));
+            assert!(limiter.admit_at(fully_refilled));
+            assert!(limiter.admit_at(fully_refilled));
+            assert!(!limiter.admit_at(fully_refilled));
         }
         #[test]
-        fn inbound_ping_and_pong_share_one_health_budget() {
+        fn inbound_ping_limiter_does_not_bank_time_at_capacity() {
             let now = Instant::now();
             let period = Duration::from_secs(10);
-            let mut limiter = InboundHealthFrameLimiter::new(now, period * 2);
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, now));
-            assert!(limiter.admit_at(InboundHealthFrame::Pong, now));
-            assert!(!limiter.admit_at(InboundHealthFrame::Pong, now));
-
-            let one_period = now + period;
-            assert!(limiter.admit_at(InboundHealthFrame::Ping, one_period));
-            assert!(
-                !limiter.admit_at(InboundHealthFrame::Pong, one_period),
-                "a Pong must not receive a disjoint refill from Ping"
-            );
+            let mut limiter = InboundPingLimiter::new(now, period * 2);
+            let long_idle = now + period * 20;
+            assert!(limiter.admit_at(long_idle));
+            assert!(limiter.admit_at(long_idle));
+            assert!(!limiter.admit_at(long_idle));
+            assert!(!limiter.admit_at(long_idle + period / 2));
+            assert!(limiter.admit_at(long_idle + period));
+            assert!(!limiter.admit_at(long_idle + period));
         }
         #[test]
         fn inbound_priority_marks_control_planes_high() {
@@ -14707,6 +13164,7 @@ mod state {
             write_half.write_all(&buf).await?;
             write_half.flush().await?;
             Ok(GetKey {
+                local_peer_id: key_pair.public_key().clone().into(),
                 connection,
                 expected_peer_id,
                 cryptographer,
@@ -14723,6 +13181,7 @@ mod state {
     }
     /// Peer that needs to get key.
     pub struct GetKey<E: Enc> {
+        pub(super) local_peer_id: PeerId,
         pub(super) connection: Connection,
         pub(super) expected_peer_id: Option<iroha_model_base::peer::PeerId>,
         pub(super) cryptographer: Cryptographer<E>,
@@ -14739,6 +13198,7 @@ mod state {
         /// Read the peer's public key
         pub(super) async fn read_their_public_key(
             Self {
+                local_peer_id,
                 mut connection,
                 expected_peer_id,
                 cryptographer,
@@ -14834,6 +13294,8 @@ mod state {
             let trust_gossip = trust_gossip && trust_gossip_remote;
             let scion_supported = scion_supported_remote;
             Ok(Ready {
+                network_id,
+                local_peer_id,
                 peer,
                 connection,
                 cryptographer,
@@ -14846,6 +13308,8 @@ mod state {
     /// Peer that is ready for communication after finishing the
     /// handshake process.
     pub(super) struct Ready<E: Enc> {
+        pub network_id: iroha_data_model::NetworkId,
+        pub local_peer_id: PeerId,
         pub peer: Peer,
         pub connection: Connection,
         pub cryptographer: Cryptographer<E>,
@@ -14928,9 +13392,11 @@ mod handshake_flow {
     impl_handshake!(ConnectedTo);
     impl_handshake!(Connecting);
 }
-pub(crate) use run::{checked_data_message_wire_len, data_message_wire_len_from_payload_len};
 #[cfg(test)]
-pub(crate) use run::{data_message_wire_len, materialized_data_message_wire_len};
+pub(crate) use run::data_message_wire_len;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) use run::materialized_data_message_wire_len;
+pub(crate) use run::{checked_data_message_wire_len, data_message_wire_len_from_payload_len};
 pub mod message {
     //! Module for peer messages
     use super::*;
@@ -15050,6 +13516,18 @@ pub mod message {
         pub high: mpsc::Sender<PeerMessage<T>>,
         /// Sender for low-priority inbound peer messages.
         pub low: mpsc::Sender<PeerMessage<T>>,
+        /// Ordinary body/chunk FIFO, independent from sidecar recovery.
+        pub(crate) payload: mpsc::Sender<PeerMessage<T>>,
+        /// Ordinary RS16 availability FIFO, independent from large payloads.
+        pub(crate) availability: mpsc::Sender<PeerMessage<T>>,
+        /// Reliable `BlockSync` FIFO charged to the low lane.
+        pub(crate) block_sync: mpsc::Sender<PeerMessage<T>>,
+        /// Exact sidecar request/close/ack/hint FIFO.
+        pub(crate) recovery_control: mpsc::Sender<PeerMessage<T>>,
+        /// Exact sidecar bounded chunk FIFO.
+        pub(crate) recovery_data: mpsc::Sender<PeerMessage<T>>,
+        /// Ordinary application control FIFO.
+        pub(crate) control: mpsc::Sender<PeerMessage<T>>,
         /// Classified downstream owner shared by every peer producer.
         pub(crate) dispatch_budgets: InboundDispatchByteBudgets,
         /// PeerId-keyed count owners, isolated by scheduling lane so stalled
@@ -15072,6 +13550,7 @@ pub mod message {
         owner: Arc<AuthenticatedSourceCreditOwner>,
     }
     /// Opaque count ownership retained with one authenticated inbound message.
+    #[derive(Debug)]
     pub(super) struct AuthenticatedSourceCreditGuard {
         _permit: OwnedSemaphorePermit,
         /// Retaining the aggregate owner is what lets the PeerId-keyed weak
@@ -15079,6 +13558,46 @@ pub mod message {
         _owner: Option<AuthenticatedSourceCredits>,
     }
     impl AuthenticatedSourceCredits {
+        pub(super) fn receive_capacity(&self) -> usize {
+            self.owner.per_lane_capacity
+        }
+        pub(super) fn receive_partition(
+            &self,
+            geometry: [u8; 32],
+            make: impl FnOnce() -> Result<receive_credit::SourcePartition, Error>,
+        ) -> Result<Arc<receive_credit::SourcePartition>, Error> {
+            let mut slot = self
+                .owner
+                .receive_partition
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(existing) = slot.as_ref() {
+                if existing.geometry != geometry {
+                    return Err(Error::Format);
+                }
+                return Ok(Arc::clone(existing));
+            }
+            let created = Arc::new(make()?);
+            if created.geometry != geometry {
+                return Err(Error::Format);
+            }
+            *slot = Some(Arc::clone(&created));
+            Ok(created)
+        }
+        pub(super) fn try_receive_count(
+            &self,
+            class: crate::TransportAdmissionClass,
+        ) -> Option<AuthenticatedSourceCreditGuard> {
+            let owner = match class {
+                crate::TransportAdmissionClass::Safety => &self.owner.safety,
+                class if class.is_low() => &self.owner.low,
+                _ => &self.owner.high,
+            };
+            Some(AuthenticatedSourceCreditGuard {
+                _permit: Arc::clone(owner).try_acquire_owned().ok()?,
+                _owner: Some(self.clone()),
+            })
+        }
         #[cfg(any(test, feature = "test-fixtures"))]
         pub(crate) fn new(per_lane_capacity: usize) -> Self {
             Self {
@@ -15142,6 +13661,12 @@ pub mod message {
             let cap = self.topic_frame_caps.for_topic(topic);
             if message.payload_bytes > cap {
                 return InboundDispatchAdmission::OverTopicCap { cap };
+            }
+            if matches!(message.retention, Some(PeerMessageRetention::Granted(_))) {
+                // The unforgeable grant already owns both dispatch bytes and
+                // its exact count. Its final notifier runs after both release.
+                message.attach_delivery_drain(&self.delivery_drain);
+                return InboundDispatchAdmission::Admitted;
             }
             let safety = matches!(topic, crate::network::message::Topic::ConsensusSafety);
             let high = matches!(
@@ -15230,6 +13755,13 @@ pub mod message {
         _delivery_drain: Option<InboundDeliveryDrainGuard>,
     }
     impl<T: Pload> PeerMessage<T> {
+        /// Exact class carried by a consumed grant; absent only for non-grant producers.
+        pub(crate) fn granted_admission_class(&self) -> Option<crate::TransportAdmissionClass> {
+            match &self.retention {
+                Some(PeerMessageRetention::Granted(retention)) => Some(retention.class),
+                _ => None,
+            }
+        }
         /// Construct an unretained message for synthetic producers and tests.
         #[must_use]
         pub fn new(peer: Peer, payload: T, payload_bytes: usize) -> Self {
@@ -15391,6 +13923,26 @@ pub mod message {
                 },
             )
         }
+        pub(super) fn from_receive_grant(
+            peer: Peer,
+            payload: T,
+            payload_bytes: usize,
+            connection_id: ConnectionId,
+            retention: receive_credit::GrantRetention,
+        ) -> Self {
+            let authenticated_via = peer.id().clone();
+            Self {
+                peer,
+                payload,
+                payload_bytes,
+                authenticated_via,
+                connection_id: Some(connection_id),
+                reply_route: None,
+                retention: Some(PeerMessageRetention::Granted(retention)),
+                source_credit: None,
+                delivery_drain: None,
+            }
+        }
         pub(super) fn from_inbound_frame(
             peer: Peer,
             payload: T,
@@ -15492,7 +14044,9 @@ pub mod message {
                         retention.try_clone_for_payload(self.payload_bytes)?,
                     ))
                 }
-                Some(PeerMessageRetention::Source(_)) => return None,
+                Some(PeerMessageRetention::Source(_) | PeerMessageRetention::Granted(_)) => {
+                    return None;
+                }
                 None => None,
             };
             Some(Self {
@@ -15526,6 +14080,14 @@ pub mod message {
         }
     }
     impl PeerMessageRetentionGuard {
+        /// Return the class authorized by the consumed, pre-reserved data grant.
+        /// Synthetic messages have no grant. This never reclassifies from caller priority.
+        pub fn granted_admission_class(&self) -> Option<crate::TransportAdmissionClass> {
+            match &self._retention {
+                Some(PeerMessageRetention::Granted(retention)) => Some(retention.class),
+                _ => None,
+            }
+        }
         /// Return the authenticated transport source whose ownership this guard retains.
         pub fn authenticated_via(&self) -> &PeerId {
             &self.authenticated_via
@@ -15538,8 +14100,27 @@ pub mod message {
         /// Connection Id
         pub conn_id: ConnectionId,
     }
+    /// Verified identity offered to the central connection owner before reader binding.
+    /// It does not publish an online/application session. Exact configured-hub
+    /// identity proof remains a separate decision of the network owner.
+    pub struct Authenticated {
+        /// Exact identity and address verified by the handshake.
+        pub(crate) peer: Peer,
+        /// Existing listener/dial connection reservation.
+        pub(crate) connection_id: ConnectionId,
+        /// Complete session hash covered by the peer identity signature.
+        pub(crate) session: [u8; iroha_crypto::Hash::LENGTH],
+        /// Authenticated role used only for the existing configured hub proof.
+        pub(crate) relay_role: RelayRole,
+        /// Same cancellation watch used throughout negotiation and active I/O.
+        pub(crate) cancel: tokio::sync::watch::Sender<bool>,
+        /// Exclusive reader permission, issued only after predecessor release.
+        pub(crate) reply: tokio::sync::oneshot::Sender<super::tenure::ReaderPermit>,
+    }
     /// Messages sent by peer during connection process
     pub enum ServiceMessage<T: Pload> {
+        /// Authenticated identity awaits the central exclusive reader permission.
+        Authenticated(Authenticated),
         /// Connection and Handshake was successful
         Connected(Connected<T>),
         /// Peer faced error or `Terminate` message, send to indicate that it is terminated
@@ -15570,12 +14151,12 @@ mod cryptographer {
     /// Peer's cryptographic primitives
     #[derive(Clone)]
     pub struct Cryptographer<E: Enc> {
-        /// Compact connection tie-breaker derived from the session binding.
+        /// Diagnostic prefix derived from the session binding.
         pub disambiguator: u64,
         /// Full domain-separated hash of the negotiated session key.
         ///
         /// Long-term peer identity signatures bind this complete value. The
-        /// compact disambiguator is only an operational connection tie-breaker.
+        /// compact disambiguator is diagnostic; arbitration orders this full value.
         pub session_binding: [u8; iroha_crypto::Hash::LENGTH],
         /// Encryptor created from session key, that we got by Diffie-Hellman scheme
         pub encryptor: SymmetricEncryptor<E>,
@@ -15594,8 +14175,8 @@ mod cryptographer {
             compact.copy_from_slice(&session_binding[..COMPACT_LEN]);
             u64::from_be_bytes(compact)
         }
-        /// Construct from raw key bytes for deterministic unit-test fixtures.
-        #[cfg(test)]
+        /// Construct from raw key bytes for deterministic unit and cross-crate fixtures.
+        #[cfg(any(test, feature = "test-fixtures"))]
         pub fn new_with_raw_key_bytes(key_bytes: &[u8]) -> Result<Self, Error> {
             let session_binding = Self::session_binding(key_bytes);
             let disambiguator = Self::disambiguator(&session_binding);

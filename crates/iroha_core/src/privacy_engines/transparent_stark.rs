@@ -12,9 +12,9 @@
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
 pub(crate) use fastpq_isi::GoldilocksDigest384V1;
+use fastpq_isi::{GoldilocksDigest384DomainPrefixV1, GoldilocksDigestDomainV1, hash_bytes_384_v1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use fastpq_isi::{GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1};
-use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
 use rayon::prelude::*;
@@ -40,8 +40,6 @@ const TRANSCRIPT_FP4_CHALLENGE_DOMAIN_V1: &[u8] =
 const QUERY_INDEX_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:query-index:v1";
 const GRINDING_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:grinding:v1";
 const MERKLE_NODE_PHASE_V1: &[u8] = b"binary-merkle-node";
-/// Avoid Rayon dispatch overhead once a Merkle level becomes small.
-const MERKLE_PARALLEL_PARENT_THRESHOLD_V1: usize = 256;
 /// Avoid parallel dispatch for tiny development/test grinding targets.
 const GRINDING_PARALLEL_MIN_BITS_V1: u8 = 12;
 /// Search canonical nonce intervals in this fixed order while parallelizing within each interval.
@@ -97,12 +95,42 @@ impl TransparentStarkDigestContextV1 {
     pub(crate) const fn is_execution_v1(self) -> bool {
         self.protocol.is_none()
     }
-    fn catalog_v1(self) -> [u8; 48] {
+    pub(crate) fn catalog_v1(self) -> [u8; 48] {
         if self.protocol.is_some() {
             exact12_catalog_commitment_bytes_v1()
         } else {
             sha2::Sha384::digest(b"iroha:execution:catalog:v1:race-v1").into()
         }
+    }
+    /// Borrow a checked canonical domain while its catalog backing remains alive.
+    pub(crate) fn domain_v1<'a>(
+        self,
+        catalog: &'a [u8; 48],
+        role: &'a [u8],
+        phase: &'a [u8],
+        level: u64,
+        index: u64,
+        counter: u64,
+    ) -> Result<GoldilocksDigestDomainV1<'a>, TransparentStarkErrorV1> {
+        self.validate()?;
+        if *catalog != self.catalog_v1()
+            || role.is_empty()
+            || phase.is_empty()
+            || u16::try_from(role.len()).is_err()
+            || u16::try_from(phase.len()).is_err()
+        {
+            return Err(TransparentStarkErrorV1::InvalidDigestDomain);
+        }
+        Ok(GoldilocksDigestDomainV1 {
+            catalog,
+            protocol: self.protocol_label_v1(),
+            profile: self.profile,
+            role,
+            phase,
+            level,
+            index,
+            counter,
+        })
     }
     fn protocol_label_v1(self) -> &'static [u8] {
         self.protocol.map_or(b"native-execution-v1", |protocol| {
@@ -528,6 +556,9 @@ pub(crate) enum TransparentStarkErrorV1 {
     /// The configured grinding nonce does not meet its bit target.
     #[error("transparent STARK grinding nonce is invalid")]
     InvalidGrinding,
+    /// The explicitly selected digest executor failed; no backend substitution occurred.
+    #[error("transparent STARK digest execution failed")]
+    DigestExecution,
 }
 /// Derive the exact minimum Protocol-3 masking geometry.
 ///
@@ -1161,6 +1192,7 @@ pub(crate) struct GoldilocksMerkleTreeV1 {
 impl GoldilocksMerkleTreeV1 {
     /// Commit a non-empty power-of-two leaf vector.
     pub(crate) fn from_leaves(
+        execution: fastpq_prover::DigestExecutionV1,
         leaves: Vec<GoldilocksDigest384V1>,
         context: TransparentStarkDigestContextV1,
         node_role: &'static [u8],
@@ -1189,41 +1221,26 @@ impl GoldilocksMerkleTreeV1 {
             let previous = levels
                 .last()
                 .ok_or(TransparentStarkErrorV1::InvalidMerkleShape)?;
-            let parent_count = previous.len() / 2;
-            let mut next = Vec::new();
-            next.try_reserve_exact(parent_count)
-                .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
-            next.resize(parent_count, GoldilocksDigest384V1::default());
-            // Every node is domain-separated by its canonical level and index. An indexed
-            // parallel write therefore changes only scheduling: the resulting vector and root
-            // are byte-identical for every Rayon pool width and hardware topology.
-            let hash_parent =
-                |index: usize| -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1> {
-                    let child_index = index
-                        .checked_mul(2)
-                        .ok_or(TransparentStarkErrorV1::InvalidMerkleShape)?;
-                    goldilocks_merkle_node_v1(
-                        context,
-                        node_role,
-                        parent_level,
-                        u64::try_from(index)
-                            .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
-                        previous[child_index],
-                        previous[child_index + 1],
-                    )
-                };
-            if parent_count >= MERKLE_PARALLEL_PARENT_THRESHOLD_V1 {
-                next.par_iter_mut().enumerate().try_for_each(
-                    |(index, parent)| -> Result<(), TransparentStarkErrorV1> {
-                        *parent = hash_parent(index)?;
-                        Ok(())
-                    },
-                )?;
-            } else {
-                for (index, parent) in next.iter_mut().enumerate() {
-                    *parent = hash_parent(index)?;
-                }
-            }
+            let catalog = context.catalog_v1();
+            let next = fastpq_prover::hash_digest384_pairs_v1(
+                previous,
+                |index| {
+                    context
+                        .domain_v1(
+                            &catalog,
+                            node_role,
+                            MERKLE_NODE_PHASE_V1,
+                            parent_level,
+                            index as u64,
+                            0,
+                        )
+                        .map_err(|_| fastpq_prover::Error::NativeDigestExecution {
+                            details: "invalid canonical Merkle domain".into(),
+                        })
+                },
+                &mut |frames| fastpq_prover::execute_digest384_frames_v1(frames, execution),
+            )
+            .map_err(|_| TransparentStarkErrorV1::DigestExecution)?;
             levels.push(next);
         }
         Ok(Self { levels })
@@ -1451,6 +1468,68 @@ impl TransparentTranscriptV1 {
         label: &[u8],
     ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
         self.challenge_fp4_where(label, |_| true)
+    }
+
+    /// Derive the exact scalar challenge sequence while reusing its public domain prefixes.
+    ///
+    /// Every challenge still depends on the previously absorbed state. Only the
+    /// invariant framing through domain tag 7 is cached; index, counter, state,
+    /// all six digest lanes and the accepted-digest absorption remain unchanged.
+    pub(crate) fn challenge_fp4_sequence(
+        &mut self,
+        label: &[u8],
+        count: usize,
+    ) -> Result<Vec<GoldilocksFp4V1>, TransparentStarkErrorV1> {
+        // An empty scalar sequence neither validates a label nor changes state.
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        self.context.validate()?;
+        if label.is_empty() || u16::try_from(label.len()).is_err() {
+            return Err(TransparentStarkErrorV1::InvalidDigestDomain);
+        }
+        let catalog = self.context.catalog_v1();
+        let domain = GoldilocksDigestDomainV1 {
+            catalog: &catalog,
+            protocol: self.context.protocol_label_v1(),
+            profile: self.context.profile,
+            role: TRANSCRIPT_FP4_CHALLENGE_DOMAIN_V1,
+            phase: label,
+            level: 0,
+            index: 0,
+            counter: 0,
+        };
+        let challenge_prefix = GoldilocksDigest384DomainPrefixV1::new(domain)
+            .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)?;
+        let absorb_prefix = GoldilocksDigest384DomainPrefixV1::new(GoldilocksDigestDomainV1 {
+            role: TRANSCRIPT_ABSORB_DOMAIN_V1,
+            ..domain
+        })
+        .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)?;
+        (0..count)
+            .map(|_| {
+                // Unrestricted Fp4 sampling accepts attempt zero, including zero.
+                let digest = challenge_prefix
+                    .hash_at_with_counter(0, self.challenge_counter, &[&self.state.to_le_bytes()])
+                    .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)?;
+                let words = digest.words();
+                let field = GoldilocksFp4V1::canonical([words[0], words[1], words[2], words[3]])
+                    .expect("digest lanes are canonical Goldilocks elements");
+                let accepted_counter = self.challenge_counter;
+                self.challenge_counter = self
+                    .challenge_counter
+                    .checked_add(1)
+                    .ok_or(TransparentStarkErrorV1::ChallengeSamplingExhausted)?;
+                self.state = absorb_prefix
+                    .hash_at_with_counter(
+                        0,
+                        accepted_counter,
+                        &[&self.state.to_le_bytes(), &digest.to_le_bytes()],
+                    )
+                    .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)?;
+                Ok(field)
+            })
+            .collect()
     }
     /// Derive a uniform quartic challenge satisfying an additional deterministic public predicate.
     ///
@@ -1726,6 +1805,7 @@ pub(crate) fn ensure_fri_terminal_degree_fp4_v1(
 }
 /// Search for the smallest nonce meeting an exact leading-zero-bit target.
 pub(crate) fn grind_nonce_v1(
+    execution: fastpq_prover::DigestExecutionV1,
     context: TransparentStarkDigestContextV1,
     transcript_seed: &GoldilocksDigest384V1,
     grinding_bits: u8,
@@ -1733,14 +1813,68 @@ pub(crate) fn grind_nonce_v1(
     if grinding_bits > 63 {
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
-    if grinding_bits < GRINDING_PARALLEL_MIN_BITS_V1 {
-        return grind_nonce_serial_v1(context, transcript_seed, grinding_bits);
+    context.validate()?;
+    let catalog = context.catalog_v1();
+    let seed_bytes = transcript_seed.to_le_bytes();
+    let fields: &[&[u8]] = &[&seed_bytes];
+    let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
+        GoldilocksDigestDomainV1 {
+            catalog: &catalog,
+            protocol: context.protocol_label_v1(),
+            profile: context.profile,
+            role: GRINDING_DOMAIN_V1,
+            phase: b"proof-of-work-nonce",
+            level: 0,
+            index: 0,
+            counter: 0,
+        },
+        fields,
+    )
+    .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)?;
+    let cached = frame.indexed_predicate_v1();
+    if execution != fastpq_prover::DigestExecutionV1::Cpu {
+        return first_nonce_in_ordered_device_chunks_v1(0, grinding_bits, |start, count| {
+            fastpq_prover::execute_digest384_indexed_coordinates_v1(
+                &cached, start, count, execution,
+            )
+            .map_err(|_| TransparentStarkErrorV1::DigestExecution)
+        });
     }
-    first_nonce_in_ordered_parallel_chunks_v1(|nonce| {
-        verify_grinding_nonce_v1(context, transcript_seed, grinding_bits, nonce).is_ok()
-    })
-    .ok_or(TransparentStarkErrorV1::InvalidGrinding)
+    let accepts = |nonce| cached.matches_index_v1(nonce, grinding_bits) == Some(true);
+    let nonce = if grinding_bits < GRINDING_PARALLEL_MIN_BITS_V1 {
+        (0..=u64::MAX).find(|nonce| accepts(*nonce))
+    } else {
+        first_nonce_in_ordered_parallel_chunks_v1(accepts)
+    };
+    nonce.ok_or(TransparentStarkErrorV1::InvalidGrinding)
 }
+fn first_nonce_in_ordered_device_chunks_v1(
+    mut start: u64,
+    target: u8,
+    mut dispatch: impl FnMut(u64, usize) -> Result<Vec<u64>, TransparentStarkErrorV1>,
+) -> Result<u64, TransparentStarkErrorV1> {
+    if target > 63 {
+        return Err(TransparentStarkErrorV1::InvalidGrinding);
+    }
+    loop {
+        let end = start.saturating_add(GRINDING_PARALLEL_CHUNK_SIZE_V1 - 1);
+        let count = (end - start + 1) as usize;
+        let words = dispatch(start, count)?;
+        if words.len() != count || words.iter().any(|word| *word >= GOLDILOCKS_MODULUS_V1) {
+            return Err(TransparentStarkErrorV1::DigestExecution);
+        }
+        if let Some(offset) = words
+            .iter()
+            .position(|word| word.swap_bytes().leading_zeros() >= u32::from(target))
+        {
+            return Ok(start + offset as u64);
+        }
+        start = end
+            .checked_add(1)
+            .ok_or(TransparentStarkErrorV1::InvalidGrinding)?;
+    }
+}
+
 fn first_nonce_in_ordered_parallel_chunks_v1<Accept>(accept: Accept) -> Option<u64>
 where
     Accept: Fn(u64) -> bool + Sync,
@@ -1761,18 +1895,6 @@ where
         chunk_start = chunk_end + 1;
     }
 }
-fn grind_nonce_serial_v1(
-    context: TransparentStarkDigestContextV1,
-    transcript_seed: &GoldilocksDigest384V1,
-    grinding_bits: u8,
-) -> Result<u64, TransparentStarkErrorV1> {
-    for nonce in 0..=u64::MAX {
-        if verify_grinding_nonce_v1(context, transcript_seed, grinding_bits, nonce).is_ok() {
-            return Ok(nonce);
-        }
-    }
-    Err(TransparentStarkErrorV1::InvalidGrinding)
-}
 /// Verify a transcript grinding nonce.
 pub(crate) fn verify_grinding_nonce_v1(
     context: TransparentStarkDigestContextV1,
@@ -1783,31 +1905,31 @@ pub(crate) fn verify_grinding_nonce_v1(
     if grinding_bits > 63 {
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
-    let digest = goldilocks_digest384_frame_v1(
-        context,
-        GRINDING_DOMAIN_V1,
-        b"proof-of-work-nonce",
-        0,
-        nonce,
-        0,
-        &[&transcript_seed.to_le_bytes()],
-    )?;
-    if leading_zero_bits_v1(&digest.to_le_bytes()) < u32::from(grinding_bits) {
+    context.validate()?;
+    let catalog = context.catalog_v1();
+    let seed_bytes = transcript_seed.to_le_bytes();
+    let fields: &[&[u8]] = &[&seed_bytes];
+    let frame = fastpq_isi::GoldilocksDigest384FrameV1::new(
+        GoldilocksDigestDomainV1 {
+            catalog: &catalog,
+            protocol: context.protocol_label_v1(),
+            profile: context.profile,
+            role: GRINDING_DOMAIN_V1,
+            phase: b"proof-of-work-nonce",
+            level: 0,
+            index: nonce,
+            counter: 0,
+        },
+        fields,
+    )
+    .ok_or(TransparentStarkErrorV1::FrameLengthOverflow)?;
+    if !frame
+        .matches_leading_zero_bits_v1(grinding_bits)
+        .ok_or(TransparentStarkErrorV1::InvalidGrinding)?
+    {
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
     Ok(())
-}
-fn leading_zero_bits_v1(bytes: &[u8]) -> u32 {
-    let mut count = 0_u32;
-    for byte in bytes {
-        if *byte == 0 {
-            count += 8;
-        } else {
-            count += byte.leading_zeros();
-            break;
-        }
-    }
-    count
 }
 /// Strict fixed-shape proof reader.
 pub(crate) struct ExactProofReaderV1<'a> {
@@ -2493,9 +2615,13 @@ mod tests {
                 .expect("leaf hash")
             })
             .collect::<Vec<_>>();
-        let tree =
-            GoldilocksMerkleTreeV1::from_leaves(leaves.clone(), TEST_DIGEST_CONTEXT_V1, node_role)
-                .expect("tree");
+        let tree = GoldilocksMerkleTreeV1::from_leaves(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            leaves.clone(),
+            TEST_DIGEST_CONTEXT_V1,
+            node_role,
+        )
+        .expect("tree");
         for (index, leaf) in leaves.iter().copied().enumerate() {
             verify_goldilocks_merkle_path_v1(
                 TEST_DIGEST_CONTEXT_V1,
@@ -2544,6 +2670,7 @@ mod tests {
             Box::leak(vec![0_u8; usize::from(u16::MAX) + 1].into_boxed_slice());
         assert!(matches!(
             GoldilocksMerkleTreeV1::from_leaves(
+                fastpq_prover::DigestExecutionV1::Cpu,
                 vec![GoldilocksDigest384V1::default(); 2],
                 TEST_DIGEST_CONTEXT_V1,
                 oversized_domain,
@@ -2588,6 +2715,7 @@ mod tests {
                 .expect("private test thread pool")
                 .install(|| {
                     GoldilocksMerkleTreeV1::from_leaves(
+                        fastpq_prover::DigestExecutionV1::Cpu,
                         leaves.clone(),
                         TEST_DIGEST_CONTEXT_V1,
                         node_role,
@@ -2628,6 +2756,63 @@ mod tests {
             assert_eq!(serial.path(index), parallel.path(index));
         }
     }
+    #[test]
+    fn cached_fp4_sequence_matches_scalar_values_state_and_continuation() {
+        for count in [0, 1, 2, 17, 1526] {
+            let mut scalar = test_transcript_v1();
+            scalar.absorb(b"roots", &[b"base", b"aux"]).unwrap();
+            let mut cached = scalar;
+            for label in [b"constraint-alpha".as_slice(), b"deep-mix".as_slice()] {
+                let expected = (0..count)
+                    .map(|_| scalar.challenge_fp4(label))
+                    .collect::<Result<Vec<_>, _>>();
+                assert_eq!(cached.challenge_fp4_sequence(label, count), expected);
+                assert_eq!(cached, scalar, "count {count}");
+            }
+            cached.absorb(b"next-roots", &[b"fri"]).unwrap();
+            scalar.absorb(b"next-roots", &[b"fri"]).unwrap();
+            assert_eq!(
+                cached.challenge_fp4(b"later"),
+                scalar.challenge_fp4(b"later")
+            );
+            assert_eq!(cached, scalar);
+        }
+    }
+
+    #[test]
+    fn cached_fp4_sequence_preserves_empty_invalid_and_counter_overflow_behavior() {
+        for label in [Vec::new(), vec![b'x'; usize::from(u16::MAX) + 1]] {
+            let mut cached = test_transcript_v1();
+            let pristine = cached;
+            assert_eq!(cached.challenge_fp4_sequence(&label, 0), Ok(Vec::new()));
+            assert_eq!(cached, pristine);
+            let mut scalar = pristine;
+            assert_eq!(
+                cached
+                    .challenge_fp4_sequence(&label, 1)
+                    .map(|values| values[0]),
+                scalar.challenge_fp4(&label)
+            );
+            assert_eq!(cached, scalar);
+            assert_eq!(cached, pristine);
+        }
+        for counter in [GOLDILOCKS_MODULUS_V1, u64::MAX - 1, u64::MAX] {
+            for count in [1, 2, 3] {
+                let mut cached = test_transcript_v1();
+                cached.challenge_counter = counter;
+                let mut scalar = cached;
+                let expected = (0..count)
+                    .map(|_| scalar.challenge_fp4(b"counter-boundary"))
+                    .collect::<Result<Vec<_>, _>>();
+                assert_eq!(
+                    cached.challenge_fp4_sequence(b"counter-boundary", count),
+                    expected
+                );
+                assert_eq!(cached, scalar);
+            }
+        }
+    }
+
     #[test]
     fn transcript_is_framed_ordered_and_deterministic() {
         let profile = GoldilocksDigest384V1::new([1; 6]).expect("profile digest");
@@ -2830,9 +3015,149 @@ mod tests {
         );
     }
     #[test]
+    fn ordered_device_nonce_batches_preserve_first_match_and_fail_closed() {
+        let mut starts = Vec::new();
+        let found = first_nonce_in_ordered_device_chunks_v1(0, 8, |start, count| {
+            starts.push(start);
+            let mut words = vec![1; count];
+            if start == 4096 {
+                words[17] = 0;
+                words[29] = 0;
+            }
+            Ok(words)
+        })
+        .unwrap();
+        assert_eq!(found, 4096 + 17);
+        assert_eq!(starts, [0, 4096]);
+        let mut calls = 0;
+        assert_eq!(
+            first_nonce_in_ordered_device_chunks_v1(0, 8, |_, count| {
+                calls += 1;
+                if calls == 2 {
+                    Err(TransparentStarkErrorV1::DigestExecution)
+                } else {
+                    Ok(vec![1; count])
+                }
+            }),
+            Err(TransparentStarkErrorV1::DigestExecution)
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(
+            first_nonce_in_ordered_device_chunks_v1(u64::MAX - 2, 8, |start, count| {
+                assert_eq!((start, count), (u64::MAX - 2, 3));
+                Ok(vec![1, 1, 0])
+            }),
+            Ok(u64::MAX)
+        );
+        assert_eq!(
+            first_nonce_in_ordered_device_chunks_v1(u64::MAX, 8, |_, _| Ok(vec![1])),
+            Err(TransparentStarkErrorV1::InvalidGrinding)
+        );
+        assert!(first_nonce_in_ordered_device_chunks_v1(0, 8, |_, _| Ok(Vec::new())).is_err());
+        assert!(
+            first_nonce_in_ordered_device_chunks_v1(0, 8, |_, count| Ok(vec![
+                GOLDILOCKS_MODULUS_V1;
+                count
+            ]))
+            .is_err()
+        );
+        assert!(
+            first_nonce_in_ordered_device_chunks_v1(0, 64, |_, _| panic!(
+                "invalid target must not dispatch"
+            ))
+            .is_err()
+        );
+    }
+    #[test]
+    fn cached_grinding_finds_the_same_first_nonce_as_complete_hashing() {
+        for word in [0x42, 0x91] {
+            let seed = GoldilocksDigest384V1::new([word; 6]).expect("canonical seed");
+            for target in [0, 4, 8] {
+                let expected = (0..=u64::MAX)
+                    .find(|nonce| {
+                        let digest = goldilocks_digest384_frame_v1(
+                            TEST_DIGEST_CONTEXT_V1,
+                            GRINDING_DOMAIN_V1,
+                            b"proof-of-work-nonce",
+                            0,
+                            *nonce,
+                            0,
+                            &[&seed.to_le_bytes()],
+                        )
+                        .expect("complete reference digest");
+                        let mut count = 0;
+                        for byte in digest.to_le_bytes() {
+                            count += byte.leading_zeros();
+                            if byte != 0 {
+                                break;
+                            }
+                        }
+                        count >= u32::from(target)
+                    })
+                    .expect("first reference nonce");
+                assert_eq!(
+                    grind_nonce_v1(
+                        fastpq_prover::DigestExecutionV1::Cpu,
+                        TEST_DIGEST_CONTEXT_V1,
+                        &seed,
+                        target
+                    ),
+                    Ok(expected)
+                );
+            }
+        }
+    }
+    #[test]
+    fn grinding_prefix_predicate_matches_complete_digest_for_every_supported_target() {
+        let seed = GoldilocksDigest384V1::new([0x42; 6]).expect("canonical seed");
+        for nonce in [0, 1, 7, 255, 65_535, u64::MAX] {
+            let digest = goldilocks_digest384_frame_v1(
+                TEST_DIGEST_CONTEXT_V1,
+                GRINDING_DOMAIN_V1,
+                b"proof-of-work-nonce",
+                0,
+                nonce,
+                0,
+                &[&seed.to_le_bytes()],
+            )
+            .expect("full canonical reference digest");
+            let mut prefix_bits = 0;
+            for byte in digest.to_le_bytes() {
+                prefix_bits += byte.leading_zeros();
+                if byte != 0 {
+                    break;
+                }
+            }
+            for target in 0..=63 {
+                let expected = if prefix_bits >= u32::from(target) {
+                    Ok(())
+                } else {
+                    Err(TransparentStarkErrorV1::InvalidGrinding)
+                };
+                assert_eq!(
+                    verify_grinding_nonce_v1(TEST_DIGEST_CONTEXT_V1, &seed, target, nonce),
+                    expected
+                );
+            }
+            for target in [64, 255] {
+                assert_eq!(
+                    verify_grinding_nonce_v1(TEST_DIGEST_CONTEXT_V1, &seed, target, nonce),
+                    Err(TransparentStarkErrorV1::InvalidGrinding)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn grinding_and_exact_reader_fail_closed() {
         let seed = GoldilocksDigest384V1::new([0x42; 6]).expect("canonical seed");
-        let nonce = grind_nonce_v1(TEST_DIGEST_CONTEXT_V1, &seed, 8).expect("grind");
+        let nonce = grind_nonce_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            TEST_DIGEST_CONTEXT_V1,
+            &seed,
+            8,
+        )
+        .expect("grind");
         verify_grinding_nonce_v1(TEST_DIGEST_CONTEXT_V1, &seed, 8, nonce).expect("valid nonce");
         if nonce > 0 {
             assert_eq!(

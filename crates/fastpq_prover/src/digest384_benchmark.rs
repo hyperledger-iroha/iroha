@@ -135,9 +135,11 @@ pub fn benchmark_digest384_v1(
         &mut |device, frames, work| {
             #[cfg(feature = "fastpq-gpu")]
             {
-                use crate::digest384_gpu::{
-                    Digest384GpuBackendV1, MAX_DIGEST384_GPU_FRAMES_V1, MAX_DIGEST384_GPU_WORDS_V1,
-                    try_hash_digest384_frames_v1,
+                use crate::{
+                    digest_executor::{
+                        MAX_DIGEST384_BATCH_FRAMES_V1, MAX_DIGEST384_BATCH_WORDS_V1,
+                    },
+                    digest384_gpu::{Digest384GpuBackendV1, try_hash_digest384_frames_v1},
                 };
                 let backend = match device {
                     Digest384BenchmarkDeviceV1::Metal => Digest384GpuBackendV1::Metal,
@@ -145,8 +147,8 @@ pub fn benchmark_digest384_v1(
                 };
                 digest_executor::execute_bounded_digest384_frames_v1(
                     frames,
-                    MAX_DIGEST384_GPU_FRAMES_V1,
-                    MAX_DIGEST384_GPU_WORDS_V1,
+                    MAX_DIGEST384_BATCH_FRAMES_V1,
+                    MAX_DIGEST384_BATCH_WORDS_V1,
                     &mut |chunk| {
                         let output = try_hash_digest384_frames_v1(backend, chunk)
                             .map_err(|error| invalid(&error.to_string()))?;

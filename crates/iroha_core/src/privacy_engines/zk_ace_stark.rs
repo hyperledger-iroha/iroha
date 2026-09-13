@@ -401,9 +401,14 @@ impl MerkleTree {
         leaves: Vec<GoldilocksDigest384V1>,
         node_role: &'static [u8],
     ) -> Result<Self, ZkAceStarkError> {
-        GoldilocksMerkleTreeV1::from_leaves(leaves, DIGEST_CONTEXT_V1, node_role)
-            .map(|inner| Self { inner })
-            .map_err(map_merkle_error_v1)
+        GoldilocksMerkleTreeV1::from_leaves(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            leaves,
+            DIGEST_CONTEXT_V1,
+            node_role,
+        )
+        .map(|inner| Self { inner })
+        .map_err(map_merkle_error_v1)
     }
     fn root(&self) -> GoldilocksDigest384V1 {
         self.inner.root()

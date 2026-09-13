@@ -153,6 +153,18 @@ pub enum LaneAuthorityError {
         /// Requested consensus height.
         authority_height: u64,
     },
+    /// An oversubscribed pool has no published threshold-beacon history yet.
+    #[error(
+        "lane {lane_id} dataspace {dataspace_id} awaits threshold-beacon selection entropy at height {authority_height}"
+    )]
+    SelectionEntropyUnavailable {
+        /// Requested lane.
+        lane_id: LaneId,
+        /// Requested dataspace.
+        dataspace_id: DataSpaceId,
+        /// Requested consensus height.
+        authority_height: u64,
+    },
     /// The live canonical pool cannot fill the exact `3f+1` committee.
     #[error(
         "lane {lane_id} dataspace {dataspace_id} requires {required} validators at height {authority_height}, but its canonical pool has {actual}"
@@ -607,6 +619,18 @@ pub(super) fn resolve_from_sources(
         }
         pool
     } else {
+        // No selection can be made before the first threshold-beacon pulse.
+        // Only entirely empty stores denote pending initialization: a missing
+        // singleton amid other entries or inconsistent history remains invalid.
+        if world.global_beacon_latest_pulse().iter().next().is_none()
+            && world.global_beacon_pulses().iter().next().is_none()
+        {
+            return Err(LaneAuthorityError::SelectionEntropyUnavailable {
+                lane_id: route.lane_id(),
+                dataspace_id: route.dataspace_id(),
+                authority_height,
+            });
+        }
         let seed = State::lane_relay_committee_seed_from_sources(
             world,
             network_id,

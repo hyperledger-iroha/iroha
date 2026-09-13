@@ -312,18 +312,29 @@ mod tests {
             })
         }
     }
-    fn factory_context() -> MusubiPublicationPrivateServiceContextV1 {
+    fn factory_context() -> (MusubiPublicationPrivateServiceContextV1, tempfile::TempDir) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, query));
         let (events, _) = tokio::sync::broadcast::channel(1);
         let queue = Arc::new(Queue::from_config(QueueConfig::default(), events));
-        let sorafs_node = sorafs_node::NodeHandle::new(StorageConfig::default());
-        MusubiPublicationPrivateServiceContextV1::new(
-            *state.network_id_ref(),
-            state,
-            queue,
-            sorafs_node,
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical storage fixture parent");
+        let temp = tempfile::tempdir_in(root).expect("private fixture storage");
+        let sorafs_node = sorafs_node::NodeHandle::new(
+            StorageConfig::builder()
+                .data_dir(temp.path().join("storage"))
+                .build(),
+        );
+        (
+            MusubiPublicationPrivateServiceContextV1::new(
+                *state.network_id_ref(),
+                state,
+                queue,
+                sorafs_node,
+            ),
+            temp,
         )
     }
     struct RecordingFactory {
@@ -379,10 +390,24 @@ mod tests {
         assert!(child.is_none());
     }
     #[test]
+    fn simultaneous_factory_contexts_hold_distinct_storage_owners() {
+        let (first, first_storage) = factory_context();
+        let (second, second_storage) = factory_context();
+        assert_ne!(first_storage.path(), second_storage.path());
+        assert!(!Arc::ptr_eq(
+            &first.sorafs_node().capacity_manager(),
+            &second.sorafs_node().capacity_manager()
+        ));
+        drop(first);
+        assert!(second_storage.path().exists());
+        drop(second);
+    }
+    #[test]
     fn absent_factory_is_fail_closed_and_starts_no_child() {
+        let (context, _storage) = factory_context();
         let (availability, child) = build_and_start_injected_musubi_publication_private_service_v1(
             None,
-            factory_context(),
+            context,
             ShutdownSignal::new(),
         )
         .expect("absent factory is not an error");
@@ -394,9 +419,10 @@ mod tests {
     }
     #[test]
     fn factory_failure_precedes_child_start() {
+        let (context, _storage) = factory_context();
         let result = build_and_start_injected_musubi_publication_private_service_v1(
             Some(Box::new(FailingFactory)),
-            factory_context(),
+            context,
             ShutdownSignal::new(),
         );
         let error = match result {
@@ -410,7 +436,7 @@ mod tests {
     }
     #[tokio::test]
     async fn factory_receives_exact_handles_once_and_joins_supervisor() {
-        let context = factory_context();
+        let (context, _storage) = factory_context();
         let called = Arc::new(AtomicBool::new(false));
         let runner_started = Arc::new(AtomicBool::new(false));
         let factory = RecordingFactory {

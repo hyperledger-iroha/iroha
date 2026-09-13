@@ -314,10 +314,10 @@ impl V2LaneWorkAdapter {
         if !local_is_leader {
             return Ok(V2LaneIngressOutcome::Rejected);
         }
-        let Ok(outcome) = self
-            .state
-            .persist_classified_queue_plan_admission(certificate.as_slice())
-        else {
+        let Ok(outcome) = self.state.persist_classified_queue_plan_admission(
+            certificate.as_slice(),
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        ) else {
             return Ok(V2LaneIngressOutcome::Rejected);
         };
         match outcome {

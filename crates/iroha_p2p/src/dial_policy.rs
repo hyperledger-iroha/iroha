@@ -13,7 +13,7 @@ use iroha_primitives::addr::SocketAddr;
 /// The policy checks every answer before dialing, but the answer set itself
 /// must also be bounded so a hostile resolver cannot turn validation into an
 /// unbounded allocation or loop.
-pub(crate) const MAX_OUTBOUND_DNS_ANSWERS: usize = 64;
+pub const MAX_OUTBOUND_DNS_ANSWERS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IpFamily {
@@ -181,7 +181,7 @@ fn parse_dns_suffixes(values: Vec<String>) -> io::Result<Vec<String>> {
 /// (IP or DNS) leaves that dimension unrestricted, so operators can constrain
 /// names, address ranges, or both independently without changing defaults.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct OutboundDialPolicy {
+pub struct OutboundDialPolicy {
     allow_cidrs: Vec<IpNetwork>,
     deny_cidrs: Vec<IpNetwork>,
     allow_dns_suffixes: Vec<String>,

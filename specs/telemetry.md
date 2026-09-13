@@ -14,6 +14,30 @@ Endpoints
 - `/v1/soranet/privacy/{event,share}` (Norito): bounded privacy telemetry mutation ingress for relay/collector signals. Before decoding, Torii verifies the four exact NetworkId-bound `X-Iroha-Operator-*` headers over the method, target, body, timestamp, and fresh nonce, then requires `torii.soranet_privacy_ingest.enabled = true` and a CIDR allow-list entry (empty list denies). Rate limits come from `rate_per_sec`/`burst` and are keyed by authenticated operator public key. DTOs reject unknown fields and overlong/control-bearing labels; live bucket admission rejects future or expired timestamps, bounds incomplete windows, and rejects conflicting or already-finalized collector shares. The share route also derives a full 256-bit BLAKE3 collector ID from the authenticated operator key and rejects caller identity mismatches. Retired collector/API bearer headers are rejected; failures surface `400/401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}`.
 - `/v1/sumeragi/params` (JSON): read-only snapshot of governed NPoS parameter records. It does not replace the signed revision-4 height context or the shared configuration fingerprint exposed by `/v1/sumeragi/status`.
 
+`/status` is an immutable reply from the Core telemetry actor. Its applied target
+height, header hash and Nexus routing policy are copied under one stable State
+publication generation. Torii does not compare it to an earlier or later live
+height. Runtime gauges remain sampled observables, not a consensus snapshot or
+transaction-finality assertion.
+
+The actor classifies the captured finite prefix in quanta of at most 64 blocks.
+Each quantum streams a domain-separated digest of its fixed-width range and
+ordered `(height, header_hash)` rows from the State journal, then checks the
+actual Kura sequence against it. The previously classified tip must also match.
+Counters and commit timestamps are staged until the complete quantum verifies;
+missing or substituted blocks cannot publish unverified progress. No State,
+world, transaction or report guard is held during Kura access. State appends do
+not extend the active target; a replaced target or checkpoint is refused.
+
+The existing 1024-message mailbox and absolute 500 ms status service budget stay
+unchanged. Expired queued requests do not start classification. Once started,
+finite catch-up remains owned by the actor after HTTP cancellation or timeout,
+yields between quanta, and retains verified progress for the next request. An
+expired request never receives a successful late response. Missing actor,
+mailbox capacity, inconsistent journal/counters or service timeout remains a
+retriable unavailable result. This boundary does not change transaction wait
+semantics or assert that `/status` failures cause slow transaction confirmation.
+
 The authoritative `/v1/sumeragi/status` response carries canonical settlement,
 relay, payload-ownership, committed-lane-block, and active-session evidence; it
 does not infer governance readiness from retired operator snapshots. Use

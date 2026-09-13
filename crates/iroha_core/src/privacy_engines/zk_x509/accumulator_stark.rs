@@ -568,7 +568,8 @@ fn map_aggregate_proof_error_v1(error: AggregateStarkErrorV1) -> ZkX509CaAccumul
         AggregateStarkErrorV1::InvalidLayout
         | AggregateStarkErrorV1::InvalidProofShape
         | AggregateStarkErrorV1::AllocationFailure
-        | AggregateStarkErrorV1::InternalInvariant => ZkX509CaAccumulatorProofErrorV1::Resource,
+        | AggregateStarkErrorV1::InternalInvariant
+        | AggregateStarkErrorV1::DigestExecution => ZkX509CaAccumulatorProofErrorV1::Resource,
         AggregateStarkErrorV1::MalformedProof => ZkX509CaAccumulatorProofErrorV1::MalformedProof,
         AggregateStarkErrorV1::ProofTooLarge => ZkX509CaAccumulatorProofErrorV1::ProofTooLarge,
         AggregateStarkErrorV1::NonCanonicalField => {
@@ -2807,6 +2808,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &mut checked_rng,
     )?;
     let base_tree = aggregate::row_tree_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         CA_AGGREGATE_DOMAINS_V1.digest_context,
         CA_BASE_LEAF_DOMAIN_V1,
         CA_BASE_NODE_DOMAIN_V1,
@@ -2853,6 +2855,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         &mut checked_rng,
     )?;
     let aux_tree = aggregate::row_tree_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         CA_AGGREGATE_DOMAINS_V1.digest_context,
         CA_AUX_LEAF_DOMAIN_V1,
         CA_AUX_NODE_DOMAIN_V1,
@@ -2885,8 +2888,13 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
     let mut composition_trees = Vec::new();
     let mut composition_roots = Vec::new();
     for (lane, chunks) in compositions.iter().enumerate() {
-        let tree = aggregate::composition_tree_v1(CA_AGGREGATE_DOMAINS_V1, lane, chunks)
-            .map_err(map_aggregate_proof_error_v1)?;
+        let tree = aggregate::composition_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
+            CA_AGGREGATE_DOMAINS_V1,
+            lane,
+            chunks,
+        )
+        .map_err(map_aggregate_proof_error_v1)?;
         composition_roots.push(tree.root());
         composition_trees.push(tree);
     }
@@ -2898,6 +2906,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
     )
     .map_err(map_aggregate_proof_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         CA_AGGREGATE_PARAMETERS_V1,
         CA_AGGREGATE_DOMAINS_V1,
         &layout,
@@ -2949,6 +2958,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
             .map_err(map_aggregate_proof_error_v1)?;
         fri_materials.push(
             aggregate::build_fri_lane_v1(
+                fastpq_prover::DigestExecutionV1::Cpu,
                 CA_AGGREGATE_PARAMETERS_V1,
                 CA_AGGREGATE_DOMAINS_V1,
                 &layout,
@@ -2961,6 +2971,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,

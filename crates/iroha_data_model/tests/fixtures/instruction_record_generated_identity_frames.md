@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for all 289 current `isi!` declarations: 280 nongeneric records and 39 concrete
-instantiations of the nine generic declarations. Its 319 type rows preserve 354
-populated values and 1,416 complete root, vector, option and map frames.
+for all 290 current `isi!` declarations: 281 nongeneric records and 39 concrete
+instantiations of the nine generic declarations. Its 320 type rows preserve 355
+populated values and 1,420 complete root, vector, option and map frames.
 
 The fixture SHA-256 is
-`4f96c3ba6f71281f3207b8d5a17361965a7454c3ccdb0aaa963e19bcba5723c9`.
+`baae76d11197718ee5a45f4418694e2aaea891d56aa79cf6992e12667703ef75`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 remaining captured frame bytes are unchanged. Names and directional hashes come from actual compiler captures before adding
 the independent identity declarations; no physical paths were guessed.
@@ -33,3 +33,6 @@ were captured as generic arguments, without separate pre-declaration root hashes
 The capture is development evidence, not a sealed release candidate. Active
 codec cutover, physical model moves and complete candidate qualification remain
 separate work in [the identity design](../../../../specs/norito_schema_identity.md).
+
+`SettleAtomic` was captured with the current native codec on 2026-09-12,
+including exact root, vector, option and map decode/re-encode checks.

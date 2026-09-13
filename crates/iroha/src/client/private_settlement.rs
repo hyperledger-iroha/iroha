@@ -47,6 +47,39 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
 
+/// Issue one Prepare request per committee member and join every initiated worker.
+///
+/// Results retain roster order, including ordinary request rejections. A local
+/// worker launch or panic is a fatal orchestration error, never an unavailable
+/// validator vote. No response is consumed until all initiated requests finish.
+fn collect_private_settlement_prepare_responses_v1<T, F>(request: F) -> Result<Vec<Result<T>>>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T> + Sync,
+{
+    const REQUESTS: usize = PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1 as usize;
+    std::thread::scope(|scope| {
+        let request = &request;
+        let children: [_; REQUESTS] = std::array::from_fn(|index| {
+            std::thread::Builder::new()
+                .name(format!("aps-prepare-{index}"))
+                .spawn_scoped(scope, move || request(index))
+        });
+        // Array::map completes every join before Result collection can return
+        // the first roster-ordered orchestration error. Do not fuse these into
+        // an iterator that could short-circuit and discard an initiated owner.
+        let joined = children.map(|child| match child {
+            Ok(child) => child
+                .join()
+                .map_err(|_| eyre!("private-settlement Prepare request worker panicked")),
+            Err(_) => Err(eyre!(
+                "private-settlement Prepare request worker could not start"
+            )),
+        });
+        joined.into_iter().collect()
+    })
+}
+
 fn validate_private_settlement_audit_approval_request_identity_v1(
     network_id: &NetworkId,
     auditor_signing_key: &PublicKey,
@@ -1412,8 +1445,12 @@ impl Client {
     /// Fan out to all four validators, select exactly three votes canonically,
     /// and durably hand the QC back to every successfully staged node.
     ///
-    /// Endpoint order must exactly match the authority roster. One unavailable
-    /// endpoint is tolerated; malformed or identity-substituted responses are not.
+    /// Exactly four scoped requests run concurrently and all initiated requests
+    /// finish before response selection or certificate handoff. Endpoint order
+    /// must exactly match the authority roster. Request failures do not count
+    /// toward quorum; an otherwise valid vote from the wrong endpoint is fatal.
+    /// On rejection, later endpoints may already hold durable Prepare staging;
+    /// recovery remains responsible for that staging and any interrupted QC handoff.
     ///
     /// # Errors
     ///
@@ -1493,15 +1530,22 @@ impl Client {
             PrivateSettlementPhaseV1::Prepare,
             private_settlement_reserved_prepared_digest_v1(),
         )?;
-        let mut votes = Vec::with_capacity(authority.validators.len());
-        let mut responders = Vec::with_capacity(authority.validators.len());
-        for (index, endpoint) in committee_endpoints.iter().enumerate() {
-            let Ok(response) = self.request_private_settlement_prepare_vote_v1(
-                endpoint,
+        // The validated authority fixes this operation to four roster-indexed
+        // requests. Later roster members may stage before an earlier identity
+        // rejection is observed; every request is joined before that rejection
+        // returns, and no QC handoff starts until the ordered checks succeed.
+        let responses = collect_private_settlement_prepare_responses_v1(|index| {
+            self.request_private_settlement_prepare_vote_v1(
+                &committee_endpoints[index],
                 manifest,
                 payload_digest,
                 authority,
-            ) else {
+            )
+        })?;
+        let mut votes = Vec::with_capacity(authority.validators.len());
+        let mut responders = Vec::with_capacity(authority.validators.len());
+        for (index, response) in responses.into_iter().enumerate() {
+            let Ok(response) = response else {
                 continue;
             };
             if response.vote.signer != authority.validators[index] {
@@ -2986,6 +3030,323 @@ mod tests {
         num::NonZeroU64,
         sync::{Arc, Mutex},
     };
+
+    #[test]
+    fn prepare_request_fanout_overlaps_and_restores_reverse_completion_order() {
+        use std::sync::mpsc;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let (release_tx, release_rx): (Vec<_>, Vec<_>) =
+            (0..4).map(|_| mpsc::channel::<()>()).unzip();
+        let release_rx = release_rx.into_iter().map(Mutex::new).collect::<Vec<_>>();
+        let timeout = Duration::from_secs(5);
+        let responses = std::thread::scope(|scope| {
+            let controller = scope.spawn(move || {
+                let started = (0..4)
+                    .map(|_| started_rx.recv_timeout(timeout).expect("all four overlap"))
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(started, BTreeSet::from([0, 1, 2, 3]));
+                for index in (0..4).rev() {
+                    release_tx[index].send(()).expect("release live request");
+                    assert_eq!(
+                        finished_rx.recv_timeout(timeout).expect("request finished"),
+                        index
+                    );
+                }
+            });
+            let responses = collect_private_settlement_prepare_responses_v1(|index| {
+                started_tx.send(index).expect("controller exists");
+                release_rx[index]
+                    .lock()
+                    .expect("release receiver")
+                    .recv_timeout(timeout)
+                    .expect("controller releases request");
+                finished_tx
+                    .send(index)
+                    .expect("controller observes completion");
+                if index == 1 {
+                    Err(eyre!("ordinary request rejection"))
+                } else {
+                    Ok(index)
+                }
+            });
+            controller.join().expect("completion controller");
+            responses.expect("all request owners joined")
+        });
+        assert_eq!(responses.len(), 4);
+        assert_eq!(*responses[0].as_ref().expect("roster zero"), 0);
+        assert!(
+            responses[1]
+                .as_ref()
+                .expect_err("request rejection retained")
+                .to_string()
+                .contains("ordinary request rejection")
+        );
+        assert_eq!(*responses[2].as_ref().expect("roster two"), 2);
+        assert_eq!(*responses[3].as_ref().expect("roster three"), 3);
+    }
+
+    #[test]
+    fn prepare_request_fanout_joins_every_worker_after_an_early_panic() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Finished<'a>(&'a AtomicUsize, usize);
+        impl Drop for Finished<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_or(1 << self.1, Ordering::SeqCst);
+            }
+        }
+        let finished = AtomicUsize::new(0);
+        let result = collect_private_settlement_prepare_responses_v1(|index| {
+            let _finished = Finished(&finished, index);
+            assert_ne!(index, 0, "intentional request-worker panic");
+            Ok(index)
+        });
+        assert!(
+            result
+                .expect_err("worker panic must fail closed")
+                .to_string()
+                .contains("request worker panicked")
+        );
+        assert_eq!(
+            finished.load(Ordering::SeqCst),
+            0b1111,
+            "a returned error must not detach any initiated request"
+        );
+    }
+
+    #[test]
+    fn prepare_vote_fanout_preserves_quorum_rejection_and_durable_recovery() {
+        // Each case uses the real request/response validation and BLS signatures
+        // through the existing client-owned mock transport, without a network.
+        for case in 0..7 {
+            let client = client_with_base_url(base_url());
+            let (manifest, _) = finalization_manifest_v1(&client);
+            let (authority, keys) = finalization_authority_v1(manifest.legs[0].route, 0);
+            let payload_digest = manifest.legs[0].payload_digest;
+            let body = expected_phase_body_v1(
+                &manifest,
+                0,
+                &authority,
+                PrivateSettlementPhaseV1::Prepare,
+                private_settlement_reserved_prepared_digest_v1(),
+            )
+            .expect("valid Prepare body");
+            let votes = phase_votes_v1(&authority, &keys, &body, &[0, 1, 2, 3]);
+            let recovered = aggregate_phase_votes_v1(
+                &body,
+                0,
+                &authority,
+                &phase_votes_v1(&authority, &keys, &body, &[0, 1, 3]),
+            )
+            .expect("independent recovered signer subset");
+            let responses = votes
+                .iter()
+                .enumerate()
+                .map(|(index, vote)| {
+                    let mut vote = vote.clone();
+                    if case == 2 && index == 0 {
+                        vote.signature[0] ^= 1;
+                    }
+                    if case == 3 && index == 0 {
+                        // Valid cryptography from the wrong roster endpoint is fatal,
+                        // even though another request below is also unavailable.
+                        vote = votes[1].clone();
+                    }
+                    let mut response = PrivateSettlementPhaseVoteResponseV1 {
+                        bundle_id: manifest.bundle_id,
+                        payload_digest,
+                        leg_ordinal: 0,
+                        vote,
+                    };
+                    if case == 2 && index == 2 {
+                        response.payload_digest = Hash::new(b"substituted-response-payload");
+                    }
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", APPLICATION_JSON)
+                        .body(norito::json::to_vec(&response).expect("vote response JSON"))
+                        .expect("vote HTTP response")
+                })
+                .collect::<Vec<_>>();
+            let ack = PrivateSettlementPhaseCertificateResponseV1 {
+                bundle_id: manifest.bundle_id,
+                payload_digest,
+                leg_ordinal: 0,
+                phase: PrivateSettlementPhaseV1::Prepare,
+                lifecycle: PrivateSettlementLifecycleDtoV1::Prepared,
+            };
+            let recovery_response = PrivateSettlementPhaseCertificatesResponseV1 {
+                bundle_id: manifest.bundle_id,
+                payload_digest,
+                leg_ordinal: 0,
+                lifecycle: PrivateSettlementLifecycleDtoV1::Prepared,
+                prepare_certificate: Some(recovered.clone()),
+                commit_certificate: None,
+            };
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let observed = Arc::clone(&events);
+            let handed_off = Arc::new(Mutex::new(Vec::new()));
+            let recorded = Arc::clone(&handed_off);
+            let endpoints = committee_endpoint_fixture_v1();
+            let result = with_mock_http(
+                move |snapshot| {
+                    let index = usize::from(snapshot.url.port().expect("fixture port") - 24_000);
+                    if snapshot.url.path().ends_with("/prepare-votes") {
+                        observed.lock().expect("event log").push(("vote", index));
+                        if (case == 1 && index == 1) || (case == 3 && index == 3) {
+                            return Err(eyre!("unavailable fixture endpoint"));
+                        }
+                        return Ok(responses[index].clone());
+                    }
+                    if snapshot.url.path().ends_with("/phases/certificates") {
+                        observed.lock().expect("event log").push(("persist", index));
+                        let request: PrivateSettlementPhaseCertificateRequestV1 =
+                            norito::json::from_slice(&snapshot.body)
+                                .expect("exact QC handoff request");
+                        recorded
+                            .lock()
+                            .expect("handoff log")
+                            .push(request.certificate);
+                        let mut response = ack;
+                        if case == 5 && index == 2 {
+                            response.lifecycle = PrivateSettlementLifecycleDtoV1::Audited;
+                        }
+                        return Ok(Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", APPLICATION_JSON)
+                            .body(norito::json::to_vec(&response).expect("handoff JSON"))
+                            .expect("handoff response"));
+                    }
+                    assert!(snapshot.url.path().ends_with("/phase-certificates"));
+                    observed.lock().expect("event log").push(("recover", index));
+                    let mut response = recovery_response.clone();
+                    if case == 6 && index >= 2 {
+                        response.payload_digest = Hash::new(b"recovery-quorum-rejected");
+                    }
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", APPLICATION_JSON)
+                        .body(norito::json::to_vec(&response).expect("recovery JSON"))
+                        .expect("recovery response"))
+                },
+                |transport| {
+                    let client = client.clone().with_test_http_transport(transport);
+                    if case == 4 || case == 6 {
+                        client.recover_or_certify_private_settlement_prepare_v1(
+                            &endpoints,
+                            &manifest,
+                            payload_digest,
+                            &authority,
+                        )
+                    } else {
+                        client.certify_private_settlement_prepare_v1(
+                            &endpoints,
+                            &manifest,
+                            payload_digest,
+                            &authority,
+                        )
+                    }
+                },
+            );
+            let events = events.lock().expect("events");
+            if case == 6 {
+                assert!(
+                    result
+                        .expect_err("failed recovery blocks fresh votes")
+                        .to_string()
+                        .contains("three valid committee responses")
+                );
+                assert_eq!(
+                    *events,
+                    vec![
+                        ("recover", 0),
+                        ("recover", 1),
+                        ("recover", 2),
+                        ("recover", 3)
+                    ]
+                );
+                assert!(handed_off.lock().expect("handoffs").is_empty());
+                continue;
+            }
+            let prefix = if case == 4 { 4 } else { 0 };
+            assert_eq!(
+                events[prefix..prefix + 4]
+                    .iter()
+                    .map(|(phase, index)| {
+                        assert_eq!(*phase, "vote");
+                        *index
+                    })
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([0, 1, 2, 3])
+            );
+            if case == 2 || case == 3 {
+                let error = result.expect_err("invalid quorum or endpoint identity must fail");
+                assert!(error.to_string().contains(if case == 2 {
+                    "phase quorum is unavailable"
+                } else {
+                    "Prepare endpoint identity is substituted"
+                }));
+                assert_eq!(events.len(), 4);
+                assert!(handed_off.lock().expect("handoffs").is_empty());
+                continue;
+            }
+            let expected_responders = if case == 1 {
+                vec![0, 2, 3]
+            } else if case == 5 {
+                vec![0, 1, 2]
+            } else {
+                vec![0, 1, 2, 3]
+            };
+            assert_eq!(
+                events
+                    .iter()
+                    .filter_map(|(phase, index)| (*phase == "persist").then_some(*index))
+                    .collect::<Vec<_>>(),
+                expected_responders
+            );
+            if case == 5 {
+                assert!(
+                    result
+                        .expect_err("failed durable handoff cannot succeed")
+                        .to_string()
+                        .contains("acknowledgement is substituted")
+                );
+                assert_eq!(events.len(), 7);
+                continue;
+            }
+            let certificate = result.expect("complete exact quorum and handoff");
+            assert_eq!(
+                certificate.signers_bitmap,
+                if case == 1 {
+                    0b1101
+                } else if case == 4 {
+                    0b1011
+                } else {
+                    0b0111
+                }
+            );
+            validate_phase_certificate_v1(&certificate, &body, 0, &authority)
+                .expect("returned QC cryptographically validates");
+            assert!(
+                handed_off
+                    .lock()
+                    .expect("handoffs")
+                    .iter()
+                    .all(|qc| qc == &certificate)
+            );
+            if case == 4 {
+                assert_eq!(certificate, recovered, "preserve recovered aggregate bytes");
+                let recovery = vec![
+                    ("recover", 0),
+                    ("recover", 1),
+                    ("recover", 2),
+                    ("recover", 3),
+                ];
+                assert_eq!(&events[..4], recovery.as_slice());
+                assert_eq!(&events[12..], recovery.as_slice());
+            }
+        }
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct MockExactQuorumViewV1 {

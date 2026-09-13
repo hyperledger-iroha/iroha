@@ -30,14 +30,12 @@ HARDWARE_PROFILE = "c" * 64
 NONCE = "d" * 64
 
 
-def request(
+def request_header(
     participants: int = 3,
     *,
-    profile: str = "private",
-    warmup: bool = False,
     run: int = 0,
 ) -> dict[str, Any]:
-    """Build one exact canonical benchmark request."""
+    """Build the common exact fault/leakage request envelope."""
 
     seeds = list(range(10))
     configuration = MODULE.runner.build_configuration(
@@ -52,12 +50,10 @@ def request(
     configuration_sha = hashlib.sha256(configuration_bytes).hexdigest()
     seed = seeds[run % len(seeds)]
     job = {
-        "kind": "benchmark",
-        "profile": profile,
+        "kind": "fault",
         "participants": participants,
         "seed": seed,
         "run": run,
-        "warmup": warmup,
         "configuration_sha256": configuration_sha,
     }
     return {
@@ -65,7 +61,7 @@ def request(
         "protocol": MODULE.runner.PROTOCOL,
         "request_id": MODULE.runner.object_digest(job),
         "invocation_nonce": NONCE,
-        "kind": "benchmark",
+        "kind": "fault",
         "commit": COMMIT,
         "hardware_sha256": HARDWARE,
         "hardware_profile_sha256": HARDWARE_PROFILE,
@@ -83,19 +79,14 @@ def request(
         "seed": seed,
         "run": run,
         "configuration": configuration,
-        "payload": {
-            "profile": profile,
-            "warmup": warmup,
-            "stages": list(MODULE.benchmark_stages(profile)),
-            "resources": list(MODULE.runner.benchmark_report.RESOURCE_FIELDS),
-        },
+        "payload": {},
     }
 
 
 def fault_request(participants: int = 3, *, run: int = 0) -> dict[str, Any]:
     """Build one exact canonical fault-campaign request."""
 
-    result = request(participants, run=run)
+    result = request_header(participants, run=run)
     result["kind"] = "fault"
     result["payload"] = {
         "loss_phases": list(MODULE.runner.fault_report.REQUIRED_LOSS_PHASES),
@@ -135,7 +126,7 @@ def fault_request(participants: int = 3, *, run: int = 0) -> dict[str, Any]:
 def leakage_request(variant: str = "left") -> dict[str, Any]:
     """Build one exact commit-bound N=3 differential request."""
 
-    result = request(3)
+    result = request_header(3)
     manifest = MODULE.runner.build_canary_manifest(COMMIT)
     canaries = MODULE.runner.canaries_for_variant(manifest, variant)
     commitments = {
@@ -199,7 +190,6 @@ def inventory(participants: int) -> list[dict[str, Any]]:
 
 def rust_result(bound_request: dict[str, Any], request_sha: str) -> dict[str, Any]:
     participants = bound_request["participants"]
-    profile = bound_request["payload"]["profile"]
     return {
         "version": 1,
         "protocol": MODULE.runner.PROTOCOL,
@@ -212,26 +202,32 @@ def rust_result(bound_request: dict[str, Any], request_sha: str) -> dict[str, An
         "signed_rs16_da_observations": (participants + 1) * 4,
         "authenticated_message_control": True,
         "process_inventory": inventory(participants),
-        "payload": {
-            "stages_ms": {
-                stage: 1.0
-                for stage in MODULE.benchmark_stages(profile)
-            },
-            "throughput_bundles_per_second": 1.0,
-            "cpu_seconds": 1.0,
-            "peak_rss_bytes": 1,
-            "network_bytes": 1,
-            "proof_bytes": 1 if profile == "private" else 0,
-            "receipt_bytes": 1,
-            "storage_growth_bytes": 0,
-            "finalized_receipt_observed": True,
-            "successful_leg_applications": participants,
-            "each_leg_applied_exactly_once": True,
-            "partial_visible_observations": 0,
-            "partial_spendable_observations": 0,
-        },
+        "payload": {},
     }
 
+
+
+import private_settlement_session_semantics as semantics
+SOURCE_ROOT = ROOT
+
+
+def native_fixture(profile):
+    """Synthetic payload-only boundary fixture; not process/capture evidence."""
+    request = {'participants': 3, 'payload': {'profile': profile}}
+    vector = {'economic_vector_sha256': '8'*64}
+    ready = {'process_inventory': inventory(3)}
+    stages = (MODULE.runner.benchmark_report.REQUIRED_PRIVATE_STAGES if profile == 'private'
+              else ('global_finality', 'end_to_end'))
+    payload = {'stages_ms': {name: 1.0 for name in stages}, 'proof_bytes': int(profile == 'private'),
+        'receipt_bytes': 1, 'storage_growth_bytes': 0, 'finalized_receipt_observed': True,
+        'successful_leg_applications': 3, 'each_leg_applied_exactly_once': True,
+        'partial_visible_observations': 0, 'partial_spendable_observations': 0,
+        'economic_vector_sha256': vector['economic_vector_sha256'],
+        'primary_payment_count': 3, 'monetary_movement_count': 4}
+    result = {'payload': payload, 'mandatory_signed_rs16_da_rbc': True,
+        'authenticated_message_control': True, 'signed_rs16_da_observations': 16,
+        'process_inventory': ready['process_inventory']}
+    return result, request, ready, vector
 
 class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
     """Exercise strict request/result bindings without launching Cargo."""
@@ -365,26 +361,23 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertFalse(MODULE._exact_integer(0.0, 0))
 
     def test_all_release_participant_shapes_validate_deterministically(self) -> None:
-        for profile in MODULE.runner.PROFILES:
-            for participants in MODULE.runner.PARTICIPANTS:
-                fixture = request(participants, profile=profile)
-                self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
         for participants in MODULE.runner.PARTICIPANTS:
-            fixture = fault_request(participants)
-            self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
+            for run in range(10):
+                fixture = fault_request(participants, run=run)
+                self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
         for variant in ("left", "right"):
             fixture = leakage_request(variant)
             self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
 
     def test_primary_visibility_profile_fails_closed_on_every_shape_change(self) -> None:
         canonical = ["public", "restricted", "restricted"]
-        fixture = request(3)
+        fixture = fault_request(3)
         self.assertEqual(fixture["participant_visibilities"], canonical)
         self.assertEqual(
             fixture["configuration"]["participant_visibilities"], canonical
         )
 
-        factories = (request, fault_request, leakage_request)
+        factories = (fault_request, leakage_request)
         for factory in factories:
             missing = factory()
             del missing["participant_visibilities"]
@@ -407,13 +400,13 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
                     MODULE.validate_request(changed)
 
         for malformed_participants in (True, 3.0, "3"):
-            changed = request(3)
+            changed = fault_request(3)
             changed["participants"] = malformed_participants
             with self.assertRaisesRegex(MODULE.HarnessError, "participant count"):
                 MODULE.validate_request(changed)
 
     def test_embedded_visibility_profile_cannot_be_removed_or_substituted(self) -> None:
-        for factory in (request, fault_request, leakage_request):
+        for factory in (fault_request, leakage_request):
             missing = factory()
             del missing["configuration"]["participant_visibilities"]
             with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
@@ -431,9 +424,9 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
                     MODULE.validate_request(changed)
 
     def test_unsupported_kinds_fail_before_execution(self) -> None:
-        unknown = request()
+        unknown = fault_request()
         unknown["kind"] = "unknown"
-        with self.assertRaisesRegex(MODULE.HarnessError, "benchmark, fault, and leakage"):
+        with self.assertRaisesRegex(MODULE.HarnessError, "fault and leakage"):
             MODULE.validate_request(unknown)
 
     def test_leakage_request_rejects_canary_or_topology_substitution(self) -> None:
@@ -447,39 +440,35 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
             MODULE.validate_request(wrong_topology)
 
     def test_each_profile_requires_its_exact_stage_inventory(self) -> None:
-        private = request()
-        private["payload"]["stages"] = ["global_finality", "end_to_end"]
-        with self.assertRaisesRegex(MODULE.HarnessError, "canonical profile"):
-            MODULE.validate_request(private)
-        transparent = request(profile="transparent_control")
-        transparent["payload"]["stages"] = list(
-            MODULE.runner.benchmark_report.REQUIRED_PRIVATE_STAGES
-        )
-        with self.assertRaisesRegex(MODULE.HarnessError, "canonical profile"):
-            MODULE.validate_request(transparent)
+        for profile in MODULE.runner.PROFILES:
+            result, request, ready, vector = native_fixture(profile)
+            semantics.native_payload(result, request, ready, vector)
+            result['payload']['stages_ms'] = {'end_to_end': 1.0}
+            with self.assertRaisesRegex(semantics.control.SessionProtocolError, 'native benchmark stages'):
+                semantics.native_payload(result, request, ready, vector)
 
     def test_configuration_job_and_hardware_bindings_reject_substitution(self) -> None:
-        malformed = request()
+        malformed = fault_request()
         malformed["hardware_profile_sha256"] = "0" * 64
         with self.assertRaisesRegex(MODULE.HarnessError, "must be non-zero"):
             MODULE.validate_request(malformed)
-        configuration = request()
+        configuration = fault_request()
         configuration["configuration"]["participants"] = 4
         with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
             MODULE.validate_request(configuration)
-        rayon_width = request()
+        rayon_width = fault_request()
         rayon_width["configuration"]["execution"]["rayon_worker_threads"] = 1
         with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
             MODULE.validate_request(rayon_width)
-        validator_width = request()
+        validator_width = fault_request()
         validator_width["configuration"]["execution"]["validator_worker_threads"] = 1
         with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
             MODULE.validate_request(validator_width)
-        cargo_jobs = request()
+        cargo_jobs = fault_request()
         cargo_jobs["configuration"]["execution"]["cargo_build_jobs"] = 2
         with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
             MODULE.validate_request(cargo_jobs)
-        job = request()
+        job = fault_request()
         job["request_id"] = "1" * 64
         with self.assertRaisesRegex(MODULE.HarnessError, "does not bind"):
             MODULE.validate_request(job)
@@ -487,7 +476,7 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
     def test_rust_environment_overrides_ambient_width_and_strips_control_inputs(
         self,
     ) -> None:
-        bound = request()
+        bound = fault_request()
         with mock.patch.dict(
             MODULE.os.environ,
             {
@@ -524,39 +513,24 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertEqual(environment["APS_UNRELATED"], "preserved")
 
     def test_rust_result_cannot_be_reused_across_request_or_nonce(self) -> None:
-        for profile in MODULE.runner.PROFILES:
-            bound = request(profile=profile)
-            raw = (json.dumps(bound, sort_keys=True) + "\n").encode()
-            request_sha = hashlib.sha256(raw).hexdigest()
-            result = rust_result(bound, request_sha)
-            MODULE.validate_rust_result(result, request=bound, request_sha=request_sha)
-            stale = copy.deepcopy(result)
-            stale["request_sha256"] = "1" * 64
-            with self.assertRaisesRegex(MODULE.HarnessError, "exact invocation"):
-                MODULE.validate_rust_result(stale, request=bound, request_sha=request_sha)
-            stale_nonce = copy.deepcopy(result)
-            stale_nonce["invocation_nonce"] = "2" * 64
-            with self.assertRaisesRegex(MODULE.HarnessError, "exact invocation"):
-                MODULE.validate_rust_result(
-                    stale_nonce, request=bound, request_sha=request_sha
-                )
+        for factory in (fault_request, leakage_request):
+            bound = factory(); request_sha = '3'*64
+            for key in ('request_id', 'request_sha256', 'invocation_nonce', 'commit'):
+                stale = rust_result(bound, request_sha)
+                stale[key] = '1'*(40 if key == 'commit' else 64)
+                with self.assertRaisesRegex(MODULE.HarnessError, 'exact invocation'):
+                    MODULE.validate_rust_result(stale, request=bound, request_sha=request_sha)
 
     def test_transparent_control_accepts_zero_proof_bytes_but_private_does_not(self) -> None:
-        transparent = request(profile="transparent_control")
-        transparent_result = rust_result(transparent, "3" * 64)
-        MODULE.validate_rust_result(
-            transparent_result, request=transparent, request_sha="3" * 64
-        )
-        private = request()
-        private_result = rust_result(private, "4" * 64)
-        private_result["payload"]["proof_bytes"] = 0
-        with self.assertRaisesRegex(MODULE.HarnessError, "proof_bytes"):
-            MODULE.validate_rust_result(
-                private_result, request=private, request_sha="4" * 64
-            )
+        for profile in MODULE.runner.PROFILES:
+            result, request, ready, vector = native_fixture(profile)
+            semantics.native_payload(result, request, ready, vector)
+            result['payload']['proof_bytes'] = 1 if profile == 'transparent_control' else 0
+            with self.assertRaisesRegex(semantics.control.SessionProtocolError, 'proof/receipt sizes'):
+                semantics.native_payload(result, request, ready, vector)
 
     def test_rust_result_requires_validator_scaled_da_and_complete_inventory(self) -> None:
-        bound = request(8)
+        bound = fault_request(8)
         request_sha = "3" * 64
         too_few = rust_result(bound, request_sha)
         too_few["signed_rs16_da_observations"] = 1
@@ -614,11 +588,11 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
     def test_static_rust_path_uses_real_processes_controller_and_signed_da(self) -> None:
         python_harness = SCRIPT.read_text(encoding="utf-8")
         localnet = (
-            ROOT
+            SOURCE_ROOT
             / "integration_tests/tests/nexus/atomic_private_settlement_localnet.rs"
         ).read_text(encoding="utf-8")
         harness = (
-            ROOT
+            SOURCE_ROOT
             / "integration_tests/tests/nexus/atomic_private_settlement_real_process_harness.rs"
         ).read_text(encoding="utf-8")
         private_benchmark = harness[
@@ -626,7 +600,8 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
                 "fn write_real_process_result"
             )
         ]
-        self.assertIn("atomic_private_settlement_real_process_benchmark_harness", harness)
+        self.assertIn("atomic_private_settlement_real_process_benchmark_session_harness", harness)
+        self.assertNotIn("BENCHMARK_TEST_NAME", python_harness)
         self.assertIn("atomic_private_settlement_real_process_leakage_harness", harness)
         self.assertIn("run_real_process_leakage_campaign", harness)
         self.assertIn("ensure_leakage_sources_redacted", harness)
@@ -668,15 +643,33 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertNotIn("TODO:", private_benchmark)
         self.assertNotIn("&deltas,\n        &deltas,", private_benchmark)
         self.assertIn("run_real_process_transparent_control_benchmark", harness)
-        self.assertIn("DvpIsi::new", harness)
+        self.assertIn("SettleAtomic", harness)
         self.assertNotIn("Transfer::asset", harness)
-        self.assertIn("request.participants - 1", harness)
+        self.assertIn("monetary_movement_count", harness)
+        self.assertNotIn("request.participants - 1", harness)
         self.assertIn("CanExecuteSettlement", localnet)
         self.assertIn("wait_for_identical_native_amx_receipt", harness)
         self.assertIn("proof_bytes: 0", harness)
         self.assertIn(
             'include!("atomic_private_settlement_real_process_harness.rs")', localnet
         )
+
+
+    def test_retired_profile_warmups_are_not_a_compatibility_path(self):
+        bound = fault_request()
+        benchmark = bound['configuration']['benchmark']
+        benchmark['warmups_per_profile'] = benchmark.pop('warmups_per_session')
+        with self.assertRaisesRegex(MODULE.HarnessError, 'embedded configuration is invalid'):
+            MODULE.validate_request(bound)
+
+    def test_one_shot_benchmark_rejects_before_any_execution_owner(self):
+        for bound in ({'kind': 'benchmark'}, {**fault_request(), 'kind': 'benchmark'}):
+            with mock.patch.object(MODULE, 'bind_source_revision') as source, mock.patch.object(MODULE, '_run') as execute:
+                with self.assertRaisesRegex(MODULE.HarnessError, 'retained session owner'):
+                    MODULE.validate_request(bound)
+                with self.assertRaisesRegex(MODULE.HarnessError, 'fault and leakage only'):
+                    MODULE.run_rust_harness(Path('unused'), b'{}', bound, Path('unused'))
+                source.assert_not_called(); execute.assert_not_called()
 
 
 if __name__ == "__main__":

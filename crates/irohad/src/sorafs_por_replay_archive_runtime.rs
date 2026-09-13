@@ -385,7 +385,15 @@ mod tests {
     }
     #[test]
     fn reputation_reconciliation_does_not_require_an_archive_policy() {
-        let node = NodeHandle::new(StorageConfig::default());
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical node fixture parent");
+        let _storage = TempDir::new_in(root).expect("private node fixture storage");
+        let node = NodeHandle::new(
+            StorageConfig::builder()
+                .data_dir(_storage.path().join("storage"))
+                .build(),
+        );
         assert_eq!(
             reconcile_reputation_once(&node, &RejectingAdmission, 1),
             Ok(PorReplayArchiveTickOutcomeV1 {

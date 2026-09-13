@@ -972,6 +972,7 @@ define_singular_source_admission! {
     FindMusubiOrderedPrefixV1: ProvenBounded,
     FindDomainById: ProvenBounded,
     FindFeeSponsorProgramById: ProvenBounded,
+    FindSettlementReceiptById: ProvenBounded,
     FindFxCorridorPolicyRegistry: ProvenBounded,
     FindFxCorridorPolicyById: ProvenBounded,
     FindDomainEndorsements: ProvenBounded,
@@ -1314,6 +1315,11 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge(policy, &mut remaining)?;
             }
         }
+        SingularQueryBox::FindSettlementReceiptById(query) => {
+            if let Some(receipt) = world.settlement_receipts().get(&query.id) {
+                charge(receipt, &mut remaining)?;
+            }
+        }
         SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {
             require_active_adapter(
                 singular_output_lane_active,
@@ -1571,7 +1577,7 @@ mod tests {
     }
     #[test]
     fn singular_source_admission_audit_covers_every_variant() {
-        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 101);
+        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 102);
         let mut names = std::collections::BTreeSet::new();
         for (name, class) in SINGULAR_SOURCE_ADMISSION_AUDIT {
             assert!(!name.is_empty());

@@ -36,7 +36,8 @@ pub(super) fn asset_definitions(
             pvp.primary_leg().asset_definition_id(),
             pvp.counter_leg().asset_definition_id(),
         )),
-        SettlementInstructionBox::SetFxCorridorPolicy(_)
+        SettlementInstructionBox::Atomic(_)
+        | SettlementInstructionBox::SetFxCorridorPolicy(_)
         | SettlementInstructionBox::FundFxCorridorEscrow(_)
         | SettlementInstructionBox::RefundFxCorridorEscrow(_)
         | SettlementInstructionBox::SettleFxCorridor(_) => None,

@@ -144,6 +144,19 @@ rho and blinding prevents a public observer from testing pairs of public note
 commitments against this binding. A self-consistent capsule and a cooperating payer's signature
 cannot substitute different funding notes for those proved by the AIR.
 
+The sole APZ1 V1 proof wire has one exact public-profile length, derived by
+`maximum_encoded_proof_with_deep_bytes_v1` from the admitted parameters and
+statement-derived layout, including the DEEP openings. Query-dependent Merkle
+frontiers remain minimal and canonical; after those frontiers the encoder
+fills the remaining fixed wire with zeros. The decoder requires that exact
+length before proof-vector allocation, derives frontier sizes from valid unique
+query indices, and rejects nonzero padding, short/unpadded encodings, truncation
+and extra suffixes. The eight-MiB protocol ceiling remains an admission bound;
+it is not the padding target. Proof digests, restricted uploads and retained
+sidecars bind the complete padded bytes. The shared profile descriptor commits
+this mandatory wire rule. Fixed proof length does not by itself qualify packet
+boundaries, other capture surfaces or the secret-only differential release gate.
+
 The relation enforces a balanced confidential transition and rejects the
 directional public-balance bridge. It binds the network, manifest proof-binding
 digest, bundle and leg ordinal, exact route, salted opaque asset/pool binding,
@@ -179,6 +192,10 @@ trusted values. The Python native worker retains the envelope in a native vault
 addressed by an opaque one-shot handle; Python supplies only the public
 successor root and receives the statement, proof, derived delta, and encrypted
 capsule. No witness enters Python.
+
+Digest preparation uses one always-compiled resource policy: at most 65,536 frames and 4,194,304 canonical words per batch. Private row preparation additionally retains its independent 32 MiB serialized-payload limit and chooses the minimum of these three bounds using the framing owner's exact length-only geometry. Device admission still validates the actual complete frames. Pair preparation uses fallible allocations, preserves absolute node indices and ordered digests, and never changes transcript bytes. These are local resource limits, not proof-profile or consensus parameters; readiness/KAT, quarantine and private-buffer zeroization remain enforced.
+
+Global timeout certificates are delivered to the immutable union of the global roster and usable current-height participant committees resolved from one preceding-State view. Only global-roster senders expand this delivery audience; ordinary votes keep their original global destinations. An unpopulated optional lane or an oversubscribed lane awaiting its first beacon pulse contributes no guessed committee. Other authority inconsistencies remain errors. Existing certificate authentication, exact-view admission and retained retransmission govern observer progress.
 
 ## Audit capsule and approval
 
@@ -299,6 +316,15 @@ release recovery test, not an implicit property of AEAD.
 
 `ActivatePrivateSettlementPoolV1` creates the public projection of one
 restricted route/pool/asset binding and its canonical initial commitments.
+A transaction activating pools in more than one private dataspace uses the
+universal dataspace's configured coordinator lane and retains every private
+participant leg. Catalog-only ingress and State-based admission apply the same
+settlement-target normalization, including instruction vectors and executable
+batches. Instruction order cannot select a different coordinator. One or more
+activation instructions confined to one private dataspace retain its local
+route. The precomputed routing-plan comparison remains exact; stale plans are
+rejected rather than repaired during admission.
+
 `RotatePrivateSettlementPoolPolicyV1` is the privacy-governance-authorized
 replacement boundary for its auditor policy and key epoch. A rotation must name
 the exact current `governance_digest`, preserve the route, pool, asset-binding
@@ -577,6 +603,8 @@ protocol limits are configuration errors.
   confidential financial effect occurs together in the single finalization
   `StateTransaction`.
 - Every global leg is validated before the first overlay write.
+- A staged recovery checkpoint includes the exact post-commit replay ledger and prepared DA quota writes, including first-touch MV undo history. The projection is read-only; ordinary expiry remains a commit operation and autonomous retention semantics are unchanged. Immutable checkpoint/post-commit hash parity remains mandatory.
+- Loading verified relay caches never mutates canonical contract storage. Stale or mismatched-incarnation records remain ineligible; canonical removal occurs only through the committed lane lifecycle transition.
 - Replay markers and terminal receipts survive snapshots, Kura replay, and
   restart; ambiguous local state fails closed and reconciles from immutable WSV.
 - Snapshot restore accepts exactly the current 188-field `World` schema,

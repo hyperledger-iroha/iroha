@@ -53,11 +53,12 @@ fn ensure_status_metrics_match_authoritative_height(
     status: &Status,
     authoritative_block_height: u64,
 ) -> std::result::Result<(), Error> {
+    // This height travels with the immutable actor reply, not a live/pre-await State read.
     if status.blocks != authoritative_block_height {
         return Err(Error::AppServiceUnavailable {
             code: "status_metrics_stale",
             message: format!(
-                "status metrics classified height {} while applied state is at height {authoritative_block_height}; retry",
+                "status metrics classified height {} while its owned State target is at height {authoritative_block_height}; retry",
                 status.blocks
             ),
         });

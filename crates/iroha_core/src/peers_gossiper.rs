@@ -180,8 +180,8 @@ impl TrustBook {
 /// [`PeersGossiper`] actor handle.
 #[derive(Debug)]
 enum GossipEvent {
-    Peers { gossip: PeersGossip, from: Peer },
-    Trust { gossip: PeerTrustGossip, from: Peer },
+    Peers(crate::retained_gossip::RetainedGossip<(PeersGossip, Peer)>),
+    Trust(crate::retained_gossip::RetainedGossip<(PeerTrustGossip, Peer)>),
 }
 /// Handle to interact with the peers gossiper actor.
 #[derive(Clone)]
@@ -194,12 +194,9 @@ impl PeersGossiperHandle {
     ///
     /// Messages are best-effort: if the queue is full, the gossip is dropped
     /// to avoid blocking consensus traffic.
-    pub fn gossip(&self, gossip: PeersGossip, peer: Peer) {
-        let peer_id = peer.id().clone();
-        match self
-            .message_sender
-            .try_send(GossipEvent::Peers { gossip, from: peer })
-        {
+    pub fn gossip(&self, gossip: crate::retained_gossip::RetainedGossip<(PeersGossip, Peer)>) {
+        let peer_id = gossip.payload().1.id().clone();
+        match self.message_sender.try_send(GossipEvent::Peers(gossip)) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
                 iroha_logger::debug!(
@@ -219,12 +216,12 @@ impl PeersGossiperHandle {
     ///
     /// Messages are best-effort: if the queue is full, the gossip is dropped
     /// to avoid blocking consensus traffic.
-    pub fn gossip_trust(&self, gossip: PeerTrustGossip, peer: Peer) {
-        let peer_id = peer.id().clone();
-        match self
-            .message_sender
-            .try_send(GossipEvent::Trust { gossip, from: peer })
-        {
+    pub fn gossip_trust(
+        &self,
+        gossip: crate::retained_gossip::RetainedGossip<(PeerTrustGossip, Peer)>,
+    ) {
+        let peer_id = gossip.payload().1.id().clone();
+        match self.message_sender.try_send(GossipEvent::Trust(gossip)) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
                 iroha_logger::debug!(
@@ -511,16 +508,16 @@ impl PeersGossiper {
                 }
                 Some(event) = message_receiver.recv() => {
                     match event {
-                        GossipEvent::Peers { gossip, from } => {
+                        GossipEvent::Peers(message) => message.with_payload(|(gossip, from)| {
                             if self.handle_peers_gossip(gossip, &from) {
                                 self.note_gossip_change(std::time::Instant::now());
                             }
-                        }
-                        GossipEvent::Trust { gossip, from } => {
+                        }),
+                        GossipEvent::Trust(message) => message.with_payload(|(gossip, from)| {
                             if self.handle_trust_gossip(gossip, &from) {
                                 self.note_gossip_change(std::time::Instant::now());
                             }
-                        }
+                        }),
                     }
                     true
                 }
@@ -1750,6 +1747,62 @@ mod tests {
         );
     }
     #[test]
+    fn retained_peers_and_trust_events_keep_credit_until_processing_or_rejection() {
+        use crate::retained_gossip::RetainedGossip;
+        for trust_first in [false, true] {
+            let (message_sender, mut receiver) = mpsc::channel(1);
+            let (update_topology_sender, _updates) = mpsc::unbounded_channel();
+            let handle = PeersGossiperHandle {
+                message_sender,
+                update_topology_sender,
+            };
+            let key = checked_seed_keypair(&[98, 97, 96, 95]);
+            let peer = Peer::new("127.0.0.1:9998".parse().unwrap(), key.public_key().clone());
+            let (peers, peers_count) = RetainedGossip::with_count_for_test((
+                PeersGossip {
+                    peers: UniqueVec::from_iter(vec![peer.clone()]),
+                    peer_capabilities: BTreeMap::new(),
+                },
+                peer.clone(),
+            ));
+            let (trust, trust_count) = RetainedGossip::with_count_for_test((
+                PeerTrustGossip {
+                    network_id: trust_test_network_id(),
+                    trust: Vec::new(),
+                },
+                peer,
+            ));
+            let (queued, rejected) = if trust_first {
+                handle.gossip_trust(trust);
+                handle.gossip(peers);
+                (trust_count, peers_count)
+            } else {
+                handle.gossip(peers);
+                handle.gossip_trust(trust);
+                (peers_count, trust_count)
+            };
+            assert_eq!(queued.available_permits(), 0);
+            assert_eq!(rejected.available_permits(), 1);
+            match receiver.try_recv().unwrap() {
+                GossipEvent::Peers(message) => message.with_payload(|(gossip, _)| {
+                    assert!(!trust_first);
+                    assert_eq!(gossip.peers.len(), 1);
+                    assert_eq!(queued.available_permits(), 0);
+                }),
+                GossipEvent::Trust(message) => message.with_payload(|(gossip, _)| {
+                    assert!(trust_first);
+                    assert!(gossip.trust.is_empty());
+                    assert_eq!(queued.available_permits(), 0);
+                }),
+            }
+            assert_eq!(queued.available_permits(), 1);
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty)
+            ));
+        }
+    }
+    #[test]
     fn gossiper_handle_drops_messages_when_receiver_closed() {
         let handle = PeersGossiperHandle::closed_for_tests();
         let kp = checked_seed_keypair(&[99, 98, 97, 96]);
@@ -1757,20 +1810,24 @@ mod tests {
             "127.0.0.1:9999".parse().expect("addr"),
             kp.public_key().clone(),
         );
-        handle.gossip(
-            PeersGossip {
-                peers: UniqueVec::from_iter(vec![peer.clone()]),
-                peer_capabilities: BTreeMap::new(),
-            },
-            peer.clone(),
-        );
-        handle.gossip_trust(
-            PeerTrustGossip {
-                network_id: trust_test_network_id(),
-                trust: Vec::new(),
-            },
-            peer,
-        );
+        handle.gossip(crate::retained_gossip::RetainedGossip::synthetic_for_test(
+            (
+                PeersGossip {
+                    peers: UniqueVec::from_iter(vec![peer.clone()]),
+                    peer_capabilities: BTreeMap::new(),
+                },
+                peer.clone(),
+            ),
+        ));
+        handle.gossip_trust(crate::retained_gossip::RetainedGossip::synthetic_for_test(
+            (
+                PeerTrustGossip {
+                    network_id: trust_test_network_id(),
+                    trust: Vec::new(),
+                },
+                peer,
+            ),
+        ));
         handle.update_topology(UpdateTopology(HashSet::new()));
     }
     #[tokio::test]

@@ -6970,8 +6970,9 @@ pub(crate) mod valid {
         /// so its embedded block signature need not belong to the current
         /// proposal leader. This path skips only that already-checked block
         /// signature set. A body which is wire-empty may pass only when the
-        /// shared semantic-work gate proves state-derived clock progress or
-        /// autonomous/internal work; genuinely idle bodies are rejected.
+        /// shared semantic-work gate proves state-derived clock progress,
+        /// scheduled start effects or autonomous/internal work; idle bodies
+        /// are rejected.
         /// The authenticated height context and its parent CommitQC are the
         /// sole reconfiguration proof; the block payload carries no parallel
         /// authority surface.
@@ -7528,8 +7529,11 @@ pub(crate) mod valid {
                     .is_some_and(|parent_creation_time| {
                         state.time_trigger_clock_progress_required_fast(parent_creation_time)
                     });
-                if !candidate_block_has_proposal_work(&block, time_trigger_clock_progress_required)
-                {
+                if !candidate_block_has_proposal_work(
+                    &block,
+                    state,
+                    time_trigger_clock_progress_required,
+                ) {
                     let stateless_elapsed = stateless_start.elapsed();
                     record_timings(&mut timings, stateless_elapsed, None);
                     let error = BlockValidationError::EmptyBlock;

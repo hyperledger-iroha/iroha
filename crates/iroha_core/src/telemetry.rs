@@ -4704,7 +4704,25 @@ const CHANNEL_CAPACITY: usize = 1024;
 const METRICS_SYNC_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 enum Message {
-    Sync { reply: Option<oneshot::Sender<()>> },
+    Sync {
+        reply: Option<oneshot::Sender<Result<(), StatusSnapshotError>>>,
+    },
+    #[cfg(test)]
+    TestBarrier {
+        entered: oneshot::Sender<()>,
+        resume: oneshot::Receiver<()>,
+    },
+    #[cfg(test)]
+    TestChunkBarrier {
+        entered: oneshot::Sender<usize>,
+        resume: oneshot::Receiver<()>,
+    },
+    #[cfg(feature = "telemetry")]
+    Status {
+        build: iroha_torii_shared::status::BuildStatus,
+        deadline: tokio::time::Instant,
+        reply: oneshot::Sender<Result<OwnedStatus, StatusSnapshotError>>,
+    },
 }
 /// Handle to the telemetry state
 pub struct Telemetry {
@@ -6359,6 +6377,36 @@ impl Telemetry {
         refresh_ivm_cache_metrics(&self.metrics);
         Ok(&self.metrics)
     }
+    /// Return an immutable classified State/Nexus status under one service deadline.
+    ///
+    /// The bounded actor owns physical catch-up after a waiter expires; no late
+    /// response is accepted and no request keeps State or transaction guards.
+    #[cfg(feature = "telemetry")]
+    pub async fn status_snapshot(
+        &self,
+        build: &iroha_torii_shared::status::BuildStatus,
+    ) -> Result<OwnedStatus, StatusSnapshotError> {
+        if !self.enabled {
+            return Err(StatusSnapshotError::Disabled);
+        }
+        let deadline = tokio::time::Instant::now() + METRICS_SYNC_TIMEOUT;
+        let (reply, receiver) = oneshot::channel();
+        self.actor
+            .try_send(Message::Status {
+                build: build.clone(),
+                deadline,
+                reply,
+            })
+            .map_err(|_| StatusSnapshotError::MailboxUnavailable)?;
+        let result = tokio::time::timeout_at(deadline, receiver)
+            .await
+            .map_err(|_| StatusSnapshotError::DeadlineElapsed)?
+            .map_err(|_| StatusSnapshotError::ActorClosed)?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(StatusSnapshotError::DeadlineElapsed);
+        }
+        result
+    }
     #[cfg(feature = "telemetry")]
     async fn synchronize_metrics(&self) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
@@ -6369,7 +6417,8 @@ impl Telemetry {
         tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
             .await
             .map_err(|_| "telemetry sync timed out".to_owned())?
-            .map_err(|_| "telemetry actor closed".to_owned())?;
+            .map_err(|_| "telemetry actor closed".to_owned())?
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
     /// Access the `SoraNet` privacy aggregator.
@@ -6449,6 +6498,9 @@ struct Actor {
     handle: mpsc::Receiver<Message>,
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     last_sync_block: usize,
+    last_sync_hash: Option<HashOf<BlockHeader>>,
+    #[cfg(test)]
+    status_chunk_barrier: Option<(oneshot::Sender<usize>, oneshot::Receiver<()>)>,
     last_online_peers: BTreeSet<PeerId>,
     online_peers: watch::Receiver<OnlinePeers>,
     local_peer_id: PeerId,
@@ -6464,28 +6516,54 @@ impl Actor {
     async fn run(mut self) {
         while let Some(message) = self.handle.recv().await {
             match message {
+                #[cfg(test)]
+                Message::TestBarrier { entered, resume } => {
+                    let _ = entered.send(());
+                    let _ = resume.await;
+                }
+                #[cfg(test)]
+                Message::TestChunkBarrier { entered, resume } => {
+                    self.status_chunk_barrier = Some((entered, resume));
+                }
                 Message::Sync { reply } => {
-                    self.sync().await;
+                    let result = self.sync().await.map(|_| ());
                     self.sync_requested.store(false, Ordering::Release);
                     if let Some(reply) = reply {
-                        let _ = reply.send(());
+                        let _ = reply.send(result);
                     }
+                }
+                #[cfg(feature = "telemetry")]
+                Message::Status {
+                    build,
+                    deadline,
+                    reply,
+                } => {
+                    if reply.is_closed() || tokio::time::Instant::now() >= deadline {
+                        let _ = reply.send(Err(StatusSnapshotError::DeadlineElapsed));
+                        continue;
+                    }
+                    // Work remains actor-owned through finite chunked catch-up.
+                    // Expiration retires only the response, never verified progress.
+                    let result = match self.sync().await {
+                        Ok(target) => self.owned_status(target, &build),
+                        Err(error) => Err(error),
+                    };
+                    self.sync_requested.store(false, Ordering::Release);
+                    let result = if tokio::time::Instant::now() >= deadline {
+                        Err(StatusSnapshotError::DeadlineElapsed)
+                    } else {
+                        result
+                    };
+                    let _ = reply.send(result);
                 }
             }
         }
     }
-    fn seed_last_reported_block(&self) -> Option<BlockCommitReport> {
-        let next_height = self.last_sync_block.checked_add(1)?;
-        let index = NonZeroUsize::new(next_height)?;
-        let block = self.kura.get_block(index)?;
-        let header = block.header();
-        Some(BlockCommitReport::new(&header, &self.time_source))
-    }
     #[allow(clippy::too_many_lines)]
-    async fn sync(&mut self) {
+    async fn sync(&mut self) -> Result<crate::state::TelemetryStatusTarget, StatusSnapshotError> {
         // Disabled profiles skip recording/updating all metrics.
         if !self.enabled {
-            return;
+            return Err(StatusSnapshotError::Disabled);
         }
         refresh_sumeragi_mode(&self.metrics);
         let local_removed = {
@@ -6861,147 +6939,12 @@ impl Actor {
         caps.with_label_values(&["Other"])
             .set(iroha_p2p::network::cap_violations_other());
         // Reconnect-success export remains pending a dedicated metrics counter.
-        // Kura append precedes State publication. Classify only one captured
-        // applied prefix, so all block and transaction counters exclude a
-        // durably stored block whose state transition is still in flight.
-        let applied_height = self.state.committed_height();
-        if applied_height == 0 {
-            return;
-        }
-        let mut last_reported_block = {
-            let mut lock = self.last_reported_block.write().await;
-            if lock.is_none() {
-                *lock = self.seed_last_reported_block();
-            }
-            let Some(mut latest) = *lock else {
-                return;
-            };
-            if latest.height > applied_height {
-                let index =
-                    NonZeroUsize::new(applied_height).expect("the applied prefix contains genesis");
-                let Some(block) = self.kura.get_block(index) else {
-                    return;
-                };
-                latest = BlockCommitReport::new(&block.header(), &self.time_source);
-            }
-            // Recover missed notifications only through the applied prefix.
-            while latest.height < applied_height {
-                let Some(next_index) = latest.height.checked_add(1).and_then(NonZeroUsize::new)
-                else {
-                    break;
-                };
-                let Some(next_block) = self.kura.get_block(next_index) else {
-                    break;
-                };
-                latest = BlockCommitReport::new(&next_block.header(), &self.time_source);
-            }
-            // Keep a notification for an as-yet unpublished block, including
-            // its original observation time, for the next successful refresh.
-            if lock.is_none_or(|reported| reported.height <= latest.height) {
-                *lock = Some(latest);
-            }
-            latest
-        };
-        let start_index = self.last_sync_block;
-        {
-            let mut inc_txs_accepted = 0;
-            let mut inc_txs_rejected = 0;
-            let mut inc_blocks = 0;
-            let mut inc_blocks_non_empty = 0;
-            let mut corrected_last_report = false;
-            let mut block_index = start_index;
-            while block_index < last_reported_block.height {
-                let Some(block) = NonZeroUsize::new(
-                    block_index
-                        .checked_add(1)
-                        .expect("INTERNAL BUG: Blockchain height exceeds usize::MAX"),
-                )
-                .and_then(|index| self.kura.get_block(index)) else {
-                    break;
-                };
-                block_index += 1;
-                let block_external_txs = block.external_transactions().len();
-                let block_txs_rejected = block
-                    .results()
-                    .take(block_external_txs)
-                    .filter(|result| result.is_err())
-                    .count() as u64;
-                let block_txs_all = block_external_txs as u64;
-                let block_txs_approved = block_txs_all.saturating_sub(block_txs_rejected);
-                inc_blocks += 1;
-                inc_txs_accepted += block_txs_approved;
-                inc_txs_rejected += block_txs_rejected;
-                let block_counts_as_non_empty = block_counts_as_non_empty(block.as_ref());
-                if block_counts_as_non_empty {
-                    inc_blocks_non_empty += 1;
-                }
-                let block_observed_at_ms = if block_index == last_reported_block.height {
-                    corrected_last_report |= reconcile_last_reported_block_with_kura(
-                        &mut last_reported_block,
-                        &block.header(),
-                        &self.time_source,
-                    );
-                    last_reported_block.observed_at_ms
-                } else {
-                    BlockCommitReport::new(&block.header(), &self.time_source).observed_at_ms
-                };
-                self.metrics
-                    .last_block_committed_at_ms
-                    .set(block_observed_at_ms);
-                if block_counts_as_non_empty {
-                    self.metrics
-                        .last_non_empty_block_committed_at_ms
-                        .set(block_observed_at_ms);
-                }
-                if block_index == last_reported_block.height {
-                    #[allow(clippy::cast_precision_loss)]
-                    self.metrics.last_commit_time_ms.set(
-                        u64::try_from(last_reported_block.commit_time.as_millis())
-                            .expect("time should fit into u64"),
-                    );
-                }
-            }
-            self.last_sync_block = block_index;
-            if corrected_last_report {
-                let mut lock = self.last_reported_block.write().await;
-                let should_replace = match *lock {
-                    Some(current)
-                        if current.height > last_reported_block.height
-                            || (current.height == last_reported_block.height
-                                && current.hash == last_reported_block.hash) =>
-                    {
-                        false
-                    }
-                    _ => true,
-                };
-                if should_replace {
-                    *lock = Some(last_reported_block);
-                }
-            }
-            self.metrics
-                .txs
-                .with_label_values(&["accepted"])
-                .inc_by(inc_txs_accepted);
-            self.metrics
-                .txs
-                .with_label_values(&["rejected"])
-                .inc_by(inc_txs_rejected);
-            if inc_txs_rejected != 0 {
-                let observed_at_ms =
-                    u64::try_from(self.time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX);
-                self.metrics
-                    .record_rejected_transactions(inc_txs_rejected, observed_at_ms);
-            }
-            self.metrics
-                .txs
-                .with_label_values(&["total"])
-                .inc_by(inc_txs_accepted + inc_txs_rejected);
-            self.metrics.block_height.inc_by(inc_blocks);
-            self.metrics
-                .block_height_non_empty
-                .inc_by(inc_blocks_non_empty);
-        }
-        let world_view = self.state.world_view();
+        // Capture routing and applied journal together; no State guard survives.
+        let target = self
+            .state
+            .telemetry_status_target()
+            .map_err(|_| StatusSnapshotError::StateUnavailable)?;
+        self.classify_status_target(&target).await?;
         #[allow(clippy::cast_possible_truncation)]
         if self.state.committed_height() > 0 {
             let genesis_timestamp = NonZeroUsize::new(1).and_then(|index| {
@@ -7028,6 +6971,7 @@ impl Actor {
                 iroha_logger::error!("Failed to get genesis block from Kura.");
             }
         }
+        let world_view = self.state.world_view();
         // These metrics may briefly lead "latest block" when the world snapshot is ahead;
         // that observation window should remain very narrow.
         self.metrics.domains.set(world_view.domains().len() as u64);
@@ -7053,6 +6997,7 @@ impl Actor {
             .runtime_abi_version
             .set(u64::from(world_view.abi_version()));
         refresh_ivm_cache_metrics(&self.metrics);
+        Ok(target)
     }
 }
 fn refresh_ivm_cache_metrics(metrics: &Metrics) {
@@ -7166,6 +7111,9 @@ pub fn start(
                     kura,
                     queue,
                     last_sync_block: 0,
+                    last_sync_hash: None,
+                    #[cfg(test)]
+                    status_chunk_barrier: None,
                     last_online_peers: BTreeSet::new(),
                     last_reported_block,
                     online_peers,
@@ -10639,6 +10587,11 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].contract_address, activation.contract_address);
     }
+    #[cfg(feature = "telemetry")]
+    mod classified_status_tests {
+        use super::*;
+        include!("telemetry/classified_status_tests.rs");
+    }
     impl SystemUnderTest {
         fn new() -> Self {
             let metrics = Arc::new(Metrics::default());
@@ -11165,6 +11118,18 @@ mod tests {
                 );
                 assert_eq!(metrics.txs.with_label_values(&["total"]).get(), old_total);
                 assert_eq!(metrics.last_block_committed_at_ms.get(), old_observed);
+                #[cfg(feature = "telemetry")]
+                {
+                    let (status, height) = sut
+                        .telemetry
+                        .status_snapshot(&Default::default())
+                        .await
+                        .expect("unpublished Kura body cannot extend the owned target")
+                        .into_parts();
+                    assert_eq!(height, old_height);
+                    assert_eq!(status.blocks, old_height);
+                    assert_eq!(status.blocks_non_empty, old_non_empty);
+                }
 
                 let _events = state_block
                     .apply_without_execution(&committed, sut.topology.as_ref().to_owned());
@@ -12142,3 +12107,8 @@ mod tests {
     include!("telemetry/genesis_commit_time_test.rs");
     include!("telemetry/block_payload_tests.rs");
 }
+
+mod classified_status;
+#[cfg(feature = "telemetry")]
+pub use classified_status::OwnedStatus;
+pub use classified_status::StatusSnapshotError;

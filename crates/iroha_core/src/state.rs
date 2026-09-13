@@ -3385,6 +3385,19 @@ pub enum PendingQueuePlanAdmissionDisposition {
     /// The certificate is authentic but its history, lifecycle, or authority context is stale.
     Stale,
 }
+/// The admission surface whose authenticated receiver policy must hold before persistence.
+///
+/// Every surface uses the same bounded authentication and State-owned persistence operation.
+/// Publication receivers are checked against the certificate itself, before inventory access
+/// or durable mutation; callers do not need a separately decoded copy of the certificate.
+#[derive(Clone, Copy, Debug)]
+pub enum QueuePlanAdmissionPersistenceScope<'a> {
+    /// Retain an admission from the existing transaction, gossip, or consensus handoff surface.
+    /// The caller remains responsible for its normal transaction or handoff authorization.
+    Admission,
+    /// Retain a peer publication only on a member of its certified coordinator roster.
+    CoordinatorPublication(&'a PeerId),
+}
 /// Result of atomically classifying and durably retaining one QueuePlan certificate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PendingQueuePlanAdmissionPersistenceOutcome {
@@ -12072,6 +12085,7 @@ const STATE_VIEW_LOCK_CONTENTION_WARN_COOLDOWN: Duration = Duration::from_secs(5
 const DIAGNOSTIC_STABLE_STATE_GENERATION_ATTEMPTS: usize = 4;
 struct StateViewGenerationWriteGuard<'a> {
     generation: &'a AtomicU64,
+    publication: &'a tokio::sync::Notify,
 }
 impl Drop for StateViewGenerationWriteGuard<'_> {
     fn drop(&mut self) {
@@ -12081,6 +12095,7 @@ impl Drop for StateViewGenerationWriteGuard<'_> {
             1,
             "state view generation write guard must end from an active odd generation"
         );
+        self.publication.notify_waiters();
     }
 }
 #[inline]
@@ -12286,6 +12301,8 @@ pub struct State {
     state_write_lock: parking_lot::Mutex<()>,
     /// Even generation means no writer is committing; odd generation means retry full state views.
     view_generation: AtomicU64,
+    /// Wakeup for retained work awaiting a stable committed State frontier.
+    publication_notify: tokio::sync::Notify,
     /// Aggregates repeated view-generation contention warnings to avoid log spam under write pressure.
     view_lock_contention_log: parking_lot::Mutex<ViewLockContentionLog>,
     /// Bounded process-local exact equivocation proofs awaiting block admission.
@@ -13702,6 +13719,63 @@ impl<'state> StateBlock<'state> {
     /// Serialize the committed event-buffer cell, which block commit deliberately leaves intact.
     pub(crate) fn json_serialize_committed_external_event_buffer(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.state_ref.world.external_event_buf, out);
+    }
+    /// Serialize the replay ledger exactly as this commit will publish it.
+    ///
+    /// Ordinary expiry is projected without pruning the live block overlay or
+    /// changing witness timing. Autonomous execution deliberately retains expiry
+    /// candidates. `None` means the ordinary staged serializer is already exact.
+    pub(crate) fn json_serialize_committed_axt_replay_ledger(&self) -> Option<String> {
+        if self
+            .staged_merge_entry
+            .as_ref()
+            .is_some_and(|entry| entry.execution_batch.is_some())
+        {
+            return None;
+        }
+        let current_slot =
+            current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
+        let retention_slots = self.nexus.axt.replay_retention_slots.get();
+        let changes: BTreeMap<_, _> = self
+            .world
+            .axt_replay_ledger
+            .iter()
+            .filter(|(_, record)| record.is_expired(current_slot, retention_slots))
+            .map(|(key, _)| (*key, None))
+            .collect();
+        if changes.is_empty() {
+            return None;
+        }
+        let mut out = String::new();
+        mv::json::json_serialize_storage_block_with_changes(
+            &self.world.axt_replay_ledger,
+            &changes,
+            &mut out,
+        );
+        Some(out)
+    }
+    /// Serialize contract storage with this block's deferred DA quota writes.
+    ///
+    /// Only the already prepared writes are projected. Their values and first
+    /// pre-block undo entries match commit; no quota is recomputed or applied.
+    /// `None` means there are no pending writes to override.
+    pub(crate) fn json_serialize_committed_smart_contract_state(&self) -> Option<String> {
+        let pending = self.pending_da_pin_intents.as_ref()?;
+        if pending.quota_writes.is_empty() {
+            return None;
+        }
+        let changes: BTreeMap<_, _> = pending
+            .quota_writes
+            .iter()
+            .map(|(key, value)| (key.clone(), Some(value.clone())))
+            .collect();
+        let mut out = String::new();
+        mv::json::json_serialize_storage_block_with_changes(
+            &self.world.smart_contract_state,
+            &changes,
+            &mut out,
+        );
+        Some(out)
     }
     fn prepare_replay_checkpoint_preview(&mut self) {
         let Some(pending) = self.pending_autoscale_lifecycle.as_ref() else {
@@ -25115,6 +25189,30 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         Ok(())
     }
+    /// Stage a historical public TLE session for runtime snapshot fixtures.
+    ///
+    /// This fixture-only entry point validates the public transcript, exact frozen
+    /// roster, and next-height lifecycle through the ordinary state methods. It
+    /// does not authenticate a lifecycle certificate or assert consensus finality.
+    /// The caller must discard this transaction on error, and separately establish
+    /// the snapshot height before exercising a runtime reader.
+    ///
+    /// # Errors
+    /// Returns the transcript/roster or lifecycle validation failure.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn install_historical_tle_session_for_testing(
+        &mut self,
+        public_state: TleKeySessionPublicStateV1,
+        ordered_roster: Vec<PeerId>,
+        installed_height: u64,
+        policy: iroha_config::parameters::actual::ParliamentTleKeyLifecycle,
+    ) -> Result<(), String> {
+        let key_session_id = public_state.key_session_id;
+        self.put_tle_key_session(public_state, ordered_roster)
+            .map_err(|error| format!("invalid TLE fixture public state: {error:?}"))?;
+        self.activate_tle_key_session(key_session_id, installed_height, policy)
+            .map_err(|error| format!("invalid TLE fixture lifecycle: {error:?}"))
+    }
     /// Validate and persist one immutable public-only adaptive TLE key session.
     ///
     /// The session and its exact frozen seat roster are admitted as one pair.
@@ -29434,6 +29532,7 @@ impl State {
             state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
             state_write_lock: parking_lot::Mutex::new(()),
             view_generation: AtomicU64::new(0),
+            publication_notify: tokio::sync::Notify::new(),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
             sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
             sccp_registry_cache: parking_lot::Mutex::new(SccpRegistryCache::default()),
@@ -30087,6 +30186,35 @@ impl State {
         let started_at = Instant::now();
         block.commit_world_overlay_for_testing()?;
         Ok(started_at.elapsed())
+    }
+    /// Detect deterministic start-of-block work for the exact committed successor.
+    ///
+    /// The ordinary block-start hooks run in a discarded overlay, so this also
+    /// covers scheduled work without an external entrypoint, such as privacy
+    /// activation. The same predicate excludes that work from a pristine merge
+    /// execution carrier and admits the ordinary carrier which must apply it.
+    /// A stale parent or concurrent state publication returns `None`.
+    pub(crate) fn deterministic_start_work_pending(&self, header: &BlockHeader) -> Option<bool> {
+        let generation = self.state_view_generation();
+        if generation % 2 != 0
+            || u64::try_from(self.committed_height())
+                .ok()?
+                .checked_add(1)?
+                != header.height().get()
+            || header.is_genesis()
+            || header.prev_block_hash() != self.latest_block_hash_fast()
+        {
+            return None;
+        }
+        let probe = self.block(header.clone());
+        let pending = !probe.world.merge_execution_write_set_bytes().is_empty()
+            || !probe.world.external_event_buf.is_empty()
+            || !probe.merge_carrier_entrypoints.is_empty()
+            || probe
+                .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
+                .is_err();
+        drop(probe);
+        is_stable_state_view_generation(generation, self.state_view_generation()).then_some(pending)
     }
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
@@ -31337,6 +31465,30 @@ impl State {
     pub fn committed_height(&self) -> usize {
         self.block_hashes.committed_height()
     }
+    /// Wait until a stable State publication reaches at least `required_height`.
+    ///
+    /// The notification is only a wakeup: a fresh even generation and committed
+    /// height establish readiness. Registering before sampling prevents a lost
+    /// publication between the predicate and suspension. No State view or writer
+    /// fence is retained while waiting. The caller owns its deadline, cancellation
+    /// and all retained work; completion does not authenticate any certificate or
+    /// authorize a durable write without reclassification.
+    pub async fn wait_for_committed_height(&self, required_height: u64) {
+        loop {
+            let published = self.publication_notify.notified();
+            tokio::pin!(published);
+            published.as_mut().enable();
+            let before = self.state_view_generation();
+            let height = self.committed_height();
+            let after = self.state_view_generation();
+            if is_stable_state_view_generation(before, after)
+                && u64::try_from(height).is_ok_and(|height| height >= required_height)
+            {
+                return;
+            }
+            published.await;
+        }
+    }
     /// Number of committed blocks durably indexed by Kura.
     ///
     /// This avoids acquiring a full [`StateView`] when callers only need to
@@ -31839,6 +31991,7 @@ impl State {
         );
         StateViewGenerationWriteGuard {
             generation: &self.view_generation,
+            publication: &self.publication_notify,
         }
     }
     #[inline]
@@ -32856,43 +33009,6 @@ impl State {
         }
         tx.commit();
     }
-    fn prune_verified_lane_relay_contract_state_record(&self, record: &VerifiedLaneRelayRecord) {
-        let Ok(relay_state_key) = Self::verified_lane_relay_state_key(&record.relay_envelope)
-        else {
-            return;
-        };
-        let mut candidate_keys = vec![relay_state_key.clone()];
-        if let Some(contract_map_key) =
-            Self::verified_lane_relay_contract_map_state_key(&relay_state_key)
-        {
-            candidate_keys.push(contract_map_key);
-        }
-        let stale_keys = {
-            let smart_contract_state = self.world.smart_contract_state.view();
-            candidate_keys
-                .into_iter()
-                .filter(|key| {
-                    let Some(payload) = smart_contract_state.get(key) else {
-                        return false;
-                    };
-                    Self::decode_verified_lane_relay_record_state(payload).is_ok_and(|decoded| {
-                        decoded == *record
-                            && Self::verified_lane_relay_contract_state_key_matches_record(
-                                key, &decoded,
-                            )
-                    })
-                })
-                .collect::<Vec<_>>()
-        };
-        if stale_keys.is_empty() {
-            return;
-        }
-        let mut tx = self.world.smart_contract_state.block();
-        for key in stale_keys {
-            tx.remove(key);
-        }
-        tx.commit();
-    }
     fn reset_lane_scoped_runtime_state(
         &self,
         lanes_to_reset: &BTreeSet<LaneId>,
@@ -33726,11 +33842,13 @@ impl State {
                 Ok(LaneRelayInsert::Duplicate) => {}
                 Err(
                     LaneRelayError::StaleLaneIncarnation { .. }
-                    | LaneRelayError::LaneIncarnationMismatch { .. },
+                    | LaneRelayError::LaneIncarnationMismatch { .. }
+                    | LaneRelayError::StaleRelay { .. },
                 ) => {
-                    self.prune_verified_lane_relay_contract_state_record(&record);
+                    // Hydration only rebuilds eligible runtime candidates. Canonical
+                    // relay values and their MV undo history belong to lifecycle
+                    // commit; stale records remain persisted but inert on reads.
                 }
-                Err(LaneRelayError::StaleRelay { .. }) => {}
                 Err(err) => iroha_logger::warn!(
                     lane_id = %record.relay_ref.lane_id,
                     dataspace_id = %record.relay_ref.dataspace_id,
@@ -34888,18 +35006,7 @@ impl State {
         {
             return None;
         }
-        let start_effect_probe = self.block(application_block_header.clone());
-        let start_effects_are_noop = start_effect_probe
-            .world
-            .merge_execution_write_set_bytes()
-            .is_empty()
-            && start_effect_probe.world.external_event_buf.is_empty()
-            && start_effect_probe.merge_carrier_entrypoints.is_empty()
-            && start_effect_probe
-                .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
-                .is_ok();
-        drop(start_effect_probe);
-        if !start_effects_are_noop {
+        if self.deterministic_start_work_pending(&application_block_header)? {
             debug!(
                 carrier_height = application_block_header.height().get(),
                 "deferring autonomous execution because its carrier has due deterministic start effects"
@@ -35926,17 +36033,37 @@ impl State {
     ///
     /// # Errors
     /// Returns an error when Kura and WSV are not at one published frontier, certificate
-    /// authentication fails, an unresolved logical admission conflict exists, or durable
-    /// sidecar persistence fails.
+    /// authentication or the requested receiver policy fails, an unresolved logical admission
+    /// conflict exists, or durable sidecar persistence fails.
     pub fn persist_classified_queue_plan_admission(
         &self,
         bytes: &[u8],
+        scope: QueuePlanAdmissionPersistenceScope<'_>,
     ) -> Result<PendingQueuePlanAdmissionPersistenceOutcome, MergeLedgerCommitError> {
         const FRONTIER_RECONCILIATION_TIMEOUT: Duration = Duration::from_millis(250);
 
         let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();
         let incoming_hash = Hash::new(bytes);
         let incoming = self.authenticate_pending_queue_plan_admission(bytes)?;
+        if let QueuePlanAdmissionPersistenceScope::CoordinatorPublication(local_peer) = scope {
+            let coordinator = incoming
+                .certificate
+                .binding
+                .admission_context
+                .route_incarnations
+                .first()
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "QueuePlan admission publication has no coordinator route".to_owned(),
+                    )
+                })?;
+            if !coordinator.validator_set.contains(local_peer) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "QueuePlan admission publication receiver is not in the certified coordinator roster"
+                        .to_owned(),
+                ));
+            }
+        }
 
         // Preserve the exact-hash idempotent fast path. Otherwise authenticate
         // the bounded inventory before taking the block-publication fence; only
@@ -57394,6 +57521,9 @@ impl StateTransaction<'_, '_> {
 #[cfg(test)]
 mod fragment_counter_tests;
 #[cfg(test)]
+#[path = "state/publication_wait_tests.rs"]
+mod publication_wait_tests;
+#[cfg(test)]
 mod state_view_lock_tests {
     use super::*;
     use crate::kura::Kura;
@@ -59105,6 +59235,30 @@ mod tiered_snapshot_diff_tests {
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::AxtHandleBudget(key) if *key == axt_budget_key)
         }));
+    }
+    #[tokio::test]
+    async fn restored_snapshot_publishes_to_new_frontier_waiters() {
+        let state = decode_sccp_world_snapshot(World::default())
+            .expect("restore a canonical State snapshot");
+        let restored_height = u64::try_from(state.committed_height()).unwrap();
+        let required_height = restored_height.checked_add(1).unwrap();
+        let wait = state.wait_for_committed_height(required_height);
+        tokio::pin!(wait);
+        assert!(futures::poll!(wait.as_mut()).is_pending());
+        // Finish the read statement before the append takes the write lock.
+        let previous_hash = state.block_hashes.view().last().copied();
+        assert!(state.block_hashes.inner.try_write().is_some());
+        state.append_committed_block_header_for_tests(BlockHeader::new(
+            NonZeroU64::new(required_height).unwrap(),
+            previous_hash,
+            None,
+            None,
+            1_700_000_000_001,
+            0,
+        ));
+        tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("restored State must initialize a fresh process-local publication owner");
     }
     #[test]
     fn pending_contract_upload_roundtrips_in_state_snapshot_without_legacy_defaults() {
@@ -66615,4 +66769,9 @@ mod tests;
 pub(crate) use tests::{
     finalized_lane_relay_registration_fixture, prove_finalized_lane_relay_for_registration,
     ton_breaker_hydration_fixture_for_testing,
+};
+
+mod telemetry_status;
+pub(crate) use telemetry_status::{
+    TelemetryStatusTarget, write_telemetry_journal_prefix, write_telemetry_journal_row,
 };
