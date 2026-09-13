@@ -49,7 +49,7 @@ fn real_timeout_body_recovery_fixture(case: u8) {
         SumeragiV2Adapter::open(
             &wal_path,
             fixture.verified.clone(),
-            None,
+            Some(context.leader(1)),
             Generation::new(0x6a),
             [0x6a; 32],
             AdapterFingerprints {
@@ -170,6 +170,10 @@ fn real_timeout_body_recovery_fixture(case: u8) {
     } else {
         assert_eq!(row.terminal(), Some(None));
         assert_eq!(owner.live_body_pipeline_counts_for_test(), (0, 0, 1));
+        assert!(matches!(
+            owner.plan_direct_registry_turn(),
+            Err(ProductionSchedulerInputsError::IoCapacityObservationRequired { ordinal: 9 })
+        ));
     }
     let (mut cold, effects) = owner
         .adapter_startup
@@ -186,7 +190,8 @@ fn real_timeout_body_recovery_fixture(case: u8) {
             .iter()
             .filter(|effect| matches!(effect, AdapterEffect::ValidateBody { .. }))
             .count(),
-        usize::from(case == 1)
+        0,
+        "LocalBody Validate is owned by the recovered registry; custody alone cannot create a Proposal or QC retry"
     );
     assert!(
         !effects
