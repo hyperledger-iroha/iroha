@@ -2626,6 +2626,65 @@ pub(crate) fn install_proposal_broadcast_before_current_control_for_test(
     store.persist(&incident).is_ok()
 }
 
+/// Retain one exact completed body validation beside the current control owner.
+#[cfg(all(test, feature = "bls"))]
+pub(crate) fn append_terminal_validate_before_current_control_for_test(
+    root: &Path,
+    context: LifecycleContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    proposal: wire::Proposal,
+    receipt: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+    local_body: bool,
+) -> bool {
+    let Ok((store, ledger)) = LifecycleLedgerStoreV1::open(root, context) else {
+        return false;
+    };
+    let replay = if local_body {
+        super::replay_authority::exact_local_body_record_fixture(
+            context,
+            tag,
+            proposal.manifest,
+            receipt,
+            LifecycleStageKind::ValidateBody,
+        )
+    } else {
+        super::replay_authority::exact_proposal_validate_record_fixture(
+            context, tag, proposal, receipt,
+        )
+    };
+    let Some(replay) = replay else {
+        return false;
+    };
+    let mut records = ledger.records.clone();
+    let Some(mut current) = records.pop() else {
+        return false;
+    };
+    let ordinal = current.ordinal();
+    let owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xDA; 32])), ordinal);
+    let Ok(terminal) = LifecycleLedgerRecordV1::new(
+        replay.key,
+        owner,
+        ordinal,
+        LifecycleWorkClass::Validate,
+        replay.stage,
+        Some(TerminalOutcome::Advanced),
+        owner.causal_root().digest(),
+        replay.payload,
+        replay.authority,
+        DurableContinuation::AdvancedNoSuccessor,
+    ) else {
+        return false;
+    };
+    current.ordinal = ordinal + 1;
+    current.owner_first_ordinal = ordinal + 1;
+    records.extend([terminal, current]);
+    let Ok(incident) = LifecycleLedgerV1::new(context, ordinal + 1, records, BTreeMap::new())
+    else {
+        return false;
+    };
+    store.persist(&incident).is_ok()
+}
+
 /// Return the closed scalar census for an obsolete-timeout/current-control test frame.
 #[cfg(all(test, feature = "bls"))]
 pub(crate) fn control_timeout_supersession_summary_for_test(

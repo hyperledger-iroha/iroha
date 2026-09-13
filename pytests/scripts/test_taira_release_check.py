@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 611
+EXPECTED_REGRESSION_COUNT = 614
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 430)
+        self.assertEqual(gate.selected_regression_count(), 433)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -150,6 +150,18 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             self.assertIn(stage, basic["torii-unit"])
         for stage in gate.CORE_ADMISSION_STARTUP_STAGES:
             self.assertIn(stage, full["core"])
+
+    def test_both_scopes_require_exact_terminal_history_and_shared_outcome_recovery(self):
+        required = (
+            "sumeragi::v2::tests::same_round_timeout_cold_owner_preserves_retired_terminal_validation_history",
+            "sumeragi::v2_body_store::tests::terminal_validate_shared_outcomes_keep_one_latest_retry_origin",
+            "sumeragi::v2_body_store::tests::retired_terminal_claim_comparison_never_promotes_marker_authority",
+        )
+        for scope in ("basic", "full"):
+            selected = [name for _, names in gate.qualification_stages(scope)["core"] for name in names]
+            for name in required:
+                with self.subTest(scope=scope, regression=name):
+                    self.assertEqual(selected.count(name), 1)
 
     def test_both_scopes_require_unsigned_bootstrap_and_fail_closed_capability_validation(self):
         required = {

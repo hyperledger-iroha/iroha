@@ -22,6 +22,9 @@ pub(crate) struct LeaderWireRecoveryAuthority {
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_commit_statement: Option<Hash>,
     retired_local_proposal: Option<Hash>,
+    current_timeout_durable: bool,
+    protected_prepare: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    protected_decision: Option<(wire::ConsensusRound, wire::BlockSubject)>,
 }
 
 /// Exact non-owning coordinates copied only from an authenticated envelope.
@@ -119,6 +122,24 @@ impl LeaderWireRecoveryAuthority {
                 ))
             })
             .transpose()?;
+        let protected_prepare = durable
+            .highest_prepare()
+            .map(|certificate| {
+                Ok::<_, AdapterError>((
+                    adapter.registry.round_to_wire(certificate.proposal_round()),
+                    adapter.registry.subject(certificate.subject())?,
+                ))
+            })
+            .transpose()?;
+        let protected_decision = durable
+            .decision()
+            .map(|certificate| {
+                Ok::<_, AdapterError>((
+                    adapter.registry.round_to_wire(certificate.proposal_round()),
+                    adapter.registry.subject(certificate.subject())?,
+                ))
+            })
+            .transpose()?;
         // An observer may collect current-round shares. Historical shares
         // reconstruct a pool only when replay retains the exact CommitIntent.
         let protected_commit_statement = durable
@@ -182,6 +203,11 @@ impl LeaderWireRecoveryAuthority {
             protected_lock,
             protected_commit_statement,
             retired_local_proposal,
+            current_timeout_durable: durable
+                .timeout_intent(current_round)
+                .is_some_and(|timeout| Some(timeout.signer()) == adapter.reducer.local_validator()),
+            protected_prepare,
+            protected_decision,
         })
     }
     pub(crate) fn matches_geometry(
@@ -221,6 +247,9 @@ impl LeaderWireRecoveryAuthority {
         bytes.extend(self.protected_lock.encode());
         bytes.extend(self.protected_commit_statement.encode());
         bytes.extend(self.retired_local_proposal.encode());
+        bytes.extend(self.current_timeout_durable.encode());
+        bytes.extend(self.protected_prepare.encode());
+        bytes.extend(self.protected_decision.encode());
         Hash::new(bytes)
     }
     pub(crate) const fn consumer_tag(self) -> reducer::EventTag {
@@ -272,6 +301,34 @@ impl LeaderWireRecoveryAuthority {
             && self.consumer_tag.view() == proposal.round.view
             && self.wal_id.get() != 0
             && self.retired_local_proposal == Some(Hash::new(proposal.signature_preimage()))
+    }
+    /// Prove that a completed validation belongs only to closed historical
+    /// work. This does not cancel a live owner or recover a validation result.
+    /// A same-round local timeout closes candidate work without advancing the
+    /// view; the durable Prepare, lock, and Decision still protect their bodies.
+    pub(in crate::sumeragi) fn proves_retired_terminal_body(
+        self,
+        original: reducer::EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        self.context_id == round.context_id
+            && self.height == round.height
+            && self.height == original.height()
+            && self.wal_id.get() != 0
+            // Generations are process-local; restart may begin below the
+            // historical owner's generation. Only durable views order this
+            // inert history, while its original tag remains unchanged.
+            && original.view() <= self.consumer_tag.view()
+            && round.view <= self.consumer_tag.view()
+            && self.protected_prepare.is_none_or(|body| body.1 != subject)
+            && self.protected_lock.is_none_or(|body| body.1 != subject)
+            && self.protected_decision.is_none_or(|body| body.1 != subject)
+            && (self.decision_durable
+                || (self.installed_timeout_view.and_then(|view| view.checked_add(1))
+                    == Some(self.consumer_tag.view())
+                    && original.view() < self.consumer_tag.view())
+                || (self.current_timeout_durable && original.view() == self.consumer_tag.view()))
     }
     /// Authenticate a Decision for isolated cancellation tests; production uses
     /// the actual replay-authenticated WAL frontier from `from_adapter`.
@@ -523,6 +580,9 @@ impl LeaderWireRecoveryAuthority {
             protected_lock: None,
             protected_commit_statement: None,
             retired_local_proposal: None,
+            current_timeout_durable: false,
+            protected_prepare: None,
+            protected_decision: None,
         }
     }
     /// Unqualified unit-fixture projection of the lock and exact Commit statement.

@@ -755,6 +755,11 @@ CORE_ADMISSION_STARTUP_STAGES += (("same-round timeout recovery and bounded fron
     "sumeragi::lane_planner::tests::canonical_frontier_reads_scale_with_distinct_routes_including_absence",
     "sumeragi::lane_planner::tests::canonical_frontier_reads_preserve_first_storage_failure_and_stop",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("terminal validation history and shared outcome recovery", (
+    "sumeragi::v2::tests::same_round_timeout_cold_owner_preserves_retired_terminal_validation_history",
+    "sumeragi::v2_body_store::tests::terminal_validate_shared_outcomes_keep_one_latest_retry_origin",
+    "sumeragi::v2_body_store::tests::retired_terminal_claim_comparison_never_promotes_marker_authority",
+)),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",

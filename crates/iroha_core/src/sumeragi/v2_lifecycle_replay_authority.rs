@@ -159,6 +159,80 @@ impl LifecycleReplayAuthorityV1 {
             ),
         )
     }
+    /// Authenticate a completed Validate as historical evidence without
+    /// reconstructing a body event, validation receipt, or executable owner.
+    /// The same source/frame checks used for ordinary body recovery remain
+    /// mandatory; only the actual replayed closing frontier permits omitting
+    /// a semantic outcome that was deliberately retired at startup.
+    pub(super) fn authenticates_retired_terminal_validate_source(
+        &self,
+        verified: &VerifiedHeightContext,
+        key: LifecycleKey,
+        stage: LifecycleStage,
+        payload: DurablePayloadReference,
+        frontier: crate::sumeragi::v2::LeaderWireRecoveryAuthority,
+        store: &crate::sumeragi::v2_body_store::V2BodyStore,
+    ) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        let Some(source) = self.recover_durable_standalone_validate(context, key, stage, payload)
+        else {
+            return false;
+        };
+        let Some(manifest) = standalone_origin_manifest(&source.source) else {
+            return false;
+        };
+        let original = EventTag::new(
+            source.source.tag.height,
+            source.source.tag.view,
+            crate::sumeragi::v2_core::Generation::new(source.source.tag.generation),
+        );
+        if !frontier.proves_retired_terminal_body(original, manifest.round, manifest.subject) {
+            return false;
+        }
+        let certified = match &source.source.origin {
+            BodyPipelineOriginV1::Certified { .. } => {
+                let evidence = CertifiedFetchReplayEvidenceV1 {
+                    family: CertifiedBodyPipelineReplayFamilyV1 {
+                        source: source.source.clone(),
+                        body_frame: source.body_frame,
+                    },
+                };
+                if evidence.authenticated_by_verified_height(verified) {
+                    Some(evidence)
+                } else if authenticated_genesis_standalone_source(verified, &source.source)
+                    || authenticated_refined_proposal_standalone_source(verified, &source.source)
+                {
+                    None
+                } else {
+                    return false;
+                }
+            }
+            BodyPipelineOriginV1::Proposal(proposal) => {
+                if verified
+                    .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+                    ))
+                    .is_err()
+                {
+                    return false;
+                }
+                None
+            }
+            BodyPipelineOriginV1::LocalBody(_) => None,
+            BodyPipelineOriginV1::RecoveredDecision { .. } => return false,
+        };
+        let Ok(body) = super::projection::authenticate_durable_body_frame_recovery(
+            context,
+            store,
+            source.body_frame.durable_reference(),
+        ) else {
+            return false;
+        };
+        match certified {
+            Some(evidence) => body.into_certified_fetch_body(&evidence).is_some(),
+            None => body.into_standalone_validate_body(&source).is_some(),
+        }
+    }
     /// Return whether this canonical authority is one deterministic invalid-body report.
     pub(super) fn is_invalid_body_report_origin(&self) -> bool {
         matches!(
@@ -5683,7 +5757,8 @@ pub(super) use tests::{
     exact_body_record_fixture, exact_decision_body_record_fixture,
     exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
     exact_pending_certified_fetch_candidate_fixture, exact_prepare_sign_broadcast_fixture,
-    exact_proposal_sign_broadcast_fixture, exact_record_fixture,
-    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
-    exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
+    exact_proposal_sign_broadcast_fixture, exact_proposal_validate_record_fixture,
+    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
+    exact_replay_authority_for_payload_fixture, exact_timeout_sign_broadcast_fixture,
+    foreign_certified_serve_family_authority_fixture,
 };

@@ -180,6 +180,12 @@ impl RecoveredValidationAuthority {
     ) -> bool {
         self.keys.contains(&(round, subject))
     }
+    /// Whether any authenticated replay occurrence still protects this body.
+    /// Historical terminal retirement must not hide a current first-effect
+    /// owner merely because it uses a different proposal round.
+    pub(crate) fn authorizes_subject(&self, subject: wire::BlockSubject) -> bool {
+        self.keys.iter().any(|(_, candidate)| *candidate == subject)
+    }
     /// Number of exact identities in the bounded replay frontier.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {

@@ -3123,6 +3123,20 @@ fn same_round_timeout_cancellation_uses_exact_durable_proposal_intent() {
             frontier.proves_retired_local_proposal(&signed),
             with_timeout
         );
+        assert_eq!(
+            frontier.proves_retired_terminal_body(
+                reducer::EventTag::new(context.height, 0, reducer::Generation::INITIAL),
+                signed.round,
+                signed.subject,
+            ),
+            with_timeout,
+            "completed history requires an actual durable local timeout",
+        );
+        assert!(!frontier.proves_retired_terminal_body(
+            reducer::EventTag::new(context.height, 1, reducer::Generation::INITIAL),
+            signed.round,
+            signed.subject,
+        ));
         assert!(
             !frontier.proves_obsolete_proposal(signed.round),
             "a local timeout intent does not install a TC or advance the view"
@@ -3302,6 +3316,229 @@ fn same_round_timeout_cold_owner_cancels_exact_retained_proposal() {
             std::fs::read(&wal_path).unwrap(),
             wal_before,
             "output cancellation neither signs nor publishes WAL authority"
+        );
+        crate::sumeragi::status::clear_v2_status();
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn same_round_timeout_cold_owner_preserves_retired_terminal_validation_history() {
+    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    use super::super::v2_lifecycle_coordinator::{
+        LifecycleOutputServiceDispositionV1, RecoveredLifecycleOutputSettlementV1,
+    };
+    let (context, keys, proofs) = authenticated_context();
+    let local = context.leader(0);
+    let local_signer = &keys[local as usize];
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let header = BlockHeader::new(
+        NonZeroU64::new(context.height).unwrap(),
+        None,
+        None,
+        None,
+        98_114,
+        0,
+    );
+    let block = SignedBlock::presigned(
+        BlockSignature::new(
+            u64::from(local),
+            SignatureOf::try_from_hash(local_signer.private_key(), header.hash()).unwrap(),
+        ),
+        header,
+        Vec::new(),
+    );
+    let body = block
+        .encode_wire()
+        .expect("canonical retained candidate body");
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: block.hash(),
+        payload_hash: Hash::new(&body),
+    };
+    let chunks = wire::encode_payload_chunks(context.da_layout, &body).unwrap();
+    let manifest =
+        wire::PayloadManifest::derive(&context, round, subject, body.len() as u64, &chunks)
+            .unwrap();
+    let wire::ConsensusMessageV2Payload::Proposal(template) =
+        proposal(&context, local, subject).payload
+    else {
+        unreachable!("Proposal fixture")
+    };
+    let unsigned = wire::Proposal {
+        round,
+        proposer: local,
+        subject,
+        manifest: manifest.clone(),
+        justification: template.justification,
+        signature: Vec::new(),
+    };
+    let mut signed = unsigned.clone();
+    signed.signature = Signature::new(local_signer.private_key(), &signed.signature_preimage())
+        .payload()
+        .to_vec();
+    let timeout = wire::TimeoutVote {
+        round,
+        highest_prepare_qc: None,
+        signer: local,
+        signature: Vec::new(),
+    };
+    // Success and deterministic rejection both retain only historical evidence.
+    // A forged original Proposal still fails; an older process may legitimately
+    // have reached a generation larger than the fresh startup generation.
+    for case in 0..5 {
+        let safety = TempDir::new().unwrap();
+        let storage = TempDir::new().unwrap();
+        let ledger_root = storage.path().join("ledger");
+        let body_root = storage.path().join("body");
+        let lifecycle_context = LifecycleContext::new(
+            LifecycleDigest::new(*context.id().0.as_ref()),
+            context.height,
+        );
+        drop(write_and_reopen_authenticated_wal_startup(
+            &safety,
+            &context,
+            &proofs,
+            local,
+            [0xE4; 32],
+            vec![
+                WalRecordV2::ProposalIntent(unsigned.clone()),
+                WalRecordV2::TimeoutIntent(timeout.clone()),
+            ],
+        ));
+        let wal_path = safety.path().join("authenticated-fifo-safety.wal");
+        let wal_before = std::fs::read(&wal_path).unwrap();
+        let open = || {
+            let startup = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+                &wal_path,
+                VerifiedHeightContext::genesis(context.clone(), proofs.clone()).unwrap(),
+                Some(local),
+                reducer::Generation::new(50),
+                [0xE4; 32],
+                fingerprints(),
+                Box::new(TestAggregator),
+                deferred_admission_ordinals(),
+            )
+            .expect("replay actual local Proposal and Timeout intents");
+            let authenticated = startup
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|(error, _)| panic!("authenticate cold timeout: {error}"));
+            let mut recovered_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+                &body_root,
+                context.clone(),
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+            )
+            .unwrap();
+            recovered_store
+                .retain_recovered_markers_for_authority(authenticated.validation_authority.clone())
+                .expect("filter by actual first-replay validation frontier");
+            recovered_store
+                .revalidate_recovered_markers(|_| -> Result<wire::ExecutionCommitment, String> {
+                    panic!("closed historical body must not execute during startup")
+                })
+                .unwrap();
+            assert!(recovered_store.validated_recovery_catalog().is_empty());
+            assert!(recovered_store.rejected_recovery_catalog().is_empty());
+            authenticated.open_production_lifecycle_owner_v1_with_store_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &ledger_root,
+                &storage.path().join("serve"),
+                recovered_store.into_revalidated_startup().unwrap(),
+                local_signer,
+            )
+        };
+        drop(open().unwrap_or_else(|error| panic!("stage current Timeout owner: {error}")));
+        let mut store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            &body_root,
+            context.clone(),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        )
+        .unwrap();
+        let durable = store.store(manifest.clone(), body.clone()).unwrap();
+        let outcome = store
+            .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                if case == 1 {
+                    Err("deterministic fixture rejection".to_owned())
+                } else {
+                    Ok(execution_commitment(0xE4))
+                }
+            })
+            .expect("persist actual historical terminal marker");
+        assert_eq!(outcome.validated_receipt().is_some(), case != 1);
+        drop(store);
+        assert!(install_proposal_broadcast_before_current_control_for_test(
+            &ledger_root,
+            lifecycle_context,
+            Some((unsigned.clone(), signed.clone())),
+        ));
+        let mut retained_source = signed.clone();
+        if case == 2 {
+            retained_source.signature[0] ^= 1;
+        }
+        assert!(append_terminal_validate_before_current_control_for_test(
+            &ledger_root,
+            lifecycle_context,
+            reducer::EventTag::new(
+                context.height,
+                0,
+                if case == 3 {
+                    reducer::Generation::new(900)
+                } else {
+                    reducer::Generation::INITIAL
+                }
+            ),
+            retained_source,
+            &durable,
+            case == 4,
+        ));
+        let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
+        let ledger_before = std::fs::read(&ledger_path).unwrap();
+        let result = open();
+        if case == 2 {
+            assert!(
+                result.is_err(),
+                "unproved terminal history must fail closed"
+            );
+            assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_before);
+        } else {
+            let mut owner =
+                result.unwrap_or_else(|error| panic!("open retired terminal history: {error}"));
+            assert_eq!(
+                std::fs::read(&ledger_path).unwrap(),
+                ledger_before,
+                "historical terminal evidence does not rewrite the ledger"
+            );
+            assert_eq!(owner.recovered_control_row_summary_for_test(), Some((4, 4)));
+            assert_eq!(
+                owner
+                    .settle_next_recovered_lifecycle_output(
+                        |_| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
+                            panic!("retired Proposal must not fan out")
+                        },
+                    )
+                    .unwrap(),
+                RecoveredLifecycleOutputSettlementV1::Completed
+            );
+            let after = std::fs::read(&ledger_path).unwrap();
+            drop(owner);
+            let mut repeated =
+                open().unwrap_or_else(|error| panic!("reopen retired terminal history: {error}"));
+            assert!(!repeated.has_recovered_lifecycle_outputs());
+            assert_eq!(
+                repeated.recovered_control_row_summary_for_test(),
+                Some((4, 4))
+            );
+            assert_eq!(std::fs::read(&ledger_path).unwrap(), after);
+        }
+        assert_eq!(
+            std::fs::read(&wal_path).unwrap(),
+            wal_before,
+            "historical recovery must neither sign nor publish WAL authority"
         );
         crate::sumeragi::status::clear_v2_status();
     }

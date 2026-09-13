@@ -181,6 +181,7 @@ pub(crate) use ledger::{
 };
 #[cfg(all(test, feature = "bls"))]
 pub(in crate::sumeragi) use ledger::{
+    append_terminal_validate_before_current_control_for_test,
     control_timeout_supersession_persistence_failure_for_test,
     control_timeout_supersession_summary_for_test,
     install_non_timeout_broadcast_before_current_control_for_test,
