@@ -7,7 +7,7 @@ use norito::{
 
 /// A nested codec owner deliberately lacking a typed frame identity.
 #[derive(Clone, Debug, norito::Encode, norito::Decode)]
-pub(crate) struct PayloadOnly(pub(crate) u32);
+pub struct PayloadOnly(pub(crate) u32);
 
 fn payload<T: SerializePayload>(value: &T) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -17,7 +17,7 @@ fn payload<T: SerializePayload>(value: &T) -> Vec<u8> {
     bytes
 }
 
-pub(crate) fn prefix<T>(value: &T)
+pub fn prefix<T>(value: &T)
 where
     T: SerializePayload + for<'de> DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
 {
@@ -53,7 +53,7 @@ where
     assert_eq!(ncore::get_decode_flags(), previous);
 }
 
-pub(crate) fn allocation_limit<T>(value: &T)
+pub fn allocation_limit<T>(value: &T)
 where
     T: SerializePayload + for<'de> DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
 {

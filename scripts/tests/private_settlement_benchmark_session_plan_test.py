@@ -17,7 +17,7 @@ SPEC.loader.exec_module(ACCOUNTING)
 def inputs():
     return {
         "configuration_sha256": {n: hashlib.sha256(f"config:{n}".encode()).hexdigest() for n in (2, 3, 4, 8, 16)},
-        "workload_sha256": {n: hashlib.sha256(f"workload:{n}".encode()).hexdigest() for n in (2, 3, 4, 8, 16)},
+        "workload_manifest_sha256": {n: hashlib.sha256(f"workload:{n}".encode()).hexdigest() for n in (2, 3, 4, 8, 16)},
         "seeds": list(range(10)), "warmups_per_session": 5, "measured_per_profile": 30,
     }
 
@@ -67,7 +67,7 @@ class BenchmarkSessionPlanTests(unittest.TestCase):
                     left, right = sessions[2 * seed_index:2 * seed_index + 2]
                     self.assertEqual((left["participants"], right["participants"]), (participants, participants))
                     self.assertEqual((left["seed"], right["seed"]), (seed_index, seed_index))
-                    self.assertEqual(left["workload_sha256"], right["workload_sha256"])
+                    self.assertEqual(left["workload_manifest_sha256"], right["workload_manifest_sha256"])
                     self.assertEqual({left["profile"], right["profile"]}, {"private", "transparent_control"})
                     first_profiles.append(left["profile"])
                 self.assertTrue(all(a != b for a, b in zip(first_profiles, first_profiles[1:])))
@@ -80,7 +80,7 @@ class BenchmarkSessionPlanTests(unittest.TestCase):
         pairs = {}
         for session in plan["sessions"]:
             key = (session["participants"], session["seed"])
-            pair = {name: session[name] for name in ("seed", "workload_sha256", "warmup_attempts", "measured_attempts")}
+            pair = {name: session[name] for name in ("seed", "workload_manifest_sha256", "warmup_attempts", "measured_attempts")}
             pairs.setdefault(key, []).append(pair)
         self.assertEqual(len(pairs), 50)
         for (_, seed), values in pairs.items():
@@ -118,7 +118,7 @@ class BenchmarkSessionPlanTests(unittest.TestCase):
 
     def test_invalid_and_changed_configuration_or_workload_bindings_reject(self):
         expected = ACCOUNTING.build_benchmark_session_plan(**inputs())
-        for field in ("configuration_sha256", "workload_sha256"):
+        for field in ("configuration_sha256", "workload_manifest_sha256"):
             for mutation in ("zero", "missing", "string_key", "changed"):
                 params = inputs()
                 if mutation == "zero": params[field][3] = "0" * 64

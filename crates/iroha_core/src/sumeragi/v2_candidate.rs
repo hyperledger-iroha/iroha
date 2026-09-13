@@ -548,7 +548,21 @@ impl V2CandidateAssembler {
                 };
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
             report.selected = selected.len();
-            if !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work) {
+            let candidate_header = BlockHeader::new(
+                NonZeroU64::new(request.context.height)
+                    .ok_or(CandidateError::BuiltHeaderMismatch)?,
+                Some(request.parent.hash()),
+                None,
+                None,
+                candidate_ledger_time_ms,
+                view,
+            );
+            if !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work)
+                && request
+                    .state
+                    .deterministic_start_work_pending(&candidate_header)
+                    != Some(true)
+            {
                 if request.queue.transaction_selection_durability_faulted() {
                     return Err(CandidateError::RestartRequired);
                 }
@@ -573,6 +587,7 @@ impl V2CandidateAssembler {
             )?;
             if !candidate_block_has_proposal_work(
                 &block,
+                request.state,
                 request.attachments.time_trigger_clock_progress_required,
             ) {
                 return Err(CandidateError::BuiltWithoutProposalWork);
@@ -967,10 +982,13 @@ fn candidate_has_proposal_work(
 /// exact parent: clock progress is semantic work even when no trigger fires in
 /// this particular block and therefore no trigger entrypoint is serialized.
 ///
+/// Scheduled state transitions are independently derived from the exact parent
+/// and body header. They need no synthetic transaction or additional wire flag.
 /// This is the common fail-closed boundary used after fresh assembly, before
 /// validating an inbound body, and before re-proposing a recovered locked body.
 pub(crate) fn candidate_block_has_proposal_work(
     block: &SignedBlock,
+    state: &State,
     time_trigger_clock_progress_required: bool,
 ) -> bool {
     block.external_entrypoints_cloned().next().is_some()
@@ -990,6 +1008,7 @@ pub(crate) fn candidate_block_has_proposal_work(
             .is_some_and(|effects| !effects.is_empty())
         || block.header().sccp_commitment_root().is_some()
         || time_trigger_clock_progress_required
+        || state.deterministic_start_work_pending(&block.header()) == Some(true)
 }
 fn stripped_carrier_context_matches(
     built_header: &BlockHeader,
@@ -1612,6 +1631,7 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use std::{
         borrow::Cow,
@@ -1782,6 +1802,17 @@ mod tests {
         wire::SnapshotBootstrapAnchor,
         KeyPair,
     ) {
+        snapshot_parent_fixture_with_world(2, World::new())
+    }
+    fn snapshot_parent_fixture_with_world(
+        parent_height: u64,
+        world: World,
+    ) -> (
+        State,
+        wire::HeightContext,
+        wire::SnapshotBootstrapAnchor,
+        KeyPair,
+    ) {
         let key = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
             .expect("deterministic validator key");
         let peer = PeerId::new(key.public_key().clone());
@@ -1795,14 +1826,14 @@ mod tests {
         let topology = Topology::new(voters.clone());
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_with_chain_and_network_id_for_testing(
-            World::new(),
+            world,
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
             ChainId::from("v2-candidate-snapshot-parent"),
             crate::sumeragi::synthetic_network_id("v2-candidate-test"),
         );
         let mut parent_hash = None;
-        for height in 1..=2 {
+        for height in 1..=parent_height {
             let valid = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
                 header.set_height(NonZeroU64::new(height).expect("non-zero fixture height"));
                 header.set_prev_block_hash(parent_hash);
@@ -1830,9 +1861,9 @@ mod tests {
             state_block.commit().expect("commit fixture parent state");
         }
         let anchor = wire::SnapshotBootstrapAnchor {
-            snapshot_height: 2,
+            snapshot_height: parent_height,
             snapshot_block_hash: parent_hash.expect("fixture parent hash"),
-            snapshot_block_creation_time_ms: 2,
+            snapshot_block_creation_time_ms: parent_height,
             snapshot_state_hash: Hash::new(b"candidate snapshot state"),
         };
         let roster = voters
@@ -1848,7 +1879,7 @@ mod tests {
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
-            height: 3,
+            height: parent_height + 1,
             epoch: 0,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
@@ -1872,6 +1903,16 @@ mod tests {
             leader_seed: [0x43; 32],
         };
         context.validate().expect("fixture snapshot context");
+        let leader = &context.roster
+            [usize::try_from(context.leader(0)).expect("fixture leader index")]
+        .validator;
+        let key = (0xA7_u8..=0xAA)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic validator key")
+            })
+            .find(|key| key.public_key() == leader.public_key())
+            .expect("fixture roster contains its height-selected leader");
         (state, context, anchor, key)
     }
     #[test]
@@ -1951,7 +1992,16 @@ mod tests {
     fn assemble_empty_snapshot_candidate(
         attachments: CandidateAttachments,
     ) -> CandidateAssemblyOutcome {
-        let (state, mut context, anchor, key) = snapshot_parent_fixture();
+        let (state, context, anchor, key) = snapshot_parent_fixture();
+        assemble_empty_snapshot_candidate_for_state(attachments, &state, context, anchor, key)
+    }
+    fn assemble_empty_snapshot_candidate_for_state(
+        attachments: CandidateAttachments,
+        state: &State,
+        mut context: wire::HeightContext,
+        anchor: wire::SnapshotBootstrapAnchor,
+        key: KeyPair,
+    ) -> CandidateAssemblyOutcome {
         context.da_layout.max_payload_size_bytes = 64 * 1024;
         context.da_layout.max_chunk_count = 128;
         context.validate().expect("expanded fixture DA limits");
@@ -1980,7 +2030,7 @@ mod tests {
             directive,
             local_validator,
             parent: CandidateParent::Snapshot(&anchor),
-            state: &state,
+            state,
             queue: &queue,
             key_pair: &key,
             output_guard: &output_guard,
@@ -1996,6 +2046,108 @@ mod tests {
             panic!("an idle height must not manufacture an empty candidate");
         };
         assert_eq!(report, CandidateScanReport::default());
+    }
+    #[test]
+    fn scheduled_privacy_activation_is_proposal_work_at_exact_height_301() {
+        use iroha_data_model::privacy::{
+            PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        };
+        let mut world = World::new();
+        let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol)
+            .expect("compiled private-note profile")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 1,
+                    activate_at_height: 301,
+                },
+            ));
+        let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(protocol);
+        world.privacy_activations.insert(activation_key, activation);
+        let (state, context, anchor, key) = snapshot_parent_fixture_with_world(300, world);
+        let parent_hash = anchor.snapshot_block_hash;
+        let topology = context
+            .roster
+            .iter()
+            .map(|voter| voter.validator.clone())
+            .collect();
+        let header = BlockHeader::new(
+            NonZeroU64::new(301).expect("activation height"),
+            Some(parent_hash),
+            None,
+            None,
+            301,
+            0,
+        );
+        assert_eq!(state.deterministic_start_work_pending(&header), Some(true));
+        assert_eq!(
+            state.world.privacy_activations.view().get(&activation_key),
+            Some(&activation),
+            "probing due work must leave the committed activation untouched"
+        );
+        let mut stale = header.clone();
+        stale.set_height(NonZeroU64::new(302).expect("future height"));
+        assert_eq!(state.deterministic_start_work_pending(&stale), None);
+        stale = header.clone();
+        stale.set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"wrong parent",
+        ))));
+        assert_eq!(state.deterministic_start_work_pending(&stale), None);
+        let outcome = assemble_empty_snapshot_candidate_for_state(
+            CandidateAttachments::default(),
+            &state,
+            context,
+            anchor,
+            key,
+        );
+        let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
+            panic!("scheduled activation must produce its ordinary carrier without a transaction");
+        };
+        assert_eq!(candidate.block().header().height().get(), 301);
+        assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
+        assert!(candidate.block().is_resultless_proposal());
+        assert!(candidate_block_has_proposal_work(
+            candidate.block(),
+            &state,
+            false
+        ));
+        let mut signed = candidate.block().clone();
+        signed
+            .set_transaction_results_with_transcripts(
+                Vec::new(),
+                &[],
+                Vec::new(),
+                BTreeMap::new(),
+                Vec::new(),
+                AxtPolicySnapshot::default(),
+            )
+            .expect("empty activation execution record");
+        signed.set_committed_fragment_count(0);
+        let committed = ValidBlock::new_unverified_for_tests(signed)
+            .commit_unchecked()
+            .unpack(|_| {});
+        let mut overlay = state.block(committed.as_ref().header());
+        assert!(matches!(
+            overlay.world.privacy_activations.get(&activation_key).expect("activation").lifecycle,
+            PrivacyProtocolLifecycleV1::Active(active) if active.activated_at_height == 301
+        ));
+        let _events = overlay.apply_without_execution(&committed, topology);
+        overlay
+            .commit()
+            .expect("publish scheduled activation in the ordinary carrier");
+        let successor = BlockHeader::new(
+            NonZeroU64::new(302).expect("successor height"),
+            Some(committed.as_ref().hash()),
+            None,
+            None,
+            302,
+            0,
+        );
+        assert_eq!(state.deterministic_start_work_pending(&header), None);
+        assert_eq!(
+            state.deterministic_start_work_pending(&successor),
+            Some(false)
+        );
     }
     #[test]
     fn queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding() {
@@ -2107,16 +2259,16 @@ mod tests {
     }
     #[test]
     fn canonical_block_work_gate_preserves_transaction_autonomous_and_clock_work() {
-        let (_state, context, _anchor, key) = snapshot_parent_fixture();
+        let (state, context, _anchor, key) = snapshot_parent_fixture();
         let mut block: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
-        assert!(!candidate_block_has_proposal_work(&block, false));
+        assert!(!candidate_block_has_proposal_work(&block, &state, false));
         assert!(
-            candidate_block_has_proposal_work(&block, true),
+            candidate_block_has_proposal_work(&block, &state, true),
             "state-derived clock progress is semantic proposal work"
         );
         let transaction = accepted(71, "canonical-block-external");
         block.set_external_entrypoints(vec![transaction.entrypoint().clone()]);
-        assert!(candidate_block_has_proposal_work(&block, false));
+        assert!(candidate_block_has_proposal_work(&block, &state, false));
         let mut autonomous: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
         autonomous.set_execution_context(Some(
             BlockExecutionContextBundle::default().with_autonomous_lane_payloads(vec![
@@ -2138,13 +2290,17 @@ mod tests {
                 },
             ]),
         ));
-        assert!(candidate_block_has_proposal_work(&autonomous, false));
+        assert!(candidate_block_has_proposal_work(
+            &autonomous,
+            &state,
+            false
+        ));
         let mut queue_plan: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
         queue_plan.set_execution_context(Some(
             BlockExecutionContextBundle::default().with_queue_plan_admissions(vec![vec![0xA5]]),
         ));
         assert!(
-            candidate_block_has_proposal_work(&queue_plan, false),
+            candidate_block_has_proposal_work(&queue_plan, &state, false),
             "a proposal-native QueuePlan certificate is deterministic carrier work"
         );
     }

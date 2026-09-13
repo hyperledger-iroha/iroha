@@ -108,6 +108,24 @@ export function stringifyStrictLosslessIntegerJson(value, context) {
  * @returns {unknown} the losslessly decoded JSON value.
  */
 export function parseStrictLosslessIntegerJson(text, context) {
+  return parseStrictLosslessJsonValue(text, context, []);
+}
+
+/**
+ * Preserve integer tokens while admitting finite JSON floats only inside named
+ * metadata subtrees. Numeric spellings elsewhere remain canonical integers.
+ */
+export function parseStrictLosslessJson(text, context, { floatingPointPaths = [] } = {}) {
+  if (!Array.isArray(floatingPointPaths) || floatingPointPaths.some(
+    (path) => !Array.isArray(path) || path.length === 0
+      || path.some((key) => typeof key !== "string"),
+  )) {
+    throw new TypeError("floatingPointPaths must contain non-empty string paths");
+  }
+  return parseStrictLosslessJsonValue(text, context, floatingPointPaths);
+}
+
+function parseStrictLosslessJsonValue(text, context, floatingPointPaths) {
   if (typeof text !== "string") {
     throw new TypeError(`${context} JSON source must be a string`);
   }
@@ -117,6 +135,7 @@ export function parseStrictLosslessIntegerJson(text, context) {
 
   let index = 0;
   let nodes = 0;
+  const path = floatingPointPaths.length === 0 ? null : [];
 
   const fail = (message, ErrorType = TypeError) => {
     throw new ErrorType(`${context} contains invalid JSON at character ${index}: ${message}`);
@@ -228,6 +247,10 @@ export function parseStrictLosslessIntegerJson(text, context) {
     fail("unterminated string");
   };
   const parseInteger = () => {
+    const allowFloatingPoint = path !== null && floatingPointPaths.some(
+      (prefix) => prefix.length <= path.length
+        && prefix.every((key, index) => path[index] === key),
+    );
     const start = index;
     if (text[index] === "-") index += 1;
     if (index >= text.length) fail("incomplete number");
@@ -244,10 +267,27 @@ export function parseStrictLosslessIntegerJson(text, context) {
       fail("invalid integer token");
     }
     if (index < text.length && /[.eE]/u.test(text[index])) {
-      fail("numeric tokens must be canonical integers");
+      if (!allowFloatingPoint) fail("numeric tokens must be canonical integers");
+      if (text[index] === ".") {
+        index += 1;
+        const digits = index;
+        while (index < text.length && /[0-9]/u.test(text[index])) index += 1;
+        if (index === digits) fail("fraction must contain digits");
+      }
+      if (index < text.length && /[eE]/u.test(text[index])) {
+        index += 1;
+        if (/[+-]/u.test(text[index] ?? "")) index += 1;
+        const digits = index;
+        while (index < text.length && /[0-9]/u.test(text[index])) index += 1;
+        if (index === digits) fail("exponent must contain digits");
+      }
+      const number = Number(text.slice(start, index));
+      if (!Number.isFinite(number)) fail("floating-point values must be finite");
+      return number;
     }
     const token = text.slice(start, index);
     if (token === "-0") {
+      if (allowFloatingPoint) return -0;
       fail(
         "numeric tokens must be canonical integers; negative zero is forbidden because zero must be an unsigned integer token",
       );
@@ -288,7 +328,9 @@ export function parseStrictLosslessIntegerJson(text, context) {
           skipWhitespace();
           if (text[index] !== ":") fail("expected ':' after object key");
           index += 1;
+          if (path !== null) path.push(key);
           const value = parseValue(depth + 1);
+          if (path !== null) path.pop();
           Object.defineProperty(record, key, {
             value,
             enumerable: true,
@@ -313,7 +355,9 @@ export function parseStrictLosslessIntegerJson(text, context) {
           return values;
         }
         while (true) {
+          if (path !== null) path.push(values.length);
           values.push(parseValue(depth + 1));
+          if (path !== null) path.pop();
           skipWhitespace();
           if (text[index] === "]") {
             index += 1;

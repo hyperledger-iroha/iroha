@@ -468,6 +468,86 @@ where
         out.push('}');
     }
 }
+/// Serialize the exact storage JSON after applying ordered block-local changes.
+///
+/// This read-only projection preserves the first pre-block undo value for every
+/// previously touched key. A newly touched key records its current value as undo,
+/// even when removing an absent key. Both maps are streamed in storage-key order;
+/// no existing key, value, or full store is cloned or decoded.
+pub fn json_serialize_storage_block_with_changes<K, V>(
+    block: &StorageBlock<'_, K, V>,
+    changes: &BTreeMap<K, Option<V>>,
+    out: &mut String,
+) where
+    K: JsonKeyCodec + Key,
+    V: JsonSerialize + Value,
+{
+    out.push_str("{\"revert\":{");
+    let mut first = true;
+    let mut revert = block.revert_map().iter().peekable();
+    for key in changes.keys() {
+        while let Some((previous_key, previous)) = revert.peek().copied() {
+            if previous_key >= key {
+                break;
+            }
+            write_storage_json_entry(previous_key, previous, &mut first, out);
+            revert.next();
+        }
+        let previous = match revert.peek().copied() {
+            Some((previous_key, previous)) if previous_key == key => {
+                revert.next();
+                previous.as_ref()
+            }
+            _ => block.get(key),
+        };
+        match previous {
+            Some(value) => write_storage_json_entry(key, value, &mut first, out),
+            None => write_storage_json_entry(key, &Option::<V>::None, &mut first, out),
+        }
+    }
+    for (key, previous) in revert {
+        write_storage_json_entry(key, previous, &mut first, out);
+    }
+    out.push_str("},\"blocks\":{");
+    first = true;
+    let mut current = block.iter().peekable();
+    for (key, replacement) in changes {
+        while let Some((current_key, value)) = current.peek().copied() {
+            if current_key >= key {
+                break;
+            }
+            write_storage_json_entry(current_key, value, &mut first, out);
+            current.next();
+        }
+        if current
+            .peek()
+            .is_some_and(|(current_key, _)| *current_key == key)
+        {
+            current.next();
+        }
+        if let Some(value) = replacement {
+            write_storage_json_entry(key, value, &mut first, out);
+        }
+    }
+    for (key, value) in current {
+        write_storage_json_entry(key, value, &mut first, out);
+    }
+    out.push_str("}}");
+}
+fn write_storage_json_entry<K: JsonKeyCodec, V: JsonSerialize>(
+    key: &K,
+    value: &V,
+    first: &mut bool,
+    out: &mut String,
+) {
+    if !*first {
+        out.push(',');
+    }
+    *first = false;
+    key.encode_json_key(out);
+    out.push(':');
+    value.json_serialize(out);
+}
 impl<V> JsonSerialize for Cell<V>
 where
     V: JsonSerialize + Value,
@@ -613,6 +693,94 @@ mod tests {
         parser.skip_ws();
         assert!(parser.eof());
         assert_eq!(*cell.view(), 2);
+    }
+    #[test]
+    fn storage_projection_without_changes_is_byte_identical_and_read_only() {
+        let storage = sample_storage();
+        let mut block = storage.block();
+        block.insert("foo".to_owned(), 9);
+        block.remove("absent".to_owned());
+        let original = to_json(&block).expect("original block JSON");
+        let mut projected = String::new();
+        json_serialize_storage_block_with_changes(&block, &BTreeMap::new(), &mut projected);
+        assert_eq!(projected, original);
+        assert_eq!(to_json(&block).expect("unchanged block JSON"), original);
+    }
+    #[test]
+    fn storage_projection_matches_mutation_and_commit_with_first_touch_undo() {
+        fn fixture() -> Storage<String, i32> {
+            [("a", 10), ("c", 30), ("e", 50), ("z", 90)]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect()
+        }
+        fn earlier_writes(block: &mut StorageBlock<'_, String, i32>) {
+            block.insert("a".to_owned(), 11);
+            block.insert("b".to_owned(), 20);
+            block.remove("c".to_owned());
+            let mut transaction = block.transaction();
+            transaction.insert("e".to_owned(), 51);
+            transaction.apply();
+            block.remove("untouched-absence".to_owned());
+        }
+        let original_storage = fixture();
+        let equivalent_storage = fixture();
+        let mut original = original_storage.block();
+        let mut equivalent = equivalent_storage.block();
+        earlier_writes(&mut original);
+        earlier_writes(&mut equivalent);
+        let changes: BTreeMap<_, _> = [
+            ("a", Some(12)),
+            ("b", None),
+            ("c", Some(31)),
+            ("d", Some(40)),
+            ("e", None),
+            ("missing", None),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect();
+        let before = to_json(&original).expect("original JSON");
+        let mut projected = String::new();
+        json_serialize_storage_block_with_changes(&original, &changes, &mut projected);
+        for (key, value) in &changes {
+            match value {
+                Some(value) => {
+                    equivalent.insert(key.clone(), *value);
+                }
+                None => {
+                    equivalent.remove(key.clone());
+                }
+            }
+        }
+        assert_eq!(projected, to_json(&equivalent).expect("mutated JSON"));
+        assert_eq!(to_json(&original).expect("read-only original"), before);
+        assert_eq!(equivalent.revert_map().get("a"), Some(&Some(10)));
+        assert_eq!(equivalent.revert_map().get("b"), Some(&None));
+        assert_eq!(equivalent.revert_map().get("c"), Some(&Some(30)));
+        assert_eq!(equivalent.revert_map().get("missing"), Some(&None));
+        equivalent.commit();
+        assert_eq!(
+            projected,
+            to_json(&equivalent_storage).expect("committed JSON")
+        );
+    }
+    #[test]
+    fn storage_projection_preserves_key_codec_and_storage_order() {
+        let storage: Storage<u64, i32> = [(2, 20), (10, 100)].into_iter().collect();
+        let equivalent: Storage<u64, i32> = [(2, 20), (10, 100)].into_iter().collect();
+        let block = storage.block();
+        let mut changed = equivalent.block();
+        let changes = [(1, Some(10)), (2, Some(21)), (11, None)]
+            .into_iter()
+            .collect();
+        let mut projected = String::new();
+        json_serialize_storage_block_with_changes(&block, &changes, &mut projected);
+        changed.insert(1, 10);
+        changed.insert(2, 21);
+        changed.remove(11);
+        assert_eq!(projected, to_json(&changed).expect("numeric key JSON"));
+        assert!(projected.contains("\"1\":10,\"2\":21,\"10\":100"));
     }
     #[test]
     fn storage_roundtrip() {

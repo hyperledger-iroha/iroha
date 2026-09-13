@@ -1305,7 +1305,7 @@ function normalizeTransferInput(input) {
 }
 
 // The ordinary bound remains unchanged. Only one canonical native execution-proof instruction
-// can enter the larger corridor; batches, WASM, attachments and unrelated instructions cannot.
+// can enter the larger corridor; batches, attachments and unrelated instructions cannot.
 function assertTransactionPayloadByteBound(payload, networkPrefix) {
   normalizeNetworkPrefix(networkPrefix, FIELD_NETWORK_PREFIX);
   if (payload.length === 0 || payload.length > MAX_EXECUTION_PAYLOAD_BYTES) {
@@ -2385,6 +2385,7 @@ function validateTransactionPayloadEnvelope(
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @param {string | null} expectedAuthority
  * @param {"ordinary" | "queue_plan_synced"} expectedAdmissionIntent
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {{
  *   networkId: Buffer,
  *   creationTimeMs: bigint,

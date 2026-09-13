@@ -36,6 +36,18 @@ const UNAVAILABLE_NATIVE_BINDING = Object.freeze({
     throw new Error("Native binding required; test override is unavailable");
   },
 });
+const UNAVAILABLE_NORITO_API = _createNoritoInstructionApi(
+  createNativeRuntime(UNAVAILABLE_NATIVE_BINDING),
+);
+const NATIVE_NORITO_API = _createNoritoInstructionApi(
+  createNativeRuntime(nativeBinding),
+);
+const {
+  noritoDecodeInstruction: boundNoritoDecodeInstruction,
+  noritoEncodeInstruction: boundNoritoEncodeInstruction,
+  noritoEncodeInstructionBoxArchive: boundNoritoEncodeInstructionBoxArchive,
+  noritoEncodeMultisigProposeRequest: boundNoritoEncodeMultisigProposeRequest,
+} = NATIVE_NORITO_API;
 const ACCOUNT_ID = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const SEED_11_ED25519_PUBLIC_KEY_HEX =
   "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
@@ -741,6 +753,8 @@ function loadAssetIdFromFixture(name) {
   return destination;
 }
 
+
+
 function readU64Length(buffer, offset, label) {
   assert.ok(offset + 8 <= buffer.length, `${label} length prefix is in bounds`);
   const value = buffer.readBigUInt64LE(offset);
@@ -849,12 +863,12 @@ test("contract activation lifecycle instructions retain mandatory CAS revisions"
       },
     },
   ]) {
-    const decoded = noritoDecodeInstruction(noritoEncodeInstruction(instruction, 753), 753);
+    const decoded = boundNoritoDecodeInstruction(boundNoritoEncodeInstruction(instruction, 753), 753);
     assert.deepEqual(decoded, instruction);
   }
 });
 
-test("canonical instruction decoding is deterministic across process history", () => {
+baseTest("native instruction decoding is deterministic across process history", () => {
   const contractAddress =
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
   const instructions = [
@@ -898,22 +912,22 @@ test("canonical instruction decoding is deterministic across process history", (
   globalThis[cacheSymbol] = poison;
   try {
     for (const instruction of instructions) {
-      const encoded = noritoEncodeInstruction(instruction, 753);
+      const encoded = boundNoritoEncodeInstruction(instruction, 753);
       poison.set(encoded.toString("hex"), {
         Log: { level: "ERROR", message: "forged cache entry" },
       });
       assert.deepEqual(
-        noritoDecodeInstruction(encoded, 753),
+        boundNoritoDecodeInstruction(encoded, 753),
         instruction,
       );
       assert.deepEqual(
         JSON.parse(
-          noritoDecodeInstruction(encoded, 753, { parseJson: false }),
+          boundNoritoDecodeInstruction(encoded, 753, { parseJson: false }),
         ),
         instruction,
       );
 
-      const archive = noritoEncodeInstructionBoxArchive(instruction, 753);
+      const archive = boundNoritoEncodeInstructionBoxArchive(instruction, 753);
       assert.deepEqual(
         noritoDecodeInstructionBoxArchive(archive, 753),
         instruction,
@@ -983,7 +997,7 @@ test("contract activation lifecycle instructions reject omitted CAS revisions", 
     },
   ]) {
     assert.throws(
-      () => noritoEncodeInstruction(instruction, 753),
+      () => boundNoritoEncodeInstruction(instruction, 753),
       /expected_revision/u,
     );
   }
@@ -1001,28 +1015,28 @@ test("norito encode/decode supports asset definition registration", () => {
   assert.deepEqual(decoded, REGISTER_ASSET);
 });
 
-test("native instruction adapter supports asset definition registration", () => {
+baseTest("injected native codec roundtrips asset definition registration", () => {
   {
-    const encoded = noritoEncodeInstruction(REGISTER_ASSET, 753);
-    const decoded = noritoDecodeInstruction(encoded, 753);
+    const encoded = boundNoritoEncodeInstruction(REGISTER_ASSET, 753);
+    const decoded = boundNoritoDecodeInstruction(encoded, 753);
     assert.deepEqual(decoded, REGISTER_ASSET);
   }
 });
 
-test("native instruction adapter preserves optional registration fields", () => {
+baseTest("native asset definition codec preserves optional registration fields", () => {
   {
-    const encoded = noritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS, 753);
-    const decoded = noritoDecodeInstruction(encoded, 753);
+    const encoded = boundNoritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS, 753);
+    const decoded = boundNoritoDecodeInstruction(encoded, 753);
     assert.deepEqual(decoded, REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
   }
 });
 
-test("native Norito decoder accepts JavaScript adapter asset definition frames", () => {
-  const encoded = noritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS, 753);
+test("public native decoder accepts injected native asset definition frames", () => {
+  const encoded = boundNoritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS, 753);
   assert.deepEqual(noritoDecodeInstruction(encoded, 753), REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
 });
 
-test("native instruction adapter rejects adversarial fields", () => {
+baseTest("native asset definition codec rejects adversarial fields", () => {
   const withAssetPatch = (patch) => ({
     Register: {
       AssetDefinition: {
@@ -1035,56 +1049,56 @@ test("native instruction adapter rejects adversarial fields", () => {
     const missingOwnership = withAssetPatch({});
     delete missingOwnership.Register.AssetDefinition.owning_domain;
     assert.throws(
-      () => noritoEncodeInstruction(missingOwnership, 753),
-      /owning_domain is required/u,
+      () => boundNoritoEncodeInstruction(missingOwnership, 753),
+      /missing field `owning_domain`/u,
     );
     const missingBalancePolicy = withAssetPatch({});
     delete missingBalancePolicy.Register.AssetDefinition.balance_scope_policy;
     assert.throws(
-      () => noritoEncodeInstruction(missingBalancePolicy, 753),
-      /balance_scope_policy is required/u,
+      () => boundNoritoEncodeInstruction(missingBalancePolicy, 753),
+      /missing field `balance_scope_policy`/u,
     );
     assert.throws(
-      () => noritoEncodeInstruction(withAssetPatch({ mintable: "Limited(0)" }), 753),
-      /positive unsigned 32-bit integer/,
+      () => boundNoritoEncodeInstruction(withAssetPatch({ mintable: "Limited(0)" }), 753),
+      /invalid field `Mintable`: Limited mintability token count `0` is invalid/u,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        boundNoritoEncodeInstruction(
           withAssetPatch({ mintable: { kind: "Limited", tokens: 5 } }), 753,
         ),
-      /must be a non-empty string/u,
+      /JSON error: unexpected character `\{`/u,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        boundNoritoEncodeInstruction(
           withAssetPatch({ mintable: { kind: "Limited", value: "5" } }), 753,
         ),
-      /must be a non-empty string/u,
+      /JSON error: unexpected character `\{`/u,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        boundNoritoEncodeInstruction(
           withAssetPatch({ balance_scope_policy: "ObserverScoped" }), 753,
         ),
-      /Global or DataspaceRestricted/,
+      /invalid field `AssetBalancePolicy`: unknown variant 'ObserverScoped'/u,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        boundNoritoEncodeInstruction(
           withAssetPatch({
             confidential_policy: { mode: "Convertible" },
           }), 753,
         ),
-      /cannot carry confidential policy/,
+      /unknown field `confidential_policy`/u,
     );
     assert.throws(
-      () => noritoEncodeInstruction(withAssetPatch({ logo: "https://example.invalid/logo.png" }), 753),
-      /sorafs:\/\/ URI/,
+      () => boundNoritoEncodeInstruction(withAssetPatch({ logo: "https://example.invalid/logo.png" }), 753),
+      { message: "Logo URI must use `sorafs://` scheme" },
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        boundNoritoEncodeInstruction(
           withAssetPatch({ id: "62Fk4FPcMuLvW5QjDGNF2a4jAmxM" }), 753,
         ),
       /checksum is invalid/,
@@ -1121,7 +1135,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, instruction);
 });
 
-test("noritoEncodeInstruction delegates supported instruction JSON to the native owner", () => {
+baseTest("injected native codec encodes supported instruction JSON", () => {
   const instruction = {
     Transfer: {
       Asset: {
@@ -1133,7 +1147,7 @@ test("noritoEncodeInstruction delegates supported instruction JSON to the native
   };
   let encoded;
   {
-    encoded = Buffer.from(noritoEncodeInstruction(instruction, 753));
+    encoded = Buffer.from(boundNoritoEncodeInstruction(instruction, 753));
   }
   assert.ok(encoded.length > 32);
   assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
@@ -1152,7 +1166,7 @@ test("contract manifest codec preserves the canonical seiyaku name", () => {
   };
   let encoded;
   {
-    encoded = Buffer.from(noritoEncodeInstruction(instruction, 753));
+    encoded = Buffer.from(boundNoritoEncodeInstruction(instruction, 753));
   }
   assert.deepEqual(noritoDecodeInstruction(encoded, 753), {
     RegisterSmartContractCode: {
@@ -1180,7 +1194,7 @@ test("contract manifest codec matches Rust V1 trigger bytes", () => {
   const instruction = {
     RegisterSmartContractCode: { manifest: fixture.manifest },
   };
-  const encoded = Buffer.from(noritoEncodeInstruction(instruction, 753));
+  const encoded = Buffer.from(boundNoritoEncodeInstruction(instruction, 753));
   const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
   assert.notEqual(
     encoded.indexOf(rustManifest),
@@ -1197,7 +1211,7 @@ test("contract manifest codec matches Rust V1 trigger bytes", () => {
       },
     },
   };
-  const signedEncoded = Buffer.from(noritoEncodeInstruction(signedInstruction, 753));
+  const signedEncoded = Buffer.from(boundNoritoEncodeInstruction(signedInstruction, 753));
   assert.notEqual(
     signedEncoded.indexOf(Buffer.from(fixture.signed_manifest_compact_hex, "hex")),
     -1,
@@ -1215,8 +1229,8 @@ test("contract manifest codec roundtrips every V1 descriptor field", () => {
   });
   const manifest = {
     seiyaku_name: "Ledger",
-    code_hash: `${"aa".repeat(31)}ab`,
-    abi_hash: "bb".repeat(32),
+    code_hash: "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB#3E38",
+    abi_hash: "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
     compiler_fingerprint: "kotodama_lang",
     features_bitmap: 42,
     access_set_hints: {
@@ -1296,7 +1310,7 @@ test("contract manifest codec roundtrips every V1 descriptor field", () => {
     },
   };
   const encoded = Buffer.from(
-      noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753),
+      boundNoritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753),
     );
   const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest, {
@@ -1311,11 +1325,11 @@ test("contract manifest codec rejects noncanonical and retired layouts", () => {
     fs.readFileSync(path.join(__dirname, "fixtures", "contract_manifest_v1.json"), "utf8"),
   );
   const encodeManifest = (manifest) =>
-    noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+    boundNoritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
 
   assert.throws(
     () => encodeManifest({ ...fixture.manifest, contract_name: "Legacy" }),
-    /unknown field contract_name/u,
+    /unknown field `contract_name`/u,
   );
   assert.throws(
     () =>
@@ -1325,7 +1339,7 @@ test("contract manifest codec rejects noncanonical and retired layouts", () => {
           { ...fixture.manifest.entrypoints[0], kind: { kind: "Public", value: null } },
         ],
       }),
-    /Kotoage, View, Hajimari, or Kaizen/u,
+    { message: "unknown JSON enum variant" },
   );
   assert.throws(
     () =>
@@ -1349,7 +1363,7 @@ test("contract manifest codec rejects noncanonical and retired layouts", () => {
           },
         ],
       }),
-    /unsupported value kind Opaque|not a canonical V1 entrypoint value kind/u,
+    { message: "unknown JSON enum variant" },
   );
   assert.throws(
     () =>
@@ -1386,7 +1400,7 @@ test("contract manifest codec rejects noncanonical and retired layouts", () => {
           },
         ],
       }),
-    /unknown field element|contain (?:only|exactly) capacity/u,
+    /unknown field `element`/u,
   );
 
   const badFilter = Buffer.from(
@@ -1410,7 +1424,7 @@ test("contract manifest codec rejects noncanonical and retired layouts", () => {
           },
         ],
       }),
-    /schema hash did not match/u,
+    { message: "schema mismatch" },
   );
   assert.throws(
     () =>
@@ -1477,7 +1491,7 @@ test("contract manifest codec validates every flat query schema and ordinary str
   });
   const roundtrip = (returnType, nodes) => {
     const value = instruction(returnType, nodes);
-    const encoded = noritoEncodeInstruction(value, 753);
+    const encoded = boundNoritoEncodeInstruction(value, 753);
     assert.deepEqual(noritoDecodeInstruction(encoded, 753), value);
   };
 
@@ -1509,7 +1523,7 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
   );
   const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
   const encodeNodes = (nodes, returnType = "schema-under-test") =>
-    noritoEncodeInstruction({
+    boundNoritoEncodeInstruction({
         RegisterSmartContractCode: {
           manifest: {
             ...fixture.manifest,
@@ -1532,10 +1546,6 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
     [],
     [{ kind: "List", value: { capacity: 1 } }],
     [leaf("Int"), leaf("Bool")],
-    [
-      { kind: "List", value: { capacity: 1, element: { nodes: [leaf("Int")] } } },
-      leaf("Int"),
-    ],
     [{ kind: "List", value: { capacity: 0 } }, leaf("Int")],
     [{ kind: "List", value: { capacity: 65 } }, leaf("Int")],
     [
@@ -1546,8 +1556,16 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
       leaf("Int"),
     ],
   ]) {
-    assert.throws(() => encodeNodes(malformed), /canonical|capacity|complete|exactly capacity/u);
+    assert.throws(() => encodeNodes(malformed), { message: "invalid V1 entrypoint value schema" });
   }
+
+  assert.throws(
+    () => encodeNodes([
+      { kind: "List", value: { capacity: 1, element: { nodes: [leaf("Int")] } } },
+      leaf("Int"),
+    ]),
+    { message: "JSON error: unknown field `element`" },
+  );
 
   const reservedViews = [
     ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
@@ -1582,7 +1600,7 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
       ...structuredClone(children),
     ];
     forged[1].value.kind = "Bool";
-    assert.throws(() => encodeNodes(forged), /forged reserved query-view/u);
+    assert.throws(() => encodeNodes(forged), { message: "invalid V1 entrypoint value schema" });
 
     const forgedPage = [
       {
@@ -1595,7 +1613,7 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
       { kind: "Option", value: null },
       leaf("Int"),
     ];
-    assert.throws(() => encodeNodes(forgedPage), /forged QueryPage/u);
+    assert.throws(() => encodeNodes(forgedPage), { message: "invalid V1 entrypoint value schema" });
   }
 
   const validCapacity = Buffer.from(
@@ -1613,8 +1631,8 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
     forged[capacityOffsets[0]] = invalidCapacity;
     rewriteNestedInstructionFrameCrcs(forged);
     assert.throws(
-      () => noritoDecodeInstruction(forged, 753),
-      /capacity.*1\.\.64/u,
+      () => boundNoritoDecodeInstruction(forged, 753),
+      { message: "invalid V1 entrypoint value schema" },
     );
   }
 
@@ -1636,12 +1654,12 @@ test("contract manifest codec rejects malformed and forged flat schema tapes", (
   forgedViewWire[nameOffset + forgedName.length - 1] = "w".charCodeAt(0);
   rewriteNestedInstructionFrameCrcs(forgedViewWire);
   assert.throws(
-    () => noritoDecodeInstruction(forgedViewWire, 753),
-    /forged reserved query-view/u,
+    () => boundNoritoDecodeInstruction(forgedViewWire, 753),
+    { message: "invalid V1 entrypoint value schema" },
   );
 });
 
-test("native multisig proposal DTO embeds canonical native instructions with compact inner frames", () => {
+baseTest("native multisig proposal DTO embeds canonical instructions with compact inner frames", () => {
   const sourceAssetId = loadAssetIdFromFixture("mint_asset_quantity.json");
   const instruction = {
     Transfer: {
@@ -1663,7 +1681,9 @@ test("native multisig proposal DTO embeds canonical native instructions with com
     validation_fee_transfer_entry_index: "2",
     instructions: [instruction],
   };
-  const body = Buffer.from(noritoEncodeMultisigProposeRequest(request, 753));
+  const nativeBody = Buffer.from(noritoEncodeMultisigProposeRequest(request, 753));
+  const body = Buffer.from(boundNoritoEncodeMultisigProposeRequest(request, 753));
+  assert.deepEqual(body, nativeBody);
 
   const outer = noritoFramePayload(body, "MultisigProposeDto");
   const outerUsesCompactLengths = (outer.flags & 0x02) !== 0;
@@ -2019,19 +2039,48 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
   }
 });
 
-test("noritoDecodeInstruction decodes supported canonical fixture bytes", () => {
+baseTest("canonical instruction decoding requires the native binding", () => {
   const bytes = loadInstructionBytes("mint_asset_quantity.json");
-  const decoded = noritoDecodeInstruction(bytes, 753);
-  assert.ok(decoded?.Mint?.Asset);
+  assert.throws(() => UNAVAILABLE_NORITO_API.noritoDecodeInstruction(bytes, 753), /Native binding required/u);
+  assert.ok(boundNoritoDecodeInstruction(bytes, 753)?.Mint?.Asset);
 });
 
-test("noritoEncodeInstruction validates pre-encoded canonical frames through the native owner", () => {
+baseTest("pre-encoded instructions require native canonical validation", () => {
   const payload = loadInstructionBytes("mint_asset_quantity.json");
-  assert.deepEqual(noritoEncodeInstruction(payload, 753), payload);
-  assert.deepEqual(noritoEncodeInstruction(payload.toString("base64"), 753), payload);
-  assert.deepEqual(noritoEncodeInstruction(`0x${payload.toString("hex")}`, 753), payload);
-  for (const invalid of [Buffer.from([1, 2, 3, 4]), payload.subarray(0, -1)]) {
-    assert.throws(() => noritoEncodeInstruction(invalid, 753));
+  for (const input of [payload, payload.toString("base64"), `0x${payload.toString("hex")}`]) {
+    assert.throws(() => UNAVAILABLE_NORITO_API.noritoEncodeInstruction(input, 753), /Native binding required/u);
+    assert.deepEqual(boundNoritoEncodeInstruction(input, 753), payload);
+  }
+  for (const input of [Buffer.from([1, 2, 3, 4]), "AQIDBA==", "0x01020304"]) {
+    assert.throws(() => boundNoritoEncodeInstruction(input, 753));
+  }
+});
+
+baseTest("pre-encoded instruction representations are exact and unambiguous", () => {
+  const payload = loadInstructionBytes("mint_asset_quantity.json");
+  const hex = `0x${payload.toString("hex")}`;
+  const base64 = payload.toString("base64");
+  // The old base64-first dispatch accepted this hex text as base64 and then
+  // rejected its bytes even though it carries a valid native instruction frame.
+  assert.equal(Buffer.from(hex, "base64").toString("base64"), hex);
+  assert.deepEqual(boundNoritoEncodeInstruction(hex, 753), payload);
+  assert.deepEqual(boundNoritoEncodeInstruction(base64, 753), payload);
+  assert.match(base64, /=+$/u);
+  for (const input of [
+    ` ${hex}`, `${hex} `, `${hex}\n`,
+    `0x${payload.toString("hex").toUpperCase()}`,
+    `0X${payload.toString("hex")}`, hex.slice(0, -1), "0x",
+    payload.toString("hex"),
+    ` ${base64}`, `${base64} `, `${base64}\n`,
+    `${base64.slice(0, 4)}\n${base64.slice(4)}`,
+    base64.replace(/=+$/u, ""), `${base64}=`,
+  ]) {
+    assert.throws(() => boundNoritoEncodeInstruction(input, 753), undefined, input);
+  }
+  for (const frame of [payload.subarray(0, -1), Buffer.concat([payload, Buffer.from([0])])]) {
+    for (const input of [frame.toString("base64"), `0x${frame.toString("hex")}`]) {
+      assert.throws(() => boundNoritoEncodeInstruction(input, 753));
+    }
   }
 });
 
@@ -2120,14 +2169,11 @@ test("burn trigger fixture matches canonical Norito bytes", () => {
   assert.equal(encodedHex, expectedHex);
 });
 
-baseTest("noritoEncodeInstruction requires the native owner even for supported instruction JSON", () => {
-  const unavailableApi = _createNoritoInstructionApi(
-    createNativeRuntime(UNAVAILABLE_NATIVE_BINDING),
-  );
-  assert.throws(
-    () => unavailableApi.noritoEncodeInstruction(REGISTER_DOMAIN, 753),
-    /Native binding required/,
-  );
+baseTest("instruction encoding never substitutes a codec when native execution is unavailable", () => {
+  for (const instruction of [REGISTER_DOMAIN, { Log: { level: "INFO", message: "native codec required" } }]) {
+    assert.throws(() => UNAVAILABLE_NORITO_API.noritoEncodeInstruction(instruction, 753), /Native binding required/u);
+    assert.throws(() => UNAVAILABLE_NORITO_API.noritoEncodeInstructionBoxArchive(instruction, 753), /Native binding required/u);
+  }
 });
 
 baseTest("noritoEncodeInstruction propagates native schema rejection exactly", () => {

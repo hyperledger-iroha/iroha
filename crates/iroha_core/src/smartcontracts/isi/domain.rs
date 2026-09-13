@@ -1983,10 +1983,10 @@ pub mod isi {
                 .iter()
                 .find(|(_, receipt)| {
                     receipt.authority == account_id
-                        || receipt
-                            .legs
-                            .iter()
-                            .any(|leg| leg.leg.from == account_id || leg.leg.to == account_id)
+                        || receipt.details.movements().any(|movement| {
+                            movement.source.account() == &account_id
+                                || movement.destination.account() == &account_id
+                        })
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -2684,10 +2684,10 @@ pub mod isi {
                 .settlement_receipts
                 .iter()
                 .find(|(_, receipt)| {
-                    receipt
-                        .legs
-                        .iter()
-                        .any(|leg| leg.leg.asset_definition_id() == &asset_definition_id)
+                    receipt.details.movements().any(|movement| {
+                        movement.source.definition() == &asset_definition_id
+                            || movement.destination.definition() == &asset_definition_id
+                    })
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -8757,19 +8757,14 @@ mod tests {
                 let settlement_id: iroha_data_model::isi::SettlementId =
                     "settleguard".parse().expect("settlement id");
                 let receipt = iroha_data_model::isi::SettlementReceipt {
-                    kind: iroha_data_model::isi::SettlementKind::Dvp,
                     authority: account_id.clone(),
-                    plan: iroha_data_model::isi::SettlementPlan::default(),
                     metadata: Metadata::default(),
                     block_height: 1,
                     block_hash: iroha_crypto::HashOf::<
                         iroha_data_model::block::BlockHeader,
                     >::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
                     executed_at_ms: 1,
-                    legs: [
-                        iroha_data_model::isi::SettlementLegSnapshot {
-                            role: iroha_data_model::isi::SettlementLegRole::Delivery,
-                            leg: iroha_data_model::isi::SettlementLeg::new(
+                    details: iroha_data_model::isi::SettlementDetails::Dvp(iroha_data_model::isi::DvpSettlementDetails { delivery: { let leg = iroha_data_model::isi::SettlementLeg::new(
                                 AssetDefinitionId::derive_from_components(
                                     domain_id.clone(),
                                     "usd".parse().unwrap(),
@@ -8777,11 +8772,11 @@ mod tests {
                                 Quantity::one(),
                                 account_id.clone(),
                                 authority.clone(),
-                            ),
-                        },
-                        iroha_data_model::isi::SettlementLegSnapshot {
-                            role: iroha_data_model::isi::SettlementLegRole::Payment,
-                            leg: iroha_data_model::isi::SettlementLeg::new(
+                            ); iroha_data_model::isi::ResolvedSettlementMovement {
+                source: AssetId::with_scope(leg.asset_definition_id().clone(), leg.from().clone(), iroha_data_model::asset::AssetBalanceScope::Global),
+                destination: AssetId::with_scope(leg.asset_definition_id().clone(), leg.to().clone(), iroha_data_model::asset::AssetBalanceScope::Global),
+                quantity: leg.quantity().clone(), metadata: leg.metadata().clone(),
+            } }, payment: { let leg = iroha_data_model::isi::SettlementLeg::new(
                                 AssetDefinitionId::derive_from_components(
                                     domain_id.clone(),
                                     "eur".parse().unwrap(),
@@ -8789,10 +8784,11 @@ mod tests {
                                 Quantity::one(),
                                 authority.clone(),
                                 account_id.clone(),
-                            ),
-                        },
-                    ],
-                    fx_corridor: None,
+                            ); iroha_data_model::isi::ResolvedSettlementMovement {
+                source: AssetId::with_scope(leg.asset_definition_id().clone(), leg.from().clone(), iroha_data_model::asset::AssetBalanceScope::Global),
+                destination: AssetId::with_scope(leg.asset_definition_id().clone(), leg.to().clone(), iroha_data_model::asset::AssetBalanceScope::Global),
+                quantity: leg.quantity().clone(), metadata: leg.metadata().clone(),
+            } }, order: iroha_data_model::isi::SettlementExecutionOrder::DeliveryThenPayment }),
                 };
                 tx.world.settlement_receipts.insert(settlement_id, receipt);
             },
@@ -11535,9 +11531,7 @@ mod tests {
         let settlement_id: iroha_data_model::isi::SettlementId =
             "settle_asset_guard".parse().expect("settlement id");
         let receipt = iroha_data_model::isi::SettlementReceipt {
-            kind: iroha_data_model::isi::SettlementKind::Dvp,
             authority: from.clone(),
-            plan: iroha_data_model::isi::SettlementPlan::default(),
             metadata: Metadata::default(),
             block_height: 1,
             block_hash:
@@ -11545,30 +11539,58 @@ mod tests {
                     Hash::prehashed([0; Hash::LENGTH]),
                 ),
             executed_at_ms: 1,
-            legs: [
-                iroha_data_model::isi::SettlementLegSnapshot {
-                    role: iroha_data_model::isi::SettlementLegRole::Delivery,
-                    leg: iroha_data_model::isi::SettlementLeg::new(
-                        asset_definition_id.clone(),
-                        Quantity::one(),
-                        from.clone(),
-                        to.clone(),
-                    ),
+            details: iroha_data_model::isi::SettlementDetails::Dvp(
+                iroha_data_model::isi::DvpSettlementDetails {
+                    delivery: {
+                        let leg = iroha_data_model::isi::SettlementLeg::new(
+                            asset_definition_id.clone(),
+                            Quantity::one(),
+                            from.clone(),
+                            to.clone(),
+                        );
+                        iroha_data_model::isi::ResolvedSettlementMovement {
+                            source: AssetId::with_scope(
+                                leg.asset_definition_id().clone(),
+                                leg.from().clone(),
+                                iroha_data_model::asset::AssetBalanceScope::Global,
+                            ),
+                            destination: AssetId::with_scope(
+                                leg.asset_definition_id().clone(),
+                                leg.to().clone(),
+                                iroha_data_model::asset::AssetBalanceScope::Global,
+                            ),
+                            quantity: leg.quantity().clone(),
+                            metadata: leg.metadata().clone(),
+                        }
+                    },
+                    payment: {
+                        let leg = iroha_data_model::isi::SettlementLeg::new(
+                            AssetDefinitionId::derive_from_components(
+                                counterparty_domain,
+                                "eur".parse().expect("asset name"),
+                            ),
+                            Quantity::one(),
+                            to,
+                            from,
+                        );
+                        iroha_data_model::isi::ResolvedSettlementMovement {
+                            source: AssetId::with_scope(
+                                leg.asset_definition_id().clone(),
+                                leg.from().clone(),
+                                iroha_data_model::asset::AssetBalanceScope::Global,
+                            ),
+                            destination: AssetId::with_scope(
+                                leg.asset_definition_id().clone(),
+                                leg.to().clone(),
+                                iroha_data_model::asset::AssetBalanceScope::Global,
+                            ),
+                            quantity: leg.quantity().clone(),
+                            metadata: leg.metadata().clone(),
+                        }
+                    },
+                    order: iroha_data_model::isi::SettlementExecutionOrder::DeliveryThenPayment,
                 },
-                iroha_data_model::isi::SettlementLegSnapshot {
-                    role: iroha_data_model::isi::SettlementLegRole::Payment,
-                    leg: iroha_data_model::isi::SettlementLeg::new(
-                        AssetDefinitionId::derive_from_components(
-                            counterparty_domain,
-                            "eur".parse().expect("asset name"),
-                        ),
-                        Quantity::one(),
-                        to,
-                        from,
-                    ),
-                },
-            ],
-            fx_corridor: None,
+            ),
         };
         tx.world.settlement_receipts.insert(settlement_id, receipt);
         let err = Unregister::asset_definition(asset_definition_id.clone())

@@ -484,11 +484,111 @@ state_test! { sync ordinary_block_apply_defers_axt_replay_pruning_until_commit
         Some(stale),
         "ordinary block apply should leave AXT replay pruning to commit"
     );
+    // The recovery checkpoint must describe commit's final surface without
+    // moving replay pruning ahead of the existing commit boundary.
+    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&state_block);
+    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+    assert_eq!(
+        staged_hash,
+        iroha_crypto::Hash::new(&staged_bytes),
+        "staged checkpoint streaming hash must match its canonical bytes"
+    );
     state_block.commit().expect("ordinary block should commit");
     assert!(
         state.world.axt_replay_ledger.view().get(&key).is_none(),
         "ordinary block commit should prune expired AXT replay entries"
     );
+    let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(&state);
+    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    assert_eq!(
+        committed_hash,
+        iroha_crypto::Hash::new(&committed_bytes),
+        "committed checkpoint streaming hash must match its canonical bytes"
+    );
+    assert!(
+        staged_bytes == committed_bytes && staged_hash == committed_hash,
+        "pre-WSV checkpoint must project commit-time replay pruning: \
+         staged_len={}, committed_len={}, staged_hash={staged_hash}, \
+         committed_hash={committed_hash}",
+        staged_bytes.len(),
+        committed_bytes.len(),
+    );
+}
+
+state_test! { sync committed_storage_projections_omit_absent_and_empty_changes
+    let state = State::new_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0));
+    assert!(block.json_serialize_committed_axt_replay_ledger().is_none());
+    assert!(block.json_serialize_committed_smart_contract_state().is_none());
+    block.stage_da_pin_intent_bundle(1, Vec::new());
+    assert!(block.json_serialize_committed_smart_contract_state().is_none());
+}
+state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying_it
+    let owner_keypair = crate::state::checked_keypair();
+    let owner_id = AccountId::new(owner_keypair.public_key().clone());
+    let mut world = World::new();
+    world.accounts.insert(
+        owner_id,
+        iroha_data_model::account::AccountValue::new(
+            iroha_data_model::account::AccountDetails::default(),
+        ),
+    );
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let authorization = crate::da::signed_test_ingest_authorization(
+        *state.network_id_ref(), &owner_keypair, LaneId::SINGLE, 1, 0, 1,
+    );
+    let intent = crate::da::signed_test_pin_intent(
+        authorization,
+        &owner_keypair,
+        StorageTicketId::new([0xA4; 32]),
+        ManifestDigest::new([0xB5; 32]),
+        None,
+    );
+    let signer = crate::state::checked_keypair();
+    let_row! { signed: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+        .chain(0, None)
+        .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
+        .sign(signer.private_key()).unpack(|_| {}).into() };
+    let mut block = state.block(signed.header());
+    let valid = ValidBlock::validate_unchecked(signed, &mut block).unpack(|_| {});
+    let committed = valid.commit_unchecked().unpack(|_| {});
+    let _ = block.apply_without_execution(&committed, Vec::new());
+    let writes = block.pending_da_pin_intents.as_ref()
+        .expect("real block application stages its quota bundle").quota_writes.clone();
+    assert!(!writes.is_empty(), "signed nonempty DA bundle must charge quota");
+    for key in writes.keys() {
+        assert!(block.world.smart_contract_state.get(key).is_none(),
+            "quota writes remain deferred until commit");
+    }
+    let before_storage = norito::json::to_json(&block.world.smart_contract_state)
+        .expect("unprojected contract storage");
+    let projected_storage = block.json_serialize_committed_smart_contract_state()
+        .expect("pending quota charges require an exact projection");
+    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
+    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
+    assert_eq!(staged_hash, Hash::new(&staged_bytes));
+    assert_eq!(norito::json::to_json(&block.world.smart_contract_state)
+        .expect("unchanged contract storage"), before_storage);
+    block.commit().expect("ordinary DA block commits its deferred quota");
+    assert_eq!(projected_storage, norito::json::to_json(&state.world.smart_contract_state)
+        .expect("committed contract storage including exact undo"));
+    for (key, value) in &writes {
+        assert_eq!(state.world.smart_contract_state.view().get(key), Some(value));
+    }
+    let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(&state);
+    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    assert_eq!(committed_hash, Hash::new(&committed_bytes));
+    assert!(staged_bytes == committed_bytes && staged_hash == committed_hash,
+        "DA quota checkpoint projection differs from committed WSV: \
+         staged_hash={staged_hash}, committed_hash={committed_hash}");
 }
 
 state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_parent

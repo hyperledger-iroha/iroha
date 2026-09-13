@@ -1593,6 +1593,19 @@ impl MaybeTelemetry {
             .expect("telemetry metrics requested without handle");
         telemetry.metrics_fresh_checked().await
     }
+    /// Obtain the immutable classified State and Nexus response from its actor.
+    #[cfg(feature = "telemetry")]
+    pub async fn status_snapshot(
+        &self,
+        build: &iroha_torii_shared::status::BuildStatus,
+    ) -> Result<iroha_core::telemetry::OwnedStatus, iroha_core::telemetry::StatusSnapshotError>
+    {
+        self.telemetry
+            .as_ref()
+            .ok_or(iroha_core::telemetry::StatusSnapshotError::Disabled)?
+            .status_snapshot(build)
+            .await
+    }
     /// Replace the profile while retaining the telemetry instance.
     pub fn with_profile(self, profile: TelemetryProfile) -> Self {
         MaybeTelemetry {
@@ -3505,78 +3518,123 @@ impl MaybeTelemetry {
     pub fn for_tests() -> Self {
         #[cfg(feature = "telemetry")]
         {
-            use iroha_core::{
-                kura::Kura,
-                query::store::LiveQueryStore,
-                queue::Queue,
-                state::{State, World},
-                telemetry as core_telemetry,
-            };
-            use iroha_primitives::time::TimeSource;
-            use std::sync::{Arc, LazyLock};
-            use tokio::sync::watch;
-            static TEST_TELEMETRY_RUNTIME: LazyLock<tokio::runtime::Runtime> =
-                LazyLock::new(|| {
-                    tokio::runtime::Builder::new_multi_thread()
-                        .enable_time()
-                        .build()
-                        .expect("test telemetry runtime should start")
-                });
-            let _runtime_guard = tokio::runtime::Handle::try_current()
-                .is_err()
-                .then(|| TEST_TELEMETRY_RUNTIME.enter());
-            // Each test owner needs its own registry; resource sources cannot be rebound.
-            let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let local_peer_keypair = checked_routing_fixture_keypair(
-                0xe2,
-                Algorithm::Ed25519,
-                "derive telemetry fixture peer key",
-            );
-            let local_peer_id = PeerId::new(local_peer_keypair.public_key().clone());
-            let world = World::default();
-            let mut world_block = world.block();
-            let peers = world_block.peers_mut_for_testing().get_mut();
-            let _ = peers.push(local_peer_id.clone());
-            world_block.commit();
-            let state = Arc::new(
-                State::try_new(
-                    world,
-                    kura.clone(),
-                    query,
-                    core_telemetry::StateTelemetry::new(metrics.clone(), true),
-                )
-                .expect("test telemetry state startup journals should validate"),
-            );
-            let (peers_tx, peers_rx) = watch::channel(<_>::default());
-            let (_mh, time_source) = TimeSource::new_mock(core::time::Duration::default());
-            let queue_cfg = iroha_config::parameters::actual::Queue {
-                capacity: nonzero_ext::nonzero!(1usize),
-                capacity_per_user: nonzero_ext::nonzero!(1usize),
-                transaction_time_to_live: core::time::Duration::from_secs(1),
-                ..Default::default()
-            };
-            let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-            let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
-            let (tel, _child) = core_telemetry::start(
-                metrics,
-                state,
-                kura,
-                queue,
-                peers_rx,
-                local_peer_id,
-                time_source,
-                true,
-            )
-            .expect("test telemetry resource registration");
-            let _ = peers_tx;
-            MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
+            Self::for_tests_with_nexus(None)
         }
         #[cfg(not(feature = "telemetry"))]
         {
             MaybeTelemetry::disabled()
         }
+    }
+    #[cfg(feature = "telemetry")]
+    fn for_tests_with_nexus(nexus: Option<iroha_config::parameters::actual::Nexus>) -> Self {
+        use iroha_core::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            queue::Queue,
+            state::{State, World},
+            telemetry as core_telemetry,
+        };
+        use iroha_primitives::time::TimeSource;
+        use std::sync::{Arc, LazyLock};
+        use tokio::sync::watch;
+        static TEST_TELEMETRY_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_time()
+                .build()
+                .expect("test telemetry runtime should start")
+        });
+        let _runtime_guard = tokio::runtime::Handle::try_current()
+            .is_err()
+            .then(|| TEST_TELEMETRY_RUNTIME.enter());
+        // Each test owner needs its own registry; resource sources cannot be rebound.
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let mut nexus = nexus;
+        if let Some(nexus) = nexus.as_mut() {
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        }
+        let kura = if let Some(nexus) = nexus.as_ref() {
+            let kura_config = iroha_config::parameters::actual::Kura {
+                init_mode: iroha_config::kura::InitMode::Strict,
+                // The authenticated temporary constructor replaces this placeholder.
+                store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+                lane_history_retention:
+                    iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+                fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
+                replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            };
+            Kura::new_temporary_with_configured_lane_catalog(
+                &kura_config,
+                &nexus.lane_config,
+                &nexus.configured_lane_catalog,
+            )
+            .expect("initialize authenticated temporary Kura for pre-genesis fixture")
+        } else {
+            Kura::blank_kura_for_testing()
+        };
+        let query = LiveQueryStore::start_test();
+        let local_peer_keypair = checked_routing_fixture_keypair(
+            0xe2,
+            Algorithm::Ed25519,
+            "derive telemetry fixture peer key",
+        );
+        let local_peer_id = PeerId::new(local_peer_keypair.public_key().clone());
+        let world = World::default();
+        let mut world_block = world.block();
+        let peers = world_block.peers_mut_for_testing().get_mut();
+        let _ = peers.push(local_peer_id.clone());
+        world_block.commit();
+        let mut state = State::try_new(
+            world,
+            kura.clone(),
+            query,
+            core_telemetry::StateTelemetry::new(metrics.clone(), true),
+        )
+        .expect("test telemetry state startup journals should validate");
+        if let Some(nexus) = nexus {
+            state
+                .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+                .expect("anchor configured status fixture primary");
+            state
+                .restore_kura_lane_segments_before_startup_replay()
+                .expect("restore configured status fixture primary");
+            state
+                .set_nexus_from_config(nexus)
+                .expect("configured telemetry fixture Nexus");
+        }
+        let state = Arc::new(state);
+        let (peers_tx, peers_rx) = watch::channel(<_>::default());
+        let (_mh, time_source) = TimeSource::new_mock(core::time::Duration::default());
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: nonzero_ext::nonzero!(1usize),
+            capacity_per_user: nonzero_ext::nonzero!(1usize),
+            transaction_time_to_live: core::time::Duration::from_secs(1),
+            ..Default::default()
+        };
+        let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
+        let (tel, _child) = core_telemetry::start(
+            metrics,
+            state,
+            kura,
+            queue,
+            peers_rx,
+            local_peer_id,
+            time_source,
+            true,
+        )
+        .expect("test telemetry resource registration");
+        let _ = peers_tx;
+        MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
     }
 }
 #[cfg(feature = "app_api")]
@@ -73442,22 +73500,17 @@ pub async fn handle_status(
     build: &iroha_torii_shared::status::BuildStatus,
     telemetry: &MaybeTelemetry,
     accept: Option<axum::http::HeaderValue>,
-    nexus_routing_policy: ActualLaneRoutingPolicy,
-    authoritative_block_height: u64,
 ) -> Result<Response> {
     iroha_logger::debug!(
         accept = ?accept,
         "serving /status"
     );
     ensure_status_visible(telemetry, "status")?;
-    // Keep the Kura-derived total and semantic non-empty counters on the same
-    // classified frontier as the authoritative applied-state height. A lazy
-    // snapshot can otherwise transiently publish `blocks = N` with
-    // `blocks_non_empty = N - 1` for a valid NPoS-effects-only block and falsely
-    // report an empty block.
-    let metrics =
+    // The actor owns classification, height, and routing policy in one response.
+    // Do not join a pre-await State height to a later mutable metrics registry.
+    let owned =
         telemetry
-            .metrics_fresh_checked()
+            .status_snapshot(build)
             .await
             .map_err(|error| Error::AppServiceUnavailable {
                 code: "status_metrics_unavailable",
@@ -73465,11 +73518,8 @@ pub async fn handle_status(
                     "status metrics could not reach a fresh classified frontier: {error}"
                 ),
             })?;
-    let mut status = metrics.status_snapshot(build);
-    ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
-    status.nexus = Some(iroha_torii_shared::status::NexusStatus::from(
-        &nexus_routing_policy,
-    ));
+    let (status, classified_height) = owned.into_parts();
+    ensure_status_metrics_match_authoritative_height(&status, classified_height)?;
     iroha_logger::debug!(
         blocks = status.blocks,
         blocks_non_empty = status.blocks_non_empty,

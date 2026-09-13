@@ -1,12 +1,15 @@
+//! Render current explicitly identified FASTPQ native primitive captures.
 #![allow(unexpected_cfgs)]
+#[path = "../digest384_report.rs"]
+mod digest384_report;
+use anyhow::{Context, Result, anyhow};
+use clap::Parser;
+use norito::json::{self, Value};
 use std::{
     fs,
     io::{self, Write},
     path::PathBuf,
 };
-use anyhow::{Context, Result, anyhow};
-use clap::Parser;
-use norito::json::{self, Value};
 const TARGET_GPU_MS: f64 = 900.0;
 #[derive(Parser)]
 #[command(
@@ -38,6 +41,7 @@ fn main() -> Result<()> {
 }
 #[derive(Clone, Debug)]
 struct ProfileSummary {
+    validated_report: Value,
     label: String,
     rows: Option<u64>,
     padded_rows: Option<u64>,
@@ -49,11 +53,11 @@ struct ProfileSummary {
     operations: Vec<OperationProfile>,
     queue: Option<QueueProfile>,
     column_staging: Option<ColumnStagingSummary>,
-    poseidon_micro: Option<PoseidonMicroSummary>,
 }
 impl ProfileSummary {
     fn from_value(label: String, root: &Value) -> Result<Self> {
-        let object = root
+        let report = digest384_report::report_from_root(root).map_err(|error| anyhow!(error))?;
+        let object = report
             .as_object()
             .ok_or_else(|| anyhow!("benchmark JSON must be an object"))?;
         let rows = as_u64(object.get("rows"));
@@ -78,10 +82,8 @@ impl ProfileSummary {
         let column_staging = object
             .get("column_staging")
             .and_then(ColumnStagingSummary::from_value);
-        let poseidon_micro = object
-            .get("poseidon_microbench")
-            .and_then(PoseidonMicroSummary::from_value);
         Ok(Self {
+            validated_report: root.clone(),
             label,
             rows,
             padded_rows,
@@ -93,7 +95,6 @@ impl ProfileSummary {
             operations,
             queue,
             column_staging,
-            poseidon_micro,
         })
     }
     fn total_gpu_ms(&self) -> f64 {
@@ -225,18 +226,6 @@ impl ProfileSummary {
                             )?;
                         }
                     }
-                    if let Some(poseidon_queue) = &queue.poseidon {
-                        writeln!(
-                            writer,
-                            "  - Poseidon queue: limit={} dispatches={} busy={} ms ({} busy) overlap={} ms ({} overlap)",
-                            format_u32(poseidon_queue.limit),
-                            format_u32(poseidon_queue.dispatch_count),
-                            format_ms(poseidon_queue.busy_ms),
-                            format_pct(poseidon_queue.busy_ratio.map(|ratio| ratio * 100.0)),
-                            format_ms(poseidon_queue.overlap_ms),
-                            format_pct(poseidon_queue.overlap_ratio.map(|ratio| ratio * 100.0)),
-                        )?;
-                    }
                 }
             }
             None => {
@@ -256,33 +245,33 @@ impl ProfileSummary {
                     .unwrap_or_else(|| "-".to_owned())
             )?;
         }
-        if let Some(micro) = &self.poseidon_micro {
-            writeln!(
-                writer,
-                "- Poseidon microbench speedup vs scalar: {}.",
-                format_ratio(micro.speedup_vs_scalar)
-            )?;
-            if let Some(default_mode) = &micro.default_mode {
+        for operation in &self.operations {
+            if let Some(evidence) = &operation.digest384 {
                 writeln!(
                     writer,
-                    "  - {} mode: {} states across {} columns, mean {} ms",
-                    default_mode.label("default"),
-                    format_u64(default_mode.states),
-                    format_u64(default_mode.columns),
-                    format_ms(default_mode.timings.mean_ms)
+                    "- {}: {} complete six-lane frames per invocation, {} canonical words, {} output bytes.",
+                    operation.name,
+                    format_u64(as_u64(evidence.get("frame_count"))),
+                    format_u64(as_u64(evidence.get("canonical_words"))),
+                    format_u64(as_u64(evidence.get("output_bytes")))
                 )?;
-            }
-            if let Some(scalar_mode) = &micro.scalar_mode {
-                writeln!(
-                    writer,
-                    "  - {} mode: {} states across {} columns, mean {} ms",
-                    scalar_mode.label("scalar"),
-                    format_u64(scalar_mode.states),
-                    format_u64(scalar_mode.columns),
-                    format_ms(scalar_mode.timings.mean_ms)
-                )?;
+                if let Some(gpu) = evidence.get("gpu") {
+                    writeln!(
+                        writer,
+                        "  - {} successful payload dispatches; {} digests and {} canonical lanes checked, including warmups.",
+                        format_u64(as_u64(gpu.get("dispatches"))),
+                        format_u64(as_u64(gpu.get("parity_checked_digests"))),
+                        format_u64(as_u64(gpu.get("parity_checked_lanes")))
+                    )?;
+                }
             }
         }
+        writeln!(
+            writer,
+            "\nValidated primitive report (consistency only; no device provenance or proof qualification):\n\n```json"
+        )?;
+        writeln!(writer, "{}", json::to_json_pretty(&self.validated_report)?)?;
+        writeln!(writer, "```")?;
         Ok(())
     }
 }
@@ -296,6 +285,7 @@ struct OperationProfile {
     speedup_ratio: Option<f64>,
     delta_ms: Option<f64>,
     zero_fill: Option<ZeroFillStats>,
+    digest384: Option<Value>,
 }
 impl OperationProfile {
     fn from_value(value: &Value) -> Option<Self> {
@@ -320,6 +310,7 @@ impl OperationProfile {
             speedup_ratio,
             delta_ms,
             zero_fill,
+            digest384: value.get("digest384").cloned(),
         })
     }
 }
@@ -376,7 +367,6 @@ struct QueueProfile {
     overlap_ratio: Option<f64>,
     window_ms: Option<f64>,
     lanes: Vec<QueueLaneProfile>,
-    poseidon: Option<Box<QueueProfile>>,
 }
 impl QueueProfile {
     fn from_value(value: &Value) -> Option<Self> {
@@ -408,10 +398,6 @@ impl QueueProfile {
                     .collect()
             })
             .unwrap_or_default();
-        let poseidon = object
-            .get("poseidon")
-            .and_then(QueueProfile::from_value)
-            .map(Box::new);
         Some(Self {
             limit: as_u32(object.get("limit")),
             dispatch_count: as_u32(object.get("dispatch_count")),
@@ -422,7 +408,6 @@ impl QueueProfile {
             overlap_ratio,
             window_ms,
             lanes,
-            poseidon,
         })
     }
 }
@@ -484,45 +469,6 @@ impl ColumnStagingSummary {
             wait_ms: as_f64(object.get("wait_ms")),
             wait_ratio: as_f64(object.get("wait_ratio")),
         })
-    }
-}
-#[derive(Clone, Debug)]
-struct PoseidonMicroSummary {
-    default_mode: Option<MicroModeSummary>,
-    scalar_mode: Option<MicroModeSummary>,
-    speedup_vs_scalar: Option<f64>,
-}
-impl PoseidonMicroSummary {
-    fn from_value(value: &Value) -> Option<Self> {
-        let object = value.as_object()?;
-        Some(Self {
-            default_mode: object.get("default").and_then(MicroModeSummary::from_value),
-            scalar_mode: object
-                .get("scalar_lane")
-                .and_then(MicroModeSummary::from_value),
-            speedup_vs_scalar: as_f64(object.get("speedup_vs_scalar")),
-        })
-    }
-}
-#[derive(Clone, Debug)]
-struct MicroModeSummary {
-    mode: Option<String>,
-    columns: Option<u64>,
-    states: Option<u64>,
-    timings: StageTimings,
-}
-impl MicroModeSummary {
-    fn from_value(value: &Value) -> Option<Self> {
-        let object = value.as_object()?;
-        Some(Self {
-            mode: as_string(object.get("mode")).map(|s| s.to_owned()),
-            columns: as_u64(object.get("columns")),
-            states: as_u64(object.get("states")),
-            timings: StageTimings::from_value(Some(value)),
-        })
-    }
-    fn label(&self, fallback: &str) -> String {
-        self.mode.clone().unwrap_or_else(|| fallback.to_owned())
     }
 }
 fn as_string(value: Option<&Value>) -> Option<&str> {
@@ -587,6 +533,7 @@ mod tests {
     fn parses_operations_and_totals() {
         let json = r#"
         {
+            "producer_schema": "metal_flat",
             "rows": 20000,
             "padded_rows": 32768,
             "column_count": 16,
@@ -599,16 +546,16 @@ mod tests {
                     "operation": "fft",
                     "columns": 16,
                     "input_len": 32768,
-                    "cpu": {"mean_ms": 110.0},
-                    "gpu": {"mean_ms": 130.0},
+                    "gpu_recorded": true, "cpu": {"mean_ms": 110.0, "min_ms": 110.0, "max_ms": 110.0},
+                    "gpu": {"mean_ms": 130.0, "min_ms": 130.0, "max_ms": 130.0},
                     "speedup": {"ratio": 0.85, "delta_ms": -20.0}
                 },
                 {
                     "operation": "lde",
                     "columns": 16,
                     "input_len": 262144,
-                    "cpu": {"mean_ms": 1750.0},
-                    "gpu": {"mean_ms": 1570.0},
+                    "gpu_recorded": true, "cpu": {"mean_ms": 1750.0, "min_ms": 1750.0, "max_ms": 1750.0},
+                    "gpu": {"mean_ms": 1570.0, "min_ms": 1570.0, "max_ms": 1570.0},
                     "speedup": {"ratio": 1.11, "delta_ms": 180.0},
                     "zero_fill": {"bytes": 33554432, "ms": {"mean_ms": 0.31}}
                 }
@@ -629,17 +576,36 @@ mod tests {
                 "flatten_ms": 420.0,
                 "wait_ms": 180.0,
                 "wait_ratio": 0.3
-            },
-            "poseidon_microbench": {
-                "default": {"mode": "default", "columns": 64, "states": 262144, "mean_ms": 457.0},
-                "scalar_lane": {"mode": "scalar", "columns": 64, "states": 262144, "mean_ms": 462.0},
-                "speedup_vs_scalar": 1.01
             }
         }"#;
-        let value: Value = json::from_str(json).expect("parse sample JSON");
+        let fixture: Value = json::from_str(json).expect("parse sample JSON");
+        let mut value = digest384_report::test_metal_report(20_000);
+        let fixture_operations = fixture.get("operations").unwrap().as_array().unwrap();
+        let map = value.as_object_mut().unwrap();
+        for entry in map.get_mut("operations").unwrap().as_array_mut().unwrap() {
+            if let Some(replacement) = fixture_operations
+                .iter()
+                .find(|other| other.get("operation") == entry.get("operation"))
+            {
+                *entry = replacement.clone();
+            }
+        }
+        map.insert(
+            "metal_dispatch_queue".into(),
+            fixture.get("metal_dispatch_queue").unwrap().clone(),
+        );
+        map.insert("column_staging".into(), digest384_report::test_staging());
         let summary =
             ProfileSummary::from_value("sample.json".to_owned(), &value).expect("summary");
-        assert_eq!(summary.operations.len(), 2);
+        assert_eq!(summary.operations.len(), digest384_report::OPERATIONS.len());
+        assert_eq!(
+            summary
+                .operations
+                .iter()
+                .filter(|op| matches!(op.name.as_str(), "fft" | "lde"))
+                .count(),
+            2
+        );
         assert!(summary.total_gpu_ms() > 0.0);
         assert!(summary.total_cpu_ms() > 0.0);
         assert_eq!(summary.queue.as_ref().and_then(|q| q.limit), Some(8));
@@ -652,5 +618,46 @@ mod tests {
                 .and_then(|zf| zf.bytes),
             Some(33_554_432)
         );
+    }
+    #[test]
+    fn profile_projects_complete_digest_work_and_rejects_retired_or_tampered_input() {
+        let report = digest384_report::test_metal_report(3);
+        let summary =
+            ProfileSummary::from_value("synthetic schema control".into(), &report).unwrap();
+        let mut rendered = Vec::new();
+        summary.render_markdown(&mut rendered).unwrap();
+        let text = String::from_utf8(rendered).unwrap();
+        assert!(text.contains("complete six-lane frames"));
+        assert!(text.contains("canonical lanes checked"));
+        assert!(!text.contains("Poseidon microbench"));
+        let embedded = text
+            .split("```json\n")
+            .nth(1)
+            .unwrap()
+            .split("\n```")
+            .next()
+            .unwrap();
+        let retained: Value = json::from_str(embedded).unwrap();
+        digest384_report::report_from_root(&retained)
+            .expect("complete exported report revalidates");
+        assert_eq!(retained, report);
+        let mut retired = report.clone();
+        retired
+            .as_object_mut()
+            .unwrap()
+            .insert("poseidon_microbench".into(), Value::Null);
+        assert!(ProfileSummary::from_value("retired".into(), &retired).is_err());
+        let mut corrupted = report;
+        corrupted
+            .get_mut("operations")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[3]
+            .get_mut("digest384")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("digest_lanes".into(), Value::from(1_u8));
+        assert!(ProfileSummary::from_value("corrupted".into(), &corrupted).is_err());
     }
 }

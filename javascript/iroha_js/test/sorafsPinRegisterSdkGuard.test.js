@@ -531,7 +531,9 @@ test("SoraFS pin-register SDK guard enforces caller-signed transport", () => {
   )?.[0];
   assert.ok(csharpMethod, "C# signed pin-register method missing");
   assert.match(csharpMethod, /SignedTransactionEnvelope transaction/);
-  assert.match(csharpMethod, /transaction\.NoritoBytes/);
+  assert.match(csharpMethod, /NormalizeVersionedSignedTransactionPayload/);
+  assert.match(csharpMethod, /transaction\.VersionedNoritoBytes/);
+  assert.doesNotMatch(csharpMethod, /transaction\.NoritoBytes/);
   assert.match(csharpMethod, /"application\/x-norito"/);
   assert.match(csharpMethod, /HttpStatusCode\.Accepted/);
   assert.doesNotMatch(csharpMethod, /private_key|ManifestPayload/);

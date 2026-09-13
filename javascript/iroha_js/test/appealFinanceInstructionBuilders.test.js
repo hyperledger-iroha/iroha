@@ -19,7 +19,7 @@ import {
   noritoRequiredMethods,
 } from "./helpers/native.js";
 import {
-  assertNativeInstructionAdapterRoundTrip,
+  assertNativeInstructionAdapterParity,
   normalizedHashHex,
   toByteArray,
   withNativeInstructionCodec,
@@ -126,7 +126,7 @@ baseTest("asset availability builder rejects ambiguous or noncanonical input", (
   );
 });
 
-test("native-backed codec roundtrips directional asset availability", () => {
+baseTest("native instruction adapter roundtrips directional asset availability", () => {
   const instruction = buildSetAssetTransferAvailabilityInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -176,7 +176,7 @@ test("asset availability preserves the complete u64 revision domain", () => {
   );
 });
 
-test("native-backed codec rejects noncanonical availability reasons", () => {
+baseTest("native instruction adapter rejects noncanonical availability reasons", () => {
   const base = buildSetAssetTransferAvailabilityInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -200,7 +200,7 @@ test("native-backed codec rejects noncanonical availability reasons", () => {
   });
 });
 
-test("JavaScript adapter and direct native calls byte-match for asset availability", () => {
+test("public adapter and native codec byte-match for asset availability", () => {
   const instruction = buildSetAssetTransferAvailabilityInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -209,13 +209,13 @@ test("JavaScript adapter and direct native calls byte-match for asset availabili
     outgoing: "Enabled",
     reason: "operator review",
   });
-  assertNativeInstructionAdapterRoundTrip(
+  assertNativeInstructionAdapterParity(
     instruction,
     "SetAssetTransferAvailability",
   );
 });
 
-test("asset transfer blacklist builder and pure codec use the native shape", () => {
+baseTest("asset transfer blacklist builder and native instruction adapter use the native shape", () => {
   const instruction = buildSetAssetTransferBlacklistInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -309,7 +309,7 @@ baseTest("asset transfer control rejects ambiguous or noncanonical limits", () =
   assert.throws(() => build(null), /must be an array/u);
 });
 
-test("JavaScript adapter and direct native calls byte-match for transfer blacklist and caps", () => {
+test("public adapter and native codec byte-match for transfer blacklist and caps", () => {
   const instructions = [
     buildSetAssetTransferBlacklistInstruction({
       accountId: ACCOUNT_ID,
@@ -326,7 +326,7 @@ test("JavaScript adapter and direct native calls byte-match for transfer blackli
     }),
   ];
   for (const instruction of instructions) {
-    assertNativeInstructionAdapterRoundTrip(
+    assertNativeInstructionAdapterParity(
       instruction,
       Object.keys(instruction)[0],
     );
@@ -419,7 +419,7 @@ baseTest("buildCancelAssetLockInstruction bounds the exact UTF-8 lock-id preimag
   );
 });
 
-test("native-backed codec roundtrips CancelAssetLock and rejects the legacy shape", () => {
+baseTest("native instruction adapter roundtrips CancelAssetLock and rejects the legacy shape", () => {
   withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
@@ -436,7 +436,7 @@ test("native-backed codec roundtrips CancelAssetLock and rejects the legacy shap
         noritoEncodeInstruction({
           CancelAssetLock: { escrow_id: instruction.CancelAssetLock.escrow_id },
         }, 753),
-      /expected_remaining_amount is required/,
+      /CancelAssetLock is missing field\(s\): expected_remaining_amount/u,
     );
     for (const expected_remaining_amount of ["0", "01", "1.0"]) {
       assert.throws(
@@ -448,7 +448,7 @@ test("native-backed codec roundtrips CancelAssetLock and rejects the legacy shap
             },
           }, 753),
         undefined,
-        `native-backed codec accepted ${expected_remaining_amount}`,
+        `native instruction adapter accepted ${expected_remaining_amount}`,
       );
     }
     for (const escrow_id of [
@@ -467,13 +467,13 @@ test("native-backed codec roundtrips CancelAssetLock and rejects the legacy shap
               escrow_id,
             },
           }, 753),
-        /canonical uppercase hash/u,
+        /canonical uppercase checksummed hash literal/u,
       );
     }
   });
 });
 
-test("JavaScript adapter and direct native calls byte-match and cross-decode CancelAssetLock V1", () => {
+test("public adapter and native codec byte-match and cross-decode CancelAssetLock V1", () => {
   const instruction = buildCancelAssetLockInstruction({
     lockId: "merchant-lock-001",
     expectedRemainingAmount: "1.25",
@@ -511,7 +511,7 @@ test("JavaScript adapter and direct native calls byte-match and cross-decode Can
           },
         }), 753,
       ),
-    /missing field/,
+    /CancelAssetLock is missing field\(s\): expected_remaining_amount/u,
   );
   assert.throws(
     () =>

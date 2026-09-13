@@ -2,23 +2,18 @@
 #![doc = "Telemetry gating integration tests exercising profile-based access."]
 #![cfg(feature = "telemetry")]
 use axum::{http::StatusCode, response::IntoResponse};
-use iroha_config::parameters::actual::{LaneRoutingPolicy, TelemetryProfile};
-use iroha_core::telemetry::Telemetry;
+use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
     MaybeTelemetry, handle_metrics, handle_status, handle_status_blocks, handle_status_peers,
 };
-use std::sync::Arc;
-#[path = "fixtures.rs"]
-mod fixtures;
 fn telemetry_disabled() -> MaybeTelemetry {
     MaybeTelemetry::from_profile(None, TelemetryProfile::Disabled)
 }
-fn telemetry_for(profile: TelemetryProfile, configure: impl Fn(&Arc<Metrics>)) -> MaybeTelemetry {
-    let metrics = fixtures::shared_metrics();
-    configure(&metrics);
-    let telemetry = Telemetry::new(metrics, true);
-    MaybeTelemetry::from_profile(Some(telemetry), profile)
+async fn telemetry_for(profile: TelemetryProfile, configure: impl Fn(&Metrics)) -> MaybeTelemetry {
+    let telemetry = MaybeTelemetry::for_tests().with_profile(profile);
+    configure(telemetry.metrics().await);
+    telemetry
 }
 #[tokio::test]
 async fn disabled_profile_hides_status_and_metrics() {
@@ -27,8 +22,6 @@ async fn disabled_profile_hides_status_and_metrics() {
         &build_identity_test_fixture::build_identity().status(),
         &telemetry,
         None,
-        LaneRoutingPolicy::default(),
-        0,
     )
     .await
     .unwrap_err();
@@ -53,13 +46,11 @@ async fn disabled_profile_hides_status_and_metrics() {
 }
 #[tokio::test]
 async fn operator_profile_exposes_status_only() {
-    let telemetry = telemetry_for(TelemetryProfile::Operator, |_| {});
+    let telemetry = telemetry_for(TelemetryProfile::Operator, |_| {}).await;
     let status_resp = handle_status(
         &build_identity_test_fixture::build_identity().status(),
         &telemetry,
         None,
-        LaneRoutingPolicy::default(),
-        0,
     )
     .await
     .unwrap();
@@ -74,13 +65,12 @@ async fn operator_profile_exposes_status_only() {
 async fn extended_profile_exposes_prometheus_metrics() {
     let telemetry = telemetry_for(TelemetryProfile::Extended, |metrics| {
         metrics.sumeragi_new_view_publish_total.inc();
-    });
+    })
+    .await;
     let status_resp = handle_status(
         &build_identity_test_fixture::build_identity().status(),
         &telemetry,
         None,
-        LaneRoutingPolicy::default(),
-        0,
     )
     .await
     .unwrap();
@@ -93,7 +83,7 @@ async fn extended_profile_exposes_prometheus_metrics() {
 }
 #[tokio::test]
 async fn developer_profile_hides_prometheus_metrics() {
-    let developer = telemetry_for(TelemetryProfile::Developer, |_| {});
+    let developer = telemetry_for(TelemetryProfile::Developer, |_| {}).await;
     let metrics_err = handle_metrics(&developer).await.unwrap_err();
     assert_eq!(
         metrics_err.into_response().status(),
@@ -104,13 +94,12 @@ async fn developer_profile_hides_prometheus_metrics() {
 async fn full_profile_combines_all_capabilities() {
     let telemetry = telemetry_for(TelemetryProfile::Full, |metrics| {
         metrics.sumeragi_new_view_publish_total.inc();
-    });
+    })
+    .await;
     let status = handle_status(
         &build_identity_test_fixture::build_identity().status(),
         &telemetry,
         None,
-        LaneRoutingPolicy::default(),
-        0,
     )
     .await
     .unwrap();

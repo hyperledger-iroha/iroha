@@ -185,8 +185,6 @@ mod tests {
             &crate::build_identity_test_fixture::build_identity().status(),
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            ActualLaneRoutingPolicy::default(),
-            4_274,
         )
         .await
         .expect_err("an unavailable telemetry actor must fail status retriably");
@@ -202,7 +200,6 @@ mod tests {
     #[tokio::test]
     async fn status_root_includes_effective_nexus_routing_policy() {
         use http_body_util::BodyExt;
-        let telemetry = MaybeTelemetry::for_tests();
         let policy = ActualLaneRoutingPolicy {
             default_lane: LaneId::new(0),
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -216,12 +213,40 @@ mod tests {
                 },
             }],
         };
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        let private_id = DataSpaceId::new(6647857470246403404);
+        nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: private_id,
+                alias: "private-status".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("status dataspace catalog");
+        let lanes = (0..4)
+            .map(|id| iroha_data_model::nexus::LaneConfig {
+                id: LaneId::new(id),
+                alias: format!("status-lane-{id}"),
+                dataspace_id: if id == 3 {
+                    private_id
+                } else {
+                    DataSpaceId::UNIVERSAL
+                },
+                ..Default::default()
+            })
+            .collect();
+        nexus.lane_catalog =
+            iroha_data_model::nexus::LaneCatalog::new(nonzero_ext::nonzero!(4u32), lanes)
+                .expect("status lane catalog");
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.routing_policy = policy;
+        let telemetry = MaybeTelemetry::for_tests_with_nexus(Some(nexus));
         let response = super::handle_status(
             &crate::build_identity_test_fixture::build_identity().status(),
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            policy,
-            0,
         )
         .await
         .expect("status succeeds");
@@ -609,8 +634,6 @@ mod tests {
             Some(axum::http::HeaderValue::from_static(
                 crate::utils::NORITO_MIME_TYPE,
             )),
-            ActualLaneRoutingPolicy::default(),
-            0,
         )
         .await
         .expect("status handler");

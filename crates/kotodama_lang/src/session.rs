@@ -222,8 +222,9 @@ struct IterativeResolvedGuard {
 }
 impl Clone for IterativeResolvedGuard {
     fn clone(&self) -> Self {
-        run_with_compiler_stack(|| Self::new(self.get().clone()))
-            .expect("compiler must allocate the bounded stack required to clone resolved HIR")
+        // AST cloning uses its explicit work list; the other resolved fields are
+        // flat records or shared immutable arenas. No worker stack is involved.
+        Self::new(self.get().clone())
     }
 }
 impl IterativeResolvedGuard {
@@ -260,15 +261,12 @@ impl IterativeSpannedGuard {
 }
 impl Clone for IterativeSpannedGuard {
     fn clone(&self) -> Self {
-        run_with_compiler_stack(|| {
-            Self::new(
-                self.program
-                    .as_ref()
-                    .expect("spanned guard is populated")
-                    .clone(),
-            )
-        })
-        .expect("compiler must allocate the bounded stack required to clone parsed HIR")
+        Self::new(
+            self.program
+                .as_ref()
+                .expect("spanned guard is populated")
+                .clone(),
+        )
     }
 }
 impl Drop for IterativeSpannedGuard {
@@ -2747,3 +2745,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "session/snapshot_clone_tests.rs"]
+mod snapshot_clone_tests;

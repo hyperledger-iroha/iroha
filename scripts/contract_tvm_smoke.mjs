@@ -17,9 +17,7 @@ const require = createRequire(import.meta.url);
 const { blake2b } = require("@noble/hashes/blake2b");
 const { TronWeb, utils } = require("tronweb");
 
-const TRON_COMPILER_IDENTITY = "tron-solc-tvm-0.7.4+commit.3f05b770";
-const TRON_COMPILER_SHA256 =
-  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
+const TRON_NATIVE_COMPILER = require("./contract_tooling/compiler-lock.json").compilers.tron;
 const TRON_MAINNET_PROFILE = 0x43;
 const RETIRED_TRON_NILE_PROFILE = 0x0b;
 const TRON_MAINNET_CHAIN_ID = 0x2b6653dcn;
@@ -153,8 +151,8 @@ function validateManifest(manifest) {
     manifest.targets.tron.contracts,
     "EVM and TVM artifact maps must remain distinct",
   );
-  assert.equal(manifest.targets.tron.compiler.identity, TRON_COMPILER_IDENTITY);
-  assert.equal(manifest.targets.tron.compiler.soljson_sha256_hex, TRON_COMPILER_SHA256);
+  assert.deepEqual(manifest.targets.tron.compiler, TRON_NATIVE_COMPILER,
+    "TRON artifacts require the exact target-specific native compiler identity");
   const verifier = artifact(
     manifest,
     "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol:SccpTronGroth16Bn254MessageVerifier",
@@ -1018,7 +1016,7 @@ await assertMainnetChainId(endpoint);
 
 // The first-release token constructor must name the exact future route, while
 // the route constructor must name the already-deployed token. Unlike the EVM
-// nonce flow exercised by the Hardhat smoke, TRE does not expose an audited
+// nonce flow exercised by the native EDR smoke, TRE does not expose an audited
 // deterministic address primitive that can close this dependency cycle.
 // Preserve the adversarial harness below for a future audited prebinding
 // provider, but never read test keys or construct a transaction until that

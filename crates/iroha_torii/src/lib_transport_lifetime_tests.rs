@@ -1311,7 +1311,7 @@ mod emergency_fast_surface_tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         assert!(compact_source.contains(
-            "lettorii_proxy_network_worker=ifemergency_fast{None}else{self.p2p.clone().map(|network|{attach_torii_proxy_network(app_state.clone(),network,shutdown_signal.clone(),)})};",
+            "if!emergency_fast&&letSome(network)=self.p2p.clone(){matchattach_torii_proxy_network(app_state.clone(),network,shutdown_signal.clone()){Ok(workers)=>critical_workers.extend(workers),",
         ));
     }
 

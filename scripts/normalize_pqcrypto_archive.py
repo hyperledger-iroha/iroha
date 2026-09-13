@@ -150,7 +150,7 @@ def read_regular(path: Path) -> bytes:
 
 
 def cargo_references(
-    build_dir: Path, target: str, messages_path: Path, package_root: Path,
+    build_dir: Path, target: str, messages_path: Path, package: dict[str, str],
 ) -> tuple[dict[str, bytes], dict[str, str]]:
     """Bind references to the exact package selected by this completed Cargo invocation."""
     if target.startswith("aarch64-apple-"):
@@ -159,14 +159,15 @@ def cargo_references(
         backend = "libkeccak4x.a"
     else:
         raise ValueError("archive normalization requires a supported Apple target")
-    for path in (build_dir, package_root):
-        if not path.is_absolute() or path.resolve(strict=True) != path or not path.is_dir():
-            raise ValueError("Cargo provenance directories must be canonical and non-symbolic")
-    manifest_bytes = read_regular(package_root / "Cargo.toml")
-    package = tomllib.loads(manifest_bytes.decode("utf-8")).get("package", {})
-    if package.get("name") != "pqcrypto-internals" or package.get("version") != "0.2.11":
-        raise ValueError("Cargo package provenance requires pqcrypto-internals 0.2.11")
-    package_id = package_root.as_uri().replace("file:", "path+file:", 1) + "#pqcrypto-internals@0.2.11"
+    if not build_dir.is_absolute() or build_dir.resolve(strict=True) != build_dir or not build_dir.is_dir():
+        raise ValueError("Cargo provenance directories must be canonical and non-symbolic")
+    source = "registry+https://github.com/rust-lang/crates.io-index"
+    checksum = package.get("checksum")
+    if (package.get("name") != "pqcrypto-internals" or package.get("version") != "0.2.11"
+            or package.get("source") != source or not isinstance(checksum, str)
+            or re.fullmatch(r"[0-9a-f]{64}", checksum) is None):
+        raise ValueError("Cargo package provenance requires locked registry pqcrypto-internals 0.2.11 with checksum")
+    package_id = source + "#pqcrypto-internals@0.2.11"
     messages_bytes = read_regular(messages_path)
     messages = [json.loads(line) for line in messages_bytes.decode("utf-8").splitlines()]
     if (not messages or any(not isinstance(message, dict) for message in messages)
@@ -212,7 +213,7 @@ def cargo_references(
         "cargo_build_output_sha256": hashlib.sha256(output_bytes).hexdigest(),
         "cargo_messages_sha256": hashlib.sha256(messages_bytes).hexdigest(),
         "cargo_package_id": package_id,
-        "cargo_package_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "cargo_package_checksum": checksum,
         **{name: hashlib.sha256(value).hexdigest() for name, value in archives.items()},
     }
 
@@ -223,7 +224,6 @@ def main() -> int:
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--cargo-build-dir", type=Path, required=True)
     parser.add_argument("--cargo-messages", type=Path, required=True)
-    parser.add_argument("--package-root", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--cargo-lock", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
@@ -234,7 +234,7 @@ def main() -> int:
         raise ValueError("reference provenance requires locked pqcrypto-internals 0.2.11")
     original = read_regular(args.library)
     references, provenance = cargo_references(
-        args.cargo_build_dir, args.target, args.cargo_messages, args.package_root,
+        args.cargo_build_dir, args.target, args.cargo_messages, packages[0],
     )
     normalized, removed = normalize_archive_bytes(original, references)
     report = {

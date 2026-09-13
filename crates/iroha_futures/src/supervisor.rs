@@ -261,6 +261,12 @@ impl LoopBuilder {
                             task_abort_handle.abort();
                             monitor_abort_handle.abort();
                         }
+                        OnShutdown::Drain => {
+                            // The child owns a non-preemptible operation. Keep its monitor
+                            // alive until the operation and the actor have actually exited.
+                            iroha_logger::debug!("Shutdown signal received, draining child...");
+                            exit_wait2.notified().await;
+                        }
                         OnShutdown::Wait(duration) => {
                             iroha_logger::debug!(?duration, "Shutdown signal received, waiting for child shutdown...");
                             if timeout(duration, exit_wait2.notified()).await.is_err() {
@@ -439,7 +445,9 @@ where
 ///
 /// Unlike [`spawn_os_thread_as_future`], thread creation happens before this function returns, so
 /// callers can propagate [`std::io::Error`] before publishing state that assumes the worker exists.
-/// The returned future still panics when the spawned thread panics.
+/// The returned future resumes the original panic payload when the spawned thread
+/// panics. Worker unwinding runs once on the OS thread; the async boundary does not
+/// invoke the process-global panic hook a second time.
 ///
 /// # Errors
 ///
@@ -456,14 +464,17 @@ where
     let (complete_tx, complete_rx) = oneshot::channel();
     // we are okay to drop the handle; thread will continue running in a detached way
     let _handle: std::thread::JoinHandle<_> = builder.spawn(move || {
-        f();
-        // the receiver might be dropped
-        let _ = complete_tx.send(());
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        // The receiver may be dropped while physical work continues on this thread.
+        let _ = complete_tx.send(outcome);
     })?;
     Ok(async move {
-        complete_rx
+        let outcome = complete_rx
             .await
-            .expect("thread completion notifier was dropped; thread probably panicked");
+            .expect("thread completion notifier was dropped without its physical outcome");
+        if let Err(payload) = outcome {
+            std::panic::resume_unwind(payload);
+        }
     })
 }
 /// Supervisor child.
@@ -515,6 +526,14 @@ pub enum OnShutdown {
     Abort,
     /// Wait until the child exits/aborts on its own; abort if it takes too long
     Wait(Duration),
+    /// Signal cooperative shutdown and retain supervision until the child exits.
+    ///
+    /// Use this for actors that retain non-preemptible work inline. The actor must stop
+    /// admitting work on the shared shutdown signal. This policy has no timeout: a
+    /// supervisor must not report a clean shutdown while that operation still runs.
+    /// Dropping the supervisor still requests task cancellation; this policy describes
+    /// an awaited, cooperative [`Supervisor::start`] shutdown.
+    Drain,
 }
 #[cfg(test)]
 mod tests {
@@ -682,7 +701,9 @@ mod tests {
     async fn supervisor_catches_panic_of_a_monitored_task() {
         let mut sup = Supervisor::new();
         sup.monitor(tokio::spawn(async {
-            panic!("my panic should not be unnoticed")
+            // Inject a real unwind without charging panic-hook diagnostics to
+            // the supervision deadline.
+            std::panic::resume_unwind(Box::new("my panic should not be unnoticed"))
         }));
         let err = timeout(TICK_TIMEOUT, sup.start())
             .await
@@ -691,6 +712,10 @@ mod tests {
         let mut contexts = err.current_contexts();
         let first = contexts.next().expect("at least one context");
         assert!(matches!(first, Error::ChildPanicked));
+        assert!(
+            contexts.next().is_none(),
+            "only the injected panic is reported"
+        );
     }
     #[tokio::test]
     async fn supervisor_sends_shutdown_when_some_task_exits() {
@@ -726,14 +751,18 @@ mod tests {
     async fn graceful_shutdown_when_some_task_panics() {
         let mut sup = Supervisor::new();
         let signal = sup.shutdown_signal();
-        sup.monitor(tokio::spawn(async { panic!() }));
+        sup.monitor(tokio::spawn(async {
+            std::panic::resume_unwind(Box::new("explicit panic"))
+        }));
         let err = timeout(TICK_TIMEOUT, sup.start())
             .await
             .expect("should finish immediately")
             .expect_err("should catch the panic");
+        let mut contexts = err.current_contexts();
+        assert!(matches!(contexts.next(), Some(Error::ChildPanicked)));
         assert!(
-            err.current_contexts()
-                .any(|ctx| matches!(ctx, Error::ChildPanicked))
+            contexts.next().is_none(),
+            "only the injected panic is reported"
         );
         assert!(signal.is_sent());
     }
@@ -838,23 +867,97 @@ mod tests {
         let mut sup = Supervisor::new();
         sup.monitor(tokio::spawn(spawn_os_thread_as_future(
             std::thread::Builder::new(),
-            || panic!("oops"),
+            || std::panic::resume_unwind(Box::new("oops")),
         )));
         let err = timeout(OS_THREAD_SPAWN_TICK, sup.start())
             .await
             .expect("should terminate immediately")
             .expect_err("should catch panic");
+        let mut contexts = err.current_contexts();
+        assert!(matches!(contexts.next(), Some(Error::ChildPanicked)));
         assert!(
-            err.current_contexts()
-                .any(|ctx| matches!(ctx, Error::ChildPanicked))
+            contexts.next().is_none(),
+            "only the injected panic is reported"
         );
+    }
+    #[tokio::test]
+    async fn os_thread_adapter_preserves_panic_payload_after_physical_cleanup() {
+        struct PhysicalGuard(Arc<AtomicBool>);
+        impl Drop for PhysicalGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let observed_cleanup = Arc::clone(&cleaned);
+        let payload = Arc::new(17_u64);
+        let expected_payload = Arc::clone(&payload);
+        let physical = try_spawn_os_thread_as_future(std::thread::Builder::new(), move || {
+            let _physical = PhysicalGuard(cleaned);
+            std::panic::resume_unwind(Box::new(payload));
+        })
+        .expect("fixture OS thread must start");
+        let joined = timeout(OS_THREAD_SPAWN_TICK, tokio::spawn(physical))
+            .await
+            .expect("physical unwind must reach the future within the existing OS-thread budget")
+            .expect_err("the completion future must preserve the worker panic");
+        assert!(joined.is_panic());
+        assert!(observed_cleanup.load(Ordering::Acquire));
+        let recovered = joined
+            .into_panic()
+            .downcast::<Arc<u64>>()
+            .expect("the original typed payload must survive the OS-thread boundary");
+        assert!(Arc::ptr_eq(&expected_payload, &recovered));
+    }
+    #[tokio::test]
+    async fn dropping_os_thread_completion_keeps_physical_work_owned_until_return() {
+        struct PhysicalGuard {
+            cleaned: Arc<AtomicBool>,
+            done: Option<oneshot::Sender<()>>,
+        }
+        impl Drop for PhysicalGuard {
+            fn drop(&mut self) {
+                self.cleaned.store(true, Ordering::Release);
+                let _ = self.done.take().unwrap().send(());
+            }
+        }
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let observed_cleanup = Arc::clone(&cleaned);
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (done_tx, done_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let completion = try_spawn_os_thread_as_future(std::thread::Builder::new(), move || {
+            let _physical = PhysicalGuard {
+                cleaned,
+                done: Some(done_tx),
+            };
+            entered_tx.send(()).unwrap();
+            release_rx
+                .recv_timeout(OS_THREAD_SPAWN_TICK)
+                .expect("the test must release physical work within the existing OS-thread budget");
+        })
+        .expect("fixture OS thread must start");
+        timeout(OS_THREAD_SPAWN_TICK, entered_rx)
+            .await
+            .expect("the OS thread must enter physical work")
+            .unwrap();
+        drop(completion);
+        assert!(!observed_cleanup.load(Ordering::Acquire));
+        release_tx.send(()).unwrap();
+        timeout(OS_THREAD_SPAWN_TICK, done_rx)
+            .await
+            .expect("physical work must retire after its original release")
+            .unwrap();
+        assert!(observed_cleanup.load(Ordering::Acquire));
     }
     #[tokio::test]
     async fn aggregates_multiple_errors() {
         let mut sup = Supervisor::new();
         // one child panics and another exits unexpectedly
         sup.monitor(tokio::spawn(async {}));
-        sup.monitor(tokio::spawn(async { panic!("boom") }));
+        sup.monitor(tokio::spawn(async {
+            std::panic::resume_unwind(Box::new("boom"))
+        }));
         let err = timeout(TICK_TIMEOUT, sup.start())
             .await
             .expect("should terminate quickly")

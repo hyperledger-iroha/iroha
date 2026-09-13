@@ -5005,8 +5005,8 @@
     },
     {
       "path": "github.com/mattn/go-isatty/isatty_others.go",
-      "size": 581,
-      "sha256": "20fc84b7b5e0af521fbb634f880c45f6c4ac5dcd77a96321d01fb1241bd8fa74"
+      "size": 521,
+      "sha256": "b32de920a7aa200bfa1d6ded2d07ef5df7a563b836324987f95aae2a86924692"
     },
     {
       "path": "github.com/mattn/go-isatty/isatty_plan9.go",
@@ -5729,11 +5729,6 @@
       "sha256": "2ab869aa3b38626aba388fa6db352a3be80f1efdfd2085bdf97c2ef594a5e777"
     },
     {
-      "path": "golang.org/x/sys/cpu/cpu_wasm.go",
-      "size": 439,
-      "sha256": "0da8add0ce546dfed3a844f94ce693137b6833712c016561f598e6d8b08c474e"
-    },
-    {
       "path": "golang.org/x/sys/cpu/cpu_windows.go",
       "size": 1069,
       "sha256": "af3d72b6e5d5b0d6e801eaff989e8a38f6d26ad253faf057fa618682a1875a36"
@@ -5765,8 +5760,8 @@
     },
     {
       "path": "golang.org/x/sys/cpu/endian_little.go",
-      "size": 433,
-      "sha256": "c6bc70c372d9e1fe86fcf295f406b17bf04bf8d1af25c2456f58520cdaef3be9"
+      "size": 425,
+      "sha256": "8a9a85943cd05a1a40e9498235104c942b34c6b8cb565defc20edae3720ca9e3"
     },
     {
       "path": "golang.org/x/sys/cpu/hwcap_linux.go",
@@ -7629,5 +7624,5 @@
       "sha256": "e5045fb50a1a412ce95569f579b553bf5495f10e7ed17e54db08d6b1e87dc228"
     }
   ],
-  "root_sha256": "fa0b2e353dd20fb180eeaa145604643e3002f76885340ef28731e31f5b41f9b3"
+  "root_sha256": "a0ff53b4a1d0492f10b2e415ca2e5624bddff41a25865ef600f70d7b46ca7de2"
 }

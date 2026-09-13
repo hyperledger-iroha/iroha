@@ -44,12 +44,12 @@ test("authenticated BlockProofs exports keep root and browser manifests aligned"
   }
 });
 
-test("browser authenticated verifier fails closed without digest-pinned Rust WASM", async () => {
+test("browser authenticated verifier requires the native Rust owner", async () => {
   await assert.rejects(
     browser.verifyAuthenticatedBlockProofsV1(minimallyShapedInput()),
     (error) => {
       assert.equal(error.code, "ERR_IROHA_AUTHENTICATED_BLOCK_PROOFS_UNAVAILABLE");
-      assert.match(error.message, /no digest-pinned browser finality-verifier WASM/u);
+      assert.match(error.message, /native Rust verifier and is unavailable in browsers/u);
       return true;
     },
   );

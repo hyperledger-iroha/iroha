@@ -12,7 +12,7 @@ const PACKAGE_ROOT = path.resolve(
   "..",
 );
 
-test("Nexus App transfer recipe executes the canonical browser codec end to end", () => {
+test("Nexus App transfer recipe executes the canonical native codec end to end", () => {
   const result = spawnSync(
     process.execPath,
     [path.join(PACKAGE_ROOT, "recipes/nexus_app_transfer.mjs")],

@@ -565,7 +565,7 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
   zeroKeyOwner.payload.action.value.owner = RUST_INVALID_ZERO_KEY_ACCOUNT;
   assert.throws(
     () => buildParliamentAttemptDraftRequestV1(zeroKeyOwner, 0),
-    /small-order|all-zero public key/u,
+    { name: "AccountAddressError", code: "ERR_INVALID_PUBLIC_KEY" },
   );
 });
 

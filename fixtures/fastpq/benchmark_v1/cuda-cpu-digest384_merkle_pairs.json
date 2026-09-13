@@ -1,0 +1,96 @@
+{
+  "benchmarks": {
+    "column_count": 2,
+    "execution_mode": "cpu",
+    "gpu_available": false,
+    "gpu_backend": "none",
+    "iterations": 2,
+    "operation_filter": "digest384_merkle_pairs",
+    "operations": [
+      {
+        "columns": 2,
+        "cpu_mean_ms": 20.0,
+        "digest384": {
+          "canonical_words": 156,
+          "catalog": "iroha-privacy-exact12-v1",
+          "cpu_reference_verified": true,
+          "digest_lanes": 6,
+          "frame_count": 2,
+          "input_field_bytes": 192,
+          "level": 1,
+          "output_bytes": 96,
+          "output_encoding": "six-canonical-u64-le-words",
+          "phase": "binary-node",
+          "profile": "fastpq-state-transition-stark-v1",
+          "protocol": "fastpq-state-transition-stark-v1",
+          "role": "fastpq:v1:preprocessing-trace",
+          "schema": "fastpq-digest384-primitive-benchmark-v1",
+          "sponge_permutations": 468
+        },
+        "gpu_mean_ms": null,
+        "gpu_payload_buffer_bytes": 1392,
+        "input_bytes": 192,
+        "input_len": 12,
+        "operation": "digest384_merkle_pairs",
+        "output_bytes": 96,
+        "output_len": 6,
+        "speedup_delta_ms": null,
+        "speedup_ratio": null
+      }
+    ],
+    "padded_rows": 2,
+    "rows": 2,
+    "warmups": 1
+  },
+  "metadata": {
+    "notes": [
+      "Synthetic schema fixture. Device and timing claims are invented; this is not qualification evidence."
+    ]
+  },
+  "producer_schema": "cuda_nested",
+  "report": {
+    "column_count": 2,
+    "execution_mode": "cpu",
+    "gpu_available": false,
+    "gpu_backend": "none",
+    "iterations": 2,
+    "operation_filter": "digest384_merkle_pairs",
+    "operations": [
+      {
+        "columns": 2,
+        "cpu": {
+          "max_ms": 21.0,
+          "mean_ms": 20.0,
+          "min_ms": 19.0
+        },
+        "digest384": {
+          "canonical_words": 156,
+          "catalog": "iroha-privacy-exact12-v1",
+          "cpu_reference_verified": true,
+          "digest_lanes": 6,
+          "frame_count": 2,
+          "input_field_bytes": 192,
+          "level": 1,
+          "output_bytes": 96,
+          "output_encoding": "six-canonical-u64-le-words",
+          "phase": "binary-node",
+          "profile": "fastpq-state-transition-stark-v1",
+          "protocol": "fastpq-state-transition-stark-v1",
+          "role": "fastpq:v1:preprocessing-trace",
+          "schema": "fastpq-digest384-primitive-benchmark-v1",
+          "sponge_permutations": 468
+        },
+        "gpu_payload_buffer_bytes": 1392,
+        "input_bytes": 192,
+        "input_len": 12,
+        "operation": "digest384_merkle_pairs",
+        "output_bytes": 96,
+        "output_len": 6
+      }
+    ],
+    "padded_rows": 2,
+    "producer_schema": "cuda_nested",
+    "rows": 2,
+    "warmups": 1
+  }
+}

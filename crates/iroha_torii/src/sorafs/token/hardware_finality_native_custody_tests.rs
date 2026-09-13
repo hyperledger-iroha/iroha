@@ -480,9 +480,10 @@ fn actual_native_custody_retains_history_but_fences_removed_current_provider() {
     let mut block = fixture.state.block(header);
     let mut tx = block.transaction();
     assert_eq!(
-        tx.world
+        tx.world_mut_for_testing()
             .remove_provider_owner_for_testing(ProviderId::new(PROVIDER)),
-        Some(AccountId::new(fixture_key(0xA1).public_key().clone()))
+        Some(AccountId::new(fixture_key(0xA1).public_key().clone())),
+        "the exact registered provider owner is removed",
     );
     tx.apply();
     block

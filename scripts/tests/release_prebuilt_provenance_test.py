@@ -657,6 +657,9 @@ def test_nested_release_helper_uses_safe_path_and_ignores_stdlib_shadow(
     for name in (
         "__init__.py",
         "rollout_manifest_summary.py",
+        "benchmark_operations.py",
+        "digest384_evidence.py",
+        "report_projection.py",
         "validate_row_usage_snapshot.py",
         "wrap_benchmark.py",
     ):

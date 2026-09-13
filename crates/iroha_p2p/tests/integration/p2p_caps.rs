@@ -1,4 +1,4 @@
-//! Topic cap enforcement tests. Skips gracefully if sockets are unavailable.
+//! Exact topic and negotiated frame-cap enforcement on real P2P transports.
 use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
@@ -18,12 +18,105 @@ use tokio::time::Duration;
 static FRAME_CAP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_p2p::tests::integration::p2p_caps::BigMsg")]
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Decode, Encode)]
 struct BigMsg {
     topic: u8,
     data: Vec<u8>,
 }
+// Diagnostics must not print multi-megabyte synthetic payloads on admission failure.
+impl core::fmt::Debug for BigMsg {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BigMsg")
+            .field("topic", &self.topic)
+            .field("data_bytes", &self.data.len())
+            .finish()
+    }
+}
 impl ClassifyTopic for BigMsg {
+    fn progress_reconstruction(&self) -> ProgressReconstruction {
+        // The cap probes retain an identical payload through the observation;
+        // replay has no stateful effect in this synthetic receiver.
+        ProgressReconstruction::Retransmit
+    }
+    // This explicit synthetic payload has no Availability or sidecar variants.
+    // A positive bound for each empty variant set funds mandatory geometry;
+    // no production payload owner uses these fixture-only declarations.
+    fn availability_frame_maximum(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<usize, norito::core::Error> {
+        Ok(1)
+    }
+    fn recovery_frame_maxima(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<[usize; 2], norito::core::Error> {
+        Ok([1, 1])
+    }
+
+    fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
+        use norito::core;
+        core::validate_header_flags(flags)?;
+        let _flags = core::DecodeFlagsGuard::enter(flags);
+        // Inspect the declared two-field layout without allocating the blob.
+        let (topic, vector) = if flags & core::header_flags::PACKED_STRUCT == 0 {
+            let (first, prefix) = core::read_len_from_slice_with_flags(payload, flags)?;
+            if first != 1 {
+                return Err(core::Error::LengthMismatch);
+            }
+            let topic = *payload.get(prefix).ok_or(core::Error::LengthMismatch)?;
+            let rest = payload
+                .get(prefix.checked_add(1).ok_or(core::Error::LengthMismatch)?..)
+                .ok_or(core::Error::LengthMismatch)?;
+            let (second, prefix) = core::read_len_from_slice_with_flags(rest, flags)?;
+            if prefix.checked_add(second) != Some(rest.len()) {
+                return Err(core::Error::LengthMismatch);
+            }
+            (topic, &rest[prefix..])
+        } else if flags & core::header_flags::FIELD_BITSET == 0 {
+            let (offsets, data) = payload
+                .split_at_checked(24)
+                .ok_or(core::Error::LengthMismatch)?;
+            let offset = |n: usize| -> Result<usize, core::Error> {
+                usize::try_from(u64::from_le_bytes(
+                    offsets[n * 8..(n + 1) * 8]
+                        .try_into()
+                        .map_err(|_| core::Error::LengthMismatch)?,
+                ))
+                .map_err(|_| core::Error::LengthMismatch)
+            };
+            if offset(0)? != 0 || offset(1)? != 1 || offset(2)? != data.len() {
+                return Err(core::Error::LengthMismatch);
+            }
+            let (&topic, vector) = data.split_first().ok_or(core::Error::LengthMismatch)?;
+            (topic, vector)
+        } else {
+            let (&bitset, data) = payload.split_first().ok_or(core::Error::LengthMismatch)?;
+            // u8 is fixed-width and Vec<u8> owns its sequence count. Neither
+            // field has a hybrid size header in the canonical derive layout.
+            if bitset != 0 {
+                return Err(core::Error::LengthMismatch);
+            }
+            let (&topic, vector) = data.split_first().ok_or(core::Error::LengthMismatch)?;
+            (topic, vector)
+        };
+        // Vec<u8> always encodes a fixed-u64 count followed by raw bytes.
+        // Check that inner extent as well as the enclosing field/table extent.
+        let (count, prefix) = core::inspect_seq_len_slice(vector)?;
+        if prefix.checked_add(count) != Some(vector.len()) {
+            return Err(core::Error::LengthMismatch);
+        }
+        Ok(Some(match topic {
+            0 => Topic::Consensus,
+            1 => Topic::Control,
+            2 => Topic::BlockSync,
+            3 => Topic::TxGossip,
+            4 => Topic::PeerGossip,
+            5 => Topic::Health,
+            6 => Topic::Connect,
+            _ => Topic::Other,
+        }))
+    }
+
     fn topic(&self) -> Topic {
         match self.topic {
             0 => Topic::Consensus,
@@ -124,6 +217,18 @@ fn make_config(
         )
     }
 }
+fn asymmetric_config(addr: &SocketAddr, public: &SocketAddr, plaintext: usize) -> Config {
+    let mut cfg = make_config(
+        addr,
+        public,
+        plaintext + iroha_config::parameters::defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
+        1024,
+    );
+    cfg.max_total_connections = NonZeroUsize::new(4);
+    cfg.max_frame_bytes_consensus = plaintext;
+    cfg.max_frame_bytes_block_sync = plaintext;
+    cfg
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn execution_transport_carries_large_connect_and_gossip_frames_without_widening_health() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
@@ -136,6 +241,8 @@ async fn execution_transport_carries_large_connect_and_gossip_frames_without_wid
     let shutdown2 = ShutdownSignal::new();
     let config = |addr: &SocketAddr| {
         let mut cfg = make_config(addr, addr, 17 * 1024 * 1024, 32_768);
+        cfg.max_total_connections = NonZeroUsize::new(4);
+        cfg.max_frame_bytes_block_sync = 16 * 1024 * 1024;
         cfg.max_frame_bytes_connect = 8 * 1024 * 1024;
         cfg.max_frame_bytes_tx_gossip = 8 * 1024 * 1024;
         cfg
@@ -197,47 +304,57 @@ async fn execution_transport_carries_large_connect_and_gossip_frames_without_wid
         .expect("ordinary gossip subscriber");
     for (topic, inbox) in [(6, &mut connect_rx), (3, &mut gossip_rx)] {
         let data = vec![topic; 4 * 1024 * 1024];
-        sender
-            .post_recoverable(
-                Post {
-                    data: BigMsg {
-                        topic,
-                        data: data.clone(),
-                    },
-                    peer_id: peer1.id().clone(),
-                    priority: Priority::Low,
-                },
-                None,
-            )
-            .expect("execution-sized complete frame admission");
+        let post = Post {
+            data: BigMsg {
+                topic,
+                data: data.clone(),
+            },
+            peer_id: peer1.id().clone(),
+            priority: Priority::Low,
+        };
+        // Connect and TxGossip are best effort. The reliable API must return
+        // their exact owner, rather than pretending they entered that queue.
+        let post = match sender.post_recoverable(post, None) {
+            Err(NetworkActorAdmissionError::Rejected {
+                message,
+                reason: NetworkActorAdmissionRejection::NotReliableProgress,
+            }) => message,
+            other => {
+                panic!("best-effort frame must retain its owner at the reliable API: {other:?}")
+            }
+        };
+        assert_eq!(post.data.topic, topic);
+        assert!(
+            post.data.data == data,
+            "reliable rejection must return the exact complete blob"
+        );
+        assert_eq!(post.peer_id, *peer1.id());
+        assert_eq!(post.priority, Priority::Low);
+        sender.post(post);
         let received = tokio::time::timeout(Duration::from_secs(10), inbox.recv())
             .await
             .expect("large frame crosses authenticated P2P transport")
             .expect("subscriber receives complete frame");
         assert_eq!(received.payload.topic, topic);
-        assert_eq!(received.payload.data, data);
+        assert!(
+            received.payload.data == data,
+            "subscriber receives the exact complete blob"
+        );
     }
     assert_eq!(sender.outbound_topic_frame_cap(Topic::Health), 32_768);
-    let rejection = sender
-        .post_recoverable(
-            Post {
-                data: BigMsg {
-                    topic: 5,
-                    data: vec![0; 64 * 1024],
-                },
-                peer_id: peer1.id().clone(),
-                priority: Priority::Low,
-            },
-            None,
-        )
-        .expect_err("Health must retain its ordinary frame bound");
-    assert!(matches!(
-        rejection,
-        NetworkActorAdmissionError::Rejected {
-            reason: NetworkActorAdmissionRejection::FrameTooLarge,
-            ..
-        }
-    ));
+    let health_cap_before = iroha_p2p::network::cap_violations_health();
+    sender.post(Post {
+        data: BigMsg {
+            topic: 5,
+            data: vec![0; 64 * 1024],
+        },
+        peer_id: peer1.id().clone(),
+        priority: Priority::Low,
+    });
+    assert!(
+        iroha_p2p::network::cap_violations_health() > health_cap_before,
+        "best-effort Health must fail exact actor-byte admission before enqueue"
+    );
     shutdown1.send();
     shutdown2.send();
 }
@@ -250,9 +367,20 @@ async fn topic_cap_violation_disconnects() {
     let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
     let a2 = super::next_addr();
-    // Small caps for all topics (1 KiB) with a larger global cap so the
-    // per-topic consensus cap handles the oversized frame.
-    let cfg = |addr: SocketAddr| make_config(&addr, &addr, 16 * 1024, 1024);
+    // Keep the exact 1 KiB Consensus cap under test. The independent body
+    // cap funds mandatory control/private reservations before connections.
+    let cfg = |addr: SocketAddr| {
+        let mut cfg = make_config(
+            &addr,
+            &addr,
+            1024 * 1024
+                + iroha_config::parameters::defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
+            1024,
+        );
+        cfg.max_total_connections = NonZeroUsize::new(4);
+        cfg.max_frame_bytes_block_sync = 1024 * 1024;
+        cfg
+    };
     let started1 = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp1.clone()),
         cfg(a1.clone()),
@@ -264,7 +392,7 @@ async fn topic_cap_violation_disconnects() {
     .await;
     let (net1, _c1) = match started1 {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("explicit cap fixture must start: {error}"),
     };
     let started2 = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp2.clone()),
@@ -277,7 +405,7 @@ async fn topic_cap_violation_disconnects() {
     .await;
     let (net2, _c2) = match started2 {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("explicit cap fixture must start: {error}"),
     };
     // Connect with a single outbound dial to avoid racing simultaneous
     // connection resolution with the cap-violation post below.
@@ -295,7 +423,7 @@ async fn topic_cap_violation_disconnects() {
     )
     .await
     {
-        return;
+        panic!("both cap-fixture peers must authenticate before admission assertion");
     }
     // Track the initial consensus cap counter so exact actor admission can be
     // shown to account for the rejected frame.
@@ -349,9 +477,10 @@ async fn tcp_global_frame_cap_disconnects() {
     drop(probe);
     let listen_addr = socket_addr!(127.0.0.1: {port});
     let dialer_addr = super::next_addr();
-    // Listener enforces a tight global frame cap, dialer keeps a generous cap so outbound succeeds.
-    let listener_cfg = make_config(&listen_addr, &listen_addr, 1_024, 16 * 1024);
-    let dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
+    // Both geometries are valid. The mandatory authenticated offer binds the
+    // smaller directional maximum before any data can be written.
+    let listener_cfg = asymmetric_config(&listen_addr, &listen_addr, 128 * 1024);
+    let dialer_cfg = asymmetric_config(&dialer_addr, &dialer_addr, 512 * 1024);
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
@@ -363,7 +492,7 @@ async fn tcp_global_frame_cap_disconnects() {
     .await;
     let (net_listener, _child_listener) = match started_listener {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("explicit cap fixture must start: {error}"),
     };
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
@@ -376,7 +505,7 @@ async fn tcp_global_frame_cap_disconnects() {
     .await;
     let (net_dialer, _child_dialer) = match started_dialer {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("explicit cap fixture must start: {error}"),
     };
     let peer_listener = Peer::new(listen_addr.clone(), kp_listener.public_key().clone());
     let peer_dialer = Peer::new(dialer_addr.clone(), kp_dialer.public_key().clone());
@@ -388,7 +517,7 @@ async fn tcp_global_frame_cap_disconnects() {
         peer_listener.id().clone(),
         listen_addr.clone(),
     )]));
-    // Wait for the direct TCP connection to establish; skip in sandboxed environments.
+    // Require the direct TCP connection before exercising negotiated admission.
     let online = tokio::time::timeout(Duration::from_millis(1500), async {
         loop {
             if net_listener.online_peers(HashSet::len) > 0 {
@@ -398,21 +527,29 @@ async fn tcp_global_frame_cap_disconnects() {
         }
     })
     .await;
-    if online.is_err() {
-        return;
-    }
+    assert!(
+        online.is_ok(),
+        "valid asymmetric peers must authenticate before the refusal control"
+    );
     let start_cap = iroha_p2p::network::cap_violations_consensus();
-    // Send a payload larger than the listener's global frame cap but within the dialer's allowance.
+    // Local actor admission fits, but mandatory peer-writer admission must
+    // refuse this frame against the authenticated smaller remote maximum.
     let oversize = BigMsg {
         topic: 0,
-        data: vec![0u8; 8 * 1024],
+        data: vec![0u8; 256 * 1024],
     };
-    net_dialer.post(Post {
-        data: oversize,
-        peer_id: peer_listener.id().clone(),
-        priority: Priority::High,
-    });
-    // The listener should drop the session once the oversized frame is observed.
+    net_dialer
+        .post_recoverable(
+            Post {
+                data: oversize.clone(),
+                peer_id: peer_listener.id().clone(),
+                priority: Priority::High,
+            },
+            None,
+        )
+        .expect("local actor must admit the frame before negotiated writer refusal");
+    // The writer fences the refused post; no oversized data reaches the
+    // remote decoder. The malformed-record unit controls cover receiver caps.
     let dropped = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
             if net_listener.online_peers(HashSet::len) == 0 {
@@ -424,15 +561,15 @@ async fn tcp_global_frame_cap_disconnects() {
     .await;
     assert!(
         dropped.is_ok(),
-        "listener should disconnect after global frame cap violation"
+        "negotiated oversize must close the exact refused writer tenure"
     );
     let end_cap = iroha_p2p::network::cap_violations_consensus();
     assert_eq!(
         end_cap, start_cap,
-        "global cap enforcement must run before topic cap accounting",
+        "negotiated writer refusal must precede remote topic decode/accounting",
     );
     // Dialer should eventually observe the connection closure as well.
-    let _ = tokio::time::timeout(Duration::from_millis(1000), async {
+    let dialer_closed = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
             if net_dialer.online_peers(HashSet::len) == 0 {
                 break;
@@ -441,6 +578,10 @@ async fn tcp_global_frame_cap_disconnects() {
         }
     })
     .await;
+    assert!(
+        dialer_closed.is_ok(),
+        "dialer must observe negotiated refusal"
+    );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_global_frame_cap_disconnects() {
@@ -462,9 +603,9 @@ async fn tls_global_frame_cap_disconnects() {
         port,
     });
     // Listener enforces a small global frame cap, dialer uses a generous cap so outbound succeeds.
-    let listener_cfg = make_config(&tls_listen, &public_host, 1024, 4096);
+    let listener_cfg = asymmetric_config(&tls_listen, &public_host, 128 * 1024);
     let client_addr = super::next_addr();
-    let dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
+    let dialer_cfg = asymmetric_config(&client_addr, &client_addr, 512 * 1024);
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
@@ -476,7 +617,7 @@ async fn tls_global_frame_cap_disconnects() {
     .await;
     let (net_listener, _child_listener) = match started_listener {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("explicit cap fixture must start: {error}"),
     };
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
@@ -489,7 +630,7 @@ async fn tls_global_frame_cap_disconnects() {
     .await;
     let (net_dialer, _child_dialer) = match started_dialer {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("explicit cap fixture must start: {error}"),
     };
     // Exchange topology using hostname so the dialer attempts the TLS path.
     let peer_listener = Peer::new(public_host.clone(), kp_listener.public_key().clone());
@@ -501,7 +642,7 @@ async fn tls_global_frame_cap_disconnects() {
         peer_listener.id().clone(),
         public_host.clone(),
     )]));
-    // Wait for connection establishment (skip if environment prevents it).
+    // Require the authenticated connection before exercising negotiated admission.
     let online = tokio::time::timeout(Duration::from_millis(1500), async {
         loop {
             if net_listener.online_peers(HashSet::len) > 0 {
@@ -511,20 +652,26 @@ async fn tls_global_frame_cap_disconnects() {
         }
     })
     .await;
-    if online.is_err() {
-        return;
-    }
+    assert!(
+        online.is_ok(),
+        "valid asymmetric peers must authenticate before the refusal control"
+    );
     let start_cap = iroha_p2p::network::cap_violations_consensus();
     // Send a payload exceeding listener's global frame cap but within the dialer's cap.
     let oversize = BigMsg {
         topic: 0,
-        data: vec![0u8; 8 * 1024],
+        data: vec![0u8; 256 * 1024],
     };
-    net_dialer.post(Post {
-        data: oversize,
-        peer_id: peer_listener.id().clone(),
-        priority: Priority::High,
-    });
+    net_dialer
+        .post_recoverable(
+            Post {
+                data: oversize.clone(),
+                peer_id: peer_listener.id().clone(),
+                priority: Priority::High,
+            },
+            None,
+        )
+        .expect("local actor must admit the frame before negotiated writer refusal");
     // Expect the listener to drop the connection after rejecting the oversized frame.
     let dropped = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
@@ -545,7 +692,7 @@ async fn tls_global_frame_cap_disconnects() {
         "global frame cap enforcement should occur before topic caps are counted"
     );
     // Dialer should eventually observe zero peers once the listener drops the session.
-    let _ = tokio::time::timeout(Duration::from_millis(1000), async {
+    let dialer_closed = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
             if net_dialer.online_peers(HashSet::len) == 0 {
                 break;
@@ -554,6 +701,10 @@ async fn tls_global_frame_cap_disconnects() {
         }
     })
     .await;
+    assert!(
+        dialer_closed.is_ok(),
+        "dialer must observe negotiated refusal"
+    );
 }
 #[cfg(feature = "quic")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -561,113 +712,89 @@ async fn tls_global_frame_cap_disconnects() {
 async fn quic_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
     let chain = super::test_network_id("test_chain_quic");
-    let kp_listener = super::random_node_key_pair();
-    let kp_dialer = super::random_node_key_pair();
-    // Reserve a UDP/TCP port for QUIC + TCP listener pair.
-    let probe = match std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
-        Ok(sock) => sock,
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            eprintln!(
-                "Skipping quic_global_frame_cap_disconnects: cannot bind UDP probe socket: {e}"
-            );
-            return;
-        }
-        Err(e) => panic!("bind probe udp socket: {e}"),
-    };
-    let port = probe.local_addr().expect("probe local addr").port();
-    drop(probe);
-    let listen_addr = socket_addr!(127.0.0.1: {port});
-    let public_host = SocketAddr::Host(SocketAddrHost {
-        host: "localhost".into(),
-        port,
-    });
-    let mut listener_cfg = make_config(&listen_addr, &public_host, 1024, 4096);
-    listener_cfg.quic_enabled = true;
-    let client_addr = super::next_addr();
-    let mut dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
-    dialer_cfg.quic_enabled = true;
-    let started_listener = NetworkHandle::<BigMsg>::start(
-        super::p2p_identity_keys(kp_listener.clone()),
-        listener_cfg,
-        chain,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await;
-    let (net_listener, _child_listener) = match started_listener {
-        Ok(ok) => ok,
-        Err(_) => return,
-    };
-    let started_dialer = NetworkHandle::<BigMsg>::start(
-        super::p2p_identity_keys(kp_dialer.clone()),
-        dialer_cfg,
-        chain,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await;
-    let (net_dialer, _child_dialer) = match started_dialer {
-        Ok(ok) => ok,
-        Err(_) => return,
-    };
-    let peer_listener = Peer::new(public_host.clone(), kp_listener.public_key().clone());
-    let peer_dialer = Peer::new(client_addr.clone(), kp_dialer.public_key().clone());
-    // Keep this one-way so the oversized inbound frame closes the only listener-side session.
-    net_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-    net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
-    net_dialer.update_peers_addresses(UpdatePeers(vec![(
-        peer_listener.id().clone(),
-        public_host.clone(),
-    )]));
-    let online = tokio::time::timeout(Duration::from_millis(1800), async {
-        loop {
-            if net_listener.online_peers(HashSet::len) > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(60)).await;
-        }
-    })
-    .await;
-    if online.is_err() {
-        return;
-    }
     let start_cap = iroha_p2p::network::cap_violations_consensus();
-    let oversize = BigMsg {
-        topic: 0,
-        data: vec![0u8; 8 * 1024],
-    };
-    net_dialer.post(Post {
-        data: oversize,
-        peer_id: peer_listener.id().clone(),
-        priority: Priority::High,
-    });
-    let dropped = tokio::time::timeout(Duration::from_millis(1200), async {
-        loop {
-            if net_listener.online_peers(HashSet::len) == 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(60)).await;
-        }
-    })
-    .await;
-    assert!(
-        dropped.is_ok(),
-        "listener should disconnect after QUIC frame cap violation"
-    );
-    let end_cap = iroha_p2p::network::cap_violations_consensus();
+    for plaintext in [128 * 1024, 512 * 1024] {
+        let address = super::next_addr();
+        let mut config = asymmetric_config(&address, &address, plaintext);
+        config.quic_enabled = true;
+        let result = NetworkHandle::<BigMsg>::start(
+            super::p2p_identity_keys(super::random_node_key_pair()),
+            config,
+            chain,
+            None,
+            None,
+            ShutdownSignal::new(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(iroha_p2p::Error::Io(ref error))
+            if error.kind() == std::io::ErrorKind::InvalidInput && error.to_string().contains("network.quic_enabled=true")),
+            "shipping policy must refuse QUIC before creating a connection or decoding data"
+        );
+    }
     assert_eq!(
-        end_cap, start_cap,
-        "global frame enforcement must precede topic cap accounting"
+        iroha_p2p::network::cap_violations_consensus(),
+        start_cap,
+        "unavailable transport must not manufacture a topic-cap observation"
     );
-    let _ = tokio::time::timeout(Duration::from_millis(1000), async {
-        loop {
-            if net_dialer.online_peers(HashSet::len) == 0 {
-                break;
+}
+
+#[test]
+fn cap_fixture_raw_topic_matches_canonical_layout_without_decoding_the_blob() {
+    use norito::core;
+    for topic in 0..=8 {
+        for length in [0, 1, 256] {
+            let value = BigMsg {
+                topic,
+                data: vec![7; length],
+            };
+            assert!(
+                format!("{value:?}").len() < 80,
+                "fixture diagnostics must remain bounded"
+            );
+            for requested in [
+                0,
+                core::header_flags::COMPACT_LEN,
+                core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
+                core::header_flags::PACKED_STRUCT
+                    | core::header_flags::COMPACT_LEN
+                    | core::header_flags::FIELD_BITSET,
+            ] {
+                let (bytes, flags) = {
+                    let _flags = core::DecodeFlagsGuard::enter(requested);
+                    norito::codec::encode_with_header_flags(&value)
+                };
+                let _flags = core::DecodeFlagsGuard::enter(flags);
+                let (decoded, used) = core::decode_field_canonical::<BigMsg>(&bytes).unwrap();
+                assert_eq!(used, bytes.len());
+                assert_eq!(decoded.topic, value.topic);
+                assert_eq!(decoded.data, value.data);
+                assert_eq!(
+                    BigMsg::inbound_topic(&bytes, flags).unwrap(),
+                    Some(decoded.topic())
+                );
+                assert_eq!(
+                    BigMsg::inbound_admission_class(&bytes, flags).unwrap(),
+                    decoded.admission_class()
+                );
+                let mut trailing = bytes.clone();
+                trailing.push(0);
+                assert!(BigMsg::inbound_topic(&trailing, flags).is_err());
+                assert!(BigMsg::inbound_topic(&bytes[..bytes.len() - 1], flags).is_err());
+                assert!(BigMsg::inbound_topic(&bytes, flags | 0x80).is_err());
+                // Keep the outer field/table untouched, corrupt only Vec's own count.
+                let count_at = bytes.len() - length - 8;
+                for count in [u64::try_from(length).unwrap() + 1, u64::MAX] {
+                    let mut wrong_count = bytes.clone();
+                    wrong_count[count_at..count_at + 8].copy_from_slice(&count.to_le_bytes());
+                    assert!(BigMsg::inbound_topic(&wrong_count, flags).is_err());
+                }
+                if flags & core::header_flags::FIELD_BITSET != 0 {
+                    let mut wrong_bitset = bytes.clone();
+                    wrong_bitset[0] = 0b10;
+                    assert!(BigMsg::inbound_topic(&wrong_bitset, flags).is_err());
+                }
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-    })
-    .await;
+    }
 }

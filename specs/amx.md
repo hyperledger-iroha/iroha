@@ -16,6 +16,11 @@ This guide describes transparent Native AMX/AXT. The governed, default-off
 notes, auditor-only capsule decryption, exact four-validator committees, and a
 dedicated release-evidence contract; see `private_settlement.md`.
 
+The proposed exact-consent `SettleAtomic` batch, its complete movement receipts,
+and the matched confidential/transparent benchmark contract are specified in
+[`native_atomic_settlement.md`](native_atomic_settlement.md). Native compilation
+and network qualification remain pending for that candidate.
+
 Key guarantees:
 
 - Every AMX submission receives deterministic prepare/commit budgets; overruns abort with documented codes rather than hanging lanes.

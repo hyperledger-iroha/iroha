@@ -2678,6 +2678,7 @@ fn soracloud_response_encoded_len_bound(
     operation: SoracloudHostOperationV1,
     shape: SoracloudResponseShape<'_>,
 ) -> Option<usize> {
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let response_fields = match shape {
         SoracloudResponseShape::ReadCommittedState(entry) => {
             let entry_bytes = match entry {
@@ -2915,6 +2916,7 @@ impl SoracloudIvmHost {
         envelope
             .validate()
             .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let payload_bytes = norito::to_bytes(&envelope)
             .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
         let gas =
@@ -10175,6 +10177,26 @@ fn build_runtime_snapshot(
         let service_name_key = service_name.clone();
         let service_name = service_name_key.to_string();
         let versions = collect_active_versions(deployment)?;
+        let current_bundle = bundle_registry
+            .get(&(service_name.clone(), deployment.current_service_version.clone()))
+            .ok_or_else(|| eyre::eyre!(
+                "deployment for service `{service_name}` references missing current admitted revision `{}`",
+                deployment.current_service_version
+            ))?;
+        if deployment.active_rollout.is_some()
+            && current_bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+        {
+            eyre::bail!(
+                "deployment for Inrou service `{service_name}` carries an unsupported active canary; first-release host-local lease disks require one active revision"
+            );
+        }
+        let current_lease_volumes = build_lease_volume_plans(
+            current_bundle,
+            deployment,
+            state_dir,
+            &service_name,
+            &deployment.current_service_version,
+        )?;
         let runtime_state = world.soracloud_service_runtime().get(&service_name_key);
         let authoritative_pending = authoritative_mailbox_counts(
             world.soracloud_mailbox_messages(),
@@ -10189,6 +10211,13 @@ fn build_runtime_snapshot(
                         "deployment for service `{service_name}` references missing admitted revision `{service_version}`"
                     )
                 })?;
+            if bundle.service.service_name != service_name_key
+                || bundle.service.service_version != service_version
+            {
+                eyre::bail!(
+                    "service revision registry key does not match admitted revision identity"
+                );
+            }
             if deployment.active_rollout.is_some()
                 && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
             {
@@ -10221,13 +10250,22 @@ fn build_runtime_snapshot(
             let hydration_complete = artifact_plans
                 .iter()
                 .all(|artifact| artifact.available_locally);
-            let lease_volumes = build_lease_volume_plans(
-                bundle,
-                deployment,
-                state_dir,
-                &service_name,
-                &service_version,
-            )?;
+            // A deterministic canary keeps its admitted baseline executable,
+            // while economic authority belongs to the current candidate.
+            // Hosted lease volumes can never be projected onto an older revision.
+            bundle.validate_for_admission()?;
+            let lease_volumes = if service_version == deployment.current_service_version {
+                current_lease_volumes.clone()
+            } else {
+                if bundle.service.execution_plane
+                    != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService
+                    || current_bundle.service.execution_plane
+                        != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService
+                {
+                    eyre::bail!("service `{service_name}` canary revisions must both use deterministic execution");
+                }
+                Vec::new()
+            };
             let service_lease_status = deployment.hosted_service_lease_status_at(current_height)?;
             let remaining_runtime_balance =
                 deployment.hosted_service_remaining_balance(current_height)?;
@@ -22060,7 +22098,7 @@ mod tests {
     }
     #[test]
     fn bounded_regular_file_rejects_oversized_metadata_before_reading() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let path = temp_dir.path().join("oversized-state.json");
         let file = fs::File::create(&path)?;
         file.set_len(9)?;
@@ -22354,7 +22392,7 @@ mod tests {
     #[test]
     fn soracloud_ivm_host_rejects_the_state_backed_axt_surface() -> Result<()> {
         let bundle = load_deployment_bundle_fixture()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let runtime_request = sample_ordered_mailbox_request(
             &bundle,
             "query",
@@ -22400,7 +22438,7 @@ mod tests {
     #[test]
     fn soracloud_request_decoder_accepts_owned_heap_and_rejects_unowned_heap() -> Result<()> {
         let bundle = load_deployment_bundle_fixture()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let runtime_request = sample_ordered_mailbox_request(
             &bundle,
             "query",
@@ -22454,7 +22492,7 @@ mod tests {
     #[test]
     fn soracloud_public_input_spills_to_heap_from_heap_backed_name() -> Result<()> {
         let bundle = load_deployment_bundle_fixture()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let runtime_request = sample_ordered_mailbox_request(
             &bundle,
             "query",
@@ -22528,7 +22566,7 @@ mod tests {
     }
     #[test]
     fn prepared_runtime_cache_rejects_oversized_artifact_before_reading() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifact_path = temp_dir.path().join("oversized.to");
         let artifact = vec![0xA5; 65];
         fs::write(&artifact_path, &artifact)?;
@@ -22553,7 +22591,7 @@ mod tests {
     }
     #[test]
     fn prepared_soracloud_runtime_never_collects_zk_traces() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifact = simple_soracloud_contract_artifact(&["trace_off"]);
         let artifact_path = temp_dir.path().join("trace-off.to");
         fs::write(&artifact_path, &artifact)?;
@@ -22572,7 +22610,7 @@ mod tests {
     }
     #[test]
     fn overlapping_soracloud_runtimes_return_with_their_own_templates() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifact = simple_soracloud_contract_artifact(&["overlap"]);
         let artifact_path = temp_dir.path().join("overlap.to");
         fs::write(&artifact_path, &artifact)?;
@@ -22615,7 +22653,7 @@ mod tests {
     }
     #[test]
     fn artifact_cache_verification_rejects_substitution_and_size_overrun() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let cache_path = temp_dir.path().join("artifact.bin");
         let expected_bytes = b"authenticated-artifact";
         let expected_hash = Hash::new(expected_bytes);
@@ -22647,7 +22685,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn artifact_cache_verification_rejects_symbolic_and_hard_links() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let target = temp_dir.path().join("target.bin");
         let symbolic = temp_dir.path().join("symbolic.bin");
         let hard = temp_dir.path().join("hard.bin");
@@ -22664,11 +22702,12 @@ mod tests {
     }
     #[test]
     fn artifact_plans_reverify_hash_named_cache_entries() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.service.artifacts.clear();
         let bundle_bytes = simple_soracloud_contract_artifact(&["query"]);
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let cache_path = temp_dir
             .path()
             .join(hash_cache_name(bundle.container.bundle_hash));
@@ -22694,7 +22733,7 @@ mod tests {
     }
     #[test]
     fn atomic_write_installs_complete_bytes_without_legacy_tmp_aliases() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let destination = temp_dir.path().join("state.json");
         let legacy_tmp = destination.with_extension("tmp");
         fs::write(&legacy_tmp, b"attacker-controlled")?;
@@ -22718,7 +22757,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn portable_vm_bundle_block_stage_verifies_and_pads_before_replacement() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let materialization_dir = secure_test_inrou_disk_directory(&temp_dir)?;
         let cache_path = temp_dir.path().join("bundle.tgz");
         let bundle_bytes = b"authenticated-bundle";
@@ -22783,7 +22822,7 @@ mod tests {
         let (_plan_root, replica_plan, mut cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
         cache_key.effective_env = effective_env;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let materialization_dir = secure_test_inrou_disk_directory(&temp_dir)?;
         let user_data = build_inrou_user_data(
             &replica_plan,
@@ -22868,7 +22907,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn native_inrou_bundle_extraction_replaces_stale_root_transactionally() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let parent = secure_test_inrou_disk_directory(&temp_dir)?;
         let cache_path = temp_dir.path().join("bundle.tgz");
         let bundle_root = temp_dir.path().join("bundle-root");
@@ -22923,7 +22962,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn native_inrou_bundle_rejection_preserves_live_root() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let parent = secure_test_inrou_disk_directory(&temp_dir)?;
         let cache_path = temp_dir.path().join("bundle.tgz");
         let bundle_root = temp_dir.path().join("bundle-root");
@@ -22949,7 +22988,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn native_inrou_bundle_rejects_linked_live_root_without_touching_target() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let parent = secure_test_inrou_disk_directory(&temp_dir)?;
         let cache_path = temp_dir.path().join("bundle.tgz");
         let bundle_root = temp_dir.path().join("bundle-root");
@@ -22980,7 +23019,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn native_inrou_bundle_recovers_one_interrupted_backup_before_installing() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let parent = secure_test_inrou_disk_directory(&temp_dir)?;
         let cache_path = temp_dir.path().join("bundle.tgz");
         let bundle_root = temp_dir.path().join("bundle-root");
@@ -23011,7 +23050,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn atomic_write_replaces_destination_links_without_touching_alias_targets() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let external = temp_dir.path().join("external");
         let symbolic_destination = temp_dir.path().join("symbolic-destination");
         fs::write(&external, b"external")?;
@@ -23035,7 +23074,7 @@ mod tests {
     }
     #[test]
     fn prepared_runtime_cache_evicts_lru_artifact_at_byte_budget() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let first = simple_soracloud_contract_artifact(&["first"]);
         let second = simple_soracloud_contract_artifact(&["second"]);
         let first_path = temp_dir.path().join("first.to");
@@ -23142,7 +23181,11 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/soracloud/sora_deployment_bundle_v1.json");
         let raw = fs::read_to_string(path)?;
-        Ok(norito::json::from_str(&raw)?)
+        let mut bundle: SoraDeploymentBundleV1 = norito::json::from_str(&raw)?;
+        for artifact in &mut bundle.service.artifacts {
+            artifact.artifact_hash = Hash::new(artifact.artifact_path.as_bytes());
+        }
+        Ok(bundle)
     }
     fn load_agent_manifest_fixture() -> Result<AgentApartmentManifestV1> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23167,7 +23210,7 @@ mod tests {
             state: &Arc<State>,
             configure: impl FnOnce(SoracloudRuntimeManagerConfig) -> SoracloudRuntimeManagerConfig,
         ) -> Result<Self> {
-            let temp_dir = tempfile::tempdir()?;
+            let temp_dir = canonical_runtime_fixture_tempdir()?;
             let config = test_runtime_manager_config(temp_dir.path().to_path_buf());
             let config = configure(config);
             let manager = SoracloudRuntimeManager::new(config, Arc::clone(state));
@@ -23544,9 +23587,16 @@ mod tests {
     fn lease_volume_plans_project_exact_authoritative_state() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let mut deployment = sample_deployment_state(&bundle);
-        deployment.lease_volume_states[0].lease_expires_height = 91;
+        deployment
+            .service_lease
+            .as_mut()
+            .expect("hosted lease")
+            .lease_expires_height = 91;
+        for volume in &mut deployment.lease_volume_states {
+            volume.lease_expires_height = 91;
+        }
         deployment.lease_volume_states[0].authoritative_generation = 7;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
 
         let plans = build_lease_volume_plans(
             &bundle,
@@ -23580,9 +23630,9 @@ mod tests {
     #[test]
     fn lease_volume_plans_require_exact_authoritative_names() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let mut missing = sample_deployment_state(&bundle);
-        let missing_name = missing.lease_volume_states.remove(0).volume_name;
+        missing.lease_volume_states.remove(0);
 
         let error = build_lease_volume_plans(
             &bundle,
@@ -23593,8 +23643,7 @@ mod tests {
         )
         .expect_err("a missing authoritative volume state must fail closed");
         assert!(
-            error.to_string().contains("exact 1:1")
-                && error.to_string().contains(missing_name.as_ref()),
+            matches!(error.downcast_ref::<iroha_data_model::soracloud::SoracloudManifestError>(), Some(iroha_data_model::soracloud::SoracloudManifestError::InvalidField { field: "lease_volume_states", reason, .. }) if reason.contains("exact one-to-one")),
             "unexpected error: {error}"
         );
 
@@ -23611,8 +23660,7 @@ mod tests {
         )
         .expect_err("an unexpected authoritative volume state must fail closed");
         assert!(
-            error.to_string().contains("exact 1:1")
-                && error.to_string().contains("unexpected_volume"),
+            matches!(error.downcast_ref::<iroha_data_model::soracloud::SoracloudManifestError>(), Some(iroha_data_model::soracloud::SoracloudManifestError::InvalidField { field: "lease_volume_states", reason, .. }) if reason.contains("exact one-to-one")),
             "unexpected error: {error}"
         );
         Ok(())
@@ -23627,7 +23675,7 @@ mod tests {
             .as_mut()
             .expect("hosted-service lease")
             .replica_count = std::num::NonZeroU16::new(2).expect("nonzero");
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let error = build_lease_volume_plans(
             &bundle,
             &deployment,
@@ -23636,14 +23684,22 @@ mod tests {
             &bundle.service.service_version,
         )
         .expect_err("runtime materialization must reject under-billed replica storage");
-        assert!(error.to_string().contains("lease replica_count 2"));
+        assert!(matches!(
+            error.downcast_ref::<iroha_data_model::soracloud::SoracloudManifestError>(),
+            Some(
+                iroha_data_model::soracloud::SoracloudManifestError::InvalidField {
+                    field: "service_lease.replica_count",
+                    ..
+                }
+            )
+        ));
         Ok(())
     }
 
     #[test]
     fn lease_volume_plans_reject_authoritative_binding_mismatches() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let baseline = sample_deployment_state(&bundle);
         let mut mismatches = Vec::new();
 
@@ -23671,8 +23727,16 @@ mod tests {
             )
             .expect_err("an authoritative binding mismatch must fail closed");
             assert!(
-                error.to_string().contains(field),
-                "unexpected error: {error}"
+                matches!(
+                    error.downcast_ref::<iroha_data_model::soracloud::SoracloudManifestError>(),
+                    Some(
+                        iroha_data_model::soracloud::SoracloudManifestError::InvalidField {
+                            field: "lease_volume_states",
+                            ..
+                        }
+                    )
+                ),
+                "mutation {field} must fail the canonical volume binding: {error:?}"
             );
         }
         Ok(())
@@ -24096,7 +24160,7 @@ mod tests {
             insert_inrou_service_placement_record_fixture(world, &baseline, Vec::new());
             insert_inrou_service_placement_record_fixture(world, &candidate, Vec::new());
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
@@ -24129,7 +24193,7 @@ mod tests {
         }
         let local_peer_id = canonical_inrou_test_peer_id();
         insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1]);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
@@ -24411,6 +24475,9 @@ mod tests {
     }
     fn insert_active_public_lane_validator_fixture(state: &State, local_peer_id: &str) {
         let lane_id = iroha_model_base::topology::LaneId::SINGLE;
+        // This fixture commits only world state, so its tenure must start at
+        // the exact snapshot height rather than an uncommitted next block.
+        let activation_height = committed_height(&state.view());
         let next_height = state
             .latest_block_header_fast()
             .map_or(1, |header| header.height().get().saturating_add(1));
@@ -24439,7 +24506,7 @@ mod tests {
                     self_stake: Quantity::from(1_u64),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
-                    activation_height: 1,
+                    activation_height,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -24448,6 +24515,34 @@ mod tests {
         block
             .commit_world_overlay_for_testing()
             .expect("commit Inrou public-lane validator fixture");
+    }
+    #[test]
+    fn inrou_fixture_validator_is_active_in_the_unchanged_snapshot() -> Result<()> {
+        let state = test_state()?;
+        let before = committed_height(&state.view());
+        let local_peer = canonical_inrou_test_peer_id();
+        insert_active_public_lane_validator_fixture(state.as_ref(), local_peer);
+        let view = state.view();
+        assert_eq!(committed_height(&view), before);
+        assert!(
+            iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+                view.world(),
+                &ALICE_ID,
+                local_peer,
+                before,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )
+        );
+        assert!(
+            !iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+                view.world(),
+                &ALICE_ID,
+                "foreign peer",
+                before,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )
+        );
+        Ok(())
     }
     fn insert_inrou_service_placement_record_fixture(
         world: &mut World,
@@ -24560,7 +24655,7 @@ mod tests {
             local_peer_id,
             selected_guest_isa,
         );
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir.clone())
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -24672,7 +24767,7 @@ mod tests {
             BundleArchiveFile::new("bin/sh", 0o755, b"#!/bin/sh\nexec /bin/sh \"$@\"\n"),
             BundleArchiveFile::new(
                 "app/inrou-health.py",
-                0o555,
+                0o755,
                 INROU_HEALTH_SERVER_PY.as_bytes(),
             ),
         ];
@@ -24987,6 +25082,7 @@ mod tests {
         order_id: ReplicationOrderId,
         provider_id: [u8; 32],
         issued_epoch: u64,
+        pin_policy: PinPolicy,
         canonical_order: Vec<u8>,
         manifest_id_hex: String,
         manifest_response_body: Vec<u8>,
@@ -25239,6 +25335,21 @@ mod tests {
             order_id,
             provider_id,
             issued_epoch: u64::from(order_seed),
+            pin_policy: PinPolicy {
+                min_replicas: manifest.pin_policy.min_replicas,
+                storage_class: match manifest.pin_policy.storage_class {
+                    sorafs_manifest::StorageClass::Hot => {
+                        iroha_data_model::sorafs::pin_registry::StorageClass::Hot
+                    }
+                    sorafs_manifest::StorageClass::Warm => {
+                        iroha_data_model::sorafs::pin_registry::StorageClass::Warm
+                    }
+                    sorafs_manifest::StorageClass::Cold => {
+                        iroha_data_model::sorafs::pin_registry::StorageClass::Cold
+                    }
+                },
+                retention_epoch: manifest.pin_policy.retention_epoch,
+            },
             canonical_order,
             manifest_id_hex: manifest_id_hex.clone(),
             manifest_response_body,
@@ -25618,7 +25729,7 @@ mod tests {
     }
     #[test]
     fn operator_preseed_bundle_hydration_requires_exact_iroha_hash() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let store = test_operator_preseed_store(&temp_dir);
         let decoy = b"operator-preseed-decoy";
         let (decoy_plan, decoy_manifest) = build_sorafs_manifest(decoy)?;
@@ -25712,7 +25823,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn operator_preseed_inrou_directory_hydration_requires_exact_manifest_binding() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let store = test_operator_preseed_store(&temp_dir);
         let files = [
             ("x86_64/initrd.img", b"preseed-initrd".as_slice()),
@@ -25823,7 +25934,7 @@ mod tests {
     }
     #[test]
     fn enabled_inrou_host_requires_exact_trusted_guest_preseed_before_startup() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let kernel = temp_dir.path().join("vmlinux");
         let rootfs = temp_dir.path().join("rootfs.ext4");
         fs::write(&kernel, b"trusted-kernel")?;
@@ -25931,7 +26042,7 @@ mod tests {
     }
     #[test]
     fn enabled_inrou_host_rejects_wrong_isa_trusted_guest_preseed() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let kernel = temp_dir.path().join("vmlinux");
         let rootfs = temp_dir.path().join("rootfs.ext4");
         fs::write(&kernel, b"wrong-isa-kernel")?;
@@ -25970,7 +26081,7 @@ mod tests {
     }
     #[test]
     fn enabled_inrou_host_rejects_extra_trusted_guest_preseed_member() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let store = test_operator_preseed_store(&temp_dir);
         let host_guest_isa =
             current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
@@ -26020,7 +26131,7 @@ mod tests {
         let bundle = sample_inrou_test_bundle()?;
         let guest_isa = SoraInrouGuestIsaV1::X8664;
         let plan = sample_inrou_runtime_plan(&bundle, guest_isa);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let bundle_root = secure_test_inrou_disk_directory(&temp_dir)?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config_with_trusted_guest(
@@ -26064,7 +26175,7 @@ mod tests {
                 .clone()
                 .expect("Inrou fixture initrd"),
         ];
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         for path in &required_paths {
             let target = temp_dir.path().join(
                 path.strip_prefix('/')
@@ -26106,7 +26217,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn published_inrou_guest_image_requires_manifest_and_selected_isa() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let bundle_root = secure_test_inrou_disk_directory(&temp_dir)?;
         let state = test_state()?;
         let bundle = sample_inrou_test_bundle()?;
@@ -26197,7 +26308,7 @@ mod tests {
     }
     #[test]
     fn sorafs_materialization_preserves_unrelated_existing_files() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let target_root = temp_dir.path().join("dataset");
         fs::create_dir(&target_root)?;
         fs::write(target_root.join("keep.txt"), b"unrelated")?;
@@ -26218,7 +26329,7 @@ mod tests {
     #[test]
     fn sorafs_materialization_rejects_unsafe_duplicate_and_noncontiguous_layouts_without_mutation()
     -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let target_root = temp_dir.path().join("live");
         fs::create_dir(&target_root)?;
         fs::write(target_root.join("marker"), b"live-state")?;
@@ -26265,7 +26376,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn sorafs_materialization_rejects_existing_symlink_without_mutation() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let target_root = temp_dir.path().join("live");
         fs::create_dir(&target_root)?;
         fs::write(target_root.join("marker"), b"live-state")?;
@@ -26296,7 +26407,7 @@ mod tests {
     }
     #[test]
     fn sorafs_materialization_recovers_interrupted_backup_before_commit() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let target_root = temp_dir.path().join("dataset");
         let payload = b"recovered-payload";
         let payload_digest_hex = hex::encode(blake3::hash(payload).as_bytes());
@@ -26318,6 +26429,9 @@ mod tests {
         Ok(())
     }
     fn read_http_request(stream: &mut std::net::TcpStream) -> Result<(String, String)> {
+        // Accepted sockets inherit a nonblocking listener's mode on macOS.
+        // Preserve the existing bounded synchronous request-reader contract.
+        stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
         let mut buffer = Vec::new();
         let mut chunk = [0_u8; 1024];
@@ -26649,7 +26763,7 @@ mod tests {
     #[test]
     fn remote_hydration_provider_target_requires_range_hint_and_stream_budget() -> Result<()> {
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let cases = [
             ([0x91; 32], None, Some(8), false),
             (
@@ -26718,7 +26832,7 @@ mod tests {
             Some(3),
         )?;
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             state,
@@ -26752,7 +26866,7 @@ mod tests {
             .advert()
             .clone();
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             state,
@@ -26871,7 +26985,7 @@ mod tests {
             .advert()
             .clone();
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             state,
@@ -26955,7 +27069,7 @@ mod tests {
             Some(1),
         )?;
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             state,
@@ -27099,7 +27213,7 @@ mod tests {
         let server = spawn_remote_hydration_fixture(std::slice::from_ref(&fixture))?;
         let cache = test_provider_cache(&server.base_url, provider_id)?;
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
@@ -27216,10 +27330,7 @@ mod tests {
         {
             let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
             for fixture in fixtures {
-                let policy = PinPolicy {
-                    retention_epoch: fixture.issued_epoch.saturating_add(600),
-                    ..PinPolicy::default()
-                };
+                let policy = fixture.pin_policy.clone();
                 let content_length = fixture.payload.len() as u64;
                 let amount = pricing
                     .public_pin_fee(
@@ -27312,6 +27423,9 @@ mod tests {
         }
         block.commit_world_overlay_for_testing()?;
         Ok(())
+    }
+    fn canonical_runtime_fixture_tempdir() -> io::Result<tempfile::TempDir> {
+        tempfile::tempdir_in(fs::canonicalize(std::env::temp_dir())?)
     }
     fn canonical_test_runtime_state_dir(temp_dir: &tempfile::TempDir) -> Result<PathBuf> {
         fs::canonicalize(temp_dir.path()).wrap_err("canonicalize test runtime state directory")
@@ -27612,6 +27726,7 @@ mod tests {
     ) -> Vec<Vec<u8>> {
         let service_name = bundle.service.service_name.to_string();
         bundle.container.bundle_hash = Hash::new(bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let mut payloads = Vec::with_capacity(bundle.service.artifacts.len());
         for (index, artifact) in bundle.service.artifacts.iter_mut().enumerate() {
             let payload =
@@ -27708,7 +27823,7 @@ mod tests {
             .pin_policy(ManifestPinPolicy {
                 min_replicas: 1,
                 storage_class: sorafs_manifest::StorageClass::Warm,
-                retention_epoch: u64::MAX,
+                retention_epoch: 601,
             })
             .build()?)
     }
@@ -27718,65 +27833,48 @@ mod tests {
         let manifest_id = node.ingest_manifest(&manifest, &plan, &mut reader)?;
         node.manifest_metadata(&manifest_id).map_err(Into::into)
     }
-    fn approve_sorafs_manifests(state: &Arc<State>, manifests: &[StoredManifest]) -> Result<()> {
+    fn approve_sorafs_manifests(
+        state: &Arc<State>,
+        node: &NodeHandle,
+        manifests: &[StoredManifest],
+    ) -> Result<()> {
+        let fixtures = manifests
+            .iter()
+            .enumerate()
+            .map(|(index, stored)| {
+                let payload = node.read_payload_range(
+                    stored.manifest_id(),
+                    0,
+                    usize::try_from(stored.content_length())?,
+                )?;
+                let fixture =
+                    build_remote_manifest_fixture(&payload, [0xB4; 32], u8::try_from(index + 1)?)?;
+                // The common completed-ingest fixture must identify exactly the
+                // manifest and bytes already held by the real local storage owner.
+                assert_eq!(fixture.manifest_digest.as_bytes(), stored.manifest_digest());
+                assert_eq!(fixture.manifest_root_cid.as_bytes(), stored.manifest_cid());
+                let manifest = stored.load_manifest()?;
+                assert_eq!(
+                    fixture.chunk_digest_sha3_256,
+                    manifest.chunk_digest_sha3_256
+                );
+                assert_eq!(fixture.por_root, manifest.por_root);
+                Ok(fixture)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        approve_remote_hydration_sources(state, &fixtures)?;
         let view = state.view();
-        let pricing = view.world().sorafs_pricing().clone();
-        let next_height = NonZeroU64::new(
-            u64::try_from(view.height())
-                .unwrap_or(u64::MAX.saturating_sub(1))
-                .saturating_add(1),
-        )
-        .expect("nonzero block height");
-        let header = BlockHeader::new(next_height, view.latest_block_hash(), None, None, 0, 0);
-        drop(view);
-        let mut block = state.block(header);
-        let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
-        for manifest in manifests {
-            let canonical_manifest = manifest.load_manifest()?;
-            let digest = ManifestDigest::new(*manifest.manifest_digest());
-            let policy = PinPolicy::default();
-            let submitted_epoch = 1;
-            let content_length = canonical_manifest.content_length;
-            let amount = pricing
-                .public_pin_fee(
-                    policy.storage_class,
-                    content_length,
-                    policy.min_replicas,
-                    submitted_epoch,
-                    policy.retention_epoch,
-                )
-                .wrap_err("compute SoraFS fixture pin fee")?;
-            let mut record = PinManifestRecord::new(
-                ManifestDigest::new(*manifest.manifest_digest()),
-                ManifestRootCid::try_from_slice(manifest.manifest_cid())?,
-                ChunkerProfileHandle {
-                    profile_id: 1,
-                    namespace: "sorafs".to_owned(),
-                    name: "sf1".to_owned(),
-                    semver: "1.0.0".to_owned(),
-                    multihash_code: BLAKE3_256_MULTIHASH_CODE,
-                },
-                canonical_manifest.chunk_digest_sha3_256,
-                canonical_manifest.por_root,
-                content_length,
-                policy,
-                (*ALICE_ID).clone(),
-                submitted_epoch,
-                None,
-                None,
-                Metadata::default(),
+        let sources = collect_remote_hydration_sources(&view, state);
+        for fixture in &fixtures {
+            assert!(
+                sources.iter().any(|source| source.manifest_digest_hex
+                    == hex::encode(fixture.manifest_digest.as_bytes())
+                    && source.manifest_cid_hex
+                        == hex::encode(fixture.manifest_root_cid.as_bytes())
+                    && source.provider_ids == vec![fixture.provider_id]),
+                "completed local ingest must produce its exact admitted hydration source"
             );
-            record.record_pin_fee_payment(PinFeePayment {
-                paid_by: (*ALICE_ID).clone(),
-                fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
-                treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
-                amount,
-            });
-            record.approve(submitted_epoch, None);
-            pin_manifests.insert(digest, record);
         }
-        pin_manifests.apply();
-        block.commit_world_overlay_for_testing()?;
         Ok(())
     }
     #[test]
@@ -27961,7 +28059,7 @@ mod tests {
     fn programmatic_manager_rejects_nonproduction_inrou_before_writes() {
         let runtime = iroha_config::parameters::actual::SoracloudRuntime::default();
         let mut config = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
-        let temp_dir = tempfile::tempdir().expect("temporary posture directory");
+        let temp_dir = canonical_runtime_fixture_tempdir().expect("temporary posture directory");
         config.state_dir = temp_dir.path().join("must-not-materialize");
         config.production_mode = false;
         config.inrou.enabled = true;
@@ -27986,7 +28084,7 @@ mod tests {
     }
     #[test]
     fn programmatic_manager_rejects_incomplete_production_posture() {
-        let temp_dir = tempfile::tempdir().expect("temporary posture directory");
+        let temp_dir = canonical_runtime_fixture_tempdir().expect("temporary posture directory");
         let canonical = test_runtime_manager_config(temp_dir.path().to_path_buf());
 
         let mut open_egress = canonical.clone();
@@ -28652,7 +28750,7 @@ mod tests {
     }
     #[test]
     fn disabled_inrou_reconcile_withdraws_existing_local_host_advert() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let mut state = test_state()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let enabled_config = test_runtime_manager_config(state_dir)
@@ -28984,7 +29082,7 @@ mod tests {
             insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
             insert_service_runtime_fixture(world, &bundle, sample_runtime_state(&bundle));
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let stale_dir = temp_dir.path().join("services/stale_service/stale_version");
         fs::create_dir_all(&stale_dir)?;
         fs::write(stale_dir.join("runtime_plan.json"), "{}")?;
@@ -29021,12 +29119,13 @@ mod tests {
         bundle.service.artifacts.clear();
         let bundle_bytes = simple_soracloud_contract_artifact(&["query"]);
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_revision_fixture(world, &bundle);
             insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -29082,7 +29181,7 @@ mod tests {
             selected_guest_isa,
         );
         push_committed_test_block_hash(&mut state, 1)?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -29160,7 +29259,7 @@ mod tests {
             local_peer_id,
             selected_guest_isa,
         );
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -29207,7 +29306,7 @@ mod tests {
             insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
         }
         let local_peer_id = canonical_inrou_test_peer_id();
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(state_dir)
@@ -29238,7 +29337,7 @@ mod tests {
         }
         let local_peer_id = canonical_inrou_test_peer_id();
         insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1]);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = temp_dir.path().join("blocked-runtime-state");
         let config = test_runtime_manager_config(state_dir.clone())
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -29358,7 +29457,9 @@ mod tests {
         let active_bundle_bytes = simple_soracloud_contract_artifact(&["entry_active"]);
         let canary_bundle_bytes = simple_soracloud_contract_artifact(&["entry_canary"]);
         active_bundle.container.bundle_hash = Hash::new(&active_bundle_bytes);
+        active_bundle.service.container.manifest_hash = active_bundle.container_manifest_hash();
         canary_bundle.container.bundle_hash = Hash::new(&canary_bundle_bytes);
+        canary_bundle.service.container.manifest_hash = canary_bundle.container_manifest_hash();
         active_bundle.service.container.manifest_hash = active_bundle.container_manifest_hash();
         canary_bundle.service.container.manifest_hash = canary_bundle.container_manifest_hash();
         active_bundle.validate_for_admission()?;
@@ -29389,7 +29490,7 @@ mod tests {
         let local_peer_id = canonical_inrou_test_peer_id();
         insert_inrou_service_placement_fixture(&mut state, &active_bundle, local_peer_id, [1_u16]);
         insert_inrou_service_placement_fixture(&mut state, &canary_bundle, local_peer_id, [1_u16]);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -29435,7 +29536,7 @@ mod tests {
         }
         let local_peer_id = canonical_inrou_test_peer_id();
         insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1]);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -29611,7 +29712,7 @@ mod tests {
             insert_service_deployment_fixture(world, &retired_bundle, retired_deployment.clone());
             insert_inrou_service_placement_record_fixture(world, &retired_bundle, Vec::new());
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let local_peer_id = canonical_inrou_test_peer_id();
         let config = test_runtime_manager_config(state_dir)
@@ -29827,7 +29928,7 @@ mod tests {
             selected_guest_isa,
         );
         push_committed_test_block_hash(&mut state, 1)?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -30023,7 +30124,7 @@ mod tests {
                 },
             );
 
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let config = test_runtime_manager_config(state_dir)
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -30146,7 +30247,7 @@ mod tests {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_deployment_fixture(world, &bundle, deployment_state.clone());
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
@@ -30364,14 +30465,16 @@ mod tests {
         let active_bundle_bytes = simple_soracloud_contract_artifact(&["entry_active"]);
         let canary_bundle_bytes = simple_soracloud_contract_artifact(&["entry_canary"]);
         active_bundle.container.bundle_hash = Hash::new(&active_bundle_bytes);
+        active_bundle.service.container.manifest_hash = active_bundle.container_manifest_hash();
         canary_bundle.container.bundle_hash = Hash::new(&canary_bundle_bytes);
+        canary_bundle.service.container.manifest_hash = canary_bundle.container_manifest_hash();
         let active_asset_bytes = b"active-asset".to_vec();
         let canary_asset_bytes = b"canary-asset".to_vec();
         active_bundle.service.artifacts[0].artifact_hash = Hash::new(&active_asset_bytes);
         active_bundle.service.artifacts[0].artifact_path = "/public/active.html".to_string();
         canary_bundle.service.artifacts[0].artifact_hash = Hash::new(&canary_asset_bytes);
         canary_bundle.service.artifacts[0].artifact_path = "/public/canary.html".to_string();
-        let mut deployment = sample_deployment_state(&active_bundle);
+        let mut deployment = sample_deployment_state(&canary_bundle);
         deployment.revision_count = 2;
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
@@ -30396,7 +30499,7 @@ mod tests {
             insert_service_deployment_fixture(world, &active_bundle, deployment);
             insert_service_runtime_fixture(world, &active_bundle, runtime);
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -30430,6 +30533,76 @@ mod tests {
                 .expect("asset size fits in u64"),
         )
         .expect("nonzero asset budget");
+        {
+            let view = state.view();
+            let registry = collect_service_revision_registry(&view);
+            let build = |registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>| {
+                build_runtime_snapshot(
+                    &view,
+                    registry,
+                    &config.state_dir,
+                    artifacts_root.clone(),
+                    &config.cache_budgets,
+                    None,
+                    None,
+                    false,
+                )
+            };
+            let snapshot = build(&registry)?;
+            assert_eq!(snapshot.services["web_portal"].len(), 2);
+            assert!(
+                snapshot.services["web_portal"]
+                    .values()
+                    .all(|plan| plan.lease_volumes.is_empty())
+            );
+            let current_key = (
+                "web_portal".to_owned(),
+                canary_bundle.service.service_version.clone(),
+            );
+            let mut missing_current = registry.clone();
+            missing_current.remove(&current_key);
+            assert_report_contains(
+                build(&missing_current).expect_err("missing current authority"),
+                "missing current admitted revision",
+            );
+            let mut substituted_current = registry.clone();
+            substituted_current
+                .get_mut(&current_key)
+                .unwrap()
+                .service
+                .artifacts[0]
+                .artifact_hash = Hash::new(b"substituted-current-artifact");
+            assert_report_contains(
+                build(&substituted_current).expect_err("current manifest binding"),
+                "current_service_manifest_hash",
+            );
+            let mut aliased_baseline = registry.clone();
+            aliased_baseline.insert(
+                (
+                    "web_portal".to_owned(),
+                    active_bundle.service.service_version.clone(),
+                ),
+                canary_bundle.clone(),
+            );
+            assert_report_contains(
+                build(&aliased_baseline).expect_err("valid bundle under another revision key"),
+                "registry key does not match admitted revision identity",
+            );
+            let mut invalid_baseline = registry.clone();
+            invalid_baseline
+                .get_mut(&(
+                    "web_portal".to_owned(),
+                    active_bundle.service.service_version.clone(),
+                ))
+                .unwrap()
+                .service
+                .container
+                .manifest_hash = Hash::new(b"substituted-baseline-container");
+            assert_report_contains(
+                build(&invalid_baseline).expect_err("baseline admission binding"),
+                "service.container.manifest_hash",
+            );
+        }
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
         manager.reconcile_once()?;
         let snapshot = manager.snapshot.read().clone();
@@ -30486,7 +30659,7 @@ mod tests {
     #[test]
     fn reconcile_once_prunes_tied_cache_candidates_by_stable_key() -> Result<()> {
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let journals_root = temp_dir.path().join("journals");
         fs::create_dir_all(&journals_root)?;
         let first_hash = Hash::new(b"journal-alpha");
@@ -30526,13 +30699,13 @@ mod tests {
             insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
             insert_service_runtime_fixture(world, &bundle, sample_runtime_state(&bundle));
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let sorafs_node = test_sorafs_node(&temp_dir);
         let mut committed_manifests = vec![ingest_sorafs_payload(&sorafs_node, &bundle_bytes)?];
         for payload in &artifact_payloads {
             committed_manifests.push(ingest_sorafs_payload(&sorafs_node, payload)?);
         }
-        approve_sorafs_manifests(&state, &committed_manifests)?;
+        approve_sorafs_manifests(&state, &sorafs_node, &committed_manifests)?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
@@ -30607,7 +30780,7 @@ mod tests {
         approve_remote_hydration_sources(&state, &remote_fixtures)?;
         let server = spawn_remote_hydration_fixture(&remote_fixtures)?;
         let provider_cache = test_provider_cache(&server.base_url, provider_id)?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let config = test_runtime_manager_config(temp_dir.path().to_path_buf());
         let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state))
             .with_test_remote_stream_token_operator(*state.network_id_ref())
@@ -30717,7 +30890,7 @@ mod tests {
         approve_remote_hydration_sources(&state, std::slice::from_ref(&remote_fixture))?;
         let server = spawn_remote_hydration_fixture(std::slice::from_ref(&remote_fixture))?;
         let provider_cache = test_provider_cache(&server.base_url, provider_id)?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
         let snapshot = {
@@ -30777,6 +30950,7 @@ mod tests {
         bundle.service.artifacts.clear();
         let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_revision_fixture(world, &bundle);
@@ -30788,7 +30962,7 @@ mod tests {
         approve_remote_hydration_sources(&state, std::slice::from_ref(&remote_fixture))?;
         let server = spawn_remote_hydration_fixture(std::slice::from_ref(&remote_fixture))?;
         let provider_cache = test_provider_cache(&server.base_url, provider_id)?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
@@ -30814,8 +30988,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn reconcile_once_hydrates_hash_matched_local_sorafs_artifacts_without_pin_registry()
-    -> Result<()> {
+    fn reconcile_once_requires_completed_ingest_for_hash_matched_local_artifacts() -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
@@ -30827,17 +31000,38 @@ mod tests {
             insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
             insert_service_runtime_fixture(world, &bundle, sample_runtime_state(&bundle));
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let sorafs_node = test_sorafs_node(&temp_dir);
-        let _bundle_manifest = ingest_sorafs_payload(&sorafs_node, &bundle_bytes)?;
+        let mut committed_manifests = vec![ingest_sorafs_payload(&sorafs_node, &bundle_bytes)?];
         for payload in &artifact_payloads {
-            let _stored = ingest_sorafs_payload(&sorafs_node, payload)?;
+            committed_manifests.push(ingest_sorafs_payload(&sorafs_node, payload)?);
         }
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
         )
-        .with_sorafs_node(sorafs_node);
+        .with_sorafs_node(sorafs_node.clone());
+        manager.reconcile_once()?;
+        {
+            let snapshot = manager.snapshot.read();
+            let plan = &snapshot.services["web_portal"]["2026.02.0"];
+            assert!(!plan.bundle_available_locally);
+            assert!(
+                plan.artifacts
+                    .iter()
+                    .all(|artifact| !artifact.available_locally)
+            );
+            assert!(
+                !temp_dir
+                    .path()
+                    .join("artifacts")
+                    .join(hash_cache_name(bundle.container.bundle_hash))
+                    .exists()
+            );
+        }
+        // Hash-matched local bytes become eligible only after the committed
+        // pin and exact completed ingest authority have both been installed.
+        approve_sorafs_manifests(&state, &sorafs_node, &committed_manifests)?;
         manager.reconcile_once()?;
         let snapshot = manager.snapshot.read().clone();
         let plan = snapshot
@@ -30888,13 +31082,13 @@ mod tests {
             insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
             insert_service_runtime_fixture(world, &bundle, sample_runtime_state(&bundle));
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let sorafs_node = test_sorafs_node(&temp_dir);
         let mut committed_manifests = vec![ingest_sorafs_payload(&sorafs_node, &bundle_bytes)?];
         for payload in &artifact_payloads {
             committed_manifests.push(ingest_sorafs_payload(&sorafs_node, payload)?);
         }
-        approve_sorafs_manifests(&state, &committed_manifests)?;
+        approve_sorafs_manifests(&state, &sorafs_node, &committed_manifests)?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
@@ -30948,7 +31142,7 @@ mod tests {
     #[test]
     fn startup_rejects_invalid_persisted_snapshot_before_returning_handle() -> Result<()> {
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         fs::write(
             temp_dir.path().join("runtime_snapshot.json"),
             b"{not-valid-json",
@@ -30974,7 +31168,7 @@ mod tests {
     }
     #[test]
     fn read_json_optional_treats_only_a_missing_file_as_absent() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let path = temp_dir.path().join("runtime_snapshot.json");
         let absent = read_json_optional::<SoracloudRuntimeSnapshot>(
             &path,
@@ -31000,7 +31194,7 @@ mod tests {
     #[test]
     fn restore_persisted_snapshot_rejects_non_v1_schema() -> Result<()> {
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let mut persisted = SoracloudRuntimeSnapshot::default();
         persisted.schema_version = SORACLOUD_RUNTIME_SNAPSHOT_VERSION_V1 + 1;
         write_json_atomic_bounded(
@@ -31058,7 +31252,7 @@ mod tests {
     #[test]
     fn production_startup_rejects_missing_or_unqualified_mutation_sink() -> Result<()> {
         let state = test_state()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
         config.production_mode = true;
         config.inrou.enabled = false;
@@ -31094,7 +31288,7 @@ mod tests {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let expected_snapshot = SoracloudRuntimeSnapshot {
             schema_version: SoracloudRuntimeSnapshot::default().schema_version,
             observed_height: 77,
@@ -31188,7 +31382,7 @@ mod tests {
             .expect_err("startup must fail without the admitted revision bundle");
         let error_detail = format!("{error:#}");
         assert!(
-            error_detail.contains("references missing admitted revision"),
+            error_detail.contains("references missing current admitted revision"),
             "unexpected reconcile error: {error:?}"
         );
         assert_eq!(manager.snapshot.read().clone(), expected_snapshot);
@@ -31201,10 +31395,11 @@ mod tests {
         let bundle_bytes = b"ivm bundle bytes".to_vec();
         let asset_bytes = b"<html><body>portal</body></html>".to_vec();
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         bundle.service.artifacts[0].artifact_hash = Hash::new(&asset_bytes);
         let deployment = sample_deployment_state(&bundle);
         let runtime = sample_runtime_state(&bundle);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -31268,6 +31463,7 @@ mod tests {
         let bundle_bytes = b"ivm bundle bytes".to_vec();
         let asset_bytes = b"<html><body>portal</body></html>".to_vec();
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         bundle.service.artifacts[0].artifact_hash = Hash::new(&asset_bytes);
         bundle
             .service
@@ -31277,7 +31473,7 @@ mod tests {
             .visibility = iroha_data_model::soracloud::SoraRouteVisibilityV1::Internal;
         let deployment = sample_deployment_state(&bundle);
         let runtime = sample_runtime_state(&bundle);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -31333,9 +31529,10 @@ mod tests {
         let query_body = make_pointer_tlv(PointerType::Json, &norito::to_bytes(&query_json)?);
         let bundle_bytes = simple_soracloud_contract_artifact(&[query_entrypoint.as_str()]);
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let deployment = sample_deployment_state(&bundle);
         let runtime = sample_runtime_state(&bundle);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -31446,9 +31643,10 @@ mod tests {
             &[copy_metadata_to_r10, ivm::encoding::wide::encode_halt()],
         );
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let deployment = sample_deployment_state(&bundle);
         let runtime = sample_runtime_state(&bundle);
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -31519,7 +31717,7 @@ mod tests {
     fn execute_ordered_mailbox_requires_matching_authoritative_runtime_state() -> Result<()> {
         let state = test_state()?;
         let bundle = load_deployment_bundle_fixture()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
@@ -31559,7 +31757,8 @@ mod tests {
         let artifact_bytes =
             simple_soracloud_contract_artifact(&["apply_update", "apply_ciphertext_update"]);
         bundle.container.bundle_hash = Hash::new(&artifact_bytes);
-        let temp_dir = tempfile::tempdir()?;
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -31637,9 +31836,17 @@ mod tests {
     fn failed_ordered_mailbox_execution_returns_the_warmed_runtime() -> Result<()> {
         let state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
-        let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
+        let artifact_bytes = soracloud_contract_artifact_with_words(
+            &["apply_update"],
+            &[
+                // A valid V1 instruction must load successfully before trapping.
+                ivm::encoding::wide::encode_rr(ivm::instruction::wide::arithmetic::DIVU, 3, 0, 0),
+                ivm::encoding::wide::encode_halt(),
+            ],
+        );
         bundle.container.bundle_hash = Hash::new(&artifact_bytes);
-        let temp_dir = tempfile::tempdir()?;
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let artifacts_root = temp_dir.path().join("artifacts");
         fs::create_dir_all(&artifacts_root)?;
         fs::write(
@@ -31651,11 +31858,11 @@ mod tests {
             Arc::clone(&state),
         );
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
-        let oversized_payload = vec![0xA5; Memory::INPUT_SIZE as usize];
+        let payload = vec![0xA5; 16];
         let request = sample_ordered_mailbox_request(
             &bundle,
             "update",
-            sample_mailbox_message(&bundle, "update", oversized_payload),
+            sample_mailbox_message(&bundle, "update", payload),
         );
         for expected_reuses in [0, 1] {
             let result = handle
@@ -31686,7 +31893,7 @@ mod tests {
     fn ivm_host_public_runtime_reads_authoritative_service_config_entry() -> Result<()> {
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(Vec::new());
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let value_json = Json::from(norito::json!({
             "featureFlag": true,
             "theme": "dawn"
@@ -31876,7 +32083,7 @@ mod tests {
     fn ivm_host_public_runtime_reads_authoritative_service_secret_envelope() -> Result<()> {
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(Vec::new());
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let envelope = SecretEnvelopeV1 {
             schema_version: SECRET_ENVELOPE_VERSION_V1,
             encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
@@ -31913,7 +32120,7 @@ mod tests {
     #[test]
     fn ivm_host_query_runtime_tracks_committed_state_read_bindings() -> Result<()> {
         let bundle = load_deployment_bundle_fixture()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let query_request = sample_ordered_mailbox_request(
             &bundle,
             "query",
@@ -31983,7 +32190,7 @@ mod tests {
     #[test]
     fn ivm_host_out_of_gas_does_not_query_or_allocate_public_input() -> Result<()> {
         let bundle = load_deployment_bundle_fixture()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let request = sample_ordered_mailbox_request(
             &bundle,
             "query",
@@ -32010,7 +32217,7 @@ mod tests {
     #[test]
     fn ivm_host_out_of_gas_does_not_query_state_or_materialize_side_effects() -> Result<()> {
         let bundle = load_deployment_bundle_fixture()?;
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let request = sample_ordered_mailbox_request(
             &bundle,
             "update",
@@ -32624,11 +32831,16 @@ mod tests {
         let temp_dir = tempfile::Builder::new()
             .prefix(".soracloud-relative-state-")
             .tempdir_in(".")?;
+        let relative_root = Path::new(".").join(temp_dir.path().file_name().expect("fixture name"));
         assert!(
-            !temp_dir.path().is_absolute(),
+            !relative_root.is_absolute(),
             "fixture must exercise a relative state root"
         );
-        let state_dir = temp_dir.path().join("runtime");
+        assert_eq!(
+            fs::canonicalize(&relative_root)?,
+            fs::canonicalize(temp_dir.path())?
+        );
+        let state_dir = relative_root.join("runtime");
         fs::create_dir(&state_dir)?;
 
         let checkpoint_dir = prepare_inrou_egress_checkpoint_dir(
@@ -32648,7 +32860,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn durable_inrou_egress_checkpoint_recovers_precharge_and_rejects_deletion() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let durable = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
@@ -32728,7 +32940,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn durable_inrou_egress_checkpoint_separates_leases_epochs_and_placements() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let first = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
@@ -32804,7 +33016,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn durable_inrou_egress_persistence_failure_exposes_no_response_bytes() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let durable = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
@@ -32855,7 +33067,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn durable_inrou_egress_checkpoint_rejects_rollback_and_corruption() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let durable = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
@@ -32914,7 +33126,7 @@ mod tests {
     fn durable_inrou_egress_checkpoint_rejects_symlinked_state_ancestor() -> Result<()> {
         use std::os::unix::fs::symlink;
 
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let redirected = state_dir.join("redirected");
         fs::create_dir(&redirected)?;
@@ -32966,7 +33178,7 @@ mod tests {
             insert_service_revision_fixture(world, &bundle);
             insert_service_deployment_fixture(world, &bundle, deployment);
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(canonical_test_runtime_state_dir(&temp_dir)?),
             Arc::clone(&state),
@@ -33030,7 +33242,7 @@ mod tests {
             insert_service_deployment_fixture(world, &bundle, deployment);
         }
 
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let retired = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
@@ -33093,7 +33305,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn durable_inrou_egress_gc_retains_current_and_ahead_reporters() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let checkpoint_dir = prepare_inrou_egress_checkpoint_dir(
             &state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR),
@@ -33156,7 +33368,7 @@ mod tests {
         let local_peer_id = canonical_inrou_test_peer_id();
         insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1]);
 
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let current = InrouDurableEgressCheckpoint::load_or_create(
             &state_dir,
@@ -33221,7 +33433,7 @@ mod tests {
     fn durable_inrou_egress_gc_rejects_unexpected_symlink_and_oversized_scans() -> Result<()> {
         use std::os::unix::fs::symlink;
 
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let state_dir = canonical_test_runtime_state_dir(&temp_dir)?;
         let checkpoint_dir = prepare_inrou_egress_checkpoint_dir(
             &state_dir.join(SORACLOUD_INROU_EGRESS_CHECKPOINT_DIR),
@@ -33703,7 +33915,7 @@ mod tests {
         if std::env::var_os("HOME").is_none() {
             return Ok(());
         }
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let helper = temp_dir.path().join("inrou-sanitized-command");
         fs::write(
             &helper,
@@ -33815,7 +34027,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn startup_owner_lock_remains_exclusive_through_transfer_and_binds_the_slot() -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = canonical_runtime_fixture_tempdir()?;
         for slot in 0..4 {
             let path = directory.path().join(format!("slot-{slot}.lock"));
             let file = fs::OpenOptions::new()
@@ -34374,7 +34586,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn inrou_host_command_runner_enforces_deadline() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let helper = temp_dir.path().join("inrou-never-finishes");
         fs::write(&helper, "#!/bin/sh\nwhile :; do :; done\n")?;
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))?;
@@ -34387,7 +34599,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn inrou_host_command_capture_caps_output_and_enforces_deadline() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let oversized = temp_dir.path().join("inrou-oversized-output");
         fs::write(
             &oversized,
@@ -34415,7 +34627,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_runtime_log_drain_caps_output_and_marks_truncation() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let directory = secure_test_inrou_disk_directory(&temp_dir)?;
         let log_path = temp_dir.path().join("bounded.log");
         let log = open_inrou_runtime_log(&directory, OsStr::new("bounded.log"), "test Inrou log")?;
@@ -34431,7 +34643,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_runtime_logs_reject_links_and_unsafe_permissions() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let directory = secure_test_inrou_disk_directory(&temp_dir)?;
         let target = temp_dir.path().join("target.log");
         fs::write(&target, b"retain-me")?;
@@ -34458,7 +34670,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_disk_install_never_replaces_existing_state() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let directory = secure_test_inrou_disk_directory(&temp_dir)?;
         let installed = temp_dir.path().join("installed.raw");
         fs::write(&installed, b"old!")?;
@@ -34518,7 +34730,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_bundle_member_resolution_rejects_symbolic_link_escape() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let bundle_root = temp_dir.path().join("bundle");
         let outside = temp_dir.path().join("outside");
         fs::create_dir_all(&bundle_root)?;
@@ -35115,7 +35327,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn reusable_inrou_disks_reject_links_and_unsafe_permissions() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let disk = temp_dir.path().join("disk.raw");
         fs::write(&disk, b"disk")?;
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o600))?;
@@ -35160,7 +35372,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn delegated_inrou_disk_validation_pins_the_predelegation_inode() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let original = temp_dir.path().join("original.raw");
         let substitute = temp_dir.path().join("substitute.raw");
         fs::write(&original, b"disk")?;
@@ -35189,7 +35401,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn reclaimed_inrou_disk_skips_only_its_exact_custody_descriptor() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let disk = fs::File::create(temp_dir.path().join("disk.raw"))?;
         let metadata = disk.metadata()?;
         let pid = std::process::id();
@@ -35232,7 +35444,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_disk_directory_rejects_replaceable_or_linked_custody() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let temp_root = canonical_test_runtime_state_dir(&temp_dir)?;
         let secure = temp_root.join("secure-volume");
         assert_eq!(
@@ -35271,7 +35483,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_disk_directory_rejects_component_swap_while_opening() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let temp_root = canonical_test_runtime_state_dir(&temp_dir)?;
         let target = temp_root.join("swap-target");
         let displaced = temp_root.join("swap-target-displaced");
@@ -35297,7 +35509,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_disk_directory_tolerates_unrelated_child_creation_while_opening() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let temp_root = canonical_test_runtime_state_dir(&temp_dir)?;
         let target = temp_root.join("stable-target");
         let unrelated = temp_root.join("unrelated-child");
@@ -35319,7 +35531,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_disk_mutations_remain_on_pinned_directory_after_path_replacement() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let temp_root = canonical_test_runtime_state_dir(&temp_dir)?;
         let target = temp_root.join("pinned-target");
         let displaced = temp_root.join("pinned-target-displaced");
@@ -35337,7 +35549,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn inrou_disk_staging_cleanup_refuses_replaced_name() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let directory = secure_test_inrou_disk_directory(&temp_dir)?;
         let mut staging = create_unique_inrou_disk_staging_file(&directory, "lease.raw")?;
         staging.file.write_all(b"owned")?;
@@ -35766,7 +35978,7 @@ mod tests {
     }
     #[test]
     fn portable_smoke_operator_preseed_artifact_is_authenticated_and_isa_scoped() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let kernel_image = temp_dir.path().join("vmlinux");
         let rootfs_image = temp_dir.path().join("rootfs.ext4");
         let initrd_image = temp_dir.path().join("initrd.img");
@@ -35822,7 +36034,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn portable_smoke_application_bundle_excludes_guest_artifacts() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let parent = secure_test_inrou_disk_directory(&temp_dir)?;
         let archive = create_inrou_application_bundle_archive_for_linux_test()?;
         let cache_path = temp_dir.path().join("application-bundle.tgz");
@@ -35884,7 +36096,7 @@ printf 'booted\n' >/var/lib/soracloud/volumes/index_state/boot-marker
 exec python3 /var/lib/soracloud/materialization/bundle/app/inrou-health.py
 "
         .to_owned();
-        let temp_dir = tempfile::tempdir()?;
+        let temp_dir = canonical_runtime_fixture_tempdir()?;
         let selected_guest_isa =
             current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
         let (operator_preseed_store, published_artifact) =
@@ -35900,6 +36112,7 @@ exec python3 /var/lib/soracloud/materialization/bundle/app/inrou-health.py
         bundle.container.args = vec!["-lc".to_owned(), python_http_server];
         bundle.container.bundle_path = "/bundles/inrou-portable-smoke.tgz".to_owned();
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let inrou = bundle.container.inrou.as_mut().expect("inrou manifest");
         inrou
             .guest_images

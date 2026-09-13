@@ -9,6 +9,14 @@ fn accept_deadline_test_stream(listener: &BrokerTestListener) -> BrokerTestStrea
             .expect("test peer must connect before its guard expires");
         match listener.accept() {
             Ok((stream, _)) => {
+                // macOS inherits O_NONBLOCK from the accept listener; these
+                // synchronous fixture reads require blocking accepted streams.
+                stream.set_nonblocking(false).unwrap();
+                assert!(
+                    !rustix::fs::fcntl_getfl(&*stream)
+                        .unwrap()
+                        .contains(rustix::fs::OFlags::NONBLOCK)
+                );
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();

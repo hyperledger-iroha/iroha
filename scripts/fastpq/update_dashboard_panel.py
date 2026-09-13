@@ -8,14 +8,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-OP_LABELS = {
-    "fft": "FFT",
-    "ifft": "IFFT",
-    "lde": "LDE",
-    "poseidon_hash_columns": "Poseidon columns",
-    "poseidon_merkle_pairs": "Poseidon Merkle pairs",
-    "bn254_poseidon_words": "BN254 Poseidon words",
-}
+try:
+    from .benchmark_operations import operation_label, require_filter
+    from .report_projection import project_bundle, render_evidence
+except ImportError:  # Direct script invocation.
+    from benchmark_operations import operation_label, require_filter
+    from report_projection import project_bundle, render_evidence
+
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,7 +46,7 @@ def format_float(value: float | None) -> str:
 
 
 def format_operation_entry(entry: dict[str, Any]) -> str:
-    name = OP_LABELS.get(entry.get("operation"), entry.get("operation", "unknown"))
+    name = operation_label(entry.get("operation"))
     cpu = format_float(entry.get("cpu_mean_ms"))
     gpu = format_float(entry.get("gpu_mean_ms"))
     ratio = entry.get("speedup_ratio")
@@ -65,24 +64,8 @@ def summarize_operations(entries: Sequence[dict[str, Any]] | None) -> str:
 def format_operation_filter(benchmarks: dict[str, Any] | None) -> str | None:
     if not benchmarks:
         return None
-    raw = benchmarks.get("operation_filter")
-    if isinstance(raw, str) and raw.strip():
-        return raw
-    operations = benchmarks.get("operations")
-    if not isinstance(operations, list):
-        return None
-    names = sorted(
-        {
-            entry.get("operation")
-            for entry in operations
-            if isinstance(entry, dict) and isinstance(entry.get("operation"), str)
-        }
-    )
-    if len(names) == 1:
-        return names[0]
-    if names:
-        return "all"
-    return None
+    return require_filter(benchmarks.get("operation_filter"))
+
 
 
 def summarize_device(labels: dict[str, Any] | None) -> str | None:
@@ -152,38 +135,6 @@ def summarize_column_staging(entry: dict[str, Any] | None) -> str | None:
     )
 
 
-def summarize_poseidon_microbench(entry: dict[str, Any] | None) -> str | None:
-    if not entry:
-        return None
-
-    def sample_string(name: str, sample: dict[str, Any]) -> str:
-        mean_ms = sample.get("mean_ms")
-        columns = sample.get("columns")
-        trace_log = sample.get("trace_log2")
-        tuning = sample.get("tuning") or {}
-        lanes = tuning.get("threadgroup_lanes")
-        batch = tuning.get("states_per_lane")
-        parts = [f"{name} {mean_ms:.3f} ms" if mean_ms is not None else f"{name} n/a"]
-        if columns and trace_log:
-            parts.append(f"{columns} cols @ 2^{trace_log}")
-        if lanes and batch:
-            parts.append(f"{lanes} lanes x {batch}")
-        return " (" .join(parts).replace(" (", " (") if len(parts) > 1 else parts[0]
-
-    default = entry.get("default")
-    scalar = entry.get("scalar_lane")
-    if not isinstance(default, dict) or not isinstance(scalar, dict):
-        return None
-    speedup = entry.get("speedup_vs_scalar")
-    pieces = [
-        sample_string("default", default),
-        sample_string("scalar", scalar),
-    ]
-    if isinstance(speedup, (int, float)):
-        pieces.append(f"speedup x{speedup:.3f}")
-    return "Poseidon microbench: " + "; ".join(pieces)
-
-
 def summarize_regeneration_hint(backend: Any, operation_filter: str | None) -> str:
     focused = (
         f" Reuse `--operation {operation_filter}` for focused reruns."
@@ -217,8 +168,9 @@ def relative_bundle_path(bundle_path: Path) -> str:
 
 
 def build_markdown(bundle_path: Path, bundle: dict[str, Any]) -> str:
+    evidence = project_bundle(bundle, require_wrapped=True)
     metadata = bundle.get("metadata", {})
-    benchmarks = bundle.get("benchmarks", {})
+    benchmarks = bundle["benchmarks"]
     generated_at = metadata.get("generated_at", "")
     date = generated_at.split("T")[0] if isinstance(generated_at, str) and "T" in generated_at else generated_at
     lines: list[str] = [f"### Operator Benchmark ({date})", ""]
@@ -230,7 +182,7 @@ def build_markdown(bundle_path: Path, bundle: dict[str, Any]) -> str:
     rows = benchmarks.get("rows")
     padded = benchmarks.get("padded_rows")
     iterations = benchmarks.get("iterations")
-    backend = benchmarks.get("gpu_backend") or bundle.get("report", {}).get("gpu_backend")
+    backend = benchmarks["gpu_backend"]
     row_desc = (
         f"**{rows:,}** (padded **{padded:,}**), iterations **{iterations}**, backend `{backend or 'n/a'}`"
         if rows and padded and iterations
@@ -254,11 +206,9 @@ def build_markdown(bundle_path: Path, bundle: dict[str, Any]) -> str:
     staging_summary = summarize_column_staging(benchmarks.get("column_staging"))
     if staging_summary:
         lines.append(f"- {staging_summary}")
-    poseidon_micro = summarize_poseidon_microbench(benchmarks.get("poseidon_microbench"))
-    if poseidon_micro:
-        lines.append(f"- {poseidon_micro}")
+    lines.extend(["", "Measured operation evidence:", "", render_evidence(evidence)])
     lines.append(summarize_regeneration_hint(backend, operation_filter))
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def update_dashboard(path: Path, panel_title: str, markdown: str) -> None:

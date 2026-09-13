@@ -75,12 +75,13 @@ on:
       - "scripts/tests/ton_sccp_builder_test.py"
       - "docs/source/sccp_ton_release_builder.md"
       - "scripts/contract_artifact_corridor.py"
-      - "scripts/contract_soljson_runner.js"
+      - "scripts/contract_native_solc.js"
       - "scripts/contract_tvm_runner.sh"
       - "scripts/contract_tvm_receipts.mjs"
       - "scripts/contract_tvm_smoke.mjs"
       - "scripts/contract_tooling/**"
       - "scripts/tests/contract_artifact_corridor_test.py"
+      - "scripts/tests/contract_edr_provider_test.cjs"
       - "scripts/tests/contract_tvm_receipts_test.mjs"
       - "scripts/sccp_release_readiness_report.py"
       - "scripts/sccp_*"
@@ -414,8 +415,7 @@ jobs:
         run: |
           python3 scripts/contract_artifact_corridor.py build \
             --repo-root . \
-            --output-dir "$RUNNER_TEMP/sccp-contract-artifacts" \
-            --node node
+            --output-dir "$RUNNER_TEMP/sccp-contract-artifacts"
       - name: Authenticated EVM and TVM compiler artifact corridor
         env:
           SCCP_CONTRACT_ARTIFACT_DIR: ${{ runner.temp }}/sccp-contract-artifacts

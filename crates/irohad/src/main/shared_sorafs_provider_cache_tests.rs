@@ -1,44 +1,24 @@
 #[cfg(test)]
 mod shared_sorafs_provider_cache_tests {
+    use super::*;
+    use iroha_config::parameters::actual::SorafsAdmission;
+    use iroha_config_base::toml::TomlSource;
+    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
+    use iroha_torii::sorafs::{ReplayCheckpointError, discovery::AdvertError};
+    use sorafs_manifest::{ProviderAdmissionCouncilPolicyError, ProviderAdvertV1};
     use std::{
         fs,
         num::NonZeroUsize,
         path::{Path, PathBuf},
     };
-    use iroha_config::{
-        base::read::ConfigReader,
-        parameters::{actual::SorafsAdmission, user::Root as UserConfig},
-    };
-    use iroha_config_base::toml::TomlSource;
-    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
-    use iroha_torii::sorafs::{ReplayCheckpointError, discovery::AdvertError};
-    use sorafs_manifest::{ProviderAdmissionCouncilPolicyError, ProviderAdvertV1};
     use tempfile::TempDir;
-    use super::*;
     fn base_config() -> Config {
-        let table = toml::toml! {
-            chain = "00000000-0000-0000-0000-000000000000"
-            public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-            private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-            [network]
-            address = "addr:127.0.0.1:1337#8F78"
-            public_address = "addr:127.0.0.1:1337#8F78"
-            [torii]
-            address = "addr:127.0.0.1:8080#8942"
-            [genesis]
-            public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-            expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            [streaming]
-            identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-            identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-        };
-        ConfigReader::new()
-            .with_toml_source(TomlSource::inline(table))
-            .read_and_complete::<UserConfig>()
-            .expect("shared provider-cache test config must be readable")
-            .parse()
-            .expect("shared provider-cache test config must parse")
+        Config::from_toml_source(TomlSource::inline(
+            crate::config_tests::minimal_config_table(),
+        ))
+        .expect("shared provider-cache test config must parse")
     }
+
     fn ed25519_public_key(seed: u8) -> PublicKey {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("fixture Ed25519 seed must be valid");
@@ -141,7 +121,15 @@ mod shared_sorafs_provider_cache_tests {
         config.torii.sorafs_discovery.known_capabilities =
             vec!["torii".to_owned(), "torii_gateway".to_owned()];
         let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("duplicate capability aliases must fail closed");
+            .expect_err("retired capability aliases must fail closed");
+        assert!(matches!(
+            error,
+            SharedSoraFsProviderCacheError::UnknownCapability(name) if name == "torii"
+        ));
+        config.torii.sorafs_discovery.known_capabilities =
+            vec!["torii_gateway".to_owned(), "torii_gateway".to_owned()];
+        let error = build_shared_sorafs_provider_cache(&config)
+            .expect_err("duplicate canonical capabilities must fail closed");
         assert!(matches!(
             error,
             SharedSoraFsProviderCacheError::DuplicateCapability(name)

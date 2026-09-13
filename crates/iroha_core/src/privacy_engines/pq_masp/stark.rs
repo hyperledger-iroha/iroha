@@ -727,7 +727,7 @@ pub(super) fn compile_pq_masp_prover_columns_v1(
 ///
 /// The witness is compiled and checked by the native interpreter before the shared proof driver
 /// sees any columns. The proof driver then checks the same relation algebraically on the native and
-/// extension domains and self-verifies the encoded proof before returning it.
+/// extension domains. This relation adapter independently verifies its opaque candidate before returning bytes.
 pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
     statement: &PqMaspStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
@@ -737,10 +737,17 @@ pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
 ) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
     let base_columns = compile_pq_masp_prover_columns_v1(statement, witness)?;
     prove_proof_managed_note_stark_v1_with_rng(
+        fastpq_prover::DigestExecutionV1::Cpu,
+        fastpq_prover::DigestExecutionV1::Cpu,
         &PqMaspStarkAdapterV1::new(statement, consensus_binding, consensus_limits),
         &base_columns,
         rng,
-    )
+    )?
+    .verify_into_bytes_v1(&PqMaspStarkAdapterV1::new(
+        statement,
+        consensus_binding,
+        consensus_limits,
+    ))
 }
 /// Verify the exact PQ-MASP proof against the statement and consensus binding.
 pub(crate) fn verify_pq_masp_stark_v1(

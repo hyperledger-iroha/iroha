@@ -27,7 +27,7 @@ use iroha_data_model::{
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, FundFxCorridorEscrow, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy,
-            SettleFxCorridor, SettlementInstructionBox,
+            SettleAtomic, SettleFxCorridor, SettlementInstructionBox,
         },
     },
     prelude::*,
@@ -3648,6 +3648,15 @@ fn native_fee_asset_movement_wire_id(
         .downcast_ref::<SettlementInstructionBox>()
     {
         match settlement {
+            SettlementInstructionBox::Atomic(isi)
+                if isi
+                    .movements
+                    .as_slice()
+                    .iter()
+                    .any(|movement| movement.source.definition() == fee_asset_definition_id) =>
+            {
+                return Some(SettleAtomic::WIRE_ID);
+            }
             SettlementInstructionBox::Dvp(isi)
                 if isi.delivery_leg.asset_definition_id() == fee_asset_definition_id
                     || isi.payment_leg.asset_definition_id() == fee_asset_definition_id =>
@@ -3676,13 +3685,23 @@ fn native_fee_asset_movement_wire_id(
             {
                 return Some(RefundFxCorridorEscrow::WIRE_ID);
             }
-            SettlementInstructionBox::Dvp(_)
+            SettlementInstructionBox::Atomic(_)
+            | SettlementInstructionBox::Dvp(_)
             | SettlementInstructionBox::Pvp(_)
             | SettlementInstructionBox::SetFxCorridorPolicy(_)
             | SettlementInstructionBox::FundFxCorridorEscrow(_)
             | SettlementInstructionBox::RefundFxCorridorEscrow(_)
             | SettlementInstructionBox::SettleFxCorridor(_) => {}
         }
+    }
+    if let Some(isi) = instruction.as_any().downcast_ref::<SettleAtomic>()
+        && isi
+            .movements
+            .as_slice()
+            .iter()
+            .any(|movement| movement.source.definition() == fee_asset_definition_id)
+    {
+        return Some(SettleAtomic::WIRE_ID);
     }
     if let Some(isi) = instruction.as_any().downcast_ref::<DvpIsi>()
         && (isi.delivery_leg.asset_definition_id() == fee_asset_definition_id
@@ -3884,6 +3903,7 @@ fn native_instruction_ds_effect_disposition(
         RepoIsi,
         iroha_data_model::isi::repo::RepoMarginCallIsi,
         SettlementInstructionBox,
+        SettleAtomic,
         DvpIsi,
         PvpIsi,
         SetFxCorridorPolicy,
@@ -4341,3 +4361,7 @@ pub(crate) mod tests {
     include!("validation_fee/runtime_tests.rs");
     include!("validation_fee/multisig_batch_tests.rs");
 }
+
+#[cfg(test)]
+#[path = "validation_fee_atomic_tests.rs"]
+mod atomic_settlement_fee_tests;

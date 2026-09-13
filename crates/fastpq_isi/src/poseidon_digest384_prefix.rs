@@ -146,6 +146,28 @@ impl<'a> GoldilocksDigest384DomainPrefixV1<'a> {
         GoldilocksDigest384V1::new(words)
     }
 
+    /// Hash ordered fields with explicit full-width index and challenge counter.
+    ///
+    /// Both integers occur after the cached prefix through tag 7. Rebinding
+    /// these suffix fields preserves the canonical byte framing and all six
+    /// independent lanes. The immutable prefix is never advanced or modified.
+    #[must_use]
+    pub fn hash_at_with_counter(
+        &self,
+        index: u64,
+        counter: u64,
+        fields: &[&[u8]],
+    ) -> Option<GoldilocksDigest384V1> {
+        Self {
+            domain: GoldilocksDigestDomainV1 {
+                counter,
+                ..self.domain
+            },
+            ..*self
+        }
+        .hash_at(index, fields)
+    }
+
     /// Construct the unchanged canonical final-field stream at the selected index.
     ///
     /// This less frequent API replays the borrowed domain through the canonical
@@ -958,6 +980,46 @@ mod tests {
                 hash_bytes_384_v1(original, &[b"original"])
             );
             assert_eq!(prefix, unchanged);
+        }
+    }
+
+    #[test]
+    fn counter_override_matches_one_shot_for_full_width_suffixes_and_alignment() {
+        for length in [0, 1, 6, 7, 8, 13, 14, 15] {
+            let role = bytes(length, 63);
+            let original = GoldilocksDigestDomainV1 {
+                role: &role,
+                level: u64::MAX,
+                counter: 42,
+                ..domain()
+            };
+            let prefix = GoldilocksDigest384DomainPrefixV1::new(original).unwrap();
+            let unchanged = prefix;
+            for index in [0, FIELD_MODULUS, u64::MAX] {
+                for counter in [0, 1, FIELD_MODULUS - 1, FIELD_MODULUS, u64::MAX] {
+                    for fields in [
+                        Vec::<&[u8]>::new(),
+                        vec![b"".as_slice()],
+                        vec![b"1234567".as_slice(), b"state and challenge".as_slice()],
+                    ] {
+                        let selected = GoldilocksDigestDomainV1 {
+                            index,
+                            counter,
+                            ..original
+                        };
+                        assert_eq!(
+                            prefix.hash_at_with_counter(index, counter, &fields),
+                            hash_bytes_384_v1(selected, &fields),
+                            "role length {length}, index {index}, counter {counter}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(prefix, unchanged);
+            assert_eq!(
+                prefix.hash(&[b"original"]),
+                hash_bytes_384_v1(original, &[b"original"])
+            );
         }
     }
 

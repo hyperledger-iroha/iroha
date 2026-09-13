@@ -38,10 +38,7 @@ use iroha::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
             },
             register::RegisterCommitteePeerWithPop,
-            settlement::{
-                DvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
-                SettlementPlan,
-            },
+            settlement::SettleAtomic,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         nexus::{
@@ -78,6 +75,11 @@ use iroha::{
             TransactionEntrypoint,
         },
     },
+};
+use iroha_core::privacy_engines::atomic_private_settlement::AtomicPrivateSettlementProverOptionsV1;
+#[cfg(feature = "atomic-private-settlement-metal-smoke")]
+use iroha_core::privacy_engines::atomic_private_settlement::{
+    Digest384GpuBackendV1, DigestExecutionV1,
 };
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
@@ -155,8 +157,6 @@ const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const NEXUS_FEE_SEED_BALANCE: u64 = 10_000;
 const NEXUS_FEE_SIGNED_MAXIMUM: u64 = 1;
 const NEXUS_FEE_PER_PRIVATE_SETTLEMENT_CARRIER: &str = "0.001";
-const TRANSPARENT_CONTROL_SEED_BALANCE: u64 = 10_000;
-const TRANSPARENT_CONTROL_OUTPUT_BASELINE: u64 = 1;
 const TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const FINALITY_TIMEOUT: Duration = Duration::from_secs(300);
@@ -298,7 +298,17 @@ struct PreparedLeg {
 struct PrivateSettlementFunding {
     opening: PrivateSettlementAuditNoteOpeningV1,
     spending_secret: [u8; 32],
-    initial_commitments: [PrivacyCommitmentV1; 2],
+    // Preserve the positive input in slot zero and the unspent reserve in slot
+    // one. The native bootstrap planner maps these slots into the sorted tree.
+    input_commitments: [PrivacyCommitmentV1; 2],
+}
+
+impl PrivateSettlementFunding {
+    fn activation_commitments(&self) -> [PrivacyCommitmentV1; 2] {
+        let mut commitments = self.input_commitments;
+        commitments.sort_unstable();
+        commitments
+    }
 }
 
 #[derive(Clone)]
@@ -402,44 +412,6 @@ fn cbdc_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
     )
 }
 
-fn transparent_control_domain_id(ordinal: usize) -> DomainId {
-    DomainId::try_new(
-        format!("control{}", ordinal + 1),
-        participant_dataspace_alias(ordinal),
-    )
-    .expect("transparent-control domain")
-}
-
-fn transparent_control_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        transparent_control_domain_id(ordinal),
-        format!("controlcbdc{}", ordinal + 1)
-            .parse()
-            .expect("transparent-control CBDC asset name"),
-    )
-}
-
-fn transparent_control_keypair(ordinal: usize) -> KeyPair {
-    let mut seed = vec![0_u8; 32];
-    seed[0] = 0xD7;
-    seed[1..9].copy_from_slice(&u64::try_from(ordinal).unwrap_or(u64::MAX).to_le_bytes());
-    KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("transparent-control account key")
-}
-
-fn transparent_control_account_id(ordinal: usize) -> AccountId {
-    AccountId::new(transparent_control_keypair(ordinal).public_key().clone())
-}
-
-fn transparent_control_asset_id(asset_ordinal: usize, owner_ordinal: usize) -> AssetId {
-    AssetId::with_scope(
-        transparent_control_asset_definition_id(asset_ordinal),
-        transparent_control_account_id(owner_ordinal),
-        AssetBalanceScope::Dataspace(DataSpaceId::new(
-            u64::try_from(asset_ordinal + 1).expect("control dataspace fits u64"),
-        )),
-    )
-}
-
 fn genesis_post_topology(
     shape: TopologyShape,
     topology: &[PeerId],
@@ -538,76 +510,6 @@ fn genesis_post_topology(
     universal
         .push(RegisterPrivacyProtocolActivationV1::new(genesis_private_note_activation()).into());
     let mut transactions = vec![universal];
-    for ordinal in 0..shape.participants {
-        let control_domain = transparent_control_domain_id(ordinal);
-        transactions.push(vec![
-            Register::domain(Domain::new(control_domain.clone())).into(),
-            Register::asset_definition(AssetDefinition::numeric(
-                transparent_control_asset_definition_id(ordinal),
-                format!("Transparent control CBDC {}", ordinal + 1),
-                AssetBalancePolicy::DataspaceRestricted,
-                Some(control_domain),
-            ))
-            .into(),
-            Register::account(Account::new(transparent_control_account_id(ordinal))).into(),
-        ]);
-    }
-    // Nexus fees are globally scoped even when the business instruction is
-    // routed to a restricted dataspace. Fund every authority that signs a
-    // transparent control transaction in one universal transaction after the
-    // corresponding accounts have been registered.
-    transactions.push(
-        (0..shape.participants)
-            .map(|ordinal| {
-                Mint::asset_quantity(
-                    NEXUS_FEE_SEED_BALANCE,
-                    AssetId::new(
-                        nexus_fee_asset_definition_id(),
-                        transparent_control_account_id(ordinal),
-                    ),
-                )
-                .into()
-            })
-            .collect(),
-    );
-    // Keep each restricted balance mutation in its authoritative dataspace.
-    for asset_ordinal in 0..shape.participants {
-        let mut mints = Vec::new();
-        if asset_ordinal == 0 {
-            mints.push(
-                Mint::asset_quantity(
-                    TRANSPARENT_CONTROL_SEED_BALANCE,
-                    transparent_control_asset_id(0, 0),
-                )
-                .into(),
-            );
-            for owner_ordinal in 1..shape.participants {
-                mints.push(
-                    Mint::asset_quantity(
-                        TRANSPARENT_CONTROL_OUTPUT_BASELINE,
-                        transparent_control_asset_id(0, owner_ordinal),
-                    )
-                    .into(),
-                );
-            }
-        } else {
-            mints.push(
-                Mint::asset_quantity(
-                    TRANSPARENT_CONTROL_OUTPUT_BASELINE,
-                    transparent_control_asset_id(asset_ordinal, 0),
-                )
-                .into(),
-            );
-            mints.push(
-                Mint::asset_quantity(
-                    TRANSPARENT_CONTROL_SEED_BALANCE,
-                    transparent_control_asset_id(asset_ordinal, asset_ordinal),
-                )
-                .into(),
-            );
-        }
-        transactions.push(mints);
-    }
     // Staking uses one globally scoped stake asset, so all lane registrations
     // remain together in the targetless transaction routed through universal.
     let mut authority_registration =
@@ -736,33 +638,13 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     TomlValue::Table(table)
                 })
                 .collect::<Vec<_>>();
-            let routing_rules = (0..shape.participants)
-                .map(|ordinal| {
-                    let mut matcher = Table::new();
-                    matcher.insert(
-                        "account".into(),
-                        TomlValue::String(transparent_control_account_id(ordinal).to_string()),
-                    );
-                    let mut rule = Table::new();
-                    rule.insert(
-                        "lane".into(),
-                        TomlValue::Integer(i64::try_from(ordinal + 1).expect("lane fits i64")),
-                    );
-                    rule.insert(
-                        "dataspace".into(),
-                        TomlValue::String(participant_dataspace_alias(ordinal)),
-                    );
-                    rule.insert("matcher".into(), TomlValue::Table(matcher));
-                    TomlValue::Table(rule)
-                })
-                .collect::<Vec<_>>();
             let mut routing = Table::new();
             routing.insert("default_lane".into(), TomlValue::Integer(0));
             routing.insert(
                 "default_dataspace".into(),
                 TomlValue::String("universal".to_owned()),
             );
-            routing.insert("rules".into(), TomlValue::Array(routing_rules));
+            routing.insert("rules".into(), TomlValue::Array(Vec::new()));
             layer
                 .write(
                     ["concurrency", "scheduler_min_threads"],
@@ -1010,7 +892,86 @@ fn committees_from_network(
         .collect()
 }
 
+/// Setup diagnostics only; these stages are outside settlement measurements.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateNoteActivationStage {
+    CapabilityRead,
+    PrepareSign,
+    SubmitWait,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateNoteActivationDiagnostic {
+    Call {
+        stage: PrivateNoteActivationStage,
+        succeeded: bool,
+        elapsed: Duration,
+    },
+    Completed {
+        confirmed_ticks: u64,
+        committed_height: u64,
+        elapsed: Duration,
+    },
+}
+
+/// Observe the existing call once, before its unchanged error context is added.
+fn observe_private_note_activation_call<T, E>(
+    stage: PrivateNoteActivationStage,
+    observe: &mut impl FnMut(PrivateNoteActivationDiagnostic),
+    call: impl FnOnce() -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
+    let started = Instant::now();
+    let result = call();
+    let elapsed = started.elapsed();
+    observe(PrivateNoteActivationDiagnostic::Call {
+        stage,
+        succeeded: result.is_ok(),
+        elapsed,
+    });
+    result
+}
+
+/// Emit fixed labels and numeric timing only, never a payload or error value.
+fn write_private_note_activation_diagnostic(
+    writer: &mut impl std::io::Write,
+    diagnostic: PrivateNoteActivationDiagnostic,
+) -> std::io::Result<()> {
+    match diagnostic {
+        PrivateNoteActivationDiagnostic::Call {
+            stage,
+            succeeded,
+            elapsed,
+        } => {
+            let stage = match stage {
+                PrivateNoteActivationStage::CapabilityRead => "capability_read",
+                PrivateNoteActivationStage::PrepareSign => "prepare_sign",
+                PrivateNoteActivationStage::SubmitWait => "submit_wait",
+            };
+            let outcome = if succeeded { "success" } else { "error" };
+            writeln!(
+                writer,
+                "private-note activation diagnostic_timing stage={stage} outcome={outcome} elapsed_ns={}",
+                elapsed.as_nanos()
+            )
+        }
+        PrivateNoteActivationDiagnostic::Completed {
+            confirmed_ticks,
+            committed_height,
+            elapsed,
+        } => writeln!(
+            writer,
+            "private-note activation diagnostic_completed confirmed_ticks={confirmed_ticks} committed_height={committed_height} elapsed_ns={}",
+            elapsed.as_nanos()
+        ),
+    }
+}
+
 fn activate_ivm_private_note(client: &Client) -> Result<u64> {
+    let activation_started = Instant::now();
+    // Best-effort setup diagnostics must not replace the original operation result.
+    let mut observe = |diagnostic| {
+        let _ = write_private_note_activation_diagnostic(&mut std::io::stderr().lock(), diagnostic);
+    };
     let expected = genesis_private_note_activation();
     let expected_compiled_profile = PrivacyCompiledProfileResultV1::Available(
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?.into(),
@@ -1021,7 +982,12 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
         .checked_add(16)
         .expect("privacy activation tick limit fits u64");
     loop {
-        let capability = client.client().get_privacy_capabilities().wrap_err_with(|| {
+        let capability = observe_private_note_activation_call(
+            PrivateNoteActivationStage::CapabilityRead,
+            &mut observe,
+            || client.client().get_privacy_capabilities(),
+        )
+        .wrap_err_with(|| {
             format!(
                 "private-note activation phase=capability confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
             )
@@ -1053,6 +1019,11 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
                     row.compiled_profile == expected_compiled_profile,
                     "active IVM profile differs from the exact compiled private-note profile"
                 );
+                observe(PrivateNoteActivationDiagnostic::Completed {
+                    confirmed_ticks: ticks,
+                    committed_height: capability.committed_height,
+                    elapsed: activation_started.elapsed(),
+                });
                 return Ok(capability.committed_height);
             }
             PrivacyProtocolLifecycleV1::Proposed(proposed) => {
@@ -1075,28 +1046,37 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
             ticks < tick_limit,
             "governed IVM private-note activation did not promote within {tick_limit} blocks"
         );
-        let tick = {
-            let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    [InstructionBox::from(Log::new(
-                        Level::INFO,
-                        format!(
-                            "atomic-private-settlement activation tick {}",
-                            capability.committed_height
-                        ),
-                    ))],
-                    bounded_nexus_fee(),
-                    Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
+        let tick = observe_private_note_activation_call(
+            PrivateNoteActivationStage::PrepareSign,
+            &mut observe,
+            || {
+                let account = client.account_client();
+                account
+                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                        [InstructionBox::from(Log::new(
+                            Level::INFO,
+                            format!(
+                                "atomic-private-settlement activation tick {}",
+                                capability.committed_height
+                            ),
+                        ))],
+                        bounded_nexus_fee(),
+                        Metadata::default(),
+                    ))
+                    .and_then(|payload| account.sign_transaction(payload))
+            },
+        )
         .wrap_err_with(|| {
             format!(
                 "private-note activation phase=tick_build confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
             )
         })?;
-        client.submit_transaction_and_wait(&tick).wrap_err_with(|| {
+        observe_private_note_activation_call(
+            PrivateNoteActivationStage::SubmitWait,
+            &mut observe,
+            || client.submit_transaction_and_wait(&tick),
+        )
+        .wrap_err_with(|| {
             format!(
                 "private-note activation phase=tick_confirmation confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
             )
@@ -1385,15 +1365,15 @@ fn private_settlement_funding(
     }
     // The second funded note stays unspent. The spend's zero-value slot is a
     // fresh bundle-bound virtual dummy, not this reserve note.
-    let initial_commitments = [notes[0].commitment, notes[1].commitment];
+    let input_commitments = [notes[0].commitment, notes[1].commitment];
     ensure!(
-        initial_commitments[0] != initial_commitments[1],
+        input_commitments[0] != input_commitments[1],
         "funding note collision"
     );
     Ok(PrivateSettlementFunding {
         opening: notes.remove(0),
         spending_secret: material(0, 0),
-        initial_commitments,
+        input_commitments,
     })
 }
 
@@ -1436,7 +1416,7 @@ fn activate_governed_private_pools(
             let funding = private_settlement_funding(network_id, leg, ordinal, private_data)?;
             Ok(ActivatePrivateSettlementPoolV1::from_restricted(
                 &leg.governance,
-                funding.initial_commitments.to_vec(),
+                funding.activation_commitments().to_vec(),
             )?)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1600,16 +1580,25 @@ fn proof_manifest(
 }
 
 fn prepare_leg(
+    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
     authority_digest: Hash,
 ) -> Result<PreparedLeg> {
     let private_data = default_private_settlement_leg_data(ordinal);
-    prepare_leg_with_private_data(ordinal, governed, manifest, authority_digest, &private_data)
+    prepare_leg_with_private_data(
+        prover_options,
+        ordinal,
+        governed,
+        manifest,
+        authority_digest,
+        &private_data,
+    )
 }
 
 fn prepare_leg_with_private_data(
+    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
@@ -1633,6 +1622,7 @@ fn prepare_leg_with_private_data(
     let mut output_rng = iroha_crypto::rng_from_seed_slice(&output_rng_seed);
     let mut capsule_rng = iroha_crypto::rng_from_seed_slice(&capsule_rng_seed);
     prepare_leg_with_private_data_and_rngs(
+        prover_options,
         ordinal,
         governed,
         manifest,
@@ -1644,6 +1634,7 @@ fn prepare_leg_with_private_data(
 }
 
 fn prepare_leg_with_private_data_and_rngs(
+    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
@@ -1652,6 +1643,10 @@ fn prepare_leg_with_private_data_and_rngs(
     output_rng: &mut (impl rand_core_06::RngCore + rand_core_06::CryptoRng),
     capsule_rng: &mut impl rand::rand_core::TryCryptoRng,
 ) -> Result<PreparedLeg> {
+    let witness_timing = SmokeDiagnosticSpanV1::start(
+        SmokeDiagnosticPhaseV1::WitnessAndCapsulePreparation,
+        Some(ordinal),
+    );
     let profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out;
     let placeholders = [
         placeholder_encrypted_output(0x11 + ordinal as u8 * 6),
@@ -1698,6 +1693,7 @@ fn prepare_leg_with_private_data_and_rngs(
     let recipient = &private_data.recipient;
     let funding =
         private_settlement_funding(manifest.network_id, &governed, ordinal, private_data)?;
+    let initial_commitments = funding.activation_commitments();
     let input_secrets = [
         funding.spending_secret,
         private_settlement_leg_private_material(
@@ -1890,7 +1886,7 @@ fn prepare_leg_with_private_data_and_rngs(
         &mut plaintext.inputs,
     )?;
     ensure!(
-        plaintext.inputs[0].commitment == funding.initial_commitments[0],
+        plaintext.inputs[0].commitment == funding.input_commitments[0],
         "settlement changed its already-funded positive input"
     );
     statement.nullifiers = derive_atomic_private_settlement_input_nullifiers_v1(
@@ -1955,7 +1951,7 @@ fn prepare_leg_with_private_data_and_rngs(
     statement.audit_capsule_digest = capsule.digest()?;
     let bootstrap = plan_atomic_private_settlement_bootstrap_v1(
         statement.pool_id,
-        funding.initial_commitments,
+        funding.input_commitments,
         statement
             .output_commitments
             .as_slice()
@@ -1963,6 +1959,10 @@ fn prepare_leg_with_private_data_and_rngs(
             .map_err(|_| eyre!("private settlement output commitment shape changed"))?,
         input_secrets,
     )?;
+    ensure!(
+        bootstrap.initial_commitments == initial_commitments,
+        "bootstrap origin differs from the canonically activated funding"
+    );
     statement.old_root = bootstrap.old_root;
     statement.new_root = bootstrap.new_root;
     statement.old_epoch = bootstrap.old_epoch;
@@ -1979,7 +1979,13 @@ fn prepare_leg_with_private_data_and_rngs(
         &bootstrap.into_input_secrets(),
     )?;
     let mut owner_material = owner_bundle.to_vec();
+    witness_timing.complete();
+    let proof_timing = SmokeDiagnosticSpanV1::start(
+        SmokeDiagnosticPhaseV1::ProofConstructionWithSelfVerification,
+        Some(ordinal),
+    );
     let prepared = consume_atomic_private_settlement_wallet_bundle_v1(
+        prover_options,
         &mut owner_material,
         &wallet_id,
         manifest,
@@ -1989,11 +1995,15 @@ fn prepare_leg_with_private_data_and_rngs(
         *manifest.network_id.as_genesis_hash().as_ref(),
         manifest.authority_context_height,
     )?;
+    proof_timing.complete();
     ensure!(
         owner_material.iter().all(|byte| *byte == 0),
         "owner bundle was not wiped"
     );
+    let completion_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PreparedLegCompletion, Some(ordinal));
     let prepared = complete_atomic_private_settlement_prepared_leg_v1(prepared)?;
+    completion_timing.complete();
     Ok(PreparedLeg { governed, prepared })
 }
 
@@ -2064,6 +2074,7 @@ fn wait_for_identical_receipt(
 ) -> Result<iroha::data_model::nexus::PrivateSettlementReceiptV1> {
     let started = Instant::now();
     let mut last = String::new();
+    let mut reported_finalized = false;
     while started.elapsed() < FINALITY_TIMEOUT {
         let mut receipts = Vec::new();
         for peer in network.all_peers() {
@@ -2073,6 +2084,13 @@ fn wait_for_identical_receipt(
                 .private_settlement_bundle_receipt_v1(bundle_id)
             {
                 Ok(PrivateSettlementBundleReceiptResponseV1::Finalized(receipt)) => {
+                    if !reported_finalized {
+                        observe_smoke_diagnostic_milestone_v1(
+                            SmokeDiagnosticPhaseV1::FinalizedReceiptReported,
+                            receipt.finalized_height,
+                        );
+                        reported_finalized = true;
+                    }
                     receipts.push(receipt)
                 }
                 Ok(other) => last = format!("{} returned {other:?}", peer.id()),
@@ -2096,7 +2114,464 @@ fn wait_for_identical_receipt(
     )))
 }
 
+// Diagnostic observer only. These records do not enter registered release metrics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SmokeDiagnosticPhaseV1 {
+    NetworkStartup,
+    PrivacyActivation,
+    PoolActivation,
+    EndToEndWorkflow,
+    ClientLegConstruction,
+    WitnessAndCapsulePreparation,
+    ProofConstructionWithSelfVerification,
+    PreparedLegCompletion,
+    AvailabilityCertification,
+    RestrictedUpload,
+    AuditorApproval,
+    PrepareCertification,
+    PrepareRegistration,
+    CommitCertification,
+    FinalityWorkflow,
+    FinalizationSubmission,
+    AllPeerReceipt,
+    FinalizedReceiptReported,
+    FinancialApplicationVerified,
+    SignedFinalityEvidence,
+    ReplayValidation,
+    RestartReconciliation,
+}
+
+impl SmokeDiagnosticPhaseV1 {
+    fn label(self) -> &'static str {
+        match self {
+            Self::NetworkStartup => "network_startup",
+            Self::PrivacyActivation => "privacy_activation",
+            Self::PoolActivation => "pool_activation",
+            Self::EndToEndWorkflow => "end_to_end_workflow",
+            Self::ClientLegConstruction => "client_leg_construction",
+            Self::WitnessAndCapsulePreparation => "witness_and_capsule_preparation",
+            Self::ProofConstructionWithSelfVerification => {
+                "proof_construction_with_self_verification"
+            }
+            Self::PreparedLegCompletion => "prepared_leg_completion",
+            Self::AvailabilityCertification => "availability_certification",
+            Self::RestrictedUpload => "restricted_upload",
+            Self::AuditorApproval => "auditor_approval",
+            Self::PrepareCertification => "prepare_certification",
+            Self::PrepareRegistration => "prepare_registration",
+            Self::CommitCertification => "commit_certification",
+            Self::FinalityWorkflow => "finality_workflow",
+            Self::FinalizationSubmission => "finalization_submission",
+            Self::AllPeerReceipt => "all_peer_receipt",
+            Self::FinalizedReceiptReported => "finalized_receipt_reported",
+            Self::FinancialApplicationVerified => "financial_application_verified",
+            Self::SignedFinalityEvidence => "signed_finality_evidence",
+            Self::ReplayValidation => "replay_validation",
+            Self::RestartReconciliation => "restart_reconciliation",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SmokeDiagnosticKindV1 {
+    Begin,
+    Complete,
+    Incomplete,
+    Observation,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SmokeDiagnosticEventV1 {
+    kind: SmokeDiagnosticKindV1,
+    phase: SmokeDiagnosticPhaseV1,
+    span: u64,
+    parent: u64,
+    leg: Option<usize>,
+    start_ns: u128,
+    end_ns: u128,
+    height: Option<u64>,
+}
+
+/// Fixed labels and public numbers only; never format a request, witness or error.
+fn write_smoke_diagnostic_event_v1(
+    writer: &mut impl std::io::Write,
+    event: SmokeDiagnosticEventV1,
+) -> std::io::Result<()> {
+    let kind = match event.kind {
+        SmokeDiagnosticKindV1::Begin => "begin",
+        SmokeDiagnosticKindV1::Complete => "complete",
+        SmokeDiagnosticKindV1::Incomplete => "incomplete",
+        SmokeDiagnosticKindV1::Observation => "observation",
+    };
+    let leg = event
+        .leg
+        .map_or_else(|| "none".to_owned(), |leg| leg.to_string());
+    let height = event
+        .height
+        .map_or_else(|| "none".to_owned(), |height| height.to_string());
+    use std::io::Write as _;
+    // Construct the complete bounded record before touching the shared sink.
+    // A sink accepting the whole buffer sees one write, avoiding field interleaving.
+    let mut record = std::io::Cursor::new([0_u8; 512]);
+    writeln!(
+        &mut record,
+        "APS_DIAGNOSTIC_TIMING_V1 kind={kind} phase={} span={} parent={} leg={leg} start_ns={} end_ns={} duration_ns={} height={height}",
+        event.phase.label(),
+        event.span,
+        event.parent,
+        event.start_ns,
+        event.end_ns,
+        event.end_ns.saturating_sub(event.start_ns)
+    )?;
+    let length = record.position() as usize;
+    writer.write_all(&record.get_ref()[..length])
+}
+
+fn emit_smoke_diagnostic_to_v1(writer: &mut impl std::io::Write, event: SmokeDiagnosticEventV1) {
+    // Observability must never replace the underlying operation's result.
+    let _ = write_smoke_diagnostic_event_v1(writer, event);
+}
+
+fn emit_smoke_diagnostic_v1(event: SmokeDiagnosticEventV1) {
+    emit_smoke_diagnostic_to_v1(&mut std::io::stderr().lock(), event);
+}
+
+struct SmokeDiagnosticContextV1 {
+    origin: std::time::Instant,
+    next_span: u64,
+    active: Vec<u64>,
+}
+
+std::thread_local! {
+    // Enabled only inside the N3 diagnostic on its existing smoke thread.
+    // Registered benchmark helpers otherwise remain observationally unchanged.
+    static SMOKE_DIAGNOSTIC_CONTEXT_V1: std::cell::RefCell<Option<SmokeDiagnosticContextV1>> = const { std::cell::RefCell::new(None) };
+}
+
+struct SmokeDiagnosticScopeV1 {
+    owns_context: bool,
+}
+
+impl SmokeDiagnosticScopeV1 {
+    fn start() -> Self {
+        let owns_context = SMOKE_DIAGNOSTIC_CONTEXT_V1
+            .try_with(|cell| {
+                let Ok(mut context) = cell.try_borrow_mut() else {
+                    return false;
+                };
+                if context.is_some() {
+                    return false;
+                }
+                *context = Some(SmokeDiagnosticContextV1 {
+                    origin: std::time::Instant::now(),
+                    next_span: 1,
+                    active: Vec::new(),
+                });
+                true
+            })
+            .unwrap_or(false);
+        Self { owns_context }
+    }
+}
+
+impl Drop for SmokeDiagnosticScopeV1 {
+    fn drop(&mut self) {
+        if self.owns_context {
+            let _ = SMOKE_DIAGNOSTIC_CONTEXT_V1.try_with(|cell| {
+                if let Ok(mut context) = cell.try_borrow_mut() {
+                    *context = None;
+                }
+            });
+        }
+    }
+}
+
+struct SmokeDiagnosticSpanV1 {
+    event: Option<SmokeDiagnosticEventV1>,
+}
+
+impl SmokeDiagnosticSpanV1 {
+    fn start(phase: SmokeDiagnosticPhaseV1, leg: Option<usize>) -> Self {
+        let event = SMOKE_DIAGNOSTIC_CONTEXT_V1
+            .try_with(|cell| {
+                let mut context = cell.try_borrow_mut().ok()?;
+                let context = context.as_mut()?;
+                let span = context.next_span;
+                context.next_span = context.next_span.checked_add(1)?;
+                let parent = context.active.last().copied().unwrap_or(0);
+                let at_ns = context.origin.elapsed().as_nanos();
+                context.active.push(span);
+                Some(SmokeDiagnosticEventV1 {
+                    kind: SmokeDiagnosticKindV1::Begin,
+                    phase,
+                    span,
+                    parent,
+                    leg,
+                    start_ns: at_ns,
+                    end_ns: at_ns,
+                    height: None,
+                })
+            })
+            .ok()
+            .flatten();
+        if let Some(event) = event {
+            emit_smoke_diagnostic_v1(event);
+        }
+        Self { event }
+    }
+
+    fn close(&mut self, kind: SmokeDiagnosticKindV1) {
+        let Some(mut event) = self.event.take() else {
+            return;
+        };
+        let ended = SMOKE_DIAGNOSTIC_CONTEXT_V1
+            .try_with(|cell| {
+                let mut context = cell.try_borrow_mut().ok()?;
+                let context = context.as_mut()?;
+                let ended = context.origin.elapsed().as_nanos();
+                context.active.retain(|span| *span != event.span);
+                Some(ended)
+            })
+            .ok()
+            .flatten();
+        if let Some(ended) = ended {
+            event.kind = kind;
+            event.end_ns = ended;
+            emit_smoke_diagnostic_v1(event);
+        }
+    }
+
+    fn complete(mut self) {
+        self.close(SmokeDiagnosticKindV1::Complete);
+    }
+}
+
+impl Drop for SmokeDiagnosticSpanV1 {
+    fn drop(&mut self) {
+        self.close(SmokeDiagnosticKindV1::Incomplete);
+    }
+}
+
+fn observe_smoke_diagnostic_milestone_v1(phase: SmokeDiagnosticPhaseV1, height: u64) {
+    let event = SMOKE_DIAGNOSTIC_CONTEXT_V1
+        .try_with(|cell| {
+            let context = cell.try_borrow().ok()?;
+            let context = context.as_ref()?;
+            let at_ns = context.origin.elapsed().as_nanos();
+            Some(SmokeDiagnosticEventV1 {
+                kind: SmokeDiagnosticKindV1::Observation,
+                phase,
+                span: 0,
+                parent: context.active.last().copied().unwrap_or(0),
+                leg: None,
+                start_ns: at_ns,
+                end_ns: at_ns,
+                height: Some(height),
+            })
+        })
+        .ok()
+        .flatten();
+    if let Some(event) = event {
+        emit_smoke_diagnostic_v1(event);
+    }
+}
+
+#[test]
+fn smoke_diagnostic_wire_has_only_declared_public_fields() {
+    let event = SmokeDiagnosticEventV1 {
+        kind: SmokeDiagnosticKindV1::Complete,
+        phase: SmokeDiagnosticPhaseV1::ProofConstructionWithSelfVerification,
+        span: 7,
+        parent: 2,
+        leg: Some(1),
+        start_ns: 13,
+        end_ns: 41,
+        height: None,
+    };
+    let mut output = Vec::new();
+    write_smoke_diagnostic_event_v1(&mut output, event).unwrap();
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "APS_DIAGNOSTIC_TIMING_V1 kind=complete phase=proof_construction_with_self_verification span=7 parent=2 leg=1 start_ns=13 end_ns=41 duration_ns=28 height=none\n"
+    );
+}
+
+#[test]
+fn smoke_diagnostic_disabled_outside_n3_scope() {
+    let span = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ClientLegConstruction, None);
+    assert!(span.event.is_none());
+    span.complete();
+    observe_smoke_diagnostic_milestone_v1(SmokeDiagnosticPhaseV1::FinalizedReceiptReported, 42);
+    SMOKE_DIAGNOSTIC_CONTEXT_V1.with(|cell| assert!(cell.borrow().is_none()));
+}
+
+#[test]
+fn smoke_diagnostic_nested_and_overlapping_spans_keep_identity() {
+    let scope = SmokeDiagnosticScopeV1::start();
+    let parent = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    let child =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ClientLegConstruction, Some(0));
+    let parent_event = parent.event.unwrap();
+    let child_event = child.event.unwrap();
+    assert_eq!(child_event.parent, parent_event.span);
+    assert!(child_event.start_ns >= parent_event.start_ns);
+    // Closing one overlapping span must not erase another live span.
+    parent.complete();
+    SMOKE_DIAGNOSTIC_CONTEXT_V1.with(|cell| {
+        assert_eq!(cell.borrow().as_ref().unwrap().active, [child_event.span]);
+    });
+    child.complete();
+    SMOKE_DIAGNOSTIC_CONTEXT_V1
+        .with(|cell| assert!(cell.borrow().as_ref().unwrap().active.is_empty()));
+    drop(scope);
+    SMOKE_DIAGNOSTIC_CONTEXT_V1.with(|cell| assert!(cell.borrow().is_none()));
+}
+
+#[test]
+fn smoke_diagnostic_early_error_keeps_payload_and_closes_span() {
+    let _scope = SmokeDiagnosticScopeV1::start();
+    let error = Box::new(23_u8);
+    let original = std::ptr::from_ref(error.as_ref());
+    let result: std::result::Result<(), Box<u8>> = (|| {
+        let _span =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalizationSubmission, None);
+        Err(error)
+    })();
+    assert_eq!(std::ptr::from_ref(result.unwrap_err().as_ref()), original);
+    SMOKE_DIAGNOSTIC_CONTEXT_V1
+        .with(|cell| assert!(cell.borrow().as_ref().unwrap().active.is_empty()));
+}
+
+#[test]
+fn smoke_diagnostic_failed_sink_never_changes_control_flow() {
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let event = SmokeDiagnosticEventV1 {
+        kind: SmokeDiagnosticKindV1::Observation,
+        phase: SmokeDiagnosticPhaseV1::FinancialApplicationVerified,
+        span: 0,
+        parent: 1,
+        leg: None,
+        start_ns: 10,
+        end_ns: 10,
+        height: Some(42),
+    };
+    emit_smoke_diagnostic_to_v1(&mut Broken, event);
+    let mut output = Vec::new();
+    write_smoke_diagnostic_event_v1(&mut output, event).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("kind=observation phase=financial_application_verified"));
+    assert!(output.ends_with("duration_ns=0 height=42\n"));
+}
+
+#[test]
+fn smoke_diagnostic_maximum_fields_fit_one_complete_sink_write() {
+    #[derive(Default)]
+    struct Counting {
+        writes: usize,
+        bytes: Vec<u8>,
+    }
+    impl std::io::Write for Counting {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut output = Counting::default();
+    let event = SmokeDiagnosticEventV1 {
+        kind: SmokeDiagnosticKindV1::Observation,
+        phase: SmokeDiagnosticPhaseV1::ProofConstructionWithSelfVerification,
+        span: u64::MAX,
+        parent: u64::MAX,
+        leg: Some(usize::MAX),
+        start_ns: 0,
+        end_ns: u128::MAX,
+        height: Some(u64::MAX),
+    };
+    write_smoke_diagnostic_event_v1(&mut output, event).unwrap();
+    assert_eq!(output.writes, 1);
+    assert!(output.bytes.len() < 512);
+    let expected = format!(
+        "APS_DIAGNOSTIC_TIMING_V1 kind=observation phase=proof_construction_with_self_verification span={} parent={} leg={} start_ns=0 end_ns={} duration_ns={} height={}\n",
+        u64::MAX,
+        u64::MAX,
+        usize::MAX,
+        u128::MAX,
+        u128::MAX,
+        u64::MAX
+    );
+    assert_eq!(output.bytes, expected.as_bytes());
+    output = Counting::default();
+    write_smoke_diagnostic_event_v1(
+        &mut output,
+        SmokeDiagnosticEventV1 {
+            start_ns: u128::MAX,
+            ..event
+        },
+    )
+    .unwrap();
+    assert_eq!(output.writes, 1);
+    assert!(output.bytes.len() < 512);
+    assert!(
+        String::from_utf8(output.bytes)
+            .unwrap()
+            .contains("duration_ns=0")
+    );
+}
+
+#[test]
+fn smoke_diagnostic_partial_and_interrupted_sinks_preserve_complete_record() {
+    #[derive(Default)]
+    struct Partial {
+        interrupted: bool,
+        bytes: Vec<u8>,
+    }
+    impl std::io::Write for Partial {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            let count = bytes.len().min(3);
+            self.bytes.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let event = SmokeDiagnosticEventV1 {
+        kind: SmokeDiagnosticKindV1::Complete,
+        phase: SmokeDiagnosticPhaseV1::PoolActivation,
+        span: 7,
+        parent: 2,
+        leg: None,
+        start_ns: 13,
+        end_ns: 41,
+        height: None,
+    };
+    let mut expected = Vec::new();
+    write_smoke_diagnostic_event_v1(&mut expected, event).unwrap();
+    let mut partial = Partial::default();
+    write_smoke_diagnostic_event_v1(&mut partial, event).unwrap();
+    assert!(partial.interrupted);
+    assert_eq!(partial.bytes, expected);
+}
+
+#[cfg(feature = "atomic-private-settlement-metal-smoke")]
 fn run_n3_real_process_smoke() -> Result<()> {
+    let _diagnostics = SmokeDiagnosticScopeV1::start();
     let (bound, request_sha) = read_bound_real_process_request()?;
     let RealProcessBoundRequestV1::Smoke(smoke_request) = bound else {
         return Err(eyre!("positive smoke received a non-smoke request"));
@@ -2129,6 +2604,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "aps-smoke:{}:{}:{}",
         smoke_request.seed, smoke_request.run, smoke_request.invocation_nonce
     ));
+    let startup_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::NetworkStartup, None);
     let started = sandbox::start_network_blocking_or_skip(builder, context)?;
     let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, context)?
     else {
@@ -2141,8 +2617,12 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "processes-before.json",
         &initial_inventory,
     )?);
+    startup_timing.complete();
     let sponsor = network.client();
+    let privacy_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrivacyActivation, None);
     let activated_height = activate_ivm_private_note(&sponsor)?;
+    privacy_timing.complete();
     let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(
@@ -2154,6 +2634,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let private_data = (0..routes.len())
         .map(default_private_settlement_leg_data)
         .collect::<Vec<_>>();
+    let pool_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PoolActivation, None);
     let authority_context_height = activate_governed_private_pools(
         &sponsor,
         network.network_id(),
@@ -2161,18 +2642,38 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &private_data,
         expiry_height,
     )?;
+    pool_timing.complete();
     let manifest = proof_manifest(
         network.network_id(),
         authority_context_height,
         expiry_height,
         &governed,
     )?;
+    let workflow_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
     let prepared = governed
         .into_iter()
         .zip(&committees)
         .enumerate()
         .map(|(ordinal, (leg, committee))| {
-            prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)
+            let leg_timing = SmokeDiagnosticSpanV1::start(
+                SmokeDiagnosticPhaseV1::ClientLegConstruction,
+                Some(ordinal),
+            );
+            let prepared = prepare_leg(
+                AtomicPrivateSettlementProverOptionsV1 {
+                    commitment_digest_execution: DigestExecutionV1::Device(
+                        Digest384GpuBackendV1::Metal,
+                    ),
+                    nonce_digest_execution: DigestExecutionV1::Device(Digest384GpuBackendV1::Metal),
+                },
+                ordinal,
+                leg,
+                &manifest,
+                committee.authority.digest()?,
+            )?;
+            leg_timing.complete();
+            Ok(prepared)
         })
         .collect::<Result<Vec<_>>>()?;
     let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
@@ -2202,6 +2703,8 @@ fn run_n3_real_process_smoke() -> Result<()> {
         false,
     )?;
     let materials = provisional_materials(manifest, &prepared, &committees)?;
+    let availability_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AvailabilityCertification, None);
     let certificates = materials
         .iter()
         .zip(&committees)
@@ -2211,11 +2714,14 @@ fn run_n3_real_process_smoke() -> Result<()> {
                 .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
         })
         .collect::<Result<Vec<_>>>()?;
+    availability_timing.complete();
     let mut final_manifest = materials[0].manifest.clone();
     for (ordinal, certificate) in certificates.iter().enumerate() {
         final_manifest.legs[ordinal].availability_certificate_digest = certificate.digest()?;
     }
     final_manifest.validate()?;
+    let upload_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::RestrictedUpload, None);
     for (ordinal, ((material, certificate), committee)) in materials
         .iter()
         .zip(&certificates)
@@ -2238,6 +2744,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
             );
         }
     }
+    upload_timing.complete();
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
     let state = capture_fault_state_snapshot(&network, "smoke-collecting")?;
     ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
@@ -2247,6 +2754,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &state,
     )?);
 
+    let audit_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AuditorApproval, None);
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
         let auditor_transport_signer =
             BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
@@ -2304,6 +2812,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
             "approval quorum was not durable"
         );
     }
+    audit_timing.complete();
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "audited")?;
     let state = capture_fault_state_snapshot(&network, "smoke-audited")?;
     ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
@@ -2325,12 +2834,15 @@ fn run_n3_real_process_smoke() -> Result<()> {
         .iter()
         .map(|leg| leg.prepared.delta.clone())
         .collect::<Vec<_>>();
+    let prepare_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrepareCertification, None);
     let barrier = sponsor.client().prepare_private_settlement_bundle_v1(
         &endpoint_matrix,
         &final_manifest,
         &authorities,
         &deltas,
     )?;
+    prepare_timing.complete();
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
     let state = capture_fault_state_snapshot(&network, "smoke-prepared")?;
     ensure_fault_ledger_unchanged_before_finality(&before, &state)?;
@@ -2339,6 +2851,8 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "state-prepared.json",
         &state,
     )?);
+    let registration_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrepareRegistration, None);
     let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
     sponsor
         .client()
@@ -2361,6 +2875,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     // before one-shot Commit vote collection across the disjoint committees.
     let registered = wait_for_smoke_prepare_registration(&network, &before, routes.len())?;
     ensure_fault_ledger_unchanged_before_finality(&before, &registered)?;
+    registration_timing.complete();
     evidence_files.push(write_smoke_evidence(
         &evidence_root,
         "state-registered.json",
@@ -2371,9 +2886,12 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "prepare-barrier.json",
         &barrier,
     )?);
+    let commit_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::CommitCertification, None);
     let commits = sponsor
         .client()
         .recover_or_commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    commit_timing.complete();
     evidence_files.push(write_smoke_evidence(
         &evidence_root,
         "commit-certificates.json",
@@ -2399,10 +2917,17 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     observer.begin_phase("finalization", &[], true)?;
     observer.checkpoint_active_phase(&[])?;
+    let finality_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalityWorkflow, None);
+    let submission_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalizationSubmission, None);
     sponsor
         .client()
         .submit_private_settlement_bundle_v1(&request)?;
+    submission_timing.complete();
+    let receipt_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AllPeerReceipt, None);
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
+    receipt_timing.complete();
     let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     ensure_exact_private_settlement_carrier_fee(
         &fee_before_finalization,
@@ -2430,6 +2955,12 @@ fn run_n3_real_process_smoke() -> Result<()> {
     }
     let after = wait_for_converged_fault_state_snapshot(&network, "smoke-finalized")?;
     ensure_fault_state_finalized_once(&before, &after, shape.participants)?;
+    observe_smoke_diagnostic_milestone_v1(
+        SmokeDiagnosticPhaseV1::FinancialApplicationVerified,
+        receipt.finalized_height,
+    );
+    finality_timing.complete();
+    workflow_timing.complete();
     observer.complete_phase()?;
     evidence_files.push(write_smoke_evidence(
         &evidence_root,
@@ -2441,6 +2972,8 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "receipt.json",
         &receipt,
     )?);
+    let signed_finality_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
     let (finality, files) = collect_signed_rs16_finality(
         &network,
         receipt.finalized_height,
@@ -2451,6 +2984,9 @@ fn run_n3_real_process_smoke() -> Result<()> {
         finality.observations == u64::try_from(shape.process_count())?,
         "positive smoke lacks a signed RS16 finality observation from every process"
     );
+    signed_finality_timing.complete();
+    let replay_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
     ensure!(
         sponsor
             .client()
@@ -2492,12 +3028,15 @@ fn run_n3_real_process_smoke() -> Result<()> {
             },
         )?);
     }
+    replay_timing.complete();
     let mut restarts = Vec::new();
 
     // Recover each durable store while preserving a live 3-of-4 quorum in
     // every committee. A receipt alone would miss duplicated nullifiers,
     // outputs, or residual reservations, so recheck the complete APS state.
     for (peer_index, peer) in network.all_peers().enumerate() {
+        let restart_timing =
+            SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::RestartReconciliation, None);
         let before_pid = runtime
             .block_on(peer.process_id())
             .ok_or_else(|| eyre!("smoke restart target #{peer_index} has no live PID"))?;
@@ -2534,6 +3073,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
             &format!("state-restarted-{peer_index:02}.json"),
             &recovered,
         )?);
+        restart_timing.complete();
         restarts.push(SmokeRestartV1 {
             peer_index,
             before_pid,
@@ -2543,6 +3083,8 @@ fn run_n3_real_process_smoke() -> Result<()> {
             "APS smoke restart verified: peer_index={peer_index} before_pid={before_pid} after_pid={after_pid}"
         );
     }
+    let recovered_finality_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
     let (recovered_finality, files) = collect_signed_rs16_finality(
         &network,
         receipt.finalized_height,
@@ -2552,6 +3094,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         recovered_finality == finality,
         "restarted smoke network changed its finalized block, authority context, or coverage"
     );
+    recovered_finality_timing.complete();
     evidence_files.extend(files);
     let recovered_inventory = smoke_process_inventory(&network, &runtime, shape)?;
     ensure!(
@@ -2601,6 +3144,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "atomic-private-settlement-metal-smoke")]
 #[test]
 #[ignore = "release-only: starts 16 real validators and generates three native STARK proofs"]
 fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
@@ -2713,6 +3257,161 @@ fn genesis_registers_only_participant_processes_as_committee_peers() {
 }
 
 #[test]
+fn activation_diagnostic_preserves_success_value_and_observation_order() {
+    use std::cell::RefCell;
+
+    let trace = RefCell::new(Vec::new());
+    let value = Box::new(17_u8);
+    let original = std::ptr::from_ref(value.as_ref());
+    let result: std::result::Result<_, ()> = observe_private_note_activation_call(
+        PrivateNoteActivationStage::CapabilityRead,
+        &mut |event| {
+            assert!(matches!(
+                event,
+                PrivateNoteActivationDiagnostic::Call {
+                    stage: PrivateNoteActivationStage::CapabilityRead,
+                    succeeded: true,
+                    ..
+                }
+            ));
+            trace.borrow_mut().push("observed");
+        },
+        || {
+            trace.borrow_mut().push("called");
+            Ok(value)
+        },
+    );
+    trace.borrow_mut().push("returned");
+    assert_eq!(std::ptr::from_ref(result.unwrap().as_ref()), original);
+    assert_eq!(*trace.borrow(), ["called", "observed", "returned"]);
+}
+
+#[test]
+fn activation_diagnostic_preserves_error_identity_and_fail_fast_order() {
+    use std::cell::RefCell;
+
+    let stages = [
+        PrivateNoteActivationStage::CapabilityRead,
+        PrivateNoteActivationStage::PrepareSign,
+        PrivateNoteActivationStage::SubmitWait,
+    ];
+    for failed_index in 0..stages.len() {
+        let trace = RefCell::new(Vec::new());
+        let mut error = Some(Box::new(23_u8));
+        let original = std::ptr::from_ref(error.as_ref().unwrap().as_ref());
+        let result: std::result::Result<(), Box<u8>> = (|| {
+            for (index, stage) in stages.into_iter().enumerate() {
+                observe_private_note_activation_call(
+                    stage,
+                    &mut |event| {
+                        let PrivateNoteActivationDiagnostic::Call {
+                            stage: observed_stage,
+                            succeeded,
+                            ..
+                        } = event
+                        else {
+                            panic!("call emits only a call diagnostic")
+                        };
+                        assert_eq!(observed_stage, stage);
+                        assert_eq!(succeeded, index != failed_index);
+                        trace.borrow_mut().push((index, "observed"));
+                    },
+                    || {
+                        trace.borrow_mut().push((index, "called"));
+                        if index == failed_index {
+                            Err(error.take().unwrap())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )?;
+            }
+            Ok(())
+        })();
+        assert_eq!(std::ptr::from_ref(result.unwrap_err().as_ref()), original);
+        let expected = (0..=failed_index)
+            .flat_map(|index| [(index, "called"), (index, "observed")])
+            .collect::<Vec<_>>();
+        assert_eq!(*trace.borrow(), expected);
+    }
+}
+
+#[test]
+fn activation_diagnostic_output_has_only_declared_fields() {
+    let mut output = Vec::new();
+    for stage in [
+        PrivateNoteActivationStage::CapabilityRead,
+        PrivateNoteActivationStage::PrepareSign,
+        PrivateNoteActivationStage::SubmitWait,
+    ] {
+        for succeeded in [true, false] {
+            write_private_note_activation_diagnostic(
+                &mut output,
+                PrivateNoteActivationDiagnostic::Call {
+                    stage,
+                    succeeded,
+                    elapsed: Duration::from_nanos(37),
+                },
+            )
+            .unwrap();
+        }
+    }
+    write_private_note_activation_diagnostic(
+        &mut output,
+        PrivateNoteActivationDiagnostic::Completed {
+            confirmed_ticks: 100,
+            committed_height: 301,
+            elapsed: Duration::from_nanos(41),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        concat!(
+            "private-note activation diagnostic_timing stage=capability_read outcome=success elapsed_ns=37\n",
+            "private-note activation diagnostic_timing stage=capability_read outcome=error elapsed_ns=37\n",
+            "private-note activation diagnostic_timing stage=prepare_sign outcome=success elapsed_ns=37\n",
+            "private-note activation diagnostic_timing stage=prepare_sign outcome=error elapsed_ns=37\n",
+            "private-note activation diagnostic_timing stage=submit_wait outcome=success elapsed_ns=37\n",
+            "private-note activation diagnostic_timing stage=submit_wait outcome=error elapsed_ns=37\n",
+            "private-note activation diagnostic_completed confirmed_ticks=100 committed_height=301 elapsed_ns=41\n",
+        )
+    );
+}
+
+#[test]
+fn activation_diagnostic_output_failure_does_not_replace_call_result() {
+    struct BrokenWriter;
+    impl std::io::Write for BrokenWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    for succeeded in [true, false] {
+        let value = Box::new(31_u8);
+        let original = std::ptr::from_ref(value.as_ref());
+        let mut observation_failed = false;
+        let result = observe_private_note_activation_call(
+            PrivateNoteActivationStage::SubmitWait,
+            &mut |event| {
+                observation_failed =
+                    write_private_note_activation_diagnostic(&mut BrokenWriter, event).is_err();
+            },
+            || if succeeded { Ok(value) } else { Err(value) },
+        );
+        assert!(observation_failed);
+        assert_eq!(result.is_ok(), succeeded);
+        let value = match result {
+            Ok(value) | Err(value) => value,
+        };
+        assert_eq!(std::ptr::from_ref(value.as_ref()), original);
+    }
+}
+
+#[test]
 fn genesis_ivm_private_note_activation_is_exact() {
     assert_eq!(
         PRIVACY_PROFILE_ACTIVATION_HEIGHT,
@@ -2819,13 +3518,10 @@ fn pool_funding_is_reproducible_and_binds_network_governance_and_value() {
     let repeated = private_settlement_funding(network_id, &governed[0], 0, &data).unwrap();
     assert_eq!(funding.opening, repeated.opening);
     assert_eq!(funding.spending_secret, repeated.spending_secret);
-    assert_eq!(funding.initial_commitments, repeated.initial_commitments);
-    assert_ne!(
-        funding.initial_commitments[0],
-        funding.initial_commitments[1]
-    );
+    assert_eq!(funding.input_commitments, repeated.input_commitments);
+    assert_ne!(funding.input_commitments[0], funding.input_commitments[1]);
     assert_eq!(funding.opening.value, data.amount + 7 + 5);
-    assert_eq!(funding.opening.commitment, funding.initial_commitments[0]);
+    assert_eq!(funding.opening.commitment, funding.input_commitments[0]);
     assert_eq!(
         funding.opening.spending_authority,
         derive_note_authority_v1(&funding.spending_secret).unwrap()
@@ -2835,22 +3531,74 @@ fn pool_funding_is_reproducible_and_binds_network_governance_and_value() {
         private_settlement_funding(network_id, &changed_governance[0], 0, &data).unwrap(),
         private_settlement_funding(network_id, &governed[0], 1, &data).unwrap(),
     ] {
-        assert_ne!(funding.initial_commitments, changed.initial_commitments);
+        assert_ne!(funding.input_commitments, changed.input_commitments);
         assert_ne!(funding.spending_secret, changed.spending_secret);
     }
     let mut changed_value = data.clone();
     changed_value.amount += 1;
     let changed = private_settlement_funding(network_id, &governed[0], 0, &changed_value).unwrap();
-    assert_ne!(
-        funding.initial_commitments[0],
-        changed.initial_commitments[0]
-    );
-    assert_eq!(
-        funding.initial_commitments[1],
-        changed.initial_commitments[1]
-    );
+    assert_ne!(funding.input_commitments[0], changed.input_commitments[0]);
+    assert_eq!(funding.input_commitments[1], changed.input_commitments[1]);
     changed_value.amount = u128::MAX;
     assert!(private_settlement_funding(network_id, &governed[0], 0, &changed_value).is_err());
+}
+
+#[test]
+fn pool_activation_orders_commitments_without_reordering_spend_slots() {
+    let route = PrivateSettlementRouteV1 {
+        dataspace_id: DataSpaceId::new(1),
+        lane_id: LaneId::new(1),
+        lane_incarnation: hash(0xE0),
+    };
+    let governed = governed_legs(&[route], 301, 401).expect("governance");
+    let data = default_private_settlement_leg_data(0);
+    let outputs = [0x60, 0x61, 0x62].map(|value| PrivacyCommitmentV1::new([value; 32]));
+    let mut seen_input_orders = [false; 2];
+    for seed in 0_u8..16 {
+        let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([seed; 32])),
+        );
+        let funding = private_settlement_funding(network_id, &governed[0], 0, &data)
+            .expect("real deterministic funding notes");
+        let input_order = funding.input_commitments;
+        seen_input_orders[usize::from(input_order[0] > input_order[1])] = true;
+        let initial = funding.activation_commitments();
+        assert!(initial[0] < initial[1]);
+        assert_eq!(funding.input_commitments, input_order);
+        assert_eq!(funding.opening.commitment, input_order[0]);
+        assert_eq!(
+            funding.opening.spending_authority,
+            derive_note_authority_v1(&funding.spending_secret).unwrap()
+        );
+        let activation = ActivatePrivateSettlementPoolV1::from_restricted(
+            &governed[0].governance,
+            initial.to_vec(),
+        )
+        .expect("canonical pool activation accepts either funding input order");
+        assert_eq!(
+            activation.initial_commitments.as_slice(),
+            initial.as_slice()
+        );
+        let bootstrap = plan_atomic_private_settlement_bootstrap_v1(
+            governed[0].governance.body.pool_id,
+            input_order,
+            outputs,
+            [funding.spending_secret, [0x70; 32]],
+        )
+        .expect("native planner maps original spend slots into the sorted tree");
+        assert_eq!(bootstrap.initial_commitments, initial);
+        let reordered = plan_atomic_private_settlement_bootstrap_v1(
+            governed[0].governance.body.pool_id,
+            [input_order[1], input_order[0]],
+            outputs,
+            [[0x70; 32], funding.spending_secret],
+        )
+        .expect("the same initial set has the same origin and successor roots");
+        assert_eq!(bootstrap.old_root, reordered.old_root);
+        assert_eq!(bootstrap.new_root, reordered.new_root);
+        assert_eq!((bootstrap.old_epoch, bootstrap.new_epoch), (1, 2));
+    }
+    assert_eq!(seen_input_orders, [true, true]);
 }
 
 #[test]

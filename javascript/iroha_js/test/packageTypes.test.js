@@ -293,14 +293,6 @@ test("published recipe documentation exactly matches the portable allowlist", ()
 });
 
 test("package smoke rejects every non-portable or missing required artifact", () => {
-  const requiredBrowserCodecPaths = [
-    "browser-codec.d.ts",
-    "dist/public/browserCodec.js",
-    "dist/browserCodec.js",
-    "dist/browserCodecRuntime.js",
-    "dist/wasm/iroha_js_codec_wasm.js",
-    "dist/wasm/iroha_js_codec_wasm_bg.wasm",
-  ];
   const requiredLazyPaths = [
     "dist/smartContractDeploymentSubmit.js",
     "dist/sumeragiTyped.js",
@@ -327,7 +319,6 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/sorafsOrderbookSubmission.js",
     "dist/sorafsOrderbookSubmission.d.ts",
     "dist/tairaTestnetProfile.js",
-    ...requiredBrowserCodecPaths,
     ...requiredLazyPaths,
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
@@ -336,6 +327,15 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     files: requiredPaths.map((entry) => ({ path: entry })),
   };
   assert.doesNotThrow(() => validatePackPaths(metadata));
+  for (const forbiddenPath of [
+    "dist/wasm/codec.js", "dist/codec.wasm", "dist/codec.WASM",
+    "dist/browserCodec.js", "dist/browserCodecRuntime.js", "dist/public/browserCodec.js",
+    "browser-codec.d.ts",
+  ]) {
+    assert.throws(() => validatePackPaths({
+      files: [...metadata.files, { path: forbiddenPath }],
+    }), /forbidden browser codec artifact/u, forbiddenPath);
+  }
   for (const unpublishedPath of ["src/index.js", "scripts/build-dist.mjs"]) {
     assert.throws(
       () => validatePackPaths({
@@ -353,7 +353,6 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/atomicPrivateSettlement.js",
     "dist/kagemusha.js",
     "dist/tairaTestnetProfile.js",
-    ...requiredBrowserCodecPaths,
     ...PORTABLE_RECIPES,
     ...requiredLazyPaths,
   ]) {
@@ -406,7 +405,7 @@ test("runtime namespace declarations expose exactly their module exports", async
   const rootModules = await Promise.all(rootTargets.map((target) => import(target)));
   for (const [namespaceName, moduleName, rootOnlyNames = []] of [
     ["Torii", "toriiClient"],
-    ["Norito", "public/norito", ["decodeAccountIdNoritoValue"]],
+    ["Norito", "public/norito"],
     ["Crypto", "public/crypto"],
   ]) {
     const namespaceSymbol = declarationExports.get(namespaceName);
@@ -434,6 +433,32 @@ test("runtime namespace declarations expose exactly their module exports", async
       );
     }
   }
+});
+
+test("public facades exclude internal codecs while retaining their declared owners", async () => {
+  const noritoImplementation = await import("../src/norito.js");
+  const kagemushaImplementation = await import("../src/kagemusha.js");
+  const publicKagemusha = await import("../src/public/kagemusha.js");
+  assert.deepEqual(Object.keys(publicKagemusha), ["Kagemusha"]);
+  assert.equal(publicKagemusha.Kagemusha, kagemushaImplementation.Kagemusha);
+  assert.equal(typeof kagemushaImplementation._encodeRedemptionRequestV1, "function");
+  for (const rootTarget of ["../src/index.js", "../dist/index.js"]) {
+    const { Norito } = await import(rootTarget);
+    for (const internal of [
+      "_canonicalAccountIdNoritoValue", "_createNoritoInstructionApi",
+      "noritoEncodeGameValueV1", "noritoDecodeGameValueV1",
+      "noritoEncodeNftMarketValueV1", "noritoDecodeNftMarketValueV1",
+      "encodeGameResourceValueV1", "decodeGameResourceValueV1",
+    ]) {
+      assert.equal(typeof noritoImplementation[internal], "function", internal);
+      assert.equal(Object.hasOwn(Norito, internal), false, `${rootTarget}: ${internal}`);
+    }
+    assert.equal(typeof Norito.decodeAccountIdNoritoValue, "function");
+  }
+  const game = await import("../src/game.js");
+  const nft = await import("../src/nft.js");
+  assert.equal(game.encodeGameValueV1, noritoImplementation.noritoEncodeGameValueV1);
+  assert.equal(nft.encodeNftMarketValueV1, noritoImplementation.noritoEncodeNftMarketValueV1);
 });
 
 test("root declarations expose exactly the source and distribution values", async () => {
@@ -717,9 +742,11 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
   const indexOfSubpath = (subpath) => Object.keys(packageJson.exports).indexOf(subpath);
   const noritoIndex = indexOfSubpath("./norito");
   const cryptoIndex = indexOfSubpath("./crypto");
+  const kagemushaIndex = indexOfSubpath("./kagemusha");
   const browserIndex = indexOfSubpath("./browser");
   assert.notEqual(noritoIndex, -1);
   assert.notEqual(cryptoIndex, -1);
+  assert.notEqual(kagemushaIndex, -1);
   assert.notEqual(browserIndex, -1);
   const { tempRoot } = createPackedLayout({ includeNodeTypes: true });
   try {
@@ -861,6 +888,12 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "void Norito._createNoritoInstructionApi;",
         "// @ts-expect-error The Norito subpath omits source-only runtime factories.",
         `void export${noritoIndex}._createNoritoInstructionApi;`,
+        "// @ts-expect-error game codecs belong to the game package subpath.",
+        "void Norito.noritoEncodeGameValueV1;",
+        "// @ts-expect-error NFT codecs belong to the NFT package subpath.",
+        "void Norito.noritoEncodeNftMarketValueV1;",
+        "// @ts-expect-error the Torii encoder is not a public wallet export.",
+        `void export${kagemushaIndex}._encodeRedemptionRequestV1;`,
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,

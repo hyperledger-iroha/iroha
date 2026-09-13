@@ -1,4 +1,5 @@
 //! Gossiper actor responsible for transaction gossiping.
+use crate::retained_gossip::RetainedGossip;
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{
@@ -32,7 +33,7 @@ use iroha_data_model::{
         signed::{TransactionAdmissionIntent, TransactionEntrypoint},
     },
 };
-use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_futures::supervisor::{Child, ShutdownSignal};
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_p2p::{Broadcast, Post, Priority};
@@ -50,6 +51,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
+
+mod pending;
+mod worker;
+use pending::{GossipProgress, PendingGossip};
 /// Grouped gossip entries and the lanes they originated from.
 #[derive(Default)]
 struct DataspaceBatch {
@@ -102,6 +107,7 @@ enum QueuePlanGossipCertificateDisposition {
     EligibleAbsent,
     ExactPending,
     Applied,
+    AwaitPublication(u64),
 }
 fn validate_queue_plan_gossip_certificate(
     state: &State,
@@ -122,62 +128,89 @@ fn validate_queue_plan_gossip_certificate(
     let (validated, disposition) = state
         .classify_pending_queue_plan_admission(certificate, carrier_height)
         .map_err(|error| format!("QueuePlan gossip certificate is invalid: {error}"))?;
-    if !matches!(
-        disposition,
-        PendingQueuePlanAdmissionDisposition::EligibleAbsent
-            | PendingQueuePlanAdmissionDisposition::ExactPending
-            | PendingQueuePlanAdmissionDisposition::Applied
-    ) {
-        return Err(format!(
-            "QueuePlan gossip certificate is not live at the local frontier: {disposition:?}"
-        ));
-    }
     let binding = validated.certificate.binding;
     binding.validate_for_request(state.network_id_ref(), entrypoint, routing_plan)?;
-    let disposition = match disposition {
-        PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
-            QueuePlanGossipCertificateDisposition::EligibleAbsent
-        }
-        PendingQueuePlanAdmissionDisposition::ExactPending => {
-            QueuePlanGossipCertificateDisposition::ExactPending
-        }
-        PendingQueuePlanAdmissionDisposition::Applied => {
-            QueuePlanGossipCertificateDisposition::Applied
-        }
-        PendingQueuePlanAdmissionDisposition::Future { .. }
-        | PendingQueuePlanAdmissionDisposition::DeferredCarrier
-        | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
-        | PendingQueuePlanAdmissionDisposition::Stale => {
-            unreachable!("non-live QueuePlan gossip dispositions returned above")
-        }
-    };
+    let disposition = queue_plan_gossip_disposition(state, disposition)?;
     Ok((binding, disposition))
+}
+fn queue_plan_gossip_disposition(
+    state: &State,
+    disposition: PendingQueuePlanAdmissionDisposition,
+) -> Result<QueuePlanGossipCertificateDisposition, String> {
+    use PendingQueuePlanAdmissionDisposition as D;
+    Ok(match disposition {
+        D::EligibleAbsent => QueuePlanGossipCertificateDisposition::EligibleAbsent,
+        D::ExactPending => QueuePlanGossipCertificateDisposition::ExactPending,
+        D::Applied => QueuePlanGossipCertificateDisposition::Applied,
+        D::Future {
+            authority_height,
+            proposal_height,
+            state_height,
+            ..
+        } => {
+            let next = state_height
+                .checked_add(1)
+                .ok_or("future QueuePlan publication height overflowed")?;
+            let parent = proposal_height
+                .checked_sub(1)
+                .ok_or("future QueuePlan proposal height has no parent")?;
+            QueuePlanGossipCertificateDisposition::AwaitPublication(
+                authority_height.max(parent).max(next),
+            )
+        }
+        // The caller's sampled carrier became obsolete. Re-enter classification
+        // at the already published frontier; this wakeup is not admission authority.
+        D::DeferredCarrier => QueuePlanGossipCertificateDisposition::AwaitPublication(
+            u64::try_from(state.committed_height())
+                .map_err(|_| "committed height does not fit QueuePlan gossip")?,
+        ),
+        D::DefinitiveConflict | D::Stale => {
+            return Err(format!(
+                "QueuePlan gossip certificate is not live: {disposition:?}"
+            ));
+        }
+    })
 }
 fn persist_queue_plan_gossip_certificate(
     state: &State,
     certificate: &[u8],
     expected_binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
-) -> Result<bool, String> {
-    let outcome = state
-        .persist_classified_queue_plan_admission(certificate)
-        .map_err(|error| format!("QueuePlan gossip persistence failed: {error}"))?;
-    let (admission, enqueue) = match outcome {
-        PendingQueuePlanAdmissionPersistenceOutcome::Durable { admission, .. } => (admission, true),
-        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => (admission, false),
+) -> Result<QueuePlanGossipCertificateDisposition, String> {
+    let outcome = match state.persist_classified_queue_plan_admission(
+        certificate,
+        crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+    ) {
+        Ok(outcome) => outcome,
+        Err(crate::state::MergeLedgerCommitError::Persistence(
+            crate::kura::Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height,
+                actual_durable_height,
+            },
+        )) if expected_durable_height.checked_add(1) == Some(actual_durable_height) => {
+            return Ok(QueuePlanGossipCertificateDisposition::AwaitPublication(
+                actual_durable_height,
+            ));
+        }
+        Err(error) => return Err(format!("QueuePlan gossip persistence failed: {error}")),
+    };
+    let (admission, disposition) = match outcome {
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+            admission,
+            disposition,
+            ..
+        } => (admission, disposition),
+        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => {
+            (admission, PendingQueuePlanAdmissionDisposition::Applied)
+        }
         PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
             admission,
             disposition,
-        } => {
-            return Err(format!(
-                "QueuePlan gossip became non-live before persistence: {disposition:?}; binding={}",
-                admission.binding_hash
-            ));
-        }
+        } => (admission, disposition),
     };
     if admission.certificate.binding != *expected_binding {
         return Err("QueuePlan gossip binding changed during durable persistence".to_owned());
     }
-    Ok(enqueue)
+    queue_plan_gossip_disposition(state, disposition)
 }
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
@@ -274,7 +307,7 @@ impl GossipTargetSeed {
 /// [`TransactionGossiper`] actor handle.
 #[derive(Clone)]
 pub struct TransactionGossiperHandle {
-    message_sender: Option<mpsc::Sender<Arc<TransactionGossip>>>,
+    message_sender: Option<mpsc::Sender<RetainedGossip<Arc<TransactionGossip>>>>,
 }
 impl TransactionGossiperHandle {
     /// Construct the inert handle used by emergency Fast mode.
@@ -292,12 +325,12 @@ impl TransactionGossiperHandle {
     ///
     /// Messages are best-effort: if the queue is full, the gossip is dropped
     /// to avoid blocking consensus traffic.
-    pub fn gossip(&self, gossip: Arc<TransactionGossip>) {
+    pub fn gossip(&self, gossip: RetainedGossip<Arc<TransactionGossip>>) {
         let Some(message_sender) = self.message_sender.as_ref() else {
             return;
         };
-        let txs = gossip.txs.len();
-        let plane = gossip_plane_label(gossip.plane);
+        let txs = gossip.payload().txs.len();
+        let plane = gossip_plane_label(gossip.payload().plane);
         match message_sender.try_send(gossip) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -321,6 +354,7 @@ impl TransactionGossiperHandle {
 mod handle_tests {
     use super::*;
     use tokio::sync::mpsc;
+
     #[test]
     fn gossip_drops_when_queue_full() {
         let (message_sender, mut message_receiver) = mpsc::channel(1);
@@ -339,17 +373,34 @@ mod handle_tests {
             plans: Vec::new(),
             plane: GossipPlane::Restricted,
         };
+        let (first, first_count) = RetainedGossip::with_count_for_test(Arc::new(msg1));
+        let (second, second_count) = RetainedGossip::with_count_for_test(Arc::new(msg2));
         handle
             .message_sender
             .as_ref()
             .expect("ordinary test handle has a sender")
-            .try_send(Arc::new(msg1))
+            .try_send(first)
             .expect("queue has space");
-        handle.gossip(Arc::new(msg2));
+        handle.gossip(second);
+        assert_eq!(
+            first_count.available_permits(),
+            0,
+            "queued owner survives sender return"
+        );
+        assert_eq!(
+            second_count.available_permits(),
+            1,
+            "rejected owner is released exactly once"
+        );
         let received = message_receiver
             .try_recv()
             .expect("expected queued message");
-        assert_eq!(received.plane, GossipPlane::Public);
+        assert_eq!(received.payload().plane, GossipPlane::Public);
+        received.with_payload(|payload| {
+            assert_eq!(first_count.available_permits(), 0);
+            assert_eq!(payload.plane, GossipPlane::Public);
+        });
+        assert_eq!(first_count.available_permits(), 1);
         assert!(matches!(
             message_receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
@@ -359,13 +410,31 @@ mod handle_tests {
     fn emergency_fast_handle_has_no_actor_queue() {
         let handle = TransactionGossiperHandle::emergency_fast_disabled();
         assert!(handle.message_sender.is_none());
-        handle.gossip(Arc::new(TransactionGossip {
-            txs: Vec::new(),
-            routes: Vec::new(),
-            plans: Vec::new(),
-            plane: GossipPlane::Public,
-        }));
+        handle.gossip(RetainedGossip::synthetic_for_test(Arc::new(
+            TransactionGossip {
+                txs: Vec::new(),
+                routes: Vec::new(),
+                plans: Vec::new(),
+                plane: GossipPlane::Public,
+            },
+        )));
     }
+}
+/// Invalid execution context for the transaction-gossip actor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TransactionGossiperStartError {
+    /// No Tokio runtime is active on the calling thread.
+    #[error("transaction gossip requires an active Tokio runtime")]
+    MissingRuntime,
+    /// The runtime cannot hand off an executor core during synchronous durable work.
+    #[error("transaction gossip requires a multithreaded Tokio runtime")]
+    UnsupportedRuntime,
+    /// A zero interval cannot define bounded periodic scheduling.
+    #[error("transaction gossip period must be positive")]
+    ZeroPeriod,
+    /// The configured queue TTL cannot define a monotonic retained-work deadline.
+    #[error("transaction gossip queue TTL cannot be represented as a monotonic deadline")]
+    UnrepresentableRetentionBudget,
 }
 /// Actor which gossips transactions and receives transaction gossips
 pub struct TransactionGossiper {
@@ -398,18 +467,59 @@ pub struct TransactionGossiper {
     restricted_seed: GossipTargetSeed,
 }
 impl TransactionGossiper {
-    /// Start [`Self`] actor.
-    pub fn start(self, shutdown_signal: ShutdownSignal) -> (TransactionGossiperHandle, Child) {
+    /// Start [`Self`] actor on the daemon's multithreaded Tokio runtime.
+    ///
+    /// Synchronous validation and durable persistence retain the actor inline while
+    /// Tokio hands its executor core to another worker. Cooperative shutdown drains
+    /// the current operation before releasing the actor and its message ownership.
+    ///
+    /// # Errors
+    /// Returns a precise error before publishing the actor if its runtime cannot hand
+    /// off blocking work, its gossip period is zero, or its queue TTL cannot define
+    /// a monotonic retained-work deadline.
+    pub fn start(
+        mut self,
+        shutdown_signal: ShutdownSignal,
+    ) -> Result<(TransactionGossiperHandle, Child), TransactionGossiperStartError> {
+        if tokio::time::Instant::now()
+            .checked_add(self.queue.tx_time_to_live)
+            .is_none()
+        {
+            return Err(TransactionGossiperStartError::UnrepresentableRetentionBudget);
+        }
         let (message_sender, message_receiver) = mpsc::channel(1);
-        (
+        let publication_state = Arc::clone(&self.state);
+        let child = worker::start(
+            self.gossip_period,
+            message_receiver,
+            shutdown_signal,
+            move |height| {
+                let state = Arc::clone(&publication_state);
+                async move { state.wait_for_committed_height(height).await }
+            },
+            move |work| match work {
+                worker::Work::Tick => {
+                    self.gossip_transactions();
+                    None
+                }
+                worker::Work::Incoming(message) => self.handle_retained_gossip(
+                    message,
+                    GossipProgress::default(),
+                    tokio::time::Instant::now().checked_add(self.queue.tx_time_to_live),
+                ),
+                worker::Work::Retry(pending) => self.handle_retained_gossip(
+                    pending.message,
+                    pending.progress,
+                    Some(pending.deadline),
+                ),
+            },
+        )?;
+        Ok((
             TransactionGossiperHandle {
                 message_sender: Some(message_sender),
             },
-            Child::new(
-                tokio::task::spawn(self.run(message_receiver, shutdown_signal)),
-                OnShutdown::Abort,
-            ),
-        )
+            child,
+        ))
     }
     /// Construct [`Self`], deriving target seeds from the state's exact network identity.
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -481,27 +591,6 @@ impl TransactionGossiper {
             dataspace_cfg,
             public_seed,
             restricted_seed,
-        }
-    }
-    async fn run(
-        mut self,
-        mut message_receiver: mpsc::Receiver<Arc<TransactionGossip>>,
-        shutdown_signal: ShutdownSignal,
-    ) {
-        let mut gossip_period = tokio::time::interval(self.gossip_period);
-        gossip_period.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tokio::select! {
-                _ = gossip_period.tick() => self.gossip_transactions(),
-                Some(transaction_gossip) = message_receiver.recv() => {
-                    self.handle_transaction_gossip(transaction_gossip);
-                }
-                () = shutdown_signal.receive() => {
-                    iroha_logger::debug!("Shutting down transactions gossiper");
-                    break;
-                },
-            }
-            tokio::task::yield_now().await;
         }
     }
     fn deferred_index(&self) -> usize {
@@ -1491,18 +1580,70 @@ impl TransactionGossiper {
         }
         false
     }
-    fn handle_transaction_gossip(&self, gossip: Arc<TransactionGossip>) {
-        match Arc::try_unwrap(gossip) {
-            Ok(owned) => self.handle_transaction_gossip_owned(owned),
-            Err(shared) => self.handle_transaction_gossip_shared(shared.as_ref()),
+    /// The sole production receive boundary keeps the original envelope in this
+    /// stack or returns it to the same actor. No retained payload or credit clone.
+    fn handle_retained_gossip(
+        &self,
+        message: RetainedGossip<Arc<TransactionGossip>>,
+        mut progress: GossipProgress,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Option<PendingGossip> {
+        if !message
+            .payload()
+            .txs
+            .iter()
+            .any(|tx| tx.queue_plan_certificate().is_some())
+        {
+            message.with_payload(|gossip| match Arc::try_unwrap(gossip) {
+                Ok(owned) => self.handle_transaction_gossip_owned(owned),
+                Err(shared) => {
+                    self.handle_transaction_gossip_shared(shared.as_ref(), &mut progress)
+                }
+            });
+            return None;
         }
+        let Some(deadline) = deadline else {
+            iroha_logger::error!(
+                "transaction gossip queue TTL no longer fits a monotonic deadline"
+            );
+            return None;
+        };
+        // Zero TTL permits the first physical attempt but no deferred residence.
+        // An expired retry never starts another physical validation/persistence.
+        if progress.wait_height().is_some() && deadline <= tokio::time::Instant::now() {
+            return None;
+        }
+        // Certificate-bearing batches must stay intact while individual entries
+        // await publication; ordinary unique batches retain signature batching.
+        self.handle_transaction_gossip_shared(message.payload(), &mut progress);
+        progress
+            .wait_height()
+            .filter(|_| deadline > tokio::time::Instant::now())
+            .map(|required_height| PendingGossip {
+                message,
+                progress,
+                deadline,
+                required_height,
+            })
+    }
+    /// One physical attempt for existing nonactor fixtures; no shipping overload.
+    #[cfg(test)]
+    fn handle_transaction_gossip(&self, gossip: Arc<TransactionGossip>) {
+        drop(self.handle_retained_gossip(
+            RetainedGossip::synthetic_for_test(gossip),
+            GossipProgress::default(),
+            tokio::time::Instant::now().checked_add(self.queue.tx_time_to_live),
+        ));
     }
     fn reject_oversized_incoming_batch(
         &self,
         plane: GossipPlane,
         transaction_count: usize,
     ) -> bool {
-        let max_transactions = self.gossip_size.get() as usize;
+        let max_transactions = self
+            .gossip_size
+            .get()
+            .min(TRANSACTION_GOSSIP_MAX_SIZE.get()) as usize;
         if transaction_count <= max_transactions {
             return false;
         }
@@ -1535,6 +1676,7 @@ impl TransactionGossiper {
             plane,
         }: TransactionGossip,
     ) {
+        debug_assert!(txs.iter().all(|tx| tx.queue_plan_certificate().is_none()));
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();
         if self.reject_oversized_incoming_batch(plane, batch_txs) {
@@ -2142,10 +2284,18 @@ impl TransactionGossiper {
                             unreachable!("validated QueuePlan gossip retains its certificate")
                         };
                         match persist_queue_plan_gossip_certificate(state, certificate, &binding) {
-                            Ok(true) => {}
-                            Ok(false) => {
+                            Ok(
+                                QueuePlanGossipCertificateDisposition::EligibleAbsent
+                                | QueuePlanGossipCertificateDisposition::ExactPending,
+                            ) => {}
+                            Ok(QueuePlanGossipCertificateDisposition::Applied) => {
                                 iroha_logger::debug!(%entrypoint_hash, "dropping already-applied QueuePlan gossip entry");
                                 continue;
+                            }
+                            Ok(QueuePlanGossipCertificateDisposition::AwaitPublication(_)) => {
+                                unreachable!(
+                                    "certificate batches use the retained receive boundary"
+                                )
                             }
                             Err(error) => {
                                 iroha_logger::error!(%entrypoint_hash, %error, "failed to persist authenticated QueuePlan gossip certificate");
@@ -2256,7 +2406,12 @@ impl TransactionGossiper {
         }
     }
     #[allow(clippy::too_many_lines)]
-    fn handle_transaction_gossip_shared(&self, gossip: &TransactionGossip) {
+    fn handle_transaction_gossip_shared(
+        &self,
+        gossip: &TransactionGossip,
+        progress: &mut GossipProgress,
+    ) {
+        progress.begin_pass();
         let txs = &gossip.txs;
         let routes = &gossip.routes;
         let plans = &gossip.plans;
@@ -2346,6 +2501,12 @@ impl TransactionGossiper {
         let committed_transactions = state.transactions.view();
         let active_lane_ids = active_gossip_lane_ids(state, &nexus);
         for (idx, tx) in txs.iter().enumerate() {
+            if progress.is_complete(idx) {
+                continue;
+            }
+            // Every terminal validation/queue outcome is final. Only a typed
+            // publication wait clears this bit; later passes cannot replay it.
+            progress.complete(idx);
             let Some(route) = routes.get(idx).copied() else {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
                 self.record_drop_metric(
@@ -2399,6 +2560,55 @@ impl TransactionGossiper {
                     0,
                 );
                 continue;
+            }
+            // Authenticate an ahead-of-WSV certificate before using current
+            // catalog membership to reject its route. Validate its exact body
+            // signature at the certified enqueue time before retaining anything.
+            if let Some(certificate) = tx.queue_plan_certificate() {
+                let entrypoint = match tx.materialize_entrypoint() {
+                    Ok(entrypoint) => entrypoint,
+                    Err(_) => continue,
+                };
+                if entrypoint.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+                    continue;
+                }
+                let (binding, disposition) = match validate_queue_plan_gossip_certificate(
+                    state,
+                    certificate,
+                    &entrypoint,
+                    &advertised_plan,
+                ) {
+                    Ok(validated) => validated,
+                    Err(error) => {
+                        iroha_logger::warn!(%error, "rejecting QueuePlan transaction gossip");
+                        continue;
+                    }
+                };
+                if let QueuePlanGossipCertificateDisposition::AwaitPublication(_) = disposition {
+                    if let Err(error) = AcceptedTransaction::accept_entrypoint_at_time(
+                        (*entrypoint).clone(),
+                        state.network_id_ref(),
+                        max_clock_drift,
+                        tx_limits,
+                        crypto_cfg.as_ref(),
+                        Duration::from_millis(binding.enqueue_timestamp_ms),
+                    ) {
+                        iroha_logger::warn!(%error, "rejecting future QueuePlan gossip body");
+                        continue;
+                    }
+                    match persist_queue_plan_gossip_certificate(state, certificate, &binding) {
+                        Ok(QueuePlanGossipCertificateDisposition::AwaitPublication(height)) => {
+                            progress.defer(idx, height);
+                            continue;
+                        }
+                        Ok(QueuePlanGossipCertificateDisposition::Applied) => continue,
+                        Ok(_) => {} // Publication raced ahead: revalidate all normal checks below.
+                        Err(error) => {
+                            iroha_logger::warn!(%error, "rejecting future QueuePlan gossip persistence");
+                            continue;
+                        }
+                    }
+                }
             }
             if let Err(reason) =
                 validate_route(&lane_catalog, &dataspace_catalog, &active_lane_ids, route)
@@ -2710,9 +2920,16 @@ impl TransactionGossiper {
                             unreachable!("validated QueuePlan gossip retains its certificate")
                         };
                         match persist_queue_plan_gossip_certificate(state, certificate, &binding) {
-                            Ok(true) => {}
-                            Ok(false) => {
+                            Ok(
+                                QueuePlanGossipCertificateDisposition::EligibleAbsent
+                                | QueuePlanGossipCertificateDisposition::ExactPending,
+                            ) => {}
+                            Ok(QueuePlanGossipCertificateDisposition::Applied) => {
                                 iroha_logger::debug!(%entrypoint_hash, "dropping already-applied QueuePlan gossip entry");
+                                continue;
+                            }
+                            Ok(QueuePlanGossipCertificateDisposition::AwaitPublication(height)) => {
+                                progress.defer(idx, height);
                                 continue;
                             }
                             Err(error) => {
@@ -4413,6 +4630,18 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         Vec<u8>,
         TempDir,
     ) {
+        publication_queue_plan_gossip_fixture(label, false)
+    }
+    fn publication_queue_plan_gossip_fixture(
+        label: &str,
+        future: bool,
+    ) -> (
+        TransactionGossiper,
+        SignedTransaction,
+        crate::torii_proxy::QueuePlanAdmissionBindingV1,
+        Vec<u8>,
+        TempDir,
+    ) {
         let journal_dir = tempdir().expect("QueuePlan gossip journal directory");
         let mut state = State::new_for_testing(
             world_with_alice(),
@@ -4424,11 +4653,18 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue_config = QueueConfig::default();
         let transaction_time_to_live = queue_config.transaction_time_to_live;
-        let queue = Arc::new(Queue::test_with_router(
-            queue_config,
-            &time_source,
-            Arc::new(MismatchedQueuePlanRouter),
-        ));
+        // Only canonical WSV Pending authorizes a handoff despite a changed
+        // local router. Future evidence must still satisfy ordinary routing
+        // after catch-up, so give that positive fixture the canonical router.
+        let queue = Arc::new(if future {
+            Queue::test(queue_config, &time_source)
+        } else {
+            Queue::test_with_router(
+                queue_config,
+                &time_source,
+                Arc::new(MismatchedQueuePlanRouter),
+            )
+        });
         queue
             .install_plan_journal(
                 journal_dir.path().join("queue_plan_gossip.norito"),
@@ -4447,6 +4683,12 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .sign(ALICE_KEYPAIR.private_key());
         let entrypoint = TransactionEntrypoint::External(signed.clone());
         let routing_plan = default_plan();
+        if future {
+            let successor = gossip_publication_block(None);
+            let mut hashes = state.block_hashes.block();
+            hashes.push_for_tests(successor.hash());
+            hashes.commit_for_tests();
+        }
         let admission_context = queue
             .plan_admission_context_with_state(state.as_ref(), &routing_plan)
             .expect("capture exact QueuePlan gossip admission context");
@@ -4505,10 +4747,16 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         };
         let certificate = norito::encode_canonical(&certificate)
             .expect("encode exact QueuePlan gossip certificate");
-        state
-            .install_queue_plan_pending_binding_for_test(&binding)
-            .expect("install exact pending QueuePlan gossip binding");
-        time_handle.advance(transaction_time_to_live + Duration::from_millis(1));
+        if future {
+            let hashes = state.block_hashes.block_and_revert();
+            assert!(hashes.is_empty());
+            hashes.commit_for_tests();
+        } else {
+            state
+                .install_queue_plan_pending_binding_for_test(&binding)
+                .expect("install exact pending QueuePlan gossip binding");
+            time_handle.advance(transaction_time_to_live + Duration::from_millis(1));
+        }
         let now = Instant::now();
         let resend_ticks = NonZeroU32::new(1).expect("nonzero QueuePlan resend ticks");
         let gossiper = TransactionGossiper {
@@ -6521,6 +6769,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             "stale Native AMX participant plan must drop without suppressing valid gossip entries"
         );
     }
+    include!("gossiper/publication_recovery_tests.rs");
     include!("gossiper_network_domain_tests.rs");
     include!("gossiper_restricted_route_tests.rs");
 }

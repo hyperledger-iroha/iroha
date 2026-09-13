@@ -12,7 +12,6 @@ import {
   releaseDistLock,
   validateDistOutputs,
 } from "./build-dist.mjs";
-import { verifyBrowserCodec } from "./verify-browser-codec.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = resolve(SCRIPT_PATH, "..");
@@ -83,7 +82,6 @@ export function validatePackPaths(metadata) {
   }
   for (const required of [
     "package.json",
-    "browser-codec.d.ts",
     "atomic-private-settlement.d.ts",
     "index.d.ts",
     "ivm-artifact.d.ts",
@@ -93,11 +91,6 @@ export function validatePackPaths(metadata) {
     "repo-agreement.d.ts",
     "sumeragi-typed.d.ts",
     "dist/index.js",
-    "dist/public/browserCodec.js",
-    "dist/browserCodec.js",
-    "dist/browserCodecRuntime.js",
-    "dist/wasm/iroha_js_codec_wasm.js",
-    "dist/wasm/iroha_js_codec_wasm_bg.wasm",
     "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
     "dist/kagemusha.js",
@@ -119,6 +112,10 @@ export function validatePackPaths(metadata) {
     }
   }
   for (const path of paths) {
+    if (/(?:^|\/)wasm(?:\/|$)|\.wasm$/iu.test(path)
+      || /(?:^|\/)(?:browserCodec(?:Runtime)?\.js|browser-codec\.d\.ts)$/u.test(path)) {
+      throw new Error(`package smoke found forbidden browser codec artifact: ${path}`);
+    }
     if (path.startsWith("src/") || path.startsWith("scripts/")) {
       throw new Error(`package smoke found unpublished development path: ${path}`);
     }
@@ -140,9 +137,8 @@ async function main() {
       const src = join(ROOT, "src");
       const dist = join(ROOT, "dist");
       validateDistOutputs(dist);
-      await verifyBrowserCodec(dist);
       const sourceDigest = directoryDigest(src);
-      const distDigest = directoryDigest(dist, { excludeGeneratedBrowserCodec: true });
+      const distDigest = directoryDigest(dist);
       if (sourceDigest !== distDigest) {
         throw new Error(
           `package smoke requires exact src/dist parity (${sourceDigest} != ${distDigest})`,
@@ -282,17 +278,33 @@ async function main() {
       "recipes",
       "nexus_app_transfer.mjs",
     );
-    const recipe = await run(process.execPath, [installedRecipe], {
+    // This portable installation has no platform binding. The source native
+    // suite checks the complete recipe and exact payload/transaction goldens.
+    // Here approval must fail before requesting a signature or submitting.
+    const recipe = await run(process.execPath, [
+      "--input-type=module",
+      "--eval",
+      [
+        'import assert from "node:assert/strict";',
+        'import { pathToFileURL } from "node:url";',
+        'await assert.rejects(() => import(pathToFileURL(process.argv[1]).href), (error) => {',
+        '  assert.equal(error.phase, "validation");',
+        '  assert.equal(error.submissionState, "not_submitted");',
+        '  assert.equal(error.cause?.code, "ERR_IROHA_NATIVE_BINDING");',
+        '  assert.equal(error.cause?.nativeStatus, "missing_file");',
+        '  return true;',
+        '});',
+      ].join("\n"),
+      installedRecipe,
+    ], {
       cwd: consumerRoot,
+      env: {
+        ...process.env,
+        IROHA_JS_NATIVE_DIR: join(tempRoot, "missing-native"),
+      },
     });
-    for (const expected of [
-      "payload hash: 2b1553daadf14385d797279fe662b01812e4bf37b7d62df8144a2f0bd60b6297",
-      "signed transaction hash: d338123041fd61a734f21577b92cbe4b2c177541983ddc96e9e63f9fd878bde9",
-      "final status: Applied",
-    ]) {
-      if (!recipe.stdout.includes(expected)) {
-        throw new Error(`packed Nexus recipe output is missing: ${expected}`);
-      }
+    if (/payload hash:|signed transaction hash:|final status:/u.test(recipe.stdout)) {
+      throw new Error("packed Nexus recipe progressed without its required native binding");
     }
 
     const installedIsoBuilderRecipe = join(

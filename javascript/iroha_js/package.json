@@ -143,11 +143,6 @@
       "types": "./game.d.ts",
       "browser": "./dist/game.js",
       "import": "./dist/game.js"
-    },
-    "./browser-codec": {
-      "types": "./browser-codec.d.ts",
-      "browser": "./dist/public/browserCodec.js",
-      "import": "./dist/public/browserCodec.js"
     }
   },
   "typesVersions": {
@@ -235,9 +230,6 @@
       ],
       "game": [
         "./game.d.ts"
-      ],
-      "browser-codec": [
-        "./browser-codec.d.ts"
       ]
     }
   },
@@ -264,9 +256,7 @@
     "test:integration": "node ./scripts/run_integration.mjs",
     "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs",
-    "verify:browser-codec": "node ./scripts/verify-browser-codec.mjs",
-    "prepack": "npm run build:dist && npm run verify:browser-codec",
-    "build:wasm": "python3 scripts/build-wasm.py"
+    "prepack": "npm run build:dist"
   },
   "keywords": [
     "iroha",
@@ -290,7 +280,6 @@
     "README.md",
     "LICENSE",
     "browser.d.ts",
-    "browser-codec.d.ts",
     "kagemusha.d.ts",
     "address.d.ts",
     "normalizers.d.ts",

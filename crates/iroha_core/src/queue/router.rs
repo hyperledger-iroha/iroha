@@ -4,6 +4,7 @@
 //! scheduler expects, based on the runtime configuration. The router abstraction keeps the queue
 //! decoupled from the exact routing policy while allowing metrics to reflect the real assignments
 //! instead of collapsing metrics to the primary lane.
+mod settlement_atomic;
 mod settlement_pair;
 
 use crate::{
@@ -325,6 +326,12 @@ impl RoutingPlan {
 /// Deterministic routing resolution failure against configured Nexus catalogs.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum RoutingResolveError {
+    /// An atomic settlement cannot be routed because its signed movement list is invalid.
+    #[error("invalid atomic settlement movements: {reason}")]
+    InvalidAtomicSettlement {
+        /// Bounded deterministic model validation error.
+        reason: &'static str,
+    },
     /// lane {lane_id} is not present in the lane catalog
     #[error("lane {lane_id} is not present in the lane catalog")]
     UnknownLane {
@@ -457,6 +464,7 @@ impl RoutingResolveError {
     #[must_use]
     pub const fn as_label(&self) -> &'static str {
         match self {
+            Self::InvalidAtomicSettlement { .. } => "invalid_atomic_settlement",
             Self::UnknownLane { .. } => "unknown_lane",
             Self::UnknownDataspace { .. } => "unknown_dataspace",
             Self::LaneDataspaceMismatch { .. } => "lane_dataspace_mismatch",
@@ -1223,7 +1231,8 @@ impl FxCorridorRoutingOverlay {
                 any.downcast_ref::<SettlementInstructionBox>()
                     .and_then(|settlement| match settlement {
                         SettlementInstructionBox::SetFxCorridorPolicy(set) => Some(&set.policy),
-                        SettlementInstructionBox::Dvp(_)
+                        SettlementInstructionBox::Atomic(_)
+                        | SettlementInstructionBox::Dvp(_)
                         | SettlementInstructionBox::Pvp(_)
                         | SettlementInstructionBox::FundFxCorridorEscrow(_)
                         | SettlementInstructionBox::RefundFxCorridorEscrow(_)
@@ -1782,6 +1791,10 @@ fn instruction_settlement_dataspace_target_with_stack(
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(atomic) = settlement_atomic::instruction(instruction) {
+        return settlement_atomic::target(atomic);
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -1890,6 +1903,7 @@ fn instruction_settlement_dataspace_target_with_stack(
     }
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return Ok(match settlement {
+            SettlementInstructionBox::Atomic(atomic) => settlement_atomic::target(atomic)?,
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
                 asset_balance_definition_dataspace_target(
                     dvp.delivery_leg().asset_definition_id(),
@@ -1989,6 +2003,10 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(atomic) = settlement_atomic::instruction(instruction) {
+        return settlement_atomic::target(atomic);
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -2108,6 +2126,7 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
     }
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return Ok(match settlement {
+            SettlementInstructionBox::Atomic(atomic) => settlement_atomic::target(atomic)?,
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
                 asset_balance_definition_dataspace_target_with_world(
                     dvp.delivery_leg().asset_definition_id(),
@@ -2599,6 +2618,10 @@ fn transaction_dataspace_routing_target_info(
             }
         }
     }
+    apply_settlement_routing_target(
+        &mut target,
+        settlement_transaction_dataspace_target(tx, dataspace_catalog, state_view)?,
+    );
     Ok(target)
 }
 fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
@@ -2901,24 +2924,16 @@ fn reconcile_native_amx_participants_with_world<W: WorldReadOnly>(
             ledger_time_ms,
             routing_block_height,
         )?);
-    if let Some(settlement_target) = settlement_transaction_dataspace_target_with_world(
-        tx,
-        Some(dataspace_catalog),
-        world,
-        ledger_time_ms,
-        routing_block_height,
-    )? {
-        if settlement_target == DataSpaceId::UNIVERSAL {
-            target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            target.coordinator_route = true;
-            target.has_universal_target = true;
-        } else {
-            target.participants.insert(settlement_target);
-            if target.dataspace_id.is_none() {
-                target.dataspace_id = Some(settlement_target);
-            }
-        }
-    }
+    apply_settlement_routing_target(
+        &mut target,
+        settlement_transaction_dataspace_target_with_world(
+            tx,
+            Some(dataspace_catalog),
+            world,
+            ledger_time_ms,
+            routing_block_height,
+        )?,
+    );
     if target.participants.len() > 1 {
         target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
     } else if target.dataspace_id.is_none() {
@@ -2933,6 +2948,25 @@ fn reconcile_native_amx_participants_with_world<W: WorldReadOnly>(
         target.participants.iter().copied(),
     )?;
     Ok(target)
+}
+/// Normalize settlement coordination identically for catalog-only and State-based routing.
+fn apply_settlement_routing_target(
+    target: &mut TransactionDataspaceTarget,
+    settlement_target: Option<DataSpaceId>,
+) {
+    let Some(settlement_target) = settlement_target else {
+        return;
+    };
+    if settlement_target == DataSpaceId::UNIVERSAL {
+        target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        target.coordinator_route = true;
+        target.has_universal_target = true;
+    } else {
+        target.participants.insert(settlement_target);
+        if target.dataspace_id.is_none() {
+            target.dataspace_id = Some(settlement_target);
+        }
+    }
 }
 fn insert_native_amx_participant(
     dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
@@ -3069,6 +3103,13 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         )?,
     );
     let any = instruction.as_any();
+    if let Some(atomic) = settlement_atomic::instruction(instruction) {
+        for dataspace in settlement_atomic::concrete_dataspaces(atomic)? {
+            insert_native_amx_participant(dataspaces, Some(dataspace));
+        }
+        return Ok(());
+    }
+
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
@@ -3159,7 +3200,8 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         any.downcast_ref::<SettlementInstructionBox>()
             .and_then(|settlement| match settlement {
                 SettlementInstructionBox::SettleFxCorridor(fx) => Some(fx),
-                SettlementInstructionBox::Dvp(_)
+                SettlementInstructionBox::Atomic(_)
+                | SettlementInstructionBox::Dvp(_)
                 | SettlementInstructionBox::Pvp(_)
                 | SettlementInstructionBox::SetFxCorridorPolicy(_)
                 | SettlementInstructionBox::FundFxCorridorEscrow(_)
@@ -3186,7 +3228,8 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                     SettlementInstructionBox::RefundFxCorridorEscrow(refund) => {
                         Some(&refund.policy_id)
                     }
-                    SettlementInstructionBox::Dvp(_)
+                    SettlementInstructionBox::Atomic(_)
+                    | SettlementInstructionBox::Dvp(_)
                     | SettlementInstructionBox::Pvp(_)
                     | SettlementInstructionBox::SetFxCorridorPolicy(_)
                     | SettlementInstructionBox::SettleFxCorridor(_) => None,
@@ -4479,6 +4522,10 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(atomic) = settlement_atomic::instruction(instruction) {
+        return settlement_atomic::concrete_dataspaces(atomic).map(Some);
+    }
+
     if let Some(dataspaces) =
         settlement_pair::concrete_dataspaces(instruction, |asset_definition| {
             asset_balance_definition_dataspace_target(
@@ -4751,6 +4798,10 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(atomic) = settlement_atomic::instruction(instruction) {
+        return settlement_atomic::concrete_dataspaces(atomic).map(Some);
+    }
+
     if let Some(dataspaces) =
         settlement_pair::concrete_dataspaces(instruction, |asset_definition| {
             asset_balance_definition_dataspace_target_with_world(
@@ -4878,7 +4929,8 @@ fn fx_corridor_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnl
         any.downcast_ref::<SettlementInstructionBox>()
             .and_then(|settlement| match settlement {
                 SettlementInstructionBox::SettleFxCorridor(settle) => Some(settle),
-                SettlementInstructionBox::Dvp(_)
+                SettlementInstructionBox::Atomic(_)
+                | SettlementInstructionBox::Dvp(_)
                 | SettlementInstructionBox::Pvp(_)
                 | SettlementInstructionBox::SetFxCorridorPolicy(_)
                 | SettlementInstructionBox::FundFxCorridorEscrow(_)
@@ -4906,7 +4958,8 @@ fn fx_corridor_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnl
                     SettlementInstructionBox::RefundFxCorridorEscrow(refund) => {
                         Some(&refund.policy_id)
                     }
-                    SettlementInstructionBox::Dvp(_)
+                    SettlementInstructionBox::Atomic(_)
+                    | SettlementInstructionBox::Dvp(_)
                     | SettlementInstructionBox::Pvp(_)
                     | SettlementInstructionBox::SetFxCorridorPolicy(_)
                     | SettlementInstructionBox::SettleFxCorridor(_) => None,
@@ -5666,6 +5719,10 @@ fn instruction_transaction_target_requires_universal_coordinator(
     state_view: Option<&StateView<'_>>,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(atomic) = settlement_atomic::instruction(instruction) {
+        return settlement_atomic::requires_universal_coordinator(atomic);
+    }
+
     if instruction_uses_universal_alias_registry(instruction) {
         return alias_registry_routing_active_with_state(state_view);
     }
@@ -5819,6 +5876,10 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(atomic) = settlement_atomic::instruction(instruction) {
+        return settlement_atomic::requires_universal_coordinator(atomic);
+    }
+
     if instruction_uses_universal_alias_registry(instruction) {
         return alias_registry_routing_active(world, None);
     }
@@ -6162,7 +6223,8 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
         any.downcast_ref::<SettlementInstructionBox>()
             .and_then(|settlement| match settlement {
                 SettlementInstructionBox::SettleFxCorridor(settle) => Some(settle),
-                SettlementInstructionBox::Dvp(_)
+                SettlementInstructionBox::Atomic(_)
+                | SettlementInstructionBox::Dvp(_)
                 | SettlementInstructionBox::Pvp(_)
                 | SettlementInstructionBox::SetFxCorridorPolicy(_)
                 | SettlementInstructionBox::FundFxCorridorEscrow(_)
@@ -6478,6 +6540,11 @@ fn trigger_executable_transaction_target_needs_state(executable: &Executable) ->
 }
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
+    if settlement_atomic::instruction(instruction).is_some() {
+        // Every movement binds an explicit scope; aliases cannot alter the signed routes.
+        return false;
+    }
+
     if instruction_uses_universal_alias_registry(instruction) {
         return true;
     }
@@ -6551,6 +6618,7 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     }
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return match settlement {
+            SettlementInstructionBox::Atomic(_) => false,
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => true,
             SettlementInstructionBox::SetFxCorridorPolicy(_) => false,
             SettlementInstructionBox::FundFxCorridorEscrow(_)
@@ -16739,4 +16807,5 @@ mod tests {
     include!("router_cross_dataspace_plan_tests.rs"); // Preserve stable `queue::router::tests` paths.
     include!("router_multisig_scope_tests.rs");
     include!("router_resolved_asset_scope_tests.rs");
+    include!("router_private_pool_routing_tests.rs");
 }

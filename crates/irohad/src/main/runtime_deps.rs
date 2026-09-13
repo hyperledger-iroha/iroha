@@ -803,16 +803,9 @@ impl IrohaRuntimeDeps {
 #[cfg(test)]
 mod parliament_tle_release_tests {
     use super::*;
-    use iroha_core::{
-        smartcontracts::Execute as _,
-        state::{
-            StateTransaction, THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-            threshold_key_lifecycle_certificate_preimage_v1,
-        },
-        tle_release::{TleKeySessionPublicStateV1, ValidatedTleKeySessionV1},
-    };
+    use iroha_core::tle_release::{TleKeySessionPublicStateV1, ValidatedTleKeySessionV1};
     use iroha_crypto::{
-        Algorithm, Hash, HashOf, KeyPair, Signature,
+        Algorithm, Hash, HashOf, KeyPair,
         threshold_bls::{
             AdaptiveThresholdBlsParameters, DasRenDealerSecret, ThresholdBlsSession,
             TleReleasePurpose,
@@ -823,10 +816,6 @@ mod parliament_tle_release_tests {
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
             TleKeySessionId,
-        },
-        isi::consensus_keys::{
-            ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
-            ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
         },
     };
     use rand::{SeedableRng as _, rngs::StdRng};
@@ -961,52 +950,6 @@ mod parliament_tle_release_tests {
             .clone()
     }
 
-    fn certified_tle_install_v1(
-        state_transaction: &StateTransaction<'_, '_>,
-        validator_keys: &[KeyPair],
-        public_state: &TleKeySessionPublicStateV1,
-    ) -> ApplyThresholdKeyLifecycleCertificateV1 {
-        let ordered_roster = state_transaction.commit_topology().get();
-        assert_eq!(ordered_roster.len(), validator_keys.len());
-        for (peer, key) in ordered_roster.iter().zip(validator_keys) {
-            assert_eq!(peer.public_key(), key.public_key());
-        }
-        let committee_size = u16::try_from(ordered_roster.len()).expect("small test roster");
-        let quorum =
-            u16::try_from((ordered_roster.len() - 1) / 3 * 2 + 1).expect("small test quorum");
-        let mut certificate = ThresholdKeyLifecycleCertificateV1 {
-            version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-            action: ThresholdKeyLifecycleActionV1::InstallParliamentTleKey,
-            expected_active_session_id: state_transaction
-                .world
-                .active_tle_key_session()
-                .map(|session_id| *session_id.as_bytes()),
-            effective_height: state_transaction.block_height(),
-            network_id: state_transaction.network_id,
-            roster_hash: iroha_core::beacon::global_threshold_beacon_roster_hash_v1(ordered_roster),
-            committee_size,
-            quorum,
-            session_id: *public_state.key_session_id.as_bytes(),
-            transcript_hash: public_state.transcript_hash,
-            public_state: norito::encode_canonical(public_state)
-                .expect("encode canonical TLE public state"),
-            signatures: Vec::new(),
-        };
-        let preimage = threshold_key_lifecycle_certificate_preimage_v1(&certificate)
-            .expect("derive threshold-key lifecycle preimage");
-        certificate.signatures = validator_keys
-            .iter()
-            .take(usize::from(quorum))
-            .enumerate()
-            .map(|(index, key)| ThresholdKeyLifecycleSignatureV1 {
-                signer_index: u16::try_from(index).expect("small signer index"),
-                signature: Signature::try_new(key.private_key(), &preimage)
-                    .expect("sign threshold-key lifecycle certificate"),
-            })
-            .collect();
-        ApplyThresholdKeyLifecycleCertificateV1 { certificate }
-    }
-
     struct ThresholdSignerReadinessFixture {
         state: State,
         local_peer: PeerId,
@@ -1073,41 +1016,41 @@ mod parliament_tle_release_tests {
         );
         let mut block = state.block(header);
         let mut state_transaction = block.transaction();
-        *state_transaction.commit_topology.get_mut() = retained_roster.clone();
         let retained_public_session = tle_public_session_fixture_v1(
             *network_id.as_bytes(),
             RETAINED_SESSION_BYTE,
             iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&retained_roster),
         );
         let retained_key_session_id = retained_public_session.key_session_id;
-        certified_tle_install_v1(
-            &state_transaction,
-            &validator_keys,
-            &retained_public_session,
-        )
-        .execute(
-            &AccountId::new(validator_keys[0].public_key().clone()),
-            &mut state_transaction,
-        )
-        .expect("install deadline-retained TLE session");
+        // Runtime custody is tested against a validated historical snapshot.
+        // Certificate authentication remains the core instruction tests' owner.
+        state_transaction
+            .world
+            .install_historical_tle_session_for_testing(
+                retained_public_session,
+                retained_roster.clone(),
+                1,
+                Default::default(),
+            )
+            .expect("install deadline-retained TLE snapshot fixture");
 
-        *state_transaction.commit_topology.get_mut() = active_roster.clone();
         let active_public_session = tle_public_session_fixture_v1(
             *network_id.as_bytes(),
             ACTIVE_SESSION_BYTE,
             iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&active_roster),
         );
         let active_key_session_id = active_public_session.key_session_id;
-        certified_tle_install_v1(
-            &state_transaction,
-            &active_validator_keys,
-            &active_public_session,
-        )
-        .execute(
-            &AccountId::new(active_validator_keys[0].public_key().clone()),
-            &mut state_transaction,
-        )
-        .expect("install active TLE session");
+        // Runtime custody is tested against a validated historical snapshot.
+        // Certificate authentication remains the core instruction tests' owner.
+        state_transaction
+            .world
+            .install_historical_tle_session_for_testing(
+                active_public_session,
+                active_roster.clone(),
+                2,
+                Default::default(),
+            )
+            .expect("install active TLE snapshot fixture");
 
         let proposal = ProposalKind::DeployContract(DeployContractProposal {
             proposal_operator: AccountId::new(validator_keys[0].public_key().clone()),
@@ -1163,7 +1106,7 @@ mod parliament_tle_release_tests {
         assert_eq!(
             state.commit_topology_snapshot(),
             active_roster,
-            "startup topology must match the active TLE certificate roster in this fixture",
+            "startup topology must match the active TLE frozen roster in this fixture",
         );
 
         assert_eq!(
@@ -1179,6 +1122,59 @@ mod parliament_tle_release_tests {
             retained_participant_index,
             active_participant_index,
         }
+    }
+
+    #[test]
+    fn threshold_readiness_snapshot_fixture_rejects_wrong_roster_and_overlapping_activation() {
+        let fixture = threshold_signer_readiness_fixture_v1(13);
+        let active_roster = fixture.state.commit_topology_snapshot();
+        let retained_public = fixture
+            .state
+            .view()
+            .world()
+            .tle_key_sessions()
+            .get(&fixture.retained_key_session_id)
+            .expect("retained session")
+            .clone();
+        let pending_public = tle_public_session_fixture_v1(
+            retained_public.network_id,
+            0xF1,
+            iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&active_roster),
+        );
+        let pending_id = pending_public.key_session_id;
+        {
+            let header = BlockHeader::new(NonZeroU64::new(14).unwrap(), None, None, None, 0, 0);
+            let mut block = fixture.state.block(header);
+            let mut transaction = block.transaction();
+            assert!(
+                transaction
+                    .world
+                    .install_historical_tle_session_for_testing(
+                        retained_public,
+                        active_roster.clone(),
+                        1,
+                        Default::default(),
+                    )
+                    .expect_err("a substituted frozen roster must fail")
+                    .contains("public state")
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .install_historical_tle_session_for_testing(
+                        pending_public,
+                        active_roster,
+                        0,
+                        Default::default(),
+                    )
+                    .expect_err("overlapping historical activation must fail"),
+                "invalid TLE fixture lifecycle: UnknownSession"
+            );
+            // Failed fixture transactions are discarded, exactly like failed instructions.
+        }
+        let view = fixture.state.view();
+        assert!(view.world().tle_key_sessions().get(&pending_id).is_none());
+        assert_eq!(view.world().tle_key_sessions().iter().count(), 2);
     }
 
     #[test]

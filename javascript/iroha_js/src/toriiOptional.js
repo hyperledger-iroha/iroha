@@ -83,3 +83,5 @@ export {
   encodeValidationFeeHijiriQuoteRequestV1,
   verifyValidationFeeHijiriQuoteResponseV1,
 } from "./validationFeeHijiriQuote.js";
+
+export { createSorafsReplicationResponseNormalizer } from "./sorafsReplicationResponses.js";

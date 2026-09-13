@@ -1,6 +1,8 @@
 /// Concrete effect services used by the live v2 height runner.
 pub(crate) struct ProductionV2Services {
     context: wire::HeightContext,
+    /// Immutable certified-view delivery audience, not additional global voters.
+    timeout_certificate_targets: Vec<PeerId>,
     validator_set_pops: Vec<Vec<u8>>,
     state: Arc<crate::state::State>,
     local_peer: PeerId,

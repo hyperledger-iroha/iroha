@@ -697,7 +697,8 @@ or the earlier scalar kernel captures below.
   - The kernel suite now has a dedicated reference (`specs/fastpq_metal_kernels.md`) that documents each entry point, the threadgroup/tile limits enforced in `fastpq.metallib`, and the reproduction steps for compiling the metallib manually.【specs/fastpq_metal_kernels.md:1】
   - The benchmark report now emits a `post_tile_dispatches` object that records how many FFT/IFFT/LDE batches ran in the dedicated post-tiling kernel (per-kind dispatch counts plus the stage/log₂ boundaries). `scripts/fastpq/wrap_benchmark.py` copies the block into `benchmarks.post_tile_dispatches`/`benchmarks.post_tile_summary`, and the manifest gate refuses GPU captures that omit the evidence so every 20 k-row artefact proves the multi-pass kernel ran on-device.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】【scripts/fastpq/wrap_benchmark.py:255】【xtask/src/fastpq.rs:280】
   - Set `FASTPQ_METAL_TRACE=1` to emit per-dispatch debug logs (pipeline label, threadgroup width, launch groups, elapsed time) for Instruments/Metal trace correlation.【crates/fastpq_prover/src/metal.rs:346】
-- The dispatch queue is now instrumented: `FASTPQ_METAL_MAX_IN_FLIGHT` caps concurrent Metal command buffers (auto default derived from the detected GPU core count via `system_profiler`, clamped to at least the queue fan-out floor with a host-parallelism fallback when macOS refuses to report the device). The bench enables queue-depth sampling so the exported JSON carries a `metal_dispatch_queue` object with `limit`, `dispatch_count`, `max_in_flight`, `busy_ms`, and `overlap_ms` fields for release evidence, adds a nested `metal_dispatch_queue.poseidon` block whenever a Poseidon-only capture (`--operation poseidon_hash_columns`) runs, and emits a `metal_heuristics` block describing the resolved command-buffer limit plus the FFT/LDE batch columns (including whether overrides forced the values) so reviewers can audit the scheduling decisions alongside the telemetry. Poseidon kernels also feed a dedicated `poseidon_profiles` block distilled from the kernel samples so bytes/thread, occupancy, and dispatch geometry are tracked across artefacts. If the primary run can’t collect queue depth or the LDE zero-fill stats (for example, when a GPU dispatch silently falls back to the CPU), the harness automatically fires a single probe dispatch to gather the missing telemetry and now synthesizes host zero-fill timings when the GPU refuses to report them, so published evidence always includes the `zero_fill` block.【crates/fastpq_prover/src/metal.rs:2056】【crates/fastpq_prover/src/metal.rs:247】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1524】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2078】
+- Native primitive benchmark evidence follows [the exact V1 contract](fastpq_benchmark_v1.md). Actual FFT/LDE staging and queue statistics retain their own measurements. Six-lane commitments record successful bounded frame dispatches and all-lane parity; missing telemetry is not synthesized or replaced by a probe result.
+
   - Set `FASTPQ_SKIP_GPU_BUILD=1` to skip offline shader compilation; the warning records the skip, while visible macOS Metal hardware remains usable through embedded runtime source compilation.【crates/fastpq_prover/build.rs:32】【crates/fastpq_prover/src/metal.rs:2348】
   - Runtime detection uses the Metal API to confirm a usable device independently of shader-library location. The build prefers `fastpq.metallib`, warns with an explicit manual install command when the offline compiler is missing, and compiles embedded self-contained MSL 2.4 source when the offline library is absent. Pipeline/preflight failures remain fail-closed; explicit `FASTPQ_METAL_LIB` overrides are limited to debug/dev builds.【crates/fastpq_prover/build.rs:107】【crates/fastpq_prover/src/backend.rs:745】【crates/fastpq_prover/src/metal.rs:2334】
   - Operator checklist (Metal hosts):
@@ -757,29 +758,8 @@ or the earlier scalar kernel captures below.
       template manually with `--trace-output <path>` plus optional `--trace-template` /
       `--trace-seconds`. The resulting JSON advertises `metal_trace_{template,seconds,output}` so
       artefact bundles always identify the captured trace.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:177】
-      Wrap each capture with
-      `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_<date>.json fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output`
-       (add `--gpg-key <fingerprint>` if you need to pin a signing identity) so the bundle fails
-       fast whenever the GPU LDE mean breaches the 950 ms target, Poseidon exceeds 1 s, or the
-       Poseidon telemetry blocks are missing, embeds a `row_usage_snapshot`
-      next to the JSON, surfaces the Poseidon microbench summary under `benchmarks.poseidon_microbench`,
-      and still carries metadata for runbooks and the Grafana dashboard
-    (`dashboards/grafana/fastpq_acceleration.json`). The JSON now emits `speedup.ratio` /
-     `speedup.delta_ms` per operation so release evidence can prove GPU vs
-     CPU gains without reprocessing the raw samples, and the wrapper copies both the
-     zero-fill statistics (plus `queue_delta`) into `zero_fill_hotspots` (bytes, latency, derived
-     GB/s), records the Instruments metadata under `metadata.metal_trace`, threads the optional
-     `metadata.row_usage_snapshot` block when `--row-usage <decoded witness>` is supplied, and flattens the
-     per-kernel counters into `benchmarks.kernel_summary` so padding bottlenecks, Metal queue
-     utilisation, kernel occupancy, and bandwidth regressions are visible at a glance without
-     spelunking the raw report.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:521】【scripts/fastpq/wrap_benchmark.py:1】
-     Because the row-usage snapshot now travels with the wrapped artefact, rollout tickets simply
-     reference the bundle instead of attaching a second JSON snippet, and CI can diff the embedded
-    counts directly when validating Stage 7 submissions. To archive the microbench data on its own,
-    run `python3 scripts/fastpq/export_poseidon_microbench.py --bundle artifacts/fastpq_benchmarks/<metal>.json`
-    and store the resulting file under `benchmarks/poseidon/`. Keep the aggregated manifest fresh with
-    `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`
-    so dashboards/CI can diff the full history without walking each file manually.
+      Wrap each actual capture with `scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --row-usage <decoded-snapshot.json> <raw.json> <wrapped.json> --sign-output`. Keep the complete six-lane framing and device counts, exact producer identity, FFT/LDE telemetry and trace metadata. Use `--require-digest384-columns-mean-ms <reviewed-limit-ms>` for a reviewed six-lane target. History/dashboard consumers retain this evidence; scalar microbench exporters are retired.
+
     4. Validate telemetry by curling `fastpq_execution_mode_total{device_class="<matrix>", backend="metal"}` (Prometheus endpoint) or looking for `telemetry::fastpq.execution_mode` logs; unexpected `backend="none"` or failed GPU preflight entries indicate the host did not satisfy explicit GPU readiness.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
     5. Use `zk.fastpq.execution_mode = "cpu"` to document the deterministic CPU operating path during maintenance; production `gpu` mode must pass preflight or stay disabled.【crates/iroha_config/src/parameters/user.rs:3964】【crates/iroha_core/src/fastpq/lane.rs:228】
 - Telemetry & readiness:
@@ -807,9 +787,9 @@ or the earlier scalar kernel captures below.
     | Verify library path | Record whether the build-time library or embedded source path is in use | Archive the relevant `build.rs` output and note whether the packaged binary retained its embedded Cargo `OUT_DIR` library. An absent or stale path selects embedded runtime source compilation and does not disable visible Metal hardware.【crates/fastpq_prover/build.rs:29】【crates/fastpq_prover/src/metal.rs:2475】
     | GPU parity suite | Prove kernels execute before shipping production `gpu` mode | `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu --release` and store the resulting log snippet that shows `backend="metal"` or an unavailable-backend warning that blocks GPU rollout.【crates/fastpq_prover/src/backend.rs:114】【crates/fastpq_prover/src/backend.rs:195】
     | Benchmark sample | Capture the JSON/log pair that records `speedup.*` and FFT tuning so dashboards can ingest accelerator evidence | `cargo run -p fastpq_prover --features fastpq-gpu,dev-tools --bin fastpq_metal_bench --release -- --rows 20000 --iterations 5 --output fastpq_metal_bench.json --trace-dir traces`; archive the JSON, the timestamped `.trace`, and stdout alongside release notes so the Grafana board picks up the Metal run (the report records the requested 20 k rows plus the padded 32,768-row domain so reviewers can confirm the `<1 s` LDE target).【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:697】
-    | Wrap & sign report | Fail the release if the GPU LDE mean breaches 950 ms, Poseidon exceeds 1 s, or Poseidon telemetry blocks are missing, and produce a signed artefact bundle | `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_metal_bench.json artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --sign-output [--gpg-key <fingerprint>]`; ship both the wrapped JSON and the generated `.json.asc` signature so auditors can verify the sub-second metrics without rerunning the workload.【scripts/fastpq/wrap_benchmark.py:714】【scripts/fastpq/wrap_benchmark.py:732】 |
+    | Wrap & sign report | Validate exact V1 operation evidence and reviewed per-operation limits. | Follow [the benchmark contract](fastpq_benchmark_v1.md), retaining raw/wrapped JSON and signatures. |
     | Signed bench manifest | Enforce `<1 s` LDE evidence across Metal/CUDA bundles and capture signed digests for release approval | `cargo xtask fastpq-bench-manifest --bench metal=artifacts/fastpq_benchmarks/fastpq_metal_bench_<date>_macos14_arm64.json --bench cuda=artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --matrix artifacts/fastpq_benchmarks/matrix/matrix_manifest.json --signing-key secrets/fastpq_bench.ed25519 --out artifacts/fastpq_bench_manifest.json`; attach the generated manifest + signature to the release ticket so downstream automation can validate the sub-second proof metrics.【xtask/src/fastpq.rs:1】
-| CUDA bundle | Keep the SM80 CUDA capture in lock-step with the Metal evidence so manifests cover both GPU classes. | `FASTPQ_GPU=gpu cargo run -p fastpq_prover --features dev-tools --bin fastpq_cuda_bench --release -- --rows 20000 --iterations 5 --column-count 16 --device 0 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_<date>.json` on the Xeon + RTX host → `python3 scripts/fastpq/wrap_benchmark.py --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 fastpq_cuda_bench.json artifacts/fastpq_benchmarks/fastpq_cuda_bench_<date>_sm80.json --label device_class=xeon-rtx-sm80 --sign-output`; append the generated wrapped path to `artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt` and keep the `.json`/`.asc` pair next to the Metal bundle. No seeded CUDA reference bundle is checked in.【scripts/fastpq/wrap_benchmark.py:1】
+| CUDA bundle | Capture the same V1 workload on the actual CUDA host. | Run `fastpq_cuda_bench` with current operation IDs, wrap/sign the exact `cuda_nested` report and retain its complete device counters; follow [the benchmark contract](fastpq_benchmark_v1.md). |
 | Telemetry check | Validate the Prometheus surface reflects `device_class="<matrix>", backend="metal"` or explicit CPU mode | `curl -s http://<host>:8180/metrics | rg 'fastpq_execution_mode_total{device_class'` and copy the `telemetry::fastpq.execution_mode` log emitted at startup.【crates/iroha_telemetry/src/metrics.rs:8887】【crates/fastpq_prover/src/backend.rs:174】
     | Explicit CPU drill | Document the deterministic CPU path for SRE playbooks | Run a short workload with `zk.fastpq.execution_mode = "cpu"` and capture the startup log so operators can rehearse the rollback procedure.【crates/iroha_config/src/parameters/user.rs:3964】
     | Trace capture (optional) | When profiling, capture dispatch traces so kernel lane/tile overrides are reviewable later | Rerun one parity test with `FASTPQ_METAL_TRACE=1 FASTPQ_GPU=gpu …` and attach the produced trace log to your release artefacts.【crates/fastpq_prover/src/metal.rs:346】【crates/fastpq_prover/src/backend.rs:208】
@@ -866,11 +846,7 @@ emits BLAKE3 + SHA-256 digests, and (optionally) signs the manifest with an
 Ed25519 key so release tooling can verify provenance. See
 `xtask/src/fastpq.rs`/`xtask/src/main.rs` for the implementation.
 
-> **Note:** Metal bundles that omit `benchmarks.poseidon_microbench` now cause
-> the manifest generation to fail. Re-run `scripts/fastpq/wrap_benchmark.py`
-> (and `scripts/fastpq/export_poseidon_microbench.py` if you need a standalone
-> summary) whenever the Poseidon evidence is missing so release manifests
-> always capture the scalar-vs-default comparison.【xtask/src/fastpq.rs:409】
+> Each six-lane operation must retain its exact frame/geometry and complete device parity evidence. Missing or divergent copies reject the manifest. Historical scalar reports cannot be adapted into V1 six-lane evidence.
 
 The `--matrix` flag (defaulting to `artifacts/fastpq_benchmarks/matrix/matrix_manifest.json`
 when present) loads the cross-device medians captured by
@@ -1186,7 +1162,11 @@ release ticket with the relevant `fastpq_execution_mode_total`,
 with links to the Grafana panel and the alert snapshot so reviewers can see
 exactly which SLO triggered.
 
-### WP2-E — Stage-by-stage Metal profiling snapshot
+### Historical WP2-E Metal profiling snapshot
+
+These scalar-era measurements retain their original operation names and timings.
+They do not measure or qualify the six-lane V1 construction; current capture
+requirements are in [the benchmark contract](fastpq_benchmark_v1.md).
 
 `scripts/fastpq/src/bin/metal_profile.rs` summarizes the wrapped Metal captures
 so the sub-900 ms target can be tracked over time (run
@@ -1285,8 +1265,7 @@ Key observations:
    whether the FFT occupancy can be salvaged without hurting the already-better
    IFFT timings. The `scripts/fastpq/launch_geometry_sweep.py` helper now drives
    these experiments end-to-end: pass comma-separated overrides (for example,
-   `--fft-columns 16,32 --queue-fanout 1,2` and
-   `--poseidon-lanes auto,256`) and it will invoke
+   `--fft-columns 16,32 --queue-fanout 1,2`) and it will invoke
    `fastpq_metal_bench` for every combination, store the JSON payloads under
    `artifacts/fastpq_geometry/<timestamp>/`, and persist a `summary.json` bundle
    describing each run’s queue ratios, FFT/LDE launch picks, GPU vs CPU timings,
@@ -1299,14 +1278,14 @@ Key observations:
    The companion `scripts/fastpq/geometry_matrix.py` tool now ingests one or
    more summary bundles (`--summary hostA/summary.json --summary hostB/summary.json`)
    and emits Markdown/JSON tables that label every launch shape as *stable*
-   (FFT/LDE/Poseidon GPU timings captured) or *unstable* (timeout, CPU fallback,
+   (FFT/LDE and both six-lane GPU operations validated) or *unstable* (timeout, CPU fallback,
    non-Metal backend, or missing telemetry) alongside the host columns. The
    tables now include the resolved `execution_mode`/`gpu_backend` plus a
    `Reason` column so CPU fallbacks and missing GPU timings are obvious in
    Stage 7 matrices even when timing blocks are present; a summary line counts
-   the stable vs total runs. Pass `--operation fft|lde|poseidon_hash_columns`
-   when the sweep needs to isolate a single stage (for example, to profile
-   Poseidon separately) and keep `--extra-args` free for bench-specific flags.
+   the stable vs total runs. Pass one exact V1 `--operation` selector for a
+   focused capture; a complete matrix requires FFT, LDE and both six-lane stages.
+   Keep `--extra-args` free for bench-specific flags.
    The helper accepts any
    command prefix (defaulting to `cargo run … fastpq_metal_bench`) plus optional
    `--halt-on-error` / `--timeout-seconds` guards so performance engineers can
@@ -1323,9 +1302,8 @@ Key observations:
    whenever GPU timings are missing or queue/staging telemetry is absent, so
    dispatch_count=0 runs can no longer slip into WP2-E bundles unnoticed.
    `fastpq_metal_bench` now exposes `--require-gpu`, and
-   `launch_geometry_sweep.py` enables it by default (opt out with
-   `--allow-cpu-fallback`) so CPU fallbacks and Metal detection failures abort
-   immediately instead of polluting Stage 7 matrices with non-GPU telemetry.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs】【scripts/fastpq/launch_geometry_sweep.py】
+   `launch_geometry_sweep.py` requires it unconditionally. GPU detection or
+   dispatch failure aborts the capture; a CPU run cannot qualify the matrix.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs】【scripts/fastpq/launch_geometry_sweep.py】
 4. Zero-fill metrics previously vanished for the same reason; the fencing fix
    keeps host instrumentation live, so the next capture should include the
    `zero_fill` block without synthetic timings.

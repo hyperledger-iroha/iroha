@@ -2,7 +2,7 @@
 """Summarize registered AtomicPrivateSettlementV1 benchmark evidence.
 
 Python 3.11+ and the sibling canonical accounting/runner modules are required.
-CLI callers must provide a closed retained scope and its successful JSONL rows;
+CLI callers provide a closed retained scope and exact source/image admission;
 no source execution, network operation, or missing-attempt inference is performed.
 """
 
@@ -16,9 +16,7 @@ import random
 import re
 import statistics
 import sys
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -62,38 +60,10 @@ class EvidenceError(ValueError):
     """Raised when raw benchmark evidence is incomplete or malformed."""
 
 
-@dataclass(frozen=True)
-class Measurement:
-    """Validated benchmark metrics before registered attempt identity is attached."""
-
-    commit: str
-    hardware_sha256: str
-    hardware_profile_sha256: str
-    configuration_sha256: str
-    profile: str
-    participants: int
-    seed: int
-    run: int
-    warmup: bool
-    stages_ms: Mapping[str, float]
-    resources: Mapping[str, float]
 
 
-@dataclass(frozen=True)
-class Sample(Measurement):
-    """One measured success joined to its immutable registered attempt."""
-
-    attempt_id: str
 
 
-def parse_sample(record: Any, source: str) -> Sample:
-    """Require registered attempt identity on every retained statistical sample."""
-
-    if not isinstance(record, dict) or not isinstance(record.get("attempt_id"), str) or re.fullmatch(
-            r"[0-9a-f]{64}", record["attempt_id"]) is None:
-        raise EvidenceError(f"{source}: sample must bind its registered attempt")
-    measurement = parse_measurement({key: value for key, value in record.items() if key != "attempt_id"}, source)
-    return Sample(**vars(measurement), attempt_id=record["attempt_id"])
 
 
 def _finite_nonnegative(value: Any, label: str) -> float:
@@ -105,126 +75,8 @@ def _finite_nonnegative(value: Any, label: str) -> float:
     return rendered
 
 
-def parse_measurement(record: Any, source: str) -> Measurement:
-    """Validate metrics independently of the outer attempt-registration transport."""
-
-    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != REPORT_VERSION:
-        raise EvidenceError(f"{source}: sample version must be 1")
-    expected = {
-        "version",
-        "protocol",
-        "commit",
-        "hardware_sha256",
-        "hardware_profile_sha256",
-        "configuration_sha256",
-        "profile",
-        "participants",
-        "seed",
-        "run",
-        "warmup",
-        "stages_ms",
-        *RESOURCE_FIELDS,
-    }
-    unknown = set(record) - expected
-    missing = expected - set(record)
-    if unknown or missing:
-        raise EvidenceError(
-            f"{source}: sample fields mismatch; missing={sorted(missing)} unknown={sorted(unknown)}"
-        )
-    if record["protocol"] != PROTOCOL:
-        raise EvidenceError(f"{source}: sample protocol must be {PROTOCOL}")
-    commit = record["commit"]
-    if not isinstance(commit, str) or _GIT_COMMIT.fullmatch(commit) is None:
-        raise EvidenceError(f"{source}: sample commit must be a full Git object id")
-    hardware_sha256 = record["hardware_sha256"]
-    hardware_profile_sha256 = record["hardware_profile_sha256"]
-    configuration_sha256 = record["configuration_sha256"]
-    if (
-        not isinstance(hardware_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", hardware_sha256) is None
-        or not isinstance(hardware_profile_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", hardware_profile_sha256) is None
-        or not isinstance(configuration_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", configuration_sha256) is None
-    ):
-        raise EvidenceError(f"{source}: sample environment digests must be SHA-256")
-    profile = record["profile"]
-    if profile not in PROFILES:
-        raise EvidenceError(f"{source}: profile must be one of {PROFILES}")
-    participants = record["participants"]
-    seed = record["seed"]
-    run = record["run"]
-    warmup = record["warmup"]
-    if type(participants) is not int or participants not in REQUIRED_PARTICIPANTS:
-        raise EvidenceError(f"{source}: unsupported real-network participant count")
-    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
-        raise EvidenceError(f"{source}: seed must be a non-negative integer")
-    if isinstance(run, bool) or not isinstance(run, int) or run < 0:
-        raise EvidenceError(f"{source}: run must be a non-negative integer")
-    if not isinstance(warmup, bool):
-        raise EvidenceError(f"{source}: warmup must be boolean")
-    stages = record["stages_ms"]
-    if not isinstance(stages, dict):
-        raise EvidenceError(f"{source}: stages_ms must be an object")
-    required_stages = (
-        REQUIRED_PRIVATE_STAGES
-        if profile == "private"
-        else ("global_finality", "end_to_end")
-    )
-    if set(stages) != set(required_stages):
-        raise EvidenceError(
-            f"{source}: {profile} stages must be exactly {required_stages}"
-        )
-    normalized_stages = {
-        stage: _finite_nonnegative(value, f"{source}: stages_ms.{stage}")
-        for stage, value in stages.items()
-    }
-    resources = {
-        field: _finite_nonnegative(record[field], f"{source}: {field}")
-        for field in RESOURCE_FIELDS
-    }
-    return Measurement(
-        commit=commit,
-        hardware_sha256=hardware_sha256,
-        hardware_profile_sha256=hardware_profile_sha256,
-        configuration_sha256=configuration_sha256,
-        profile=profile,
-        participants=participants,
-        seed=seed,
-        run=run,
-        warmup=warmup,
-        stages_ms=normalized_stages,
-        resources=resources,
-    )
 
 
-def load_jsonl(paths: Sequence[Path]) -> list[Sample]:
-    """Load raw JSONL files and reject duplicate run identities."""
-
-    samples: list[Sample] = []
-    identities: set[str] = set()
-    for path in paths:
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError) as error:
-            raise EvidenceError(f"cannot read {path}: {error}") from error
-        for line_number, line in enumerate(lines, 1):
-            if not line.strip():
-                continue
-            source = f"{path}:{line_number}"
-            try:
-                record = attempt_accounting._document(line.encode("utf-8"), source)
-            except attempt_accounting.AccountingError as error:
-                raise EvidenceError(f"{source}: invalid JSON: {error}") from error
-            sample = parse_sample(record, source)
-            identity = sample.attempt_id
-            if identity in identities:
-                raise EvidenceError(f"{source}: duplicate sample identity {identity}")
-            identities.add(identity)
-            samples.append(sample)
-    if not samples:
-        raise EvidenceError("benchmark input is empty")
-    return samples
 
 
 def percentile(values: Sequence[float], quantile: float) -> float:
@@ -244,44 +96,13 @@ def percentile(values: Sequence[float], quantile: float) -> float:
     return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
 
-def _bootstrap_interval(
-    values: Sequence[float], quantile: float, *, seed: int, iterations: int
-) -> tuple[float, float]:
-    rng = random.Random(seed)
-    estimates = []
-    for _ in range(iterations):
-        resample = [values[rng.randrange(len(values))] for _ in values]
-        estimates.append(percentile(resample, quantile))
-    return percentile(estimates, 0.025), percentile(estimates, 0.975)
-
-
-def summarize_values(
-    values: Sequence[float], *, binding: bytes, bootstrap_iterations: int
-) -> dict[str, Any]:
-    """Compute quantiles, deterministic bootstrap CIs, and MAD."""
-
-    if bootstrap_iterations < 100:
-        raise EvidenceError("bootstrap iterations must be at least 100")
-    median = statistics.median(values)
-    mad = statistics.median(abs(value - median) for value in values)
-    summary: dict[str, Any] = {"count": len(values), "mad": mad}
-    for label, quantile in (("p50", 0.50), ("p95", 0.95), ("p99", 0.99)):
-        seed_bytes = hashlib.sha256(binding + label.encode("ascii")).digest()[:8]
-        low, high = _bootstrap_interval(
-            values,
-            quantile,
-            seed=int.from_bytes(seed_bytes, "big"),
-            iterations=bootstrap_iterations,
-        )
-        summary[label] = percentile(values, quantile)
-        summary[f"{label}_ci95"] = [low, high]
-    return summary
 
 
 
-# TODO: Connect these arithmetic helpers only after the canonical verifier joins
-# real session processes, warmups and attempt terminals. Replace the individual
-# resampling callers then; never infer persistent network sessions from seeds.
+
+
+# The retained scope publisher supplies authenticated session/attempt groups.
+# Never infer persistent network sessions from seed numbers alone.
 def _session_statistics_inputs(groups, binding, iterations, *, paired):
     """Canonicalize explicit session/attempt identities for arithmetic only.
 
@@ -451,163 +272,13 @@ def summarize_paired_session_values(groups, *, binding: bytes, bootstrap_iterati
     return result
 
 
-def validate_matrix(samples: Sequence[Sample]) -> None:
-    """Require every real N, both profiles, warmups, measured runs, and seeds."""
-
-    buckets: dict[tuple[str, int], list[Sample]] = defaultdict(list)
-    seen = set()
-    for sample in samples:
-        if not isinstance(sample.attempt_id, str) or re.fullmatch(r"[0-9a-f]{64}", sample.attempt_id) is None or sample.attempt_id in seen:
-            raise EvidenceError("sample attempt identity is malformed or duplicated")
-        seen.add(sample.attempt_id)
-        buckets[(sample.profile, sample.participants)].append(sample)
-    required = {
-        (profile, participants)
-        for profile in PROFILES
-        for participants in REQUIRED_PARTICIPANTS
-    }
-    missing = required - set(buckets)
-    if missing:
-        raise EvidenceError(f"benchmark matrix is incomplete: {sorted(missing)}")
-    for key in sorted(required):
-        bucket = buckets[key]
-        warmups = [sample for sample in bucket if sample.warmup]
-        measured = [sample for sample in bucket if not sample.warmup]
-        seeds = {sample.seed for sample in measured}
-        if len(warmups) < MIN_WARMUPS:
-            raise EvidenceError(f"{key}: requires at least {MIN_WARMUPS} warmups")
-        if len(measured) < MIN_MEASURED:
-            raise EvidenceError(
-                f"{key}: requires at least {MIN_MEASURED} measured runs"
-            )
-        if len(seeds) < MIN_SEEDS:
-            raise EvidenceError(f"{key}: requires measured runs across multiple seeds")
 
 
-def build_report(
-    samples: Sequence[Sample], bootstrap_iterations: int, *, scope_raw: bytes,
-    campaigns: Sequence[Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Recompute registered counts and statistics from exactly joined successes."""
+def build_report(held, bootstrap_iterations):
+    """Use the canonical retained scope and authenticated network groups."""
+    import private_settlement_retained_scope_publication as publication
+    return publication.build_report(held,bootstrap_iterations)
 
-    if type(bootstrap_iterations) is not int or bootstrap_iterations < 100:
-        raise EvidenceError("bootstrap iterations must be an integer of at least 100")
-    validate_matrix(samples)
-    commits = {sample.commit for sample in samples}
-    if len(commits) != 1:
-        raise EvidenceError("benchmark evidence must use one exact source commit")
-    hardware_digests = {sample.hardware_sha256 for sample in samples}
-    if len(hardware_digests) != 1:
-        raise EvidenceError(
-            "benchmark evidence must use one pinned hardware description"
-        )
-    hardware_profile_digests = {
-        sample.hardware_profile_sha256 for sample in samples
-    }
-    if len(hardware_profile_digests) != 1:
-        raise EvidenceError("benchmark evidence must use one pinned hardware profile")
-    configuration_digests: dict[int, str] = {}
-    for participants in REQUIRED_PARTICIPANTS:
-        digests = {
-            sample.configuration_sha256
-            for sample in samples
-            if sample.participants == participants
-        }
-        if len(digests) != 1:
-            raise EvidenceError(
-                f"benchmark N={participants} must use one pinned configuration"
-            )
-        configuration_digests[participants] = next(iter(digests))
-    try:
-        successful_rows = []
-        for sample in samples:
-            document = {
-                "version": REPORT_VERSION, "protocol": PROTOCOL,
-                **{key: getattr(sample, key) for key in (
-                    "attempt_id", "commit", "hardware_sha256", "hardware_profile_sha256",
-                    "configuration_sha256", "profile", "participants", "seed", "run", "warmup")},
-                "stages_ms": dict(sample.stages_ms), **dict(sample.resources),
-            }
-            normalized = parse_sample(document, "registered statistical sample")
-            document["stages_ms"] = dict(normalized.stages_ms)
-            document.update(normalized.resources)
-            successful_rows.append(attempt_accounting.accounting_canonical_bytes(document))
-        accounting = attempt_accounting.reduce_registered_scope(scope_raw, campaigns, successful_rows)
-        if accounting["accounting_complete"] is not True:
-            raise EvidenceError("registered benchmark accounting is incomplete")
-        for campaign in campaigns:
-            plan = attempt_accounting._document(campaign["plan"], "report campaign plan")
-            if (type(plan["requirements"].get("bootstrap_iterations")) is not int
-                    or plan["requirements"]["bootstrap_iterations"] != bootstrap_iterations):
-                raise EvidenceError("report bootstrap policy differs from its registered plan")
-            for job in plan["jobs"]:
-                if job["kind"] == "benchmark" and job["configuration_sha256"] != configuration_digests[job["participants"]]:
-                    raise EvidenceError("registered campaign used a different pinned configuration")
-    except attempt_accounting.AccountingError as error:
-        raise EvidenceError(f"registered benchmark accounting is invalid: {error}") from error
-    report: dict[str, Any] = {
-        "version": REPORT_VERSION,
-        "protocol": PROTOCOL,
-        "commit": next(iter(commits)),
-        "environment": {
-            "hardware_sha256": next(iter(hardware_digests)),
-            "hardware_profile_sha256": next(iter(hardware_profile_digests)),
-            "configuration_sha256_by_participants": {
-                str(participants): configuration_digests[participants]
-                for participants in REQUIRED_PARTICIPANTS
-            },
-        },
-        "requirements": {
-            "participants": list(REQUIRED_PARTICIPANTS),
-            "minimum_warmups": MIN_WARMUPS,
-            "minimum_measured": MIN_MEASURED,
-            "minimum_seeds": MIN_SEEDS,
-            "bootstrap_iterations": bootstrap_iterations,
-        },
-        "profiles": {},
-        "accounting": accounting,
-    }
-    for profile in PROFILES:
-        profile_report: dict[str, Any] = {}
-        for participants in REQUIRED_PARTICIPANTS:
-            bucket = [
-                sample
-                for sample in samples
-                if sample.profile == profile
-                and sample.participants == participants
-                and not sample.warmup
-            ]
-            binding_prefix = f"{profile}:{participants}:".encode("ascii")
-            stage_names = (
-                REQUIRED_PRIVATE_STAGES
-                if profile == "private"
-                else ("global_finality", "end_to_end")
-            )
-            stages = {
-                stage: summarize_values(
-                    [sample.stages_ms[stage] for sample in bucket],
-                    binding=binding_prefix + b"stage:" + stage.encode("ascii"),
-                    bootstrap_iterations=bootstrap_iterations,
-                )
-                for stage in stage_names
-            }
-            resources = {
-                field: summarize_values(
-                    [sample.resources[field] for sample in bucket],
-                    binding=binding_prefix + b"resource:" + field.encode("ascii"),
-                    bootstrap_iterations=bootstrap_iterations,
-                )
-                for field in RESOURCE_FIELDS
-            }
-            profile_report[str(participants)] = {
-                "measured_runs": len(bucket),
-                "seeds": sorted({sample.seed for sample in bucket}),
-                "stages_ms": stages,
-                "resources": resources,
-            }
-        report["profiles"][profile] = profile_report
-    validate_report_accounting(report)
-    return report
 
 
 def validate_report_accounting(report: Mapping[str, Any], label: str = "benchmark report") -> None:
@@ -617,7 +288,9 @@ def validate_report_accounting(report: Mapping[str, Any], label: str = "benchmar
     This structural check alone never authenticates a baseline or its evidence.
     """
 
+    import private_settlement_retained_scope_publication as publication
     try:
+        publication.require_qualified(report)
         if (type(report.get("version")) is not int or report["version"] != REPORT_VERSION
                 or report.get("protocol") != PROTOCOL or not isinstance(report.get("commit"), str)
                 or _GIT_COMMIT.fullmatch(report["commit"]) is None):
@@ -639,26 +312,25 @@ def validate_report_accounting(report: Mapping[str, Any], label: str = "benchmar
             raise EvidenceError(f"{label} accounting inventory is empty or malformed")
         ids, campaign_rows, seen = [], {}, set()
         for campaign in campaigns:
-            attempt_accounting.exact_fields(campaign, frozenset({"campaign_id", "plan_sha256", "counts"}), "campaign projection")
+            attempt_accounting.exact_fields(campaign, frozenset({"campaign_id", "plan_sha256", "counts", "sessions"}), "campaign projection")
             name = attempt_accounting._campaign_id(campaign["campaign_id"])
             attempt_accounting._digest(campaign["plan_sha256"], "campaign plan")
+            if type(campaign["sessions"]) is not list:
+                raise EvidenceError("retained session projection must be explicit")
             ids.append(name)
             campaign_rows[name] = []
         if ids != sorted(set(ids)):
             raise EvidenceError(f"{label} campaign projection is not unique and ordered")
-        reasons = {
-            "not_started": {"closed_without_durable_start"},
-            "succeeded": {"validated_measurement"},
-            "failed": {"harness_spawn_failed", "rust_failed", "validator_build_failed",
-                       "validator_build_spawn_failed", "benchmark_process_spawn_failed", "publication_failed"},
-            "timed_out": {"outer_deadline", "rust_timed_out"},
-        }
+        reasons = {'not_started': {'closed_without_durable_start'}, 'succeeded': {'validated_measurement'},
+                   'failed': {'typed_native_failed'}, 'timed_out': {'typed_native_timed_out'}}
         plans = {campaign["campaign_id"]: campaign["plan_sha256"] for campaign in campaigns}
         for row in rows:
             attempt_accounting.exact_fields(row, frozenset({
                 "scope_sha256", "campaign_id", "plan_sha256", "attempt_id", "request_id",
-                "profile", "participants", "warmup", "state", "reason",
+                "profile", "participants", "warmup", "state", "reason", "session_id", "session_attempt_index",
             }), "accounting row")
+            attempt_accounting._digest(row["session_id"], "session id")
+            attempt_accounting.unsigned_milliseconds(row["session_attempt_index"], "session attempt index")
             name = row["campaign_id"]
             if (not isinstance(name, str) or name not in plans or row["scope_sha256"] != scope["sha256"]
                     or row["plan_sha256"] != plans[name] or row["profile"] not in PROFILES
@@ -700,10 +372,14 @@ def validate_report_accounting(report: Mapping[str, Any], label: str = "benchmar
                     if not isinstance(collection, dict) or not collection:
                         raise EvidenceError(f"{label} statistical summaries are missing")
                     for summary in collection.values():
-                        if not isinstance(summary, dict) or type(summary.get("count")) is not int or summary["count"] != measured:
+                        if (not isinstance(summary, dict) or summary.get("status") != "estimated"
+                                or summary.get("resampling_unit") != "network_session"
+                                or type(summary.get("count")) is not int or summary["count"] != measured):
                             raise EvidenceError(f"{label} statistical denominator differs from accounting")
-    except (attempt_accounting.AccountingError, KeyError, TypeError) as error:
+    except (attempt_accounting.AccountingError, publication.control.SessionProtocolError, KeyError, TypeError) as error:
         raise EvidenceError(f"{label} accounting projection is invalid: {error}") from error
+
+
 
 
 def compare_baseline(
@@ -803,40 +479,37 @@ def compare_baseline(
     return regressions
 
 
-def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", action="append", required=True, type=Path)
-    parser.add_argument("--scope", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--baseline", type=Path)
-    parser.add_argument("--bootstrap-iterations", type=int, default=2_000)
+def parse_args(argv):
+    parser=argparse.ArgumentParser(description=__doc__)
+    for name in ('scope','output','source-root','plan-harness','smoke-campaign','worker','validator'):
+        parser.add_argument('--'+name,required=True,type=Path)
+    parser.add_argument('--input',action='append',required=True,type=Path)
+    parser.add_argument('--baseline',type=Path)
+    parser.add_argument('--bootstrap-iterations',type=int,default=2000)
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+
+def main(argv=None):
+    args=parse_args(sys.argv[1:] if argv is None else argv)
+    import private_settlement_registered_session_replay as replay
+    import private_settlement_retained_scope_publication as publication
     try:
-        # Imported only for CLI collection; the runner itself imports this reporter.
-        from private_settlement_release_runner import collect_benchmark_scope
-        scope_raw, campaigns, _ = collect_benchmark_scope(args.scope.parent.resolve(strict=True) / args.scope.name)
-        report = build_report(load_jsonl(args.input), args.bootstrap_iterations,
-                              scope_raw=scope_raw, campaigns=campaigns)
-        regressions: list[dict[str, Any]] = []
-        if args.baseline is not None:
-            try:
-                baseline = attempt_accounting._document(args.baseline.read_bytes(), "benchmark baseline")
-            except (OSError, attempt_accounting.AccountingError) as error:
-                raise EvidenceError(f"cannot read baseline: {error}") from error
-            regressions = compare_baseline(report, baseline)
-        report["regressions"] = regressions
-        report["passed"] = not regressions
-        args.output.write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-    except (ValueError, OSError, KeyError, TypeError) as error:
-        print(f"private-settlement benchmark evidence error: {error}", file=sys.stderr)
-        return 2
-    return 0 if report["passed"] else 1
+        with replay.open_admitted_scope(args.scope,source_root=args.source_root,plan_harness=args.plan_harness,
+                smoke_campaign=args.smoke_campaign,worker_path=args.worker,validator_path=args.validator) as held:
+            publication.validate_raw(args.input,held)
+            report=build_report(held,args.bootstrap_iterations)
+            regressions=[]
+            if args.baseline is not None:
+                regressions=compare_baseline(report,attempt_accounting._document(args.baseline.read_bytes(),'baseline'))
+            report.update(regressions=regressions,passed=report['statistical_qualification_passed'] and not regressions)
+        args.output.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+        with args.output.open('x',encoding='utf-8') as stream:
+            stream.write(json.dumps(report,indent=2,sort_keys=True,allow_nan=False)+'\n')
+    except (ValueError,OSError,KeyError,TypeError) as error:
+        print(f'private-settlement benchmark evidence error: {error}',file=sys.stderr);return 2
+    return 0 if report['passed'] else 1
+
 
 
 if __name__ == "__main__":

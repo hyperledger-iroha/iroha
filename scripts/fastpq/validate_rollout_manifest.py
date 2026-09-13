@@ -18,10 +18,13 @@ from typing import Any, Sequence
 
 import blake3
 
-CANONICAL_OPERATIONS = {
-    "fft", "ifft", "lde", "poseidon_hash_columns", "poseidon_merkle_pairs",
-    "bn254_poseidon_words",
-}
+try:
+    from .benchmark_operations import CANONICAL_OPERATIONS, reject_retired_fields
+    from .digest384_evidence import validate_digest384_operation
+except ImportError:  # Direct script invocation.
+    from benchmark_operations import CANONICAL_OPERATIONS, reject_retired_fields
+    from digest384_evidence import validate_digest384_operation
+
 
 
 def object_value(value: Any, context: str) -> dict[str, Any]:
@@ -68,6 +71,7 @@ def load_json(content: bytes) -> dict[str, Any]:
 
 def validate_operations(benchmarks: dict[str, Any], constraints: dict[str, Any]) -> None:
     """Check actual GPU measurements and every declared performance threshold."""
+    reject_retired_fields(benchmarks)
     entries = benchmarks.get("operations")
     if not isinstance(entries, list) or not entries:
         raise ValueError("benchmarks.operations must contain measured operations")
@@ -79,6 +83,7 @@ def validate_operations(benchmarks: dict[str, Any], constraints: dict[str, Any])
             raise ValueError("benchmark contains an unknown operation")
         if name in operations:
             raise ValueError(f"duplicate operation {name}")
+        validate_digest384_operation(entry, benchmarks, flattened=True)
         operations[name] = entry
         for field in ("cpu_mean_ms", "gpu_mean_ms", "speedup_ratio"):
             number(entry.get(field), f"{name}.{field}", positive=True)
@@ -92,7 +97,7 @@ def validate_operations(benchmarks: dict[str, Any], constraints: dict[str, Any])
         if speedup + 0.0005 < lower or speedup - 0.0005 > upper:
             raise ValueError(f"{name}.speedup_ratio disagrees with CPU/GPU timings")
     missing = CANONICAL_OPERATIONS - operations.keys()
-    if missing or benchmarks.get("operation_filter", "all") != "all":
+    if missing or benchmarks.get("operation_filter") != "all":
         raise ValueError("rollout capture must measure every canonical operation")
     for key, field, is_max in (
         ("max_operation_ms", "gpu_mean_ms", True),
@@ -166,6 +171,7 @@ def validate_manifest(manifest_path: Path, repo_root: Path) -> None:
             if hashes.get(name) != digest:
                 raise ValueError(f"{label}.{name} does not match captured benchmark bytes")
         capture = load_json(content)
+        reject_retired_fields(capture)
         metadata = object_value(capture.get("metadata"), "metadata")
         device_labels = object_value(metadata.get("labels"), "metadata.labels")
         for key in ("device_class", "gpu_kind"):
@@ -186,6 +192,9 @@ def validate_manifest(manifest_path: Path, repo_root: Path) -> None:
             raise ValueError(f"{label} must record an available Metal/CUDA GPU")
         if label in {"metal", "cuda"} and backend != label:
             raise ValueError(f"{label} capture used the wrong GPU backend")
+        expected_schema = "metal_flat" if backend == "metal" else "cuda_nested"
+        if capture.get("producer_schema") != expected_schema:
+            raise ValueError("capture producer_schema must match its exact GPU producer")
         validate_operations(benchmarks, constraints)
         if backend == "metal":
             validate_metal_telemetry(benchmarks)

@@ -6,15 +6,19 @@ from pathlib import Path
 
 import pytest
 
-from scripts.fastpq import geometry_matrix
+from scripts.fastpq import geometry_matrix, wrap_benchmark
+from scripts.fastpq.tests.test_digest384_evidence import primitive_report
 
 
 def _timed_entry() -> dict:
+    entries = {"fft": {"gpu_mean_ms": 1.0}, "lde": {"gpu_mean_ms": 1.0}}
+    for name in ("digest384_trace_columns", "digest384_merkle_pairs"):
+        report = primitive_report(name, rows=8)
+        projected, _ = wrap_benchmark.summarize_operations(report, wrap_benchmark.METAL_FLAT_SCHEMA)
+        entries[name] = projected[0]
     return {
-        "status": "ok",
-        "operations": {
-            name: {"gpu_mean_ms": 1.0} for name in geometry_matrix.REQUIRED_OPERATIONS
-        },
+        "producer_schema": "metal_flat", "status": "ok", "execution_mode": "gpu", "rows": 8, "padded_rows": 8,
+        "column_count": 2, "iterations": 2, "warmups": 1, "operations": entries,
     }
 
 
@@ -200,3 +204,21 @@ def test_main_creates_nested_output_directories(tmp_path: Path, monkeypatch) -> 
     geometry_matrix.main()
 
     assert all(path.is_file() for path in outputs.values())
+
+
+def test_matrix_rejects_partial_lane_evidence_even_when_marked_stable():
+    entry = _timed_entry()
+    entry.update(gpu_available=True, gpu_backend="metal", classification={"stable": True, "reasons": []})
+    entry["operations"]["digest384_merkle_pairs"]["digest384"]["gpu"]["parity_checked_lanes"] = 6
+    classification, reasons = geometry_matrix.classify_entry(entry)
+    assert classification == "unstable"
+    assert any("parity_checked_lanes" in reason for reason in reasons)
+
+
+def test_matrix_rejects_divergent_operation_names_before_lane_validation():
+    entry = _timed_entry()
+    entry.update(gpu_available=True, gpu_backend="metal")
+    entry["operations"]["digest384_trace_columns"] = {"operation": "fft", "gpu_mean_ms": 1}
+    classification, reasons = geometry_matrix.classify_entry(entry)
+    assert classification == "unstable"
+    assert any("map key disagrees" in reason for reason in reasons)

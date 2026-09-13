@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from scripts.fastpq import rollout_manifest_summary
+from scripts.fastpq.tests.report_fixtures import complete_flat_report, add_synthetic_raw_copy, flat_report
 
 
 def _write_bundle(root: Path, name: str, payload: dict) -> Path:
@@ -27,19 +28,8 @@ def test_build_rollout_summary_preserves_filter_scope_and_device_labels(tmp_path
                 "gpu_model": "Apple M4 GPU",
             },
         },
-        "benchmarks": {
-            "rows": 20_000,
-            "padded_rows": 32_768,
-            "gpu_backend": "metal",
-            "gpu_available": True,
-            "operation_filter": "all",
-            "column_count": 16,
-            "operations": [
-                {"operation": "fft"},
-                {"operation": "lde"},
-                {"operation": "poseidon_hash_columns"},
-            ],
-        },
+        "producer_schema": "metal_flat",
+        "benchmarks": complete_flat_report("metal", rows=20_000, columns=16, iterations=5, warmups=1),
     }
     cuda_bundle = {
         "metadata": {
@@ -53,19 +43,12 @@ def test_build_rollout_summary_preserves_filter_scope_and_device_labels(tmp_path
                 "gpu_model": "NVIDIA A100",
             },
         },
-        "benchmarks": {
-            "rows": 20_000,
-            "padded_rows": 32_768,
-            "gpu_backend": "cuda",
-            "gpu_available": True,
-            "operation_filter": "lde",
-            "column_count": 16,
-            "operations": [
-                {"operation": "lde"},
-            ],
-        },
+        "producer_schema": "cuda_nested",
+        "benchmarks": flat_report(rows=20_000, columns=16, iterations=5, warmups=1),
     }
 
+    add_synthetic_raw_copy(metal_bundle)
+    add_synthetic_raw_copy(cuda_bundle)
     _write_bundle(tmp_path, "fastpq_metal_bench_probe.json", metal_bundle)
     _write_bundle(tmp_path, "fastpq_cuda_bench_probe.json", cuda_bundle)
     manifest_path = _write_bundle(
@@ -90,7 +73,7 @@ def test_build_rollout_summary_preserves_filter_scope_and_device_labels(tmp_path
                         "iterations": 5,
                         "warmups": 1,
                         "operation_filter": "all",
-                        "matrix_operation_filters": ["all", "poseidon_hash_columns"],
+                        "matrix_operation_filters": ["all", "bn254_poseidon_words"],
                         "gpu_backend": "metal",
                         "gpu_available": True,
                         "metadata": {"host": "mac-lab", "platform": "macOS", "machine": "arm64"},
@@ -103,7 +86,7 @@ def test_build_rollout_summary_preserves_filter_scope_and_device_labels(tmp_path
                         "iterations": 5,
                         "warmups": 1,
                         "operation_filter": "lde",
-                        "matrix_operation_filters": ["fft", "lde", "poseidon_hash_columns"],
+                        "matrix_operation_filters": ["fft", "lde", "bn254_poseidon_words"],
                         "gpu_backend": "cuda",
                         "gpu_available": True,
                         "metadata": {"host": "sm80-lab", "platform": "linux", "machine": "x86_64"},
@@ -129,7 +112,7 @@ def test_build_rollout_summary_preserves_filter_scope_and_device_labels(tmp_path
     cuda_entry = next(bench for bench in summary["benches"] if bench["label"] == "cuda")
     assert cuda_entry["resolved_bench_path"] == "fastpq_cuda_bench_probe.json"
     assert cuda_entry["operation_filter"] == "lde"
-    assert cuda_entry["matrix_operation_filters"] == ["fft", "lde", "poseidon_hash_columns"]
+    assert cuda_entry["matrix_operation_filters"] == ["fft", "lde", "bn254_poseidon_words"]
     assert cuda_entry["device_class"] == "xeon-rtx-sm80"
     assert cuda_entry["gpu_kind"] == "discrete"
     assert cuda_entry["available_operations"] == ["lde"]

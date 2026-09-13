@@ -458,6 +458,18 @@ class SmokeEvidenceTests(unittest.TestCase):
 class DriverBoundaryTests(unittest.TestCase):
     """Verify strict invocation controls without spawning Git, Cargo, or networks."""
 
+    def test_smoke_build_requests_the_metal_entrypoint_feature(self) -> None:
+        commands = M.build_commands(Path("/synthetic/repo"), Path("/synthetic/target"))
+        integration = commands["build-integration"]
+        self.assertEqual(integration.count("--features"), 1)
+        self.assertEqual(integration[integration.index("--features") + 1],
+                         "atomic-private-settlement-metal-smoke")
+        self.assertEqual(integration[integration.index("--test") + 1], "nexus_and_streaming")
+        for flag in ("--locked", "--offline", "--release", "--no-run"):
+            self.assertIn(flag, integration)
+        validator = commands["build-validator"]
+        self.assertEqual(validator[validator.index("--features") + 1], "test-network-message-control")
+
     def test_exact_terminal_and_discovery_reject_zero_ignored_skipped_or_duplicate(self) -> None:
         good = "running 1 test\nAPS smoke completed: synthetic fixture only\n" + (
             "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.0s\n")

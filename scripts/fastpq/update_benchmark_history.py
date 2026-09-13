@@ -11,9 +11,16 @@ from typing import Any, Iterable
 
 
 ARTIFACTS_DIR = Path("artifacts/fastpq_benchmarks")
-POSEIDON_MANIFEST = Path("benchmarks/poseidon/manifest.json")
 MERKLE_DIR = Path("benchmarks/merkle_threshold")
 HISTORY_DOC = Path("specs/benchmarks/history.md")
+
+
+try:
+    from .benchmark_operations import OPERATION_LABELS, require_filter
+    from .report_projection import project_bundle, render_evidence, validate_projection
+except ImportError:  # Direct script invocation.
+    from benchmark_operations import OPERATION_LABELS, require_filter
+    from report_projection import project_bundle, render_evidence, validate_projection
 
 
 @dataclass
@@ -26,8 +33,7 @@ class BenchmarkRow:
     operation_filter: str
     device_class: str
     gpu_model: str
-    lde: str
-    poseidon: str
+    operation_evidence: dict[str, Any]
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,12 +49,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=ARTIFACTS_DIR,
         help=f"Directory containing wrapped fastpq_*_bench_*.json files (default: {ARTIFACTS_DIR})",
-    )
-    parser.add_argument(
-        "--poseidon-manifest",
-        type=Path,
-        default=POSEIDON_MANIFEST,
-        help=f"Poseidon microbench manifest path (default: {POSEIDON_MANIFEST})",
     )
     parser.add_argument(
         "--merkle-dir",
@@ -78,9 +78,10 @@ def collect_benchmark_rows(artifacts_dir: Path) -> list[BenchmarkRow]:
     bundle_paths = sorted(artifacts_dir.glob("fastpq_*_bench_*.json"))
     for path in bundle_paths:
         data = json.loads(path.read_text())
+        evidence = project_bundle(data, require_wrapped=True)
         metadata = data.get("metadata") or {}
         labels = metadata.get("labels") or {}
-        backend = path.name.split("_")[1] if "_" in path.name else labels.get("backend", "—")
+        backend = "cuda" if evidence["producer_schema"] == "cuda_nested" else "metal"
         bench = data.get("benchmarks") or {}
         execution_mode = str(bench.get("execution_mode") or "—")
         gpu_backend = str(bench.get("gpu_backend") or labels.get("backend") or "—")
@@ -90,21 +91,7 @@ def collect_benchmark_rows(artifacts_dir: Path) -> list[BenchmarkRow]:
             gpu_available_str = "yes" if gpu_available else "no"
         device_class = labels.get("device_class", "—")
         gpu_model = labels.get("gpu_model", labels.get("chip_type", "—"))
-        operations: dict[str, dict[str, Any]] = {}
-        raw_ops = (data.get("benchmarks") or {}).get("operations", [])
-        if isinstance(raw_ops, list):
-            for entry in raw_ops:
-                if not isinstance(entry, dict):
-                    continue
-                op_name = entry.get("operation")
-                if not isinstance(op_name, str):
-                    continue
-                operations[op_name] = entry
         operation_filter = format_operation_filter(bench)
-        lde_row = operations.get("lde")
-        poseidon_row = operations.get("poseidon_hash_columns")
-        lde = format_operation(lde_row)
-        poseidon = format_operation(poseidon_row)
         rows.append(
             BenchmarkRow(
                 bundle=path,
@@ -115,18 +102,14 @@ def collect_benchmark_rows(artifacts_dir: Path) -> list[BenchmarkRow]:
                 operation_filter=operation_filter,
                 device_class=device_class,
                 gpu_model=gpu_model,
-                lde=lde,
-                poseidon=poseidon,
+                operation_evidence=evidence,
             )
         )
     return rows
 
 
 def format_operation_filter(bench: dict[str, Any]) -> str:
-    operation_filter = bench.get("operation_filter")
-    if isinstance(operation_filter, str) and operation_filter.strip():
-        return operation_filter
-    raise ValueError("wrapped benchmark is missing non-empty benchmarks.operation_filter")
+    return require_filter(bench.get("operation_filter"))
 
 
 def format_operation(operation: dict[str, Any] | None) -> str:
@@ -138,65 +121,41 @@ def format_operation(operation: dict[str, Any] | None) -> str:
     return f"{cpu}/{gpu}/{speedup}"
 
 
-def poseidon_table(manifest_path: Path) -> str:
-    if not manifest_path.exists():
-        return "_No Poseidon microbench manifest found; run `python3 scripts/fastpq/aggregate_poseidon_microbench.py` first._"
-    manifest = json.loads(manifest_path.read_text())
-    entries = manifest.get("entries") or []
-    if not isinstance(entries, list) or not entries:
-        return "_Poseidon manifest is empty; export microbench captures before regenerating history._"
-    header = "| Summary | Bundle | Timestamp | Filter | Columns | Default ms | Scalar ms | Speedup |\n"
-    header += "|---------|--------|-----------|--------|---------|------------|-----------|---------|\n"
-    rows = []
-    for index, entry in enumerate(entries):
-        if not isinstance(entry, dict):
-            raise ValueError(f"Poseidon manifest entry {index} must be an object")
-        operation_filter = entry.get("operation_filter")
-        if not isinstance(operation_filter, str) or not operation_filter.strip():
-            raise ValueError(
-                f"Poseidon manifest entry {index} is missing non-empty operation_filter"
-            )
-        column_count = entry.get("column_count")
-        if (
-            not isinstance(column_count, int)
-            or isinstance(column_count, bool)
-            or column_count <= 0
-        ):
-            raise ValueError(
-                f"Poseidon manifest entry {index} must contain a positive integer column_count"
-            )
-        column_count_str = str(column_count)
-        default_ms = fmt_ms(entry.get("default_mean_ms"))
-        scalar_ms = fmt_ms(entry.get("scalar_mean_ms"))
-        speedup = fmt_speedup(entry.get("speedup_vs_scalar"))
-        rows.append(
-            f"| `{entry.get('file')}` | `{entry.get('bundle')}` | "
-            f"{entry.get('capture_timestamp')} | {operation_filter} | {column_count_str} | "
-            f"{default_ms} | {scalar_ms} | {speedup} |"
-        )
-    return header + "\n".join(rows)
-
-
 def gpu_table(rows: Iterable[BenchmarkRow]) -> str:
-    header = (
-        "| Bundle | Backend | Mode | GPU backend | GPU available | Filter | Device class | GPU | "
-        "LDE ms (CPU/GPU/SU) | Poseidon ms (CPU/GPU/SU) |\n"
-    )
-    header += (
-        "|-------|---------|------|-------------|---------------|--------|--------------|-----|"
-        "----------------------|---------------------------|\n"
-    )
+    columns = list(OPERATION_LABELS)
+    header = "| Bundle | Backend | Mode | GPU backend | GPU available | Filter | Device class | GPU | "
+    header += " | ".join(f"{OPERATION_LABELS[name]} ms (CPU/GPU/SU)" for name in columns) + " |\n"
+    header += "|" + "---|" * (8 + len(columns)) + "\n"
     body = []
     for row in rows:
+        validated = validate_projection(row.operation_evidence)
+        if not validated["flattened"]:
+            raise ValueError("history timings require wrapped flattened operations")
+        if require_filter(row.operation_filter) != validated["report"]["operation_filter"]:
+            raise ValueError("history filter disagrees with retained measurement evidence")
+        measured = validated["report"]
+        expected_backend = "cuda" if validated["producer_schema"] == "cuda_nested" else "metal"
+        if (row.backend, row.execution_mode, row.gpu_backend, row.gpu_available) != (
+            expected_backend, measured["execution_mode"], measured["gpu_backend"],
+            "yes" if measured["gpu_available"] else "no",
+        ):
+            raise ValueError("history execution context disagrees with retained measurement evidence")
+        operations = {entry["operation"]: entry for entry in validated["report"]["operations"]}
+        timings = " | ".join(format_operation(operations.get(name)) for name in columns)
         body.append(
             f"| `{row.bundle.name}` | {row.backend} | {row.execution_mode} | {row.gpu_backend} | "
-            f"{row.gpu_available} | {row.operation_filter} | {row.device_class} | {row.gpu_model} | {row.lde} | {row.poseidon} |"
+            f"{row.gpu_available} | {row.operation_filter} | {row.device_class} | {row.gpu_model} | {timings} |"
         )
-    return (
-        header + "\n".join(body)
-        if body
-        else header + "| _No wrapped benchmarks found_ |  |  |  |  |  |  |  |  |  |"
-    )
+    if not body:
+        body.append("| _No wrapped benchmarks found_ |" + " |" * (7 + len(columns)))
+    return header + "\n".join(body)
+
+
+def operation_evidence_section(rows: Iterable[BenchmarkRow]) -> str:
+    sections = ["## Measured operation evidence", ""]
+    for row in rows:
+        sections.extend([f"### `{row.bundle.name}`", "", render_evidence(row.operation_evidence), ""])
+    return "\n".join(sections)
 
 
 def merkle_section(merkle_dir: Path) -> str:
@@ -257,7 +216,6 @@ def row_usage_section(artifacts_dir: Path) -> str:
 
 def render_document(
     rows: list[BenchmarkRow],
-    poseidon_section: str,
     merkle_notes: str,
     row_usage_notes: str,
 ) -> str:
@@ -270,8 +228,8 @@ def render_document(
         # GPU Benchmark Capture History (FASTPQ WP5-B)
 
         This file is generated by `python3 scripts/fastpq/update_benchmark_history.py`.
-        It lists current-schema wrapped GPU benchmarks, a complete Poseidon microbench
-        manifest, and auxiliary sweeps found at the supplied paths. Release benchmark and
+        It lists current-schema wrapped GPU benchmarks, complete measured operation
+        evidence, and auxiliary sweeps found at the supplied paths. Release benchmark and
         row-usage bundles are generated evidence rather than checked-in fixtures; an empty
         table means no current input was supplied.
 
@@ -280,27 +238,11 @@ def render_document(
         - Produce or wrap new GPU captures (via `scripts/fastpq/wrap_benchmark.py`),
           append them to the capture matrix, and rerun this generator to refresh the
           tables.
-        - When Poseidon microbench data is present, export it with
-          `scripts/fastpq/export_poseidon_microbench.py` and rebuild the manifest using
-          `scripts/fastpq/aggregate_poseidon_microbench.py`.
         - Record Merkle threshold sweeps by storing their JSON outputs under
           `benchmarks/merkle_threshold/`; this generator lists the known files so audits
           can cross-reference CPU vs GPU availability.
 
         ## FASTPQ Stage 7 GPU Benchmarks
-
-        """
-    )
-    poseidon_intro = textwrap.dedent(
-        """\
-        ## Poseidon Microbench Snapshots
-
-        `benchmarks/poseidon/manifest.json` aggregates the default-vs-scalar Poseidon
-        microbench runs exported from each Metal bundle. The table below is refreshed by
-        the generator script, so CI and governance reviews can diff historical speedups
-        without unpacking the wrapped FASTPQ reports. `Filter`/`Columns` come from the
-        required standalone export metadata. Incomplete captures are rejected so the
-        history cannot silently misclassify a focused run as a full benchmark.
 
         """
     )
@@ -329,8 +271,8 @@ def render_document(
     gpu_section = gpu_table(rows)
     gpu_note = textwrap.dedent(
         """\
-        > Columns: `Backend` is derived from the bundle name; `Mode`/`GPU backend`/`GPU available`
-        > come from the wrapped `benchmarks` block to expose CPU fallbacks or missing GPU discovery.
+        > Columns: `Backend` is the explicit producer schema; `Mode`/`GPU backend`/`GPU available`
+        > come from the wrapped `benchmarks` block to record the resolved execution mode and GPU discovery.
         > `Filter` records the selected operation filter (`all` for full bundles, otherwise the
         > focused stage name); current wrapped bundles must provide it explicitly.
         > SU = speedup ratio (CPU/GPU).
@@ -342,8 +284,7 @@ def render_document(
         + gpu_section
         + "\n\n"
         + gpu_note
-        + poseidon_intro
-        + poseidon_section
+        + operation_evidence_section(rows)
         + "\n\n"
         + merkle_intro
         + merkle_notes
@@ -359,12 +300,11 @@ def main() -> None:
     args = parse_args()
     try:
         rows = collect_benchmark_rows(args.artifacts)
-        poseidon_section = poseidon_table(args.poseidon_manifest)
         merkle_notes = merkle_section(args.merkle_dir)
         row_usage_notes = row_usage_section(args.artifacts)
     except ValueError as err:
         raise SystemExit(f"[error] {err}") from err
-    document = render_document(rows, poseidon_section, merkle_notes, row_usage_notes)
+    document = render_document(rows, merkle_notes, row_usage_notes)
     args.history.parent.mkdir(parents=True, exist_ok=True)
     args.history.write_text(document)
     print(f"Updated {args.history}")

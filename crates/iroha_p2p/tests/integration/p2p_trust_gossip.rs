@@ -23,6 +23,49 @@ enum TrustTestMessage {
     Peer(u32),
 }
 impl ClassifyTopic for TrustTestMessage {
+    // This explicit synthetic payload has no Availability or sidecar variants.
+    // A positive bound for each empty variant set funds mandatory geometry;
+    // no production payload owner uses these fixture-only declarations.
+    fn availability_frame_maximum(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<usize, norito::core::Error> {
+        Ok(1)
+    }
+    fn recovery_frame_maxima(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<[usize; 2], norito::core::Error> {
+        Ok([1, 1])
+    }
+
+    fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
+        // Two fixed-width variants: inspect only tag and scalar field length.
+        use norito::core;
+        core::validate_header_flags(flags)?;
+        let tag = u32::from_le_bytes(
+            payload
+                .get(..4)
+                .ok_or(core::Error::LengthMismatch)?
+                .try_into()
+                .map_err(|_| core::Error::LengthMismatch)?,
+        );
+        let field = &payload[4..];
+        if flags & core::header_flags::PACKED_STRUCT != 0 {
+            if field.len() != 4 {
+                return Err(core::Error::LengthMismatch);
+            }
+        } else {
+            let (length, prefix) = core::read_len_from_slice_with_flags(field, flags)?;
+            if length != 4 || prefix.checked_add(length) != Some(field.len()) {
+                return Err(core::Error::LengthMismatch);
+            }
+        }
+        match tag {
+            0 => Ok(Some(Topic::TrustGossip)),
+            1 => Ok(Some(Topic::PeerGossip)),
+            _ => Err(core::Error::Message("unknown trust fixture tag".to_owned())),
+        }
+    }
+
     fn topic(&self) -> Topic {
         match self {
             TrustTestMessage::Trust(_) => Topic::TrustGossip,
@@ -145,10 +188,7 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping trust_gossip_disabled_drops_frames_and_keeps_peer_gossip: {e:?}");
-            return;
-        }
+        Err(error) => panic!("trust-gossip fixture must start: {error}"),
     };
     let (net_b, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_b.clone()),
@@ -161,10 +201,7 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping trust_gossip_disabled_drops_frames_and_keeps_peer_gossip: {e:?}");
-            return;
-        }
+        Err(error) => panic!("trust-gossip fixture must start: {error}"),
     };
     let (mut rx_a, mut rx_b) = {
         let (tx_a, rx_a) = mpsc::channel(4);
@@ -238,10 +275,7 @@ async fn trust_gossip_enabled_reaches_both_peers() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping trust_gossip_enabled_reaches_both_peers: {e:?}");
-            return;
-        }
+        Err(error) => panic!("trust-gossip fixture must start: {error}"),
     };
     let (net_b, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_b.clone()),
@@ -254,10 +288,7 @@ async fn trust_gossip_enabled_reaches_both_peers() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping trust_gossip_enabled_reaches_both_peers: {e:?}");
-            return;
-        }
+        Err(error) => panic!("trust-gossip fixture must start: {error}"),
     };
     let (mut rx_a, mut rx_b) = {
         let (tx_a, rx_a) = mpsc::channel(4);
@@ -308,4 +339,46 @@ async fn trust_gossip_enabled_reaches_both_peers() {
     .unwrap_or(false);
     assert!(recv_a, "trust gossip should reach trust-enabled peer A");
     assert!(recv_b, "trust gossip should reach trust-enabled peer B");
+}
+
+#[test]
+fn trust_fixture_raw_discriminator_matches_both_fixed_native_variants() {
+    use norito::core;
+    for value in [TrustTestMessage::Trust(u32::MAX), TrustTestMessage::Peer(0)] {
+        for requested in [
+            0,
+            core::header_flags::COMPACT_LEN,
+            core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
+            core::header_flags::PACKED_STRUCT
+                | core::header_flags::COMPACT_LEN
+                | core::header_flags::FIELD_BITSET,
+        ] {
+            let (bytes, flags) = {
+                let _flags = core::DecodeFlagsGuard::enter(requested);
+                norito::codec::encode_with_header_flags(&value)
+            };
+            let _flags = core::DecodeFlagsGuard::enter(flags);
+            let (decoded, used) = core::decode_field_canonical::<TrustTestMessage>(&bytes).unwrap();
+            assert_eq!(used, bytes.len());
+            assert!(matches!((&value, &decoded),
+                (TrustTestMessage::Trust(a), TrustTestMessage::Trust(b)) |
+                (TrustTestMessage::Peer(a), TrustTestMessage::Peer(b)) if a == b));
+            assert_eq!(
+                TrustTestMessage::inbound_topic(&bytes, flags).unwrap(),
+                Some(decoded.topic())
+            );
+            assert_eq!(
+                TrustTestMessage::inbound_admission_class(&bytes, flags).unwrap(),
+                decoded.admission_class()
+            );
+            let mut unknown = bytes.clone();
+            unknown[..4].copy_from_slice(&2_u32.to_le_bytes());
+            assert!(TrustTestMessage::inbound_topic(&unknown, flags).is_err());
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(TrustTestMessage::inbound_topic(&trailing, flags).is_err());
+            assert!(TrustTestMessage::inbound_topic(&bytes[..bytes.len() - 1], flags).is_err());
+            assert!(TrustTestMessage::inbound_topic(&bytes, flags | 0x80).is_err());
+        }
+    }
 }

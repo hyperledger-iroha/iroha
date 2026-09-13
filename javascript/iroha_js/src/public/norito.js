@@ -7,6 +7,7 @@ export {
   PRIVACY_EXACT12_PROTOCOL_IDS_V1,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
+  decodeAccountIdNoritoValue,
   decodeCancelAssetLockV1,
   encodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,

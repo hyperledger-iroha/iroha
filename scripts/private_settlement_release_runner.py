@@ -53,6 +53,8 @@ import private_settlement_fault_report as fault_report
 import private_settlement_leakage_audit as leakage_audit
 import private_settlement_release_evidence as release_evidence
 import private_settlement_attempt_accounting as attempt_accounting
+import private_settlement_session_control as session_control
+import private_settlement_campaign_lifetime as campaign_lifetime
 
 VERSION = 1
 PROTOCOL = "AtomicPrivateSettlementV1"
@@ -262,13 +264,6 @@ LEAKAGE_ACCOUNT_RIGHT_I105 = (
 LEAKAGE_ASSET_LEFT = "4Zust3cNxfvUrJRuFjSMmNXho9rF"
 LEAKAGE_ASSET_RIGHT = "7fnqfbvxnCke21nA2Zy1C3KktDdi"
 
-BENCHMARK_CORRECTNESS_FIELDS = {
-    "finalized_receipt_observed",
-    "successful_leg_applications",
-    "each_leg_applied_exactly_once",
-    "partial_visible_observations",
-    "partial_spendable_observations",
-}
 
 
 class RunnerError(ValueError):
@@ -683,7 +678,9 @@ def build_configuration(
         },
         "benchmark": {
             "profiles": list(PROFILES),
-            "warmups_per_profile": warmups,
+            "warmups_per_session": warmups,
+            "network_lifecycle": "one_retained_network_per_profile_participants_seed",
+            "prefunding_policy": "session_union_of_disjoint_attempts",
             "measured_bundles_per_profile": measured,
             "seeds": list(normalized_seeds),
             "serial_execution": True,
@@ -709,6 +706,54 @@ def job_with_id(value: Mapping[str, Any]) -> dict[str, Any]:
     return {"request_id": request_id, **body}
 
 
+def benchmark_session_plan(
+    configuration_sha256: Mapping[int, str], seeds: Sequence[int], warmups: int, measured: int,
+) -> dict[str, list[dict[str, Any]]]:
+    """Use the canonical per-network planner and fixed shared policy manifests."""
+    policy_digests = {
+        n: object_digest(attempt_accounting.build_benchmark_workload_policy(n)) for n in PARTICIPANTS
+    }
+    try:
+        return attempt_accounting.build_benchmark_session_plan(
+            configuration_sha256, seeds, policy_digests,
+            warmups_per_session=warmups, measured_per_profile=measured,
+        )
+    except attempt_accounting.AccountingError as error:
+        raise RunnerError("invalid persistent benchmark session plan") from error
+
+
+def publish_workload_manifests(root: Path) -> list[dict[str, Any]]:
+    """Retain exact canonical policy bytes before the campaign plan is sealed."""
+    (root / "workloads").mkdir(mode=0o700)
+    with session_control.RecordDirectory(root) as records:
+        return [{"participants": n, **records.publish(
+            f"workloads/n{n}.json",
+            session_control.canonical(attempt_accounting.build_benchmark_workload_policy(n)),
+        )} for n in PARTICIPANTS]
+
+
+def validate_workload_manifests(value: Any, root: Path) -> dict[int, str]:
+    """Authenticate every policy file and its exact topology-specific derivation."""
+    if type(value) is not list or len(value) != len(PARTICIPANTS):
+        raise RunnerError("workload policy manifest inventory is incomplete")
+    digests = {}
+    for participants, item in zip(PARTICIPANTS, value):
+        row = exact_fields(item, {"participants", "path", "sha256", "bytes"}, "workload manifest")
+        if type(row["participants"]) is not int or row["participants"] != participants:
+            raise RunnerError("workload policy inventory is substituted or reordered")
+        if row["path"] != f"workloads/n{participants}.json":
+            raise RunnerError("workload policy does not use its canonical locator")
+        expected = session_control.canonical(attempt_accounting.build_benchmark_workload_policy(participants))
+        binding = {"sha256": hashlib.sha256(expected).hexdigest(), "bytes": len(expected)}
+        if {key: row[key] for key in binding} != binding:
+            raise RunnerError("workload policy binding differs from the canonical policy")
+        path = regular_file_under(root, safe_relative_path(row["path"], "workload policy path"), "workload policy")
+        document = read_bound_json_file(path, binding, "workload policy")
+        if session_control.canonical(document) != expected:
+            raise RunnerError("workload policy bytes differ from the canonical policy")
+        digests[participants] = binding["sha256"]
+    return digests
+
 def build_jobs(
     configuration_sha256: Mapping[int, str],
     seeds: Sequence[int],
@@ -732,40 +777,7 @@ def build_jobs(
                     }
                 )
             )
-    for profile in PROFILES:
-        for participants in PARTICIPANTS:
-            for run in range(warmups):
-                jobs.append(
-                    job_with_id(
-                        {
-                            "kind": "benchmark",
-                            "profile": profile,
-                            "participants": participants,
-                            "seed": seeds[run % len(seeds)],
-                            "run": run,
-                            "warmup": True,
-                            "configuration_sha256": configuration_sha256[
-                                participants
-                            ],
-                        }
-                    )
-                )
-            for run in range(measured):
-                jobs.append(
-                    job_with_id(
-                        {
-                            "kind": "benchmark",
-                            "profile": profile,
-                            "participants": participants,
-                            "seed": seeds[run % len(seeds)],
-                            "run": run,
-                            "warmup": False,
-                            "configuration_sha256": configuration_sha256[
-                                participants
-                            ],
-                        }
-                    )
-                )
+    jobs.extend(benchmark_session_plan(configuration_sha256, seeds, warmups, measured)["jobs"])
     for variant in ("left", "right"):
         injected = canaries_for_variant(canary_manifest, variant)
         jobs.append(
@@ -896,7 +908,8 @@ def validate_benchmark_baseline(value: Any, label: str) -> dict[str, Any]:
             "profiles",
             "accounting",
             "regressions",
-            "passed",
+            "passed", "method", "input_sha256", "paired_profiles",
+            "statistical_qualification_passed", "unconditional_quantiles",
         },
         label,
     )
@@ -913,6 +926,7 @@ def validate_benchmark_baseline(value: Any, label: str) -> dict[str, Any]:
     except benchmark_report.EvidenceError as error:
         raise RunnerError(f"{label} accounting is invalid: {error}") from error
     return record
+
 
 
 def benchmark_deadline_policy(timeout_seconds: int) -> dict[str, Any]:
@@ -1113,6 +1127,11 @@ def create_plan(
         configuration_manifest_path = root / "configuration-manifest-v1.json"
         write_json(configuration_manifest_path, configuration_manifest)
 
+        workload_manifests = publish_workload_manifests(root)
+        validate_workload_manifests(workload_manifests, root)
+        benchmark_sessions = benchmark_session_plan(
+            configuration_digests, normalized_seeds, warmups, measured,
+        )["sessions"]
         jobs = build_jobs(
             configuration_digests,
             normalized_seeds,
@@ -1122,6 +1141,8 @@ def create_plan(
         )
         validate_campaign_timeout(jobs, timeout_seconds)
         plan = {
+            "workload_manifests": workload_manifests,
+            "benchmark_sessions": benchmark_sessions,
             "benchmark_accounting": benchmark_deadline_policy(timeout_seconds),
             "version": VERSION,
             "protocol": PROTOCOL,
@@ -1197,6 +1218,8 @@ def load_plan(path: Path) -> tuple[dict[str, Any], Path]:
         "harness_contract",
         "benchmark_accounting",
         "benchmark_baseline",
+        "workload_manifests",
+        "benchmark_sessions",
         "hardware",
         "canary_manifest",
         "configuration_manifest",
@@ -1422,6 +1445,12 @@ def load_plan(path: Path) -> tuple[dict[str, Any], Path]:
                 f"configuration[{index}] differs from the canonical profile"
             )
         configuration_digests[record["participants"]] = record["sha256"]
+    validate_workload_manifests(plan["workload_manifests"], root)
+    expected_sessions = benchmark_session_plan(
+        configuration_digests, seeds, requirements["warmups"], requirements["measured"],
+    )["sessions"]
+    if canonical_bytes(plan["benchmark_sessions"]) != canonical_bytes(expected_sessions):
+        raise RunnerError("benchmark session descriptors differ from the canonical planner")
     expected_jobs = build_jobs(
         configuration_digests,
         seeds,
@@ -3775,85 +3804,6 @@ def materialize_fault_response(
     return raw, artifacts
 
 
-def materialize_benchmark_response(
-    response: Mapping[str, Any],
-    *,
-    plan: Mapping[str, Any],
-    job: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Validate and normalize one real-process benchmark measurement."""
-
-    common = validate_common_response(response, plan=plan, job=job)
-    expected = {
-        "stages_ms",
-        *benchmark_report.RESOURCE_FIELDS,
-        *BENCHMARK_CORRECTNESS_FIELDS,
-    }
-    payload = exact_fields(common["payload"], expected, "benchmark payload")
-    profile = job["profile"]
-    stages = payload["stages_ms"]
-    required_stages = (
-        benchmark_report.REQUIRED_PRIVATE_STAGES
-        if profile == "private"
-        else ("global_finality", "end_to_end")
-    )
-    if not isinstance(stages, dict) or set(stages) != set(required_stages):
-        raise RunnerError("benchmark stage inventory is incomplete")
-    normalized_stages = {
-        stage: finite_nonnegative(value, f"benchmark.{stage}")
-        for stage, value in stages.items()
-    }
-    if normalized_stages["end_to_end"] <= 0:
-        raise RunnerError("benchmark end-to-end latency must be positive")
-    resources = {
-        field: finite_nonnegative(payload[field], f"benchmark.{field}")
-        for field in benchmark_report.RESOURCE_FIELDS
-    }
-    for field in (
-        "throughput_bundles_per_second",
-        "cpu_seconds",
-        "peak_rss_bytes",
-        "network_bytes",
-        "receipt_bytes",
-    ):
-        if resources[field] <= 0:
-            raise RunnerError(f"benchmark {field} must be positive")
-    if profile == "private" and resources["proof_bytes"] <= 0:
-        raise RunnerError("private benchmark proof_bytes must be positive")
-    require_true(
-        payload["finalized_receipt_observed"],
-        "benchmark.finalized_receipt_observed",
-    )
-    if payload["successful_leg_applications"] != job["participants"]:
-        raise RunnerError("benchmark successful leg count does not match participants")
-    require_true(
-        payload["each_leg_applied_exactly_once"],
-        "benchmark.each_leg_applied_exactly_once",
-    )
-    if payload["partial_visible_observations"] != 0:
-        raise RunnerError("benchmark observed a partially visible bundle")
-    if payload["partial_spendable_observations"] != 0:
-        raise RunnerError("benchmark observed a partially spendable bundle")
-    raw = {
-        "version": VERSION,
-        "protocol": PROTOCOL,
-        "commit": plan["commit"],
-        "hardware_sha256": plan["hardware"]["sha256"],
-        "hardware_profile_sha256": plan["hardware"]["profile_sha256"],
-        "configuration_sha256": job["configuration_sha256"],
-        "profile": profile,
-        "participants": job["participants"],
-        "seed": job["seed"],
-        "run": job["run"],
-        "warmup": job["warmup"],
-        "stages_ms": normalized_stages,
-        **resources,
-    }
-    try:
-        benchmark_report.parse_measurement(raw, f"harness:{job['request_id']}")
-    except benchmark_report.EvidenceError as error:
-        raise RunnerError(f"benchmark harness result is invalid: {error}") from error
-    return raw
 
 
 def _read_exact_stream(stream: Any, length: int, label: str) -> bytes:
@@ -5237,6 +5187,137 @@ def validate_leakage_response(
     ]
 
 
+def prepare_benchmark_session(
+    plan: Mapping[str, Any], plan_root: Path, campaign_root: Path,
+    campaign_identity: Mapping[str, str], descriptor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Prebind every exact request; create no durable attempt start or process."""
+    matches = [row for row in plan["benchmark_sessions"] if row["session_id"] == descriptor["session_id"]]
+    if len(matches) != 1 or canonical_bytes(matches[0]) != canonical_bytes(descriptor):
+        raise RunnerError("session descriptor is absent, repeated or substituted")
+    session_id = session_control.digest(descriptor["session_id"])
+    indexed = [(ordinal, job) for ordinal, job in enumerate(plan["jobs"], 1)
+               if job.get("session_id") == session_id]
+    expected_count = descriptor["warmup_attempts"] + descriptor["measured_attempts"]
+    if (len(indexed) != expected_count or expected_count < 6
+            or [ordinal for ordinal, _ in indexed] != list(range(indexed[0][0], indexed[0][0] + expected_count))):
+        raise RunnerError("session attempts are incomplete or interrupted in the full plan")
+    for index, (_, job) in enumerate(indexed):
+        if (job.get("kind") != "benchmark" or job.get("session_attempt_index") != index
+                or type(job.get("warmup")) is not bool
+                or job["warmup"] != (index < descriptor["warmup_attempts"])
+                or any(job[key] != descriptor[key] for key in (
+                    "profile", "participants", "seed", "configuration_sha256", "workload_manifest_sha256"))):
+            raise RunnerError("session job differs from its canonical descriptor")
+    session_directory = campaign_root / "sessions" / session_id
+    fresh_private_directory(session_directory)
+    fresh_private_directory(session_directory / "control")
+    session_nonce = os.urandom(32).hex()
+    rows = []
+    with session_control.RecordDirectory(campaign_root) as records:
+        for index, (ordinal, job) in enumerate(indexed):
+            attempt_id = attempt_accounting.registered_attempt_id(
+                campaign_identity["scope_sha256"], campaign_identity["campaign_id"],
+                campaign_identity["plan_sha256"], job["request_id"],
+            )
+            execution_job = {**job, "invocation_nonce": os.urandom(32).hex(),
+                             "session_invocation_nonce": session_nonce, "attempt_id": attempt_id}
+            request = build_request(plan, plan_root, execution_job)
+            output_directory = f"attempts/{ordinal:05}-{job['request_id']}"
+            fresh_private_directory(campaign_root / output_directory)
+            fresh_private_directory(campaign_root / output_directory / "evidence")
+            fresh_private_directory(campaign_root / output_directory / "evidence" / "benchmark-protocol")
+            request_reference = records.publish(
+                f"{output_directory}/request.json", session_control.canonical(request),
+            )
+            rows.append({
+                "attempt_id": attempt_id, "request_id": job["request_id"],
+                "invocation_nonce": execution_job["invocation_nonce"], "session_attempt_index": index,
+                "request": request_reference, "output_directory": output_directory,
+            })
+        session_request = {
+            "version": VERSION, "protocol": PROTOCOL, "kind": "benchmark_session",
+            **campaign_identity, "session_id": session_id, "session_invocation_nonce": session_nonce,
+            "workload_manifest_sha256": descriptor["workload_manifest_sha256"],
+            "workload_manifest": attempt_accounting.build_benchmark_workload_policy(descriptor["participants"]),
+            "commit": plan["commit"], "configuration_sha256": descriptor["configuration_sha256"],
+            "profile": descriptor["profile"], "participants": descriptor["participants"],
+            "seed": descriptor["seed"], "warmups": descriptor["warmup_attempts"], "attempts": rows,
+        }
+        reference = records.publish(f"sessions/{session_id}/request.json", session_control.canonical(session_request))
+    return {"request": session_request, "reference": reference,
+            "identity": {"version": VERSION, "protocol": PROTOCOL, **campaign_identity,
+                         "session_id": session_id, "session_invocation_nonce": session_nonce,
+                         "session_request_sha256": reference["sha256"]}}
+
+
+def publish_benchmark_session_start(
+    prepared: Mapping[str, Any], *, records: session_control.RecordDirectory,
+    command: Sequence[str], harness: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind the exact owner command before starting warmup zero or spawning."""
+    identity = session_control.identity(prepared["identity"])
+    if (type(command) not in (list, tuple) or not command
+            or any(type(part) is not str or not part or "\x00" in part for part in command)):
+        raise RunnerError("session owner command is malformed")
+    session_control.reference({"path": "harness", **harness})
+    if records.read(prepared["reference"]) != session_control.canonical(prepared["request"]):
+        raise RunnerError("prepared session request changed before owner start")
+    value = {**identity, "request": prepared["reference"], "command": list(command),
+             "harness": dict(harness), "started_ns": time.time_ns()}
+    return records.publish(f"sessions/{identity['session_id']}/started.json", session_control.canonical(value))
+
+
+def publish_benchmark_attempt_start(
+    prepared: Mapping[str, Any], index: int, *, records: session_control.RecordDirectory,
+    session_started: Mapping[str, Any], ordinal: int, outer_timeout_ms: int,
+    preceding_acceptance: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Create the only attempted boundary after validating its predecessor ACK."""
+    identity = session_control.identity(prepared["identity"])
+    session_control.unsigned(index)
+    session_control.unsigned(ordinal)
+    session_control.unsigned(outer_timeout_ms)
+    if ordinal < 1 or outer_timeout_ms < 1 or index >= len(prepared["request"]["attempts"]):
+        raise RunnerError("attempt start has an invalid ordinal, budget or session index")
+    if records.read(prepared["reference"]) != session_control.canonical(prepared["request"]):
+        raise RunnerError("prepared session request changed before attempt start")
+    started = session_control.decode(records.read(dict(session_started)))
+    if (any(started.get(key) != value for key, value in identity.items())
+            or started.get("request") != prepared["reference"]):
+        raise RunnerError("attempt start does not bind its actual session start")
+    row = prepared["request"]["attempts"][index]
+    if row["output_directory"] != f"attempts/{ordinal:05}-{row['request_id']}":
+        raise RunnerError("attempt start uses a different full-plan ordinal")
+    if index == 0:
+        if preceding_acceptance is not None:
+            raise RunnerError("first attempt has no predecessor acknowledgement")
+    else:
+        if preceding_acceptance is None:
+            raise RunnerError("successor attempt requires a durable acceptance")
+        binding = dict(preceding_acceptance)
+        wire = session_control.RetainedMessage(records.read(binding), binding)
+        acceptance = session_control.validate_message(wire.decoded())
+        previous = prepared["request"]["attempts"][index - 1]
+        if (acceptance["kind"] != "accept" or acceptance["channel"] != "runner_adapter"
+                or any(acceptance[key] != value for key, value in identity.items())
+                or any(acceptance["payload"][key] != previous[key] for key in session_control.ATTEMPT_FIELDS)):
+            raise RunnerError("successor start substitutes its preceding acceptance")
+        # ACK semantic validation and ordered chain replay remain owned by the
+        # live session controller and the canonical evidence reducer.
+    request = session_control.decode(records.read(row["request"]))
+    if (request["request_id"] != row["request_id"] or request["invocation_nonce"] != row["invocation_nonce"]
+            or request["session_attempt_index"] != index
+            or request["session_id"] != identity["session_id"]
+            or request["session_invocation_nonce"] != identity["session_invocation_nonce"]):
+        raise RunnerError("attempt request changed before its durable start")
+    value = {**identity, **{key: row[key] for key in session_control.ATTEMPT_FIELDS},
+             "ordinal": ordinal, "session_started": dict(session_started), "request": row["request"],
+             "outer_timeout_ms": outer_timeout_ms, "started_ns": time.time_ns(),
+             "preceding_acceptance": None if preceding_acceptance is None else dict(preceding_acceptance)}
+    return records.publish(f"{row['output_directory']}/started.json", session_control.canonical(value))
+
+
 def build_request(
     plan: Mapping[str, Any],
     plan_root: Path,
@@ -5322,9 +5403,20 @@ def build_request(
         ),
         "authenticated_message_control": True,
         "seed": job["seed"],
-        "run": job["run"],
         "configuration": configuration,
     }
+    if job["kind"] != "benchmark":
+        request["run"] = job["run"]
+    else:
+        for key in ("session_id", "session_invocation_nonce", "workload_manifest_sha256"):
+            session_control.digest(job.get(key))
+        session_control.unsigned(job.get("session_attempt_index"))
+        expected_policy = object_digest(attempt_accounting.build_benchmark_workload_policy(job["participants"]))
+        if job["workload_manifest_sha256"] != expected_policy:
+            raise RunnerError("benchmark request changes its registered economic policy")
+        request.update({key: job[key] for key in (
+            "session_id", "session_invocation_nonce", "session_attempt_index", "workload_manifest_sha256",
+        )})
     if job["kind"] == "fault":
         request["payload"] = {
             "loss_phases": list(fault_report.REQUIRED_LOSS_PHASES),
@@ -5354,7 +5446,8 @@ def build_request(
                 if job["profile"] == "private"
                 else ("global_finality", "end_to_end")
             ),
-            "resources": list(benchmark_report.RESOURCE_FIELDS),
+            # CPU/RSS/network belong to the retained adapter window.
+            "resources": ["proof_bytes", "receipt_bytes", "storage_growth_bytes"],
         }
     else:
         canary_path = regular_file_under(
@@ -5408,37 +5501,6 @@ def _process_group_exists(process_group: int) -> bool:
     except PermissionError as error:
         raise RunnerError("cannot inspect the harness-owned process group") from error
     return True
-
-
-def _terminate_owned_process_group(
-    process: subprocess.Popen[bytes], process_group: int
-) -> None:
-    """Boundedly terminate only the new session created for one harness run."""
-
-    if process_group != process.pid or process_group <= 1:
-        raise RunnerError("refusing to terminate an unbound process group")
-    if not _process_group_exists(process_group):
-        process.wait(timeout=1)
-        return
-    try:
-        os.killpg(process_group, signal.SIGTERM)
-    except ProcessLookupError:
-        process.wait(timeout=1)
-        return
-    deadline = time.monotonic() + 10.0
-    while time.monotonic() < deadline and _process_group_exists(process_group):
-        time.sleep(0.05)
-    if _process_group_exists(process_group):
-        try:
-            os.killpg(process_group, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and _process_group_exists(process_group):
-            time.sleep(0.05)
-    if _process_group_exists(process_group):
-        raise RunnerError("harness-owned process group survived bounded termination")
-    process.wait(timeout=1)
 
 
 def private_record(path: Path, value: Any) -> None:
@@ -5523,52 +5585,6 @@ def retained_file_inventory(root: Path) -> list[dict[str, Any]]:
     return sorted(inventory, key=lambda item: item["path"])
 
 
-def validate_benchmark_transport(
-    evidence_dir: Path, *, request: Mapping[str, Any], request_sha256: str,
-) -> dict[str, Any]:
-    """Require the retained successful Rust terminal and exact adapter observation.
-
-    The transport is private evidence, not an additional measurement. Failure,
-    timeout and incomplete records remain retained for accounting; they cannot
-    satisfy this successful-response boundary.
-    """
-
-    directory = evidence_dir / attempt_accounting.BENCHMARK_PROTOCOL_DIRECTORY
-    if (
-        {entry.name for entry in evidence_dir.iterdir()} != {directory.name}
-        or directory.is_symlink() or not directory.is_dir()
-        or directory.resolve(strict=True) != directory
-        or stat.S_IMODE(directory.stat().st_mode) != 0o700
-        or {entry.name for entry in directory.iterdir()} != {
-            attempt_accounting.RUST_TERMINAL_FILE, attempt_accounting.ADAPTER_OUTCOME_FILE,
-        }
-    ):
-        raise RunnerError("benchmark transport has an undeclared or unsafe evidence inventory")
-    adapter_path = directory / attempt_accounting.ADAPTER_OUTCOME_FILE
-    terminal_path = directory / attempt_accounting.RUST_TERMINAL_FILE
-    adapter_binding = file_binding(adapter_path)
-    terminal_binding = file_binding(terminal_path)
-    if max(adapter_binding["bytes"], terminal_binding["bytes"]) > MAX_HARNESS_RESPONSE_BYTES:
-        raise RunnerError("benchmark transport exceeds its bounded response size")
-    adapter = read_bound_json_file(adapter_path, adapter_binding, "benchmark adapter outcome")
-    terminal = read_bound_json_file(terminal_path, terminal_binding, "Rust benchmark terminal")
-    try:
-        attempt_accounting.validate_adapter_outcome(
-            adapter, request=request, request_sha256=request_sha256,
-        )
-        attempt_accounting.validate_benchmark_terminal(
-            terminal, request=request, request_sha256=request_sha256,
-            exit_code=adapter["exit_code"],
-        )
-    except attempt_accounting.AccountingError as error:
-        raise RunnerError("benchmark transport outcome is invalid") from error
-    if (
-        adapter["status"] != "succeeded" or terminal["outcome"]["kind"] != "succeeded"
-        or adapter["rust_terminal"] != terminal_binding
-        or adapter["elapsed_ms"] < terminal["elapsed_ms"]
-    ):
-        raise RunnerError("benchmark transport does not prove completed successful measurement validation")
-    return terminal["outcome"]["result"]
 
 
 def invoke_harness(
@@ -5590,8 +5606,8 @@ def invoke_harness(
 
     if timeout_seconds <= 0:
         raise RunnerError("harness timeout must be positive")
-    if request.get("kind") == "benchmark" and accounting_identity is None:
-        raise RunnerError("benchmark invocation requires registered accounting identity")
+    if request.get("kind") == "benchmark":
+        raise RunnerError("benchmarks require the retained session execution owner")
     identity = {} if accounting_identity is None else dict(accounting_identity)
     if identity:
         exact_fields(identity, {"scope_sha256", "campaign_id", "plan_sha256", "attempt_id"}, "attempt identity")
@@ -5629,6 +5645,7 @@ def invoke_harness(
     returncode: int | None = None
     process_error: str | None = None
     timed_out = False
+    physical = None
     try:
         # Explicit modes also protect partial files if the caller's umask is permissive.
         with os.fdopen(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stdout, \
@@ -5645,11 +5662,13 @@ def invoke_harness(
             except subprocess.TimeoutExpired as error:
                 timed_out = True
                 completion_kind = "outer_deadline"
-                _terminate_owned_process_group(process, process_group)
                 raise RunnerError(f"real-process harness exceeded its {timeout_seconds}-second deadline") from error
             if _process_group_exists(process_group):
-                _terminate_owned_process_group(process, process_group)
                 raise RunnerError("real-process harness exited while owned child processes remained")
+            # Retain this actual completed wait plus first absence observation.
+            # A later reused numeric PGID does not belong to this child.
+            physical = {'pid': process.pid, 'exit_code': returncode,
+                        'physical_wait_completed': True, 'group_absence_observed': True}
             stdout.flush()
             stderr.flush()
             os.fsync(stdout.fileno())
@@ -5661,12 +5680,14 @@ def invoke_harness(
         process_error = str(error) or type(error).__name__
         raise
     finally:
-        if process is not None:
-            returncode = process.poll()
-        try:
-            owned_group_gone = process is None or not _process_group_exists(process.pid)
-        except (OSError, RunnerError):
-            owned_group_gone = False
+        if process is not None and physical is None:
+            # Hold the actual child through cancellation, timeout and receipt
+            # failure. Late natural exit cannot erase the original outcome.
+            physical = campaign_lifetime.wait_owned_process(process, group=True)
+            returncode = physical['exit_code']
+        owned_group_gone = process is None or (physical is not None
+            and physical['physical_wait_completed'] is True
+            and physical['group_absence_observed'] is True)
         try:
             bindings_unchanged = file_binding(request_path) == request_binding and (
                 expected_harness_binding is None or verify_harness(harness) == dict(expected_harness_binding)
@@ -5697,17 +5718,6 @@ def invoke_harness(
         if response_binding["bytes"] > MAX_HARNESS_RESPONSE_BYTES:
             raise RunnerError("harness response exceeds the bounded response size")
         response = read_bound_json_file(response_path, response_binding, "harness response")
-        if request.get("kind") == "benchmark":
-            result = validate_benchmark_transport(
-                evidence_dir, request=request, request_sha256=request_binding["sha256"],
-            )
-            if result["request_sha256"] != request_binding["sha256"] or any(
-                result[key] != response.get(key) for key in (
-                    "payload", "process_inventory", "mandatory_signed_rs16_da_rbc",
-                    "signed_rs16_da_observations", "authenticated_message_control",
-                )
-            ):
-                raise RunnerError("benchmark response differs from its bound Rust terminal")
         expected_root_names = {"request.json", "response.json", "evidence", "stdout.log", "stderr.log",
                                "started.json", "process-outcome.json"}
         if {entry.name for entry in root.iterdir()} != expected_root_names:
@@ -5799,7 +5809,13 @@ def write_benchmark_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "profile",
         "participants",
         "seed",
-        "run",
+        "request_id",
+        "invocation_nonce",
+        "session_id",
+        "session_invocation_nonce",
+        "session_attempt_index",
+        "workload_manifest_sha256",
+        "economic_vector_sha256",
         "warmup",
         *[f"stage_ms_{stage}" for stage in stage_names],
         *benchmark_report.RESOURCE_FIELDS,
@@ -5930,6 +5946,7 @@ def validate_publication_fragment(
     artifacts: Sequence[Mapping[str, Any]],
     *,
     commit: str,
+    admission,
 ) -> None:
     """Replay every strict final-bundle validator applicable to this fragment."""
 
@@ -6025,28 +6042,10 @@ def validate_publication_fragment(
     benchmark_paths = [
         publication_root.joinpath(*artifact.path.parts) for artifact in benchmark_raw
     ]
-    raw_buckets = release_evidence._load_benchmark_raw(
-        benchmark_paths,
-        commit,
-        hardware[0].sha256,
-        hardware_profile_sha256,
-        configuration_digests,
-    )
-    accounting, accounting_inputs = release_evidence._validate_registered_benchmark_accounting(
-        root=publication_root, artifacts=artifact_objects, commit=commit,
-        hardware_sha256=hardware[0].sha256, hardware_profile_sha256=hardware_profile_sha256,
-        configuration_sha256_by_participants=configuration_digests,
-    )
-    release_evidence._validate_benchmark_report(
-        publication_root.joinpath(*benchmark_reports[0].path.parts),
-        raw_buckets,
-        benchmark_paths,
-        commit,
-        hardware[0].sha256,
-        hardware_profile_sha256,
-        configuration_digests,
-        accounting=accounting, scope_raw=accounting_inputs[0], campaigns=accounting_inputs[1],
-    )
+    release_evidence.validate_retained_benchmark_publication(root=publication_root,artifacts=artifact_objects,
+        commit=commit,hardware_sha256=hardware[0].sha256,hardware_profile_sha256=hardware_profile_sha256,
+        configuration_sha256_by_participants=configuration_digests,admission=admission)
+
 
 
 def validate_smoke_prerequisite(
@@ -6101,6 +6100,7 @@ def frozen_plan_input_records(plan: Mapping[str, Any], root: Path) -> list[Mappi
     configuration_manifest = read_bound_json_file(manifest_path,
         {key: plan["configuration_manifest"][key] for key in ("sha256", "bytes")}, "configuration manifest")
     records.extend(configuration_manifest["configurations"])
+    records.extend(plan["workload_manifests"])
     return records
 
 
@@ -6114,10 +6114,10 @@ def retain_frozen_plan_inputs(
         raise RunnerError("plan changed before its controlled inputs were retained")
     copy_bound_file(plan_path, destination / "frozen-plan.json", expected=expected_plan_binding)
     records = frozen_plan_input_records(plan, root)
-    seen = {"frozen-plan.json", "registered-scope.json", "campaign-closure.json", "attempts"}
+    seen = {"frozen-plan.json", "registered-scope.json", "campaign-closure.json", "attempts", "sessions"}
     for record in records:
         relative = safe_relative_path(record["path"], "frozen plan input")
-        if relative.as_posix() in seen or relative.parts[0] in {"attempts", "publication"}:
+        if relative.as_posix() in seen or relative.parts[0] in {"attempts", "sessions", "publication"}:
             raise RunnerError("frozen plan input collides with an accounting protocol locator")
         seen.add(relative.as_posix())
         source = regular_file_under(root, relative, "frozen plan input")
@@ -6130,148 +6130,59 @@ def retain_frozen_plan_inputs(
     return plan
 
 
-def qualify_benchmark_scope(
-    scope_path: Path,
-) -> tuple[dict[str, Any], list[dict[str, Any]], tuple[bytes, list[dict[str, Any]], list[bytes]]]:
-    """Replay canonical plans and accepted measurement semantics for every campaign."""
-
-    collected = collect_benchmark_scope(scope_path)
-    scope_raw, packets, sample_bytes = collected
-    accounting = attempt_accounting.reduce_registered_scope(*collected)
-    if accounting["accounting_complete"] is not True:
-        raise RunnerError("registered benchmark scope has incomplete attempts")
-    plans = []
-    for packet in packets:
-        campaign_root = scope_path.parent / "campaigns" / packet["campaign_id"]
-        plan, _ = load_plan(campaign_root / "frozen-plan.json")
-        if canonical_bytes(plan) != canonical_bytes(strict_json_loads(packet["plan"].decode("utf-8"), "retained plan")):
-            raise RunnerError("canonical plan changed during accounting qualification")
-        plans.append(plan)
-        by_id = {job["request_id"]: (ordinal, job) for ordinal, job in enumerate(plan["jobs"], 1)}
-        benchmark_packets = {attempt["request_id"]: attempt for attempt in packet["attempts"]}
-        for ordinal, job in enumerate(plan["jobs"], 1):
-            if job["kind"] == "benchmark":
-                request_raw = benchmark_packets[job["request_id"]]["request"]
-            else:
-                request_raw = retained_accounting_bytes(campaign_root / "attempts" /
-                    f"{ordinal:05}-{job['request_id']}" / "request.json", optional=True)
-            if request_raw is None:
-                continue
-            request = strict_json_loads(request_raw.decode("utf-8"), "retained full-plan request")
-            expected_request = build_request(plan, campaign_root,
-                {**job, "invocation_nonce": request.get("invocation_nonce")})
-            if canonical_bytes(request) != canonical_bytes(expected_request):
-                raise RunnerError("retained request differs from canonical frozen-plan replay")
-        for attempt in packet["attempts"]:
-            if attempt["validation"] is None:
-                continue
-            validation = strict_json_loads(attempt["validation"].decode("utf-8"), "retained validation")
-            if validation["validation_kind"] != "accepted":
-                continue
-            ordinal, job = by_id[attempt["request_id"]]
-            request = strict_json_loads(attempt["request"].decode("utf-8"), "retained request")
-            response = strict_json_loads(attempt["response"].decode("utf-8"), "retained response")
-            evidence = campaign_root / "attempts" / f"{ordinal:05}-{job['request_id']}" / "evidence"
-            validate_benchmark_transport(evidence, request=request,
-                request_sha256=hashlib.sha256(attempt["request"]).hexdigest())
-            normalized = materialize_benchmark_response(response, plan=plan,
-                job={**job, "invocation_nonce": request["invocation_nonce"]})
-            normalized["attempt_id"] = validation["attempt_id"]
-            sample = strict_json_loads(attempt["sample"].decode("utf-8"), "retained sample")
-            if canonical_bytes(normalized) != canonical_bytes(sample):
-                raise RunnerError("retained sample differs from canonical measurement replay")
-    if collect_benchmark_scope(scope_path) != collected:
-        raise RunnerError("registered evidence changed during full accounting qualification")
-    return accounting, plans, collected
+def qualify_benchmark_scope(held):
+    """Require the full retained denominator and frozen grouped-statistical minima."""
+    import private_settlement_retained_scope_publication as publication
+    report=publication.build_report(held,held.plans[0]['requirements']['bootstrap_iterations'])
+    publication.require_qualified(report)
+    return report
 
 
-def archive_benchmark_scope(
-    scope_path: Path, publication: Path,
-) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-    """Archive controlled accounting inputs separately from the derived public counts."""
 
-    accounting, plans, collected = qualify_benchmark_scope(scope_path)
-    scope_raw, packets, samples = collected
-    destination = publication / "accounting"
-    fresh_private_directory(destination)
-    artifacts = []
-    def copy_record(source, target, kind, expected):
-        missing = []
-        parent = target.parent
-        while not parent.exists():
-            missing.append(parent)
-            parent = parent.parent
-        for directory in reversed(missing):
-            directory.mkdir(mode=0o700)
-        copy_bound_file(source, target, expected=expected)
-        target.chmod(0o600)
-        artifacts.append({"kind": kind, **file_binding(target, relative_to=publication)})
-    copy_record(scope_path, destination / "scope.json", "benchmark_scope",
-                attempt_accounting.accounting_file_binding(scope_raw))
-    record_paths = {"request": "request.json", "started": "started.json", "process": "process-outcome.json",
-                    "adapter": "evidence/benchmark-protocol/adapter-outcome.json", "rust_terminal": "evidence/benchmark-protocol/rust-result.json",
-                    "response": "response.json", "response_outcome": "response-outcome.json", "validation": "validation-outcome.json",
-                    "sample": "benchmark-sample.json"}
-    for plan, packet in zip(plans, packets):
-        source_root = scope_path.parent / "campaigns" / packet["campaign_id"]
-        target_root = destination / "campaigns" / packet["campaign_id"]
-        target_root.parent.mkdir(mode=0o700, exist_ok=True)
-        target_root.mkdir(mode=0o700)
-        fixed = {"registered-scope.json": scope_raw, "frozen-plan.json": packet["plan"], "campaign-closure.json": packet["closure"]}
-        for name, raw in fixed.items():
-            copy_record(source_root / name, target_root / name, "benchmark_accounting_record", attempt_accounting.accounting_file_binding(raw))
-        for record in frozen_plan_input_records(plan, source_root):
-            relative = safe_relative_path(record["path"], "controlled plan input")
-            copy_record(source_root.joinpath(*relative.parts), target_root.joinpath(*relative.parts),
-                        "benchmark_accounting_record", {key: record[key] for key in ("sha256", "bytes")})
-        benchmark_packets = {attempt["request_id"]: attempt for attempt in packet["attempts"]}
-        for ordinal, job in enumerate(plan["jobs"], 1):
-            relative = Path("attempts") / f"{ordinal:05}-{job['request_id']}"
-            if job["kind"] == "benchmark":
-                records = {name: raw for key, name in record_paths.items() if (raw := benchmark_packets[job["request_id"]][key]) is not None}
-            else:
-                records = {name: raw for name in ("request.json", "started.json", "process-outcome.json")
-                           if (raw := retained_accounting_bytes(source_root / relative / name, optional=True)) is not None}
-            for name, raw in records.items():
-                copy_record(source_root / relative / name, target_root / relative / name,
-                            "benchmark_accounting_record", attempt_accounting.accounting_file_binding(raw))
-    # Exact replay after copying proves that no accepted row or failed predecessor
-    # disappeared when the controlled subset was materialized.
-    archived = collect_benchmark_scope(destination / "scope.json")
-    if archived != collected or attempt_accounting.reduce_registered_scope(*archived) != accounting:
-        raise RunnerError("controlled accounting archive differs from original evidence")
-    if collect_benchmark_scope(scope_path) != collected:
-        raise RunnerError("original accounting evidence changed while copied")
-    report_path = publication / "reports" / "benchmark-accounting-v1.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    private_record(report_path, accounting)
-    artifacts.append({"kind": "benchmark_accounting_report", **file_binding(report_path, relative_to=publication)})
-    return artifacts, accounting, [strict_json_loads(raw.decode("utf-8"), "accepted sample") for raw in samples]
+def archive_benchmark_scope(held, publication_root):
+    """Copy and independently replay the complete immutable session evidence cut."""
+    import private_settlement_retained_scope_publication as publication
+    return publication.archive(held,publication_root)
+
 
 
 def close_unstarted_campaign(
     scope_path: Path, *, campaign_id: str, plan_path: Path, source_root: Path,
+    harness: Path, smoke_campaign: Path, worker_path: Path, validator_path: Path,
 ) -> Path:
-    """Exclusively close a registered slot that has never acquired an execution directory."""
-
+    """Exclusively close a never-launched slot under the same native admission."""
+    import private_settlement_campaign_execution as execution
+    owner = execution.CampaignExecution()
     plan, _ = load_plan(plan_path)
     plan_binding = file_binding(plan_path)
-    _, scope_binding = load_benchmark_scope(scope_path, campaign_id=campaign_id,
-        plan_binding=plan_binding, deadline_policy=plan["benchmark_accounting"])
+    _, scope_binding = load_benchmark_scope(scope_path,campaign_id=campaign_id,
+        plan_binding=plan_binding,deadline_policy=plan["benchmark_accounting"])
+    verify_source_checkout(source_root,plan["commit"])
+    if verify_harness(harness) != plan["harness"]:
+        raise RunnerError("unstarted plan harness differs from admission")
+    prerequisite = validate_smoke_prerequisite(smoke_campaign,source_root=source_root,commit=plan["commit"])
+    owner.admit(source_root=source_root,harness=harness,smoke_campaign=smoke_campaign,plan=plan,
+        worker_path=worker_path,validator_path=validator_path,prerequisite=prerequisite)
     output = scope_path.parent / "campaigns" / campaign_id
-    require_external_output(output, source_root)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    require_external_output(output,source_root)
+    output.parent.mkdir(parents=True,exist_ok=True)
     fresh_private_directory(output)
     previous_umask = os.umask(0o077)
     try:
-        retained = retain_frozen_plan_inputs(plan_path, output, expected_plan_binding=plan_binding)
+        retained = retain_frozen_plan_inputs(plan_path,output,expected_plan_binding=plan_binding)
         if retained != plan:
             raise RunnerError("plan inputs changed during exclusive unstarted closure")
-        copy_bound_file(scope_path, output / "registered-scope.json", expected=scope_binding)
-        if file_binding(scope_path) != scope_binding:
-            raise RunnerError("scope changed during exclusive unstarted closure")
-        return close_benchmark_campaign(output, plan=plan, scope_sha256=scope_binding["sha256"],
-            campaign_id=campaign_id, plan_sha256=plan_binding["sha256"], reason="not_run")
+        copy_bound_file(scope_path,output / "registered-scope.json",expected=scope_binding)
+        owner.revalidate()
+        verify_source_checkout(source_root,plan["commit"])
+        if (file_binding(scope_path) != scope_binding or file_binding(plan_path) != plan_binding
+                or verify_harness(harness) != plan["harness"]
+                or validate_smoke_prerequisite(smoke_campaign,source_root=source_root,commit=plan["commit"]) != prerequisite):
+            raise RunnerError("unstarted closure admission changed")
+        result = close_benchmark_campaign(output,plan=plan,scope_sha256=scope_binding["sha256"],
+            campaign_id=campaign_id,plan_sha256=plan_binding["sha256"],reason="not_run",
+            scope_path=scope_path,validate_success=owner.callback)
+        return result['path']
     finally:
         os.umask(previous_umask)
 
@@ -6298,237 +6209,54 @@ def retained_accounting_bytes(path: Path, *, optional: bool = False) -> bytes | 
     return raw
 
 
-def collect_benchmark_scope(scope_path: Path) -> tuple[bytes, list[dict[str, Any]], list[bytes]]:
-    """Collect every registered campaign at its unique immutable execution locator.
-
-    The returned packet preserves exact private bytes. Only the pure reducer's
-    counts and digest projection are suitable for an accounting report; this
-    function does not confer source, measurement or release qualification.
-    """
-
-    observed = {}
-    directories = {}
-    def metadata(path):
-        try:
-            info = path.lstat()
-        except FileNotFoundError:
-            return None
-        return tuple(getattr(info, field) for field in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns"))
-    def retained(path, *, optional=False):
-        before = metadata(path)
-        raw = retained_accounting_bytes(path, optional=optional)
-        if metadata(path) != before:
-            raise RunnerError("accounting record changed during collection")
-        captured = (before, None if raw is None else attempt_accounting.accounting_file_binding(raw))
-        if path in observed and observed[path] != captured:
-            raise RunnerError("accounting record changed between collection reads")
-        observed[path] = captured
-        return raw
-    def inventory(path, allowed):
-        before = metadata(path)
-        if before is None:
-            names = ()
-        else:
-            if path.is_symlink() or not path.is_dir():
-                raise RunnerError("accounting directory is unsafe")
-            names = tuple(sorted(entry.name for entry in path.iterdir()))
-            if not set(names) <= set(allowed):
-                raise RunnerError("accounting directory contains undeclared files")
-        if metadata(path) != before:
-            raise RunnerError("accounting directory changed during collection")
-        directories[path] = (before, names)
-    scope_raw = retained(scope_path)
-    assert scope_raw is not None
-    scope = strict_json_loads(scope_raw.decode("utf-8"), "registered scope")
-    slots = scope.get("campaigns")
-    if not isinstance(slots, list) or not slots:
-        raise RunnerError("scope must register every campaign before collection")
-    campaigns = []
-    successful_rows = []
-    nonces = set()
-    inventory(scope_path.parent / "campaigns", [slot.get("campaign_id") for slot in slots if isinstance(slot, dict)])
-    record_paths = {
-        "request": "request.json", "started": "started.json", "process": "process-outcome.json",
-        "adapter": "evidence/benchmark-protocol/adapter-outcome.json",
-        "rust_terminal": "evidence/benchmark-protocol/rust-result.json", "response": "response.json",
-        "response_outcome": "response-outcome.json", "validation": "validation-outcome.json",
-        "sample": "benchmark-sample.json",
-    }
-    for slot in slots:
-        if not isinstance(slot, dict) or not isinstance(slot.get("campaign_id"), str) or re.fullmatch(
-                r"[a-z0-9][a-z0-9_-]{0,63}", slot["campaign_id"]) is None:
-            raise RunnerError("scope campaign locator is malformed")
-        root = scope_path.parent / "campaigns" / slot["campaign_id"]
-        if root.is_symlink() or root.resolve(strict=False) != root or not root.is_dir():
-            raise RunnerError("registered campaign has no canonical retained closure")
-        if retained(root / "registered-scope.json") != scope_raw:
-            raise RunnerError("campaign retained a different scope registration")
-        plan_raw = retained(root / "frozen-plan.json")
-        closure_raw = retained(root / "campaign-closure.json")
-        plan = strict_json_loads(plan_raw.decode("utf-8"), "frozen campaign plan")
-        if not isinstance(plan.get("jobs"), list):
-            raise RunnerError("campaign frozen job inventory is malformed")
-        expected_names = {f"{ordinal:05}-{job['request_id']}" for ordinal, job in enumerate(plan["jobs"], 1)}
-        attempts_root = root / "attempts"
-        inventory(attempts_root, expected_names)
-        packets = []
-        actual_started_ids = []
-        stopped_after_nonbenchmark = False
-        closure = strict_json_loads(closure_raw.decode("utf-8"), "campaign closure")
-        expected_identity = {"scope_sha256": hashlib.sha256(scope_raw).hexdigest(),
-                             "campaign_id": slot["campaign_id"], "plan_sha256": hashlib.sha256(plan_raw).hexdigest()}
-        for ordinal, job in enumerate(plan["jobs"], 1):
-            attempt = attempts_root / f"{ordinal:05}-{job['request_id']}"
-            start_raw = retained(attempt / "started.json", optional=True)
-            process_raw = retained(attempt / "process-outcome.json", optional=True)
-            request_raw = retained(attempt / "request.json", optional=True)
-            if start_raw is not None:
-                if stopped_after_nonbenchmark:
-                    raise RunnerError("full-plan dispatch continued after a fail-fast nonbenchmark outcome")
-                start = strict_json_loads(start_raw.decode("utf-8"), "full-plan durable start")
-                exact_fields(start, set(attempt_accounting.START_FIELDS), "full-plan durable start")
-                if (type(start["version"]) is not int or start["version"] != VERSION or start["protocol"] != PROTOCOL
-                        or type(start["started_ns"]) is not int or start["started_ns"] < scope["registered_ns"]
-                        or any(start.get(key) != value for key, value in {**expected_identity, "request_id": job["request_id"]}.items())):
-                    raise RunnerError("full-plan start differs from its registered identity")
-                expected_attempt = attempt_accounting.registered_attempt_id(
-                    expected_identity["scope_sha256"], slot["campaign_id"], expected_identity["plan_sha256"], job["request_id"])
-                nonce = start.get("invocation_nonce")
-                if (start["attempt_id"] != expected_attempt or not isinstance(nonce, str) or SHA256.fullmatch(nonce) is None
-                        or nonce == "0" * 64 or nonce in nonces or request_raw is None
-                        or start["request"] != attempt_accounting.accounting_file_binding(request_raw)):
-                    raise RunnerError("full-plan start reuses or substitutes its request identity")
-                if (type(start["timeout_seconds"]) is not int
-                        or start["timeout_seconds"] * 1000 != scope["deadline_policy"]["outer_timeout_ms"]
-                        or not isinstance(start["command"], list) or not start["command"]
-                        or not all(isinstance(value, str) for value in start["command"])
-                        or canonical_bytes(start["harness"]) != canonical_bytes(plan["harness"])):
-                    raise RunnerError("full-plan start differs from its frozen invocation contract")
-                nonces.add(nonce)
-                actual_started_ids.append(job["request_id"])
-            elif process_raw is not None:
-                raise RunnerError("process record exists without a durable start")
-            if job.get("kind") != "benchmark":
-                if start_raw is not None:
-                    if process_raw is None:
-                        raise RunnerError("full-plan started job has no authoritative process closure")
-                    process = strict_json_loads(process_raw.decode("utf-8"), "full-plan process closure")
-                    try:
-                        process = attempt_accounting._process_record(process,
-                            {key: start[key] for key in ("scope_sha256", "campaign_id", "plan_sha256",
-                                                        "attempt_id", "request_id", "invocation_nonce")},
-                            start, closure["closed_ns"], scope["deadline_policy"])
-                    except attempt_accounting.AccountingError as error:
-                        raise RunnerError("full-plan process closure contradicts its typed completion") from error
-                    if process["owned_process_group_gone"] is not True:
-                        raise RunnerError("full-plan process closure is substituted or nonquiescent")
-                    if closure["reason"] == "completed" and (
-                            process["passed"] is not True or process["completion_kind"] != "exited"
-                            or process["exit_code"] != 0):
-                        raise RunnerError("completed campaign contains an unsuccessful nonbenchmark process")
-                    stopped_after_nonbenchmark = (process["passed"] is not True
-                        or process["completion_kind"] != "exited" or process["exit_code"] != 0)
-                continue
-            inventory(attempt, {"request.json", "started.json", "process-outcome.json", "response.json",
-                                "response-outcome.json", "validation-outcome.json", "benchmark-sample.json",
-                                "stdout.log", "stderr.log", "evidence"})
-            inventory(attempt / "evidence", {"benchmark-protocol"})
-            inventory(attempt / "evidence" / "benchmark-protocol", {"adapter-outcome.json", "rust-result.json"})
-            packet = {"request_id": job["request_id"], **{
-                key: retained(attempt / name, optional=True) for key, name in record_paths.items()
-            }}
-            packets.append(packet)
-            if packet["sample"] is not None and packet["validation"] is not None:
-                validation = strict_json_loads(packet["validation"].decode("utf-8"), "sample acceptance")
-                if validation.get("validation_kind") == "accepted":
-                    successful_rows.append(packet["sample"])
-        if closure.get("started_request_ids") != actual_started_ids:
-            raise RunnerError("campaign closure differs from the full retained durable-start inventory")
-        campaigns.append({"campaign_id": slot["campaign_id"], "plan": plan_raw,
-                          "closure": closure_raw, "attempts": packets})
-    for path, (initial_metadata, initial_binding) in observed.items():
-        if metadata(path) != initial_metadata or (initial_binding is not None and attempt_accounting.accounting_file_binding(retained_accounting_bytes(path)) != initial_binding):
-            raise RunnerError("accounting record appeared, disappeared or changed during collection")
-    for path, (initial_metadata, initial_names) in directories.items():
-        current_names = () if not path.exists() else tuple(sorted(entry.name for entry in path.iterdir()))
-        if metadata(path) != initial_metadata or current_names != initial_names:
-            raise RunnerError("accounting directory changed during collection")
-    return scope_raw, campaigns, successful_rows
+def collect_benchmark_scope(scope_path, **admission):
+    """Hold complete retained providers under mandatory source and native admission."""
+    import private_settlement_registered_session_replay as replay
+    return replay.open_admitted_scope(scope_path,**admission)
 
 
-def write_benchmark_scope_accounting(scope_path: Path, output: Path, *, source_root: Path) -> Path:
-    """Reduce the complete retained scope and publish immutable derived counts."""
 
-    require_external_output(output, source_root)
-    scope, campaigns, samples = collect_benchmark_scope(scope_path)
-    result = attempt_accounting.reduce_registered_scope(scope, campaigns, samples)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    private_record(output, result)
+def write_benchmark_scope_accounting(scope_path, output, *, source_root, plan_harness,smoke_campaign,worker_path,validator_path):
+    """Publish exact closed-scope counts; incomplete rows never become successes."""
+    require_external_output(output,source_root)
+    with collect_benchmark_scope(scope_path,source_root=source_root,plan_harness=plan_harness,
+            smoke_campaign=smoke_campaign,worker_path=worker_path,validator_path=validator_path) as held:
+        result=held.result['accounting']
+    output.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    private_record(output,result)
     return output
+
 
 
 def close_benchmark_campaign(
     root: Path, *, plan: Mapping[str, Any], scope_sha256: str,
-    campaign_id: str, plan_sha256: str, reason: str,
-) -> Path:
-    """Publish a quiescent campaign cut only after checking every durable start.
+    campaign_id: str, plan_sha256: str, reason: str, scope_path: Path,
+    validate_success: Any,
+) -> dict[str, Any]:
+    """Close exact retained session owners using canonical shared accounting.
 
-    Missing process records or a surviving owned group leave the campaign open.
-    An absent job is never counted as unstarted before this explicit cut.
+Source/native admission and campaign prefix authorization belong to the caller.
+The mandatory callback prevents a legacy one-process-per-attempt fallback.
+The execution and exclusive unstarted owners supply the mandatory scope and
+independently admitted native sample replay callback.
     """
-
-    if reason not in {"completed", "fail_fast", "preparation_failed", "recovered_interruption", "not_run"}:
-        raise RunnerError("campaign closure reason is undeclared")
-    attempts = root / "attempts"
-    expected = {f"{ordinal:05}-{job['request_id']}": job for ordinal, job in enumerate(plan["jobs"], 1)}
-    started = []
-    if attempts.exists():
-        if attempts.is_symlink() or not attempts.is_dir():
-            raise RunnerError("campaign attempts directory is unsafe")
-        if any(entry.name not in expected for entry in attempts.iterdir()):
-            raise RunnerError("campaign contains an undeclared attempt")
-        for name, job in expected.items():
-            directory = attempts / name
-            if not directory.exists():
-                continue
-            if directory.is_symlink() or not directory.is_dir():
-                raise RunnerError("campaign attempt directory is unsafe")
-            start_path = directory / "started.json"
-            if not start_path.exists():
-                # The durable start is the attempt boundary. The producer is
-                # currently closing this directory, so no invocation can follow.
-                continue
-            start = read_bound_json_file(start_path, file_binding(start_path), "durable attempt start")
-            for key, value in {"scope_sha256": scope_sha256, "campaign_id": campaign_id,
-                               "plan_sha256": plan_sha256, "request_id": job["request_id"]}.items():
-                if start.get(key) != value:
-                    raise RunnerError("durable start differs from campaign closure identity")
-            process_path = directory / "process-outcome.json"
-            if not process_path.is_file() or process_path.is_symlink():
-                raise RunnerError("cannot close a campaign without authoritative process quiescence")
-            outcome = read_bound_json_file(process_path, file_binding(process_path), "process quiescence")
-            for key in ("scope_sha256", "campaign_id", "plan_sha256", "attempt_id", "request_id", "invocation_nonce"):
-                if outcome.get(key) != start.get(key):
-                    raise RunnerError("process quiescence differs from its durable start")
-            pid = outcome.get("pid")
-            if outcome.get("owned_process_group_gone") is not True or (
-                    pid is not None and (type(pid) is not int or pid <= 1 or _process_group_exists(pid))):
-                raise RunnerError("cannot close a campaign with an unconfirmed owned process group")
-            started.append(job["request_id"])
-    if reason == "not_run" and started:
-        raise RunnerError("unused campaign closure contains a durable attempt")
-    if reason == "completed" and len(started) != len(plan["jobs"]):
-        raise RunnerError("completed campaign closure is missing planned durable starts")
-    destination = root / "campaign-closure.json"
-    private_record(destination, {
-        "version": VERSION, "protocol": PROTOCOL, "scope_sha256": scope_sha256,
-        "campaign_id": campaign_id, "plan_sha256": plan_sha256, "closed_ns": time.time_ns(),
-        "quiescent": True, "started_request_ids": started, "reason": reason,
-    })
-    return destination
+    import private_settlement_campaign_closure as retained_closure
+    return retained_closure.close_retained_campaign(root,plan=plan,scope_path=scope_path,
+        scope_sha256=scope_sha256,campaign_id=campaign_id,plan_sha256=plan_sha256,
+        reason=reason,validate_success=validate_success)
 
 
-def execute_plan(
+def execute_plan(plan_path: Path, output_dir: Path, *, source_root: Path, harness: Path,
+                 smoke_campaign: Path, scope_path: Path, campaign_id: str,
+                 worker_path: Path, validator_path: Path) -> Path:
+    """Execute the canonical full plan with one native owner per retained session."""
+    import private_settlement_campaign_execution as execution
+    return execution.execute_plan(plan_path,output_dir,source_root=source_root,harness=harness,
+        smoke_campaign=smoke_campaign,scope_path=scope_path,campaign_id=campaign_id,
+        worker_path=worker_path,validator_path=validator_path)
+
+
+def _execute_retained_plan(
     plan_path: Path,
     output_dir: Path,
     *,
@@ -6537,9 +6265,11 @@ def execute_plan(
     smoke_campaign: Path,
     scope_path: Path,
     campaign_id: str,
+    worker_path: Path, validator_path: Path, owner: Any,
 ) -> Path:
     """Retain every attempt and denominator; publish a fragment only after complete validation."""
 
+    import private_settlement_campaign_execution as retained_execution
     if output_dir.exists():
         raise RunnerError(f"execution output already exists: {output_dir}")
     require_external_output(output_dir, source_root)
@@ -6555,6 +6285,9 @@ def execute_plan(
         smoke_campaign, source_root=source_root, commit=plan["commit"]
     )
 
+    owner.admit(source_root=source_root,harness=harness,smoke_campaign=smoke_campaign,
+        plan=plan,worker_path=worker_path,validator_path=validator_path,prerequisite=smoke_prerequisite)
+
     scope, scope_binding = load_benchmark_scope(
         scope_path, campaign_id=campaign_id, plan_binding=plan_file_binding,
         deadline_policy=plan["benchmark_accounting"],
@@ -6568,6 +6301,7 @@ def execute_plan(
     parent.mkdir(parents=True, exist_ok=True)
     fresh_private_directory(output_dir)
     staging = output_dir
+    owner.output_root = staging
     previous_umask = os.umask(0o077)
     completed_jobs: list[dict[str, Any]] = []
     active_job: dict[str, Any] | None = None
@@ -6585,6 +6319,7 @@ def execute_plan(
         copy_bound_file(scope_path, staging / "registered-scope.json", expected=scope_binding)
         attempts = staging / "attempts"
         fresh_private_directory(attempts)
+        fresh_private_directory(staging / "runtime")
         publication = staging / "publication"
         fresh_private_directory(publication)
         artifacts: list[dict[str, Any]] = []
@@ -6653,7 +6388,32 @@ def execute_plan(
         fault_rows: list[dict[str, Any]] = []
         benchmark_rows: list[dict[str, Any]] = []
         leakage_counts: dict[str, dict[str, int]] = {}
+        dispatched_sessions = set()
         for ordinal, job in enumerate(plan["jobs"], 1):
+            owner.lifetime.require_launch()
+            if job["kind"] == "benchmark":
+                sid = job["session_id"]
+                if sid in dispatched_sessions:
+                    continue
+                descriptor = next(row for row in plan["benchmark_sessions"] if row["session_id"] == sid)
+                stage = "retained_session"
+                active_job = {"kind": "benchmark_session", "session_id": sid, "first_ordinal": ordinal,
+                              **campaign_identity}
+                active_attempt = None
+                session, grouped, samples, completed, complete = owner.run_session(descriptor,
+                    root=staging,plan=plan,completed_ids=[row["request_id"] for row in completed_jobs])
+                benchmark_rows.extend(samples)
+                completed_jobs.extend(completed)
+                for sample in samples:
+                    current_ordinal = next(index for index, current in grouped if current["request_id"] == sample["request_id"])
+                    response_path = attempts / f"{current_ordinal:05}-{sample['request_id']}" / "response.json"
+                    artifacts.append(archive_harness_response(response_path,file_binding(response_path),
+                        publication,sample["request_id"]))
+                if not complete:
+                    raise RunnerError("retained session stopped before every registered attempt was accepted")
+                dispatched_sessions.add(sid)
+                active_job = active_attempt = None
+                continue
             execution_job = {
                 **job,
                 "invocation_nonce": os.urandom(32).hex(),
@@ -6694,15 +6454,6 @@ def execute_plan(
                     )
                     fault_rows.append(raw)
                     artifacts.extend(fault_artifacts)
-                elif job["kind"] == "benchmark":
-                    sample = materialize_benchmark_response(response, plan=plan, job=execution_job)
-                    sample["attempt_id"] = execution_job["attempt_id"]
-                    try:
-                        private_record(active_attempt / "benchmark-sample.json", sample)
-                    except OSError as error:
-                        raise OutputPublicationError("cannot retain the validated benchmark sample") from error
-                    sample_binding = file_binding(active_attempt / "benchmark-sample.json")
-                    benchmark_rows.append(sample)
                 else:
                     counts, surfaces = validate_leakage_response(
                         response,
@@ -6756,7 +6507,7 @@ def execute_plan(
                     "version": VERSION, "protocol": PROTOCOL, **active_job,
                     "passed": False, "stage": stage, "error": str(error) or type(error).__name__,
                     "validation_kind": ("interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else
-                                        "publication_failed" if job["kind"] == "benchmark" and isinstance(error, OutputPublicationError) else "rejected"),
+                                        "publication_failed" if isinstance(error, OutputPublicationError) else "rejected"),
                     "finished_ns": time.time_ns(),
                 })
                 raise
@@ -6779,9 +6530,7 @@ def execute_plan(
             plan["requirements"]["seeds"]
         ):
             raise RunnerError("fault harness did not return the complete matrix")
-        expected_benchmarks = len(PROFILES) * len(PARTICIPANTS) * (
-            plan["requirements"]["warmups"] + plan["requirements"]["measured"]
-        )
+        expected_benchmarks = sum(job["kind"] == "benchmark" for job in plan["jobs"])
         if len(benchmark_rows) != expected_benchmarks:
             raise RunnerError("benchmark harness did not return the complete matrix")
         if set(leakage_counts) != {"left", "right"}:
@@ -6940,7 +6689,10 @@ def execute_plan(
             "planned_jobs": len(plan["jobs"]), "completed_jobs": completed_jobs,
             "finished_ns": time.time_ns(),
         })
-        close_benchmark_campaign(staging, plan=plan, reason="completed", **campaign_identity)
+        owner.revalidate()
+        owner.close_completed_owners()
+        owner.closure = close_benchmark_campaign(staging, plan=plan, reason="completed",
+            scope_path=scope_path,validate_success=owner.callback,**campaign_identity)
         stage = "publication"
         publish_campaign_fragment(staging / "campaign-artifacts.json", fragment)
     except BaseException as error:
@@ -6951,19 +6703,29 @@ def execute_plan(
                 "passed": False, "stage": stage, "error": reason, "finished_ns": time.time_ns(),
                 "validation_kind": "interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "not_validated",
             })
-        completed_ids = {job["request_id"] for job in completed_jobs}
-        failed_id = None if active_job is None else active_job["request_id"]
+        inventory_error = None
+        try:
+            durable_ids = retained_execution.durable_start_projection(staging,plan)
+        except BaseException as inventory_failure:
+            durable_ids = None
+            inventory_error = type(inventory_failure).__name__
         private_record(staging / "failure.json", {
             "version": VERSION, "protocol": PROTOCOL, "passed": False, "stage": stage,
             "error": reason, "finished_ns": time.time_ns(), "planned_jobs": len(plan["jobs"]),
             "completed_jobs": completed_jobs, "failed_job": active_job,
-            "not_started_request_ids": [job["request_id"] for job in plan["jobs"]
-                if job["request_id"] not in completed_ids and job["request_id"] != failed_id],
+            "durable_started_request_ids": durable_ids,"start_inventory_error": inventory_error,
+            "retained_session_ids": list(owner.session_owners),
+            "not_started_request_ids": None if durable_ids is None else [job["request_id"] for job in plan["jobs"]
+                if job["request_id"] not in durable_ids],
         })
         if not (staging / "campaign-closure.json").exists():
             try:
-                close_benchmark_campaign(staging, plan=plan, reason="fail_fast", **campaign_identity)
-            except (OSError, RunnerError) as closure_error:
+                owner.revalidate()
+                owner.close_completed_owners()
+                owner.closure = close_benchmark_campaign(staging,plan=plan,reason="fail_fast",
+                    scope_path=scope_path,validate_success=owner.callback,**campaign_identity)
+            except BaseException as closure_error:
+                owner.closure_error = closure_error
                 private_record(staging / "closure-pending.json", {
                     "version": VERSION, "protocol": PROTOCOL, **campaign_identity,
                     "error": str(closure_error), "recorded_ns": time.time_ns(),
@@ -7041,14 +6803,28 @@ def audit_finalized_scope_surfaces(
     return {"kind": "leakage_report", **file_binding(report_path, relative_to=publication)}
 
 
-def finalize_registered_scope(
-    scope_path: Path, output_dir: Path, *, qualification_campaign_id: str, source_root: Path,
+def finalize_registered_scope(scope_path,output_dir,*,qualification_campaign_id,source_root,plan_harness,smoke_campaign,worker_path,validator_path):
+    """Retain all original release gates and exact source admission through publication."""
+    admission=dict(source_root=source_root,plan_harness=plan_harness,smoke_campaign=smoke_campaign,
+                   worker_path=worker_path,validator_path=validator_path)
+    with collect_benchmark_scope(scope_path,**admission) as held:
+        path,fragment=_finalize_held_scope(held,output_dir,qualification_campaign_id=qualification_campaign_id,
+                                          source_root=source_root,admission=admission)
+    # The original scope, source, native images and ten-smoke owner have all
+    # completed their fresh postchecks before the final fragment is published.
+    publish_campaign_fragment(path,fragment)
+    return path
+
+def _finalize_held_scope(
+    held, output_dir: Path, *, qualification_campaign_id: str, source_root: Path, admission,
 ) -> Path:
     """Publish one report over all registered attempts plus one complete fault/leakage campaign."""
 
     require_external_output(output_dir, source_root)
-    accounting, plans, collected = qualify_benchmark_scope(scope_path)
-    scope_raw, packets, _ = collected
+    scope_path=held.scope_path
+    report=qualify_benchmark_scope(held)
+    accounting,plans=held.result['accounting'],held.plans
+    scope_raw,packets=held.scope_raw,held.packets
     selected = next((index for index, packet in enumerate(packets)
                      if packet["campaign_id"] == qualification_campaign_id), None)
     if selected is None:
@@ -7088,7 +6864,7 @@ def finalize_registered_scope(
             target = publication.joinpath(*relative.parts)
             copy_bound_file(source, target, expected={key: artifact[key] for key in ("sha256", "bytes")})
             artifacts.append(dict(artifact))
-        accounting_artifacts, archived_accounting, rows = archive_benchmark_scope(scope_path, publication)
+        accounting_artifacts, archived_accounting, rows = archive_benchmark_scope(held, publication)
         if archived_accounting != accounting:
             raise RunnerError("registered accounting changed during finalization")
         artifacts.extend(accounting_artifacts)
@@ -7098,8 +6874,7 @@ def finalize_registered_scope(
         csv_path = publication / "raw" / "benchmarks.csv"
         write_benchmark_csv(csv_path, rows)
         artifacts.append({"kind": "operator_log", **file_binding(csv_path, relative_to=publication)})
-        report = benchmark_report.build_report(benchmark_report.load_jsonl([raw_path]),
-            plan["requirements"]["bootstrap_iterations"], scope_raw=scope_raw, campaigns=packets)
+        report = benchmark_report.build_report(held, plan["requirements"]["bootstrap_iterations"])
         if report["accounting"] != accounting:
             raise RunnerError("benchmark report differs from independently reduced accounting")
         regressions = []
@@ -7117,16 +6892,16 @@ def finalize_registered_scope(
             raise RunnerError("registered benchmark scope exceeds its frozen regression baseline")
         artifacts.append(audit_finalized_scope_surfaces(publication, artifacts, commit=plan["commit"]))
         artifacts.sort(key=lambda item: item["path"])
-        validate_publication_fragment(publication, artifacts, commit=plan["commit"])
-        if file_binding(source_index_path) != source_index_binding or qualify_benchmark_scope(scope_path)[2] != collected:
+        validate_publication_fragment(publication, artifacts, commit=plan["commit"], admission=admission)
+        if file_binding(source_index_path) != source_index_binding:
             raise RunnerError("registered inputs changed during final publication validation")
+        held.validate()
         verify_source_checkout(source_root, plan["commit"])
         fragment = {**source_index, "artifacts": artifacts, "benchmark_scope": accounting["scope"],
                     "qualification_campaign_id": qualification_campaign_id,
                     "reason": "Complete registered benchmark scope with an explicitly bound passing fault/leakage campaign; independent release gates remain required."}
         path = output_dir / "release-artifact-fragment-v1.json"
-        publish_campaign_fragment(path, fragment)
-        return path
+        return path, fragment
     except BaseException as error:
         private_record(output_dir / "failure.json", {"version": VERSION, "protocol": PROTOCOL,
             "scope_sha256": hashlib.sha256(scope_raw).hexdigest(), "qualification_campaign_id": qualification_campaign_id,
@@ -7134,6 +6909,7 @@ def finalize_registered_scope(
         raise
     finally:
         os.umask(previous_umask)
+
 
 
 def validate_campaign_timeout(
@@ -7212,6 +6988,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     close.add_argument("--plan", type=Path, required=True)
     close.add_argument("--campaign-id", required=True)
     close.add_argument("--source-root", type=Path, required=True)
+    close.add_argument("--harness",type=Path,required=True)
+    close.add_argument("--smoke-campaign",type=Path,required=True)
+    close.add_argument("--worker",type=Path,required=True)
+    close.add_argument("--validator",type=Path,required=True)
     accounting = subparsers.add_parser("account-scope", help="derive complete retained attempt counts without release qualification")
     accounting.add_argument("--scope", type=Path, required=True)
     accounting.add_argument("--output", type=Path, required=True)
@@ -7227,6 +7007,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     execute.add_argument("--scope", required=True, type=Path)
     execute.add_argument("--campaign-id", required=True)
+    execute.add_argument("--worker",type=Path,required=True)
+    execute.add_argument("--validator",type=Path,required=True)
+    for owner in (finalize,accounting):
+        for name in ('plan-harness','smoke-campaign','worker','validator'):
+            owner.add_argument('--'+name,required=True,type=Path)
     return parser.parse_args(argv)
 
 
@@ -7234,6 +7019,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the release experiment planner or executor."""
 
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    import private_settlement_campaign_execution as campaign_execution
     try:
         if args.command == "plan":
             result = create_plan(
@@ -7258,11 +7044,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 campaigns[name] = Path(path)
             result = register_benchmark_scope(args.output, source_root=args.source_root, campaign_plans=campaigns)
         elif args.command == "finalize-scope":
-            result = finalize_registered_scope(args.scope, args.output_dir, qualification_campaign_id=args.qualification_campaign_id, source_root=args.source_root)
+            result = finalize_registered_scope(args.scope, args.output_dir, qualification_campaign_id=args.qualification_campaign_id, source_root=args.source_root, plan_harness=args.plan_harness,smoke_campaign=args.smoke_campaign,worker_path=args.worker,validator_path=args.validator)
         elif args.command == "close-unstarted":
-            result = close_unstarted_campaign(args.scope, campaign_id=args.campaign_id, plan_path=args.plan, source_root=args.source_root)
+            result = close_unstarted_campaign(args.scope,campaign_id=args.campaign_id,plan_path=args.plan,source_root=args.source_root,
+                harness=args.harness,smoke_campaign=args.smoke_campaign,worker_path=args.worker,validator_path=args.validator)
         elif args.command == "account-scope":
-            result = write_benchmark_scope_accounting(args.scope, args.output, source_root=args.source_root)
+            result = write_benchmark_scope_accounting(args.scope,args.output,source_root=args.source_root,plan_harness=args.plan_harness,smoke_campaign=args.smoke_campaign,worker_path=args.worker,validator_path=args.validator)
         else:
             result = execute_plan(
                 args.plan,
@@ -7272,7 +7059,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 smoke_campaign=args.smoke_campaign,
                 scope_path=args.scope,
                 campaign_id=args.campaign_id,
+                worker_path=args.worker,validator_path=args.validator,
             )
+    except campaign_execution.CampaignExecutionIncomplete as error:
+        # execute_plan has already physically drained every retained owner.
+        # The original cause and evidence remain controlled; no payload dump.
+        print(f"private-settlement campaign incomplete: {type(error.owner.error).__name__}", file=sys.stderr)
+        return 2
     except (
         RunnerError,
         OSError,

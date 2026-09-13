@@ -1342,7 +1342,6 @@ stage_cargo_library() {
     --library "$staged_library" \
     --cargo-build-dir "$CARGO_TARGET_DIR/$target_triple/release/build" \
     --cargo-messages "$STAGE_DIR/cargo-messages/$target_triple.jsonl" \
-    --package-root "$ROOT_DIR/vendor/pqcrypto-internals-0.2.11" \
     --target "$target_triple" --cargo-lock "$CARGO_LOCKFILE" \
     --report "$staged_library.pqcrypto-normalization.json" || return $?
   rebuild_apple_archive_index "$staged_library" || return $?

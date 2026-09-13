@@ -1,3 +1,4 @@
+import { createSorafsAliasResponseNormalizers } from "./sorafsAliasResponses.js";
 import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -51,6 +52,7 @@ import {
   normaliseGatewayProvider,
 } from "./sorafs.js";
 import { normalizeIsoWeekLabel } from "./sorafsPorWeek.js";
+import { createSorafsPinDetailNormalizer, normalizeSorafsPinU64 } from "./sorafsPinDetail.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
@@ -81,6 +83,7 @@ import {
 } from "./toriiCompatibility.js";
 import { registerPrivacyExact12CapabilityManifestTransportV1 } from "./privacyCapabilityTransport.js";
 import {
+  parseStrictLosslessJson,
   parseStrictLosslessIntegerJson,
   stringifyStrictLosslessIntegerJson,
 } from "./strictLosslessJson.js";
@@ -520,9 +523,6 @@ function decodeTransactionReceiptPayload(payload, nativeRuntime) {
   }
 }
 
-const HEADER_SORA_PROOF = "sora-proof";
-const HEADER_SORA_NAME = "sora-name";
-const HEADER_SORA_PROOF_STATUS = "sora-proof-status";
 const HEADER_SORA_PDP_COMMITMENT = "sora-pdp-commitment";
 
 const EVIDENCE_KIND = "SumeragiV2Equivocation";
@@ -946,7 +946,7 @@ function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
 }
 
 const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
-const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "expired"]);
+const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "cancelled", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
 const SORAFS_PIN_LIST_MAX_ITEMS = 256;
 const SORAFS_PIN_LIST_MIN_PAGE_BYTES = 1024;
@@ -1529,9 +1529,6 @@ export class ToriiClient {
     dataModelValidation: { status: "unknown", actual: null },
     dataModelValidationPromise: null,
   };
-  #sorafsAliasWarningHook;
-  #sorafsPolicyOverrides;
-  #sorafsResolvedPolicy = null;
   #statusState = createStatusSnapshotState();
 
   /**
@@ -1553,8 +1550,6 @@ export class ToriiClient {
    * @param {LocalSigningContext} [options.localSigningContext] Immutable context required by local-signing APIs.
    * @param {OperatorSigningContext} [options.operatorSigningContext] Immutable exact-network signer required by operator-only APIs.
    * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Default exact-network signer for authenticated calls, including expensive query POSTs and optional-auth dataspace reads.
-   * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
-   * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
  */
   constructor(baseUrl, options = {}) {
     if (!baseUrl) {
@@ -1574,6 +1569,8 @@ export class ToriiClient {
       }
     }
     for (const field of [
+      "sorafsAliasPolicy",
+      "onSorafsAliasWarning",
       "__nativeBinding",
       "sorafsGatewayFetch",
       "generateDaProofSummary",
@@ -1710,8 +1707,6 @@ export class ToriiClient {
     delete overrides.fetchImpl;
     delete overrides.config;
     delete overrides.allowInsecure;
-    delete overrides.sorafsAliasPolicy;
-    delete overrides.onSorafsAliasWarning;
     delete overrides[TORII_TEST_HOOKS];
     delete overrides[TORII_TEST_NATIVE_BINDING];
     delete overrides.localSigningContext;
@@ -1721,31 +1716,6 @@ export class ToriiClient {
       config: opts.config,
       overrides,
     });
-    if (
-      opts.sorafsAliasPolicy !== undefined &&
-      opts.sorafsAliasPolicy !== null &&
-      !isPlainObject(opts.sorafsAliasPolicy)
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "sorafsAliasPolicy must be a plain object when provided",
-        "ToriiClient.options.sorafsAliasPolicy",
-      );
-    }
-    this.#sorafsPolicyOverrides = opts.sorafsAliasPolicy ? { ...opts.sorafsAliasPolicy } : null;
-    if (
-      opts.onSorafsAliasWarning !== undefined &&
-      opts.onSorafsAliasWarning !== null &&
-      typeof opts.onSorafsAliasWarning !== "function"
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "onSorafsAliasWarning must be a function when provided",
-        "ToriiClient.options.onSorafsAliasWarning",
-      );
-    }
-    this.#sorafsAliasWarningHook =
-      typeof opts.onSorafsAliasWarning === "function" ? opts.onSorafsAliasWarning : null;
     const parsedBase = new URL(this._baseUrl.endsWith("/") ? this._baseUrl : `${this._baseUrl}/`);
     this.#baseHost = parsedBase.host;
     this.#baseProtocol = parsedBase.protocol.toLowerCase();
@@ -3956,7 +3926,12 @@ export class ToriiClient {
       canonicalAuth,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "sorafs alias list response",
+      { signal },
+    );
     if (!payload) {
       rejectError("sorafs alias list endpoint returned no payload");
     }
@@ -3995,7 +3970,9 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response, SCCP_JSON_RESPONSE_MAX_BYTES, "sorafs pin list response", { signal },
+    );
     if (!payload) {
       rejectError("sorafs pin list endpoint returned no payload");
     }
@@ -4087,7 +4064,7 @@ export class ToriiClient {
 
   /**
    * List SoraFS replication orders with attestation metadata (`GET /v1/sorafs/replication`).
-   * @param {{status?: "pending"|"completed"|"expired", manifestDigestHex?: string, limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @param {SorafsReplicationListOptions} options
    * @returns {Promise<SorafsReplicationListResponse>}
    */
   async listSorafsReplicationOrders(options) {
@@ -4103,11 +4080,16 @@ export class ToriiClient {
       canonicalAuth,
     });
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response, SCCP_JSON_RESPONSE_MAX_BYTES, "sorafs replication list response", { signal },
+    );
     if (!payload) {
       rejectError("sorafs replication list endpoint returned no payload");
     }
-    return normalizeSorafsReplicationListResponse(payload);
+    const { createSorafsReplicationResponseNormalizer } = await loadToriiOptionalModule();
+    return createSorafsReplicationResponseNormalizer({
+      account: (value, context) => ToriiClient._requireAccountId(value, context),
+    }).normalize(payload, params);
   }
 
   /**
@@ -5046,41 +5028,61 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch a SoraFS pin manifest (`GET /v1/sorafs/pin/{digest}`) with alias proof enforcement.
+   * Fetch the finalized native SoraFS pin record (`GET /v1/sorafs/pin/{digest}`).
    * @param {string} digestHex Manifest digest (hex string).
-   * @param {{ headers?: Record<string, string>, signal?: AbortSignal }} [options]
+   * @param {SorafsPinManifestReadOptions} [options]
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsPinManifest(digestHex, options = {}) {
-    const normalized = requireHexString(digestHex, "digestHex");
+    const normalized = requireNonZeroLowerHex32String(digestHex, "digestHex");
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
       "getSorafsPinManifest",
     );
-    const headers = {
-      Accept: APPLICATION_JSON,
-      ...(rest.headers ?? {}),
-    };
-    const response = await this._request(
-      "GET",
-      `/v1/sorafs/pin/${normalized}`,
-      {
-        headers,
-        signal,
-      },
-    );
+    assertSupportedOptionKeys(rest, new Set([
+      "headers", "expectedFinalizedHeight", "expectedFinalizedBlockHashHex",
+    ]), "getSorafsPinManifest options");
+    const expected = { digestHex: normalized };
+    const hasHeight = rest.expectedFinalizedHeight !== undefined;
+    const hasHash = rest.expectedFinalizedBlockHashHex !== undefined;
+    if (hasHeight !== hasHash) {
+      rejectType("expectedFinalizedHeight and expectedFinalizedBlockHashHex must be supplied together");
+    }
+    let params;
+    if (hasHeight) {
+      expected.height = normalizeSorafsPinU64(
+        rest.expectedFinalizedHeight, "expectedFinalizedHeight",
+      );
+      if (expected.height === 0) rejectType("expectedFinalizedHeight must be positive");
+      expected.blockHashHex = requireNonZeroLowerHex32String(
+        rest.expectedFinalizedBlockHashHex, "expectedFinalizedBlockHashHex",
+      );
+      params = {
+        expected_finalized_height: String(expected.height),
+        expected_finalized_block_hash_hex: expected.blockHashHex,
+      };
+    }
+    const response = await this._request("GET", `/v1/sorafs/pin/${normalized}`, {
+      headers: { Accept: APPLICATION_JSON, ...(rest.headers ?? {}) },
+      params,
+      signal,
+    });
     await this._expectStatus(response, [200, 404]);
     if (response.status === 404) {
-      return null;
+      return discardResponseBody(response, "sorafs pin manifest was not found", signal);
     }
-    this._enforceSorafsAliasPolicy(response);
-    return this._maybeJson(response);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response, SCCP_JSON_RESPONSE_MAX_BYTES, "sorafs pin manifest response",
+      { signal, floatingPointPaths: [["manifest", "metadata"]] },
+    );
+    sorafsPinDetail.normalize(payload, expected);
+    return payload;
   }
 
   /**
    * Fetch a SoraFS pin manifest with typed output.
    * @param {string} digestHex
-   * @param {{ headers?: Record<string, string>, signal?: AbortSignal }} [options]
+   * @param {SorafsPinManifestReadOptions} [options]
    * @returns {Promise<SorafsPinManifestResponse>}
    */
   async getSorafsPinManifestTyped(digestHex, options = {}) {
@@ -5088,7 +5090,7 @@ export class ToriiClient {
     if (!payload) {
       rejectError("sorafs pin manifest endpoint returned 404");
     }
-    return normalizeSorafsPinManifestResponse(payload);
+    return sorafsPinDetail.normalize(payload);
   }
 
   /**
@@ -11187,122 +11189,6 @@ export class ToriiClient {
     }
   }
 
-  _resolveSorafsPolicy() {
-    if (this.#sorafsResolvedPolicy) {
-      return this.#sorafsResolvedPolicy;
-    }
-    const native = requireSorafsNativeBinding(this._nativeRuntime);
-    const defaults = native.sorafsAliasPolicyDefaults();
-    const policy = { ...defaults };
-    const overrides = this.#sorafsPolicyOverrides;
-    if (overrides && typeof overrides === "object") {
-      const positive = pickOverride(overrides, "positive_ttl_secs", "positiveTtlSecs");
-      if (positive !== undefined && positive !== null) {
-        policy.positive_ttl_secs = ToriiClient._normalizeUnsignedInteger(
-          positive,
-          "sorafsAliasPolicy.positiveTtlSecs",
-          { allowZero: false },
-        );
-      }
-      const refresh = pickOverride(overrides, "refresh_window_secs", "refreshWindowSecs");
-      if (refresh !== undefined && refresh !== null) {
-        policy.refresh_window_secs = ToriiClient._normalizeUnsignedInteger(
-          refresh,
-          "sorafsAliasPolicy.refreshWindowSecs",
-          { allowZero: false },
-        );
-      }
-      const hard = pickOverride(overrides, "hard_expiry_secs", "hardExpirySecs");
-      if (hard !== undefined && hard !== null) {
-        policy.hard_expiry_secs = ToriiClient._normalizeUnsignedInteger(
-          hard,
-          "sorafsAliasPolicy.hardExpirySecs",
-          { allowZero: false },
-        );
-      }
-      const negative = pickOverride(overrides, "negative_ttl_secs", "negativeTtlSecs");
-      if (negative !== undefined && negative !== null) {
-        policy.negative_ttl_secs = ToriiClient._normalizeUnsignedInteger(
-          negative,
-          "sorafsAliasPolicy.negativeTtlSecs",
-          { allowZero: false },
-        );
-      }
-      const revocation = pickOverride(overrides, "revocation_ttl_secs", "revocationTtlSecs");
-      if (revocation !== undefined && revocation !== null) {
-        policy.revocation_ttl_secs = ToriiClient._normalizeUnsignedInteger(
-          revocation,
-          "sorafsAliasPolicy.revocationTtlSecs",
-          { allowZero: false },
-        );
-      }
-      const rotation = pickOverride(overrides, "rotation_max_age_secs", "rotationMaxAgeSecs");
-      if (rotation !== undefined && rotation !== null) {
-        policy.rotation_max_age_secs = ToriiClient._normalizeUnsignedInteger(
-          rotation,
-          "sorafsAliasPolicy.rotationMaxAgeSecs",
-          { allowZero: false },
-        );
-      }
-    }
-
-    if (policy.refresh_window_secs > policy.positive_ttl_secs) {
-      rejectError("sorafsAliasPolicy.refreshWindowSecs must not exceed positiveTtlSecs");
-    }
-    if (policy.hard_expiry_secs < policy.positive_ttl_secs) {
-      rejectError("sorafsAliasPolicy.hardExpirySecs must be greater than or equal to positiveTtlSecs");
-    }
-
-    this.#sorafsResolvedPolicy = policy;
-    return policy;
-  }
-
-  _enforceSorafsAliasPolicy(response) {
-    if (!response || response.status !== 200) {
-      return;
-    }
-    const proofB64 = this._getHeader(response, HEADER_SORA_PROOF);
-    if (!proofB64) {
-      return;
-    }
-    const native = requireSorafsNativeBinding(this._nativeRuntime);
-    const policy = this._resolveSorafsPolicy();
-
-    let evaluation;
-    try {
-      evaluation = native.sorafsEvaluateAliasProof(proofB64, policy);
-    } catch (error) {
-      const message =
-        error && typeof error.message === "string" ? error.message : String(error);
-      rejectError(`failed to validate SoraFS alias proof: ${message}`);
-    }
-
-    if (!evaluation || evaluation.servable !== true) {
-      const aliasLabel = this._getHeader(response, HEADER_SORA_NAME) ?? "<unknown>";
-      const statusHeader = this._getHeader(response, HEADER_SORA_PROOF_STATUS);
-      const statusHint = statusHeader ? `; header reported ${statusHeader}` : "";
-      const statusLabel =
-        evaluation && typeof evaluation.status_label === "string"
-          ? evaluation.status_label
-          : "unknown";
-      const ageSeconds =
-        evaluation && typeof evaluation.age_seconds === "number"
-          ? evaluation.age_seconds
-          : NaN;
-      rejectError(`alias proof for '${aliasLabel}' rejected: state ${statusLabel}${statusHint} (age ${ageSeconds} seconds)`);
-    }
-
-    if (
-      (evaluation.state === "refresh_window" || evaluation.rotation_due === true) &&
-      typeof this.#sorafsAliasWarningHook === "function"
-    ) {
-      this.#sorafsAliasWarningHook({
-        alias: this._getHeader(response, HEADER_SORA_NAME) ?? null,
-        evaluation: formatSorafsEvaluation(evaluation),
-      });
-    }
-  }
-
   _createHeaders(provided = {}) {
     return this.#createHeaders(provided);
   }
@@ -12000,7 +11886,7 @@ export class ToriiClient {
     response,
     maxBytes,
     context,
-    { signal, plainObjects = false, includeSourceBytes = false } = {},
+    { signal, plainObjects = false, includeSourceBytes = false, floatingPointPaths } = {},
   ) {
     let contentType;
     try {
@@ -12033,7 +11919,9 @@ export class ToriiClient {
       rejectType(`${context} must be valid UTF-8`, { cause: error });
     }
     try {
-      const parsed = parseStrictLosslessIntegerJson(text, context);
+      const parsed = floatingPointPaths === undefined
+        ? parseStrictLosslessIntegerJson(text, context)
+        : parseStrictLosslessJson(text, context, { floatingPointPaths });
       if (signalIsAborted(signal)) {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
         throw bodyReadAbortError(signal, context);
@@ -18485,42 +18373,6 @@ function optionalBoolean(value, context) {
   return coerceBoolean(value, context);
 }
 
-function optionalNumber(value, context, { allowNegative = false } = {}) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const numeric = coerceIntegerLike(value, context);
-  if (!allowNegative && numeric < 0) {
-    rejectRange(`${context} must be non-negative`);
-  }
-  return numeric;
-}
-
-function optionalRecord(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object when present`);
-  }
-  return value;
-}
-
-function optionalStringArray(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (!Array.isArray(value)) {
-    rejectType(`${context} must be an array when present`);
-  }
-  return value.map((entry, index) => {
-    if (typeof entry !== "string") {
-      rejectType(`${context}[${index}] must be a string`);
-    }
-    return entry;
-  });
-}
-
 function requireStringArray(value, context) {
   if (!Array.isArray(value)) {
     rejectType(`${context} must be an array`);
@@ -20024,19 +19876,6 @@ function requireNonNegativeIntegerLike(value, context) {
   return numeric;
 }
 
-function requireSorafsNativeBinding(nativeRuntime) {
-  const binding = resolveNativeBinding(nativeRuntime);
-  if (
-    !binding ||
-    typeof binding.sorafsEvaluateAliasProof !== "function" ||
-    typeof binding.sorafsAliasPolicyDefaults !== "function" ||
-    typeof binding.sorafsDecodeReplicationOrder !== "function"
-  ) {
-    rejectError("SoraFS helpers require the native iroha_js_host module. Run `npm run build:native` before using alias validation or replication order decoding.");
-  }
-  return binding;
-}
-
 function pickOverride(source, snakeName, camelName) {
   if (!source || typeof source !== "object") {
     return undefined;
@@ -20066,39 +19905,6 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
       );
     }
   }
-}
-
-function formatSorafsEvaluation(evaluation) {
-  if (!evaluation || typeof evaluation !== "object") {
-    return {
-      state: null,
-      statusLabel: null,
-      rotationDue: false,
-      ageSeconds: null,
-      generatedAtUnix: null,
-      expiresAtUnix: null,
-      expiresInSeconds: null,
-    };
-  }
-  return {
-    state: typeof evaluation.state === "string" ? evaluation.state : null,
-    statusLabel:
-      typeof evaluation.status_label === "string" ? evaluation.status_label : null,
-    rotationDue: Boolean(evaluation.rotation_due),
-    ageSeconds:
-      typeof evaluation.age_seconds === "number" ? evaluation.age_seconds : null,
-    generatedAtUnix:
-      typeof evaluation.generated_at_unix === "number"
-        ? evaluation.generated_at_unix
-        : null,
-    expiresAtUnix:
-      typeof evaluation.expires_at_unix === "number" ? evaluation.expires_at_unix : null,
-    expiresInSeconds:
-      typeof evaluation.expires_in_seconds === "number"
-        ? evaluation.expires_in_seconds
-        : null,
-    servable: evaluation.servable === true,
-  };
 }
 
 function normalizeAuthorityCredentials(source, context) {
@@ -26616,11 +26422,9 @@ function buildSorafsPinListParams(options = {}) {
   }
 
   const hasExpectedHeight =
-    record.expectedFinalizedHeight !== undefined &&
-    record.expectedFinalizedHeight !== null;
+    record.expectedFinalizedHeight !== undefined;
   const hasExpectedBlockHash =
-    record.expectedFinalizedBlockHashHex !== undefined &&
-    record.expectedFinalizedBlockHashHex !== null;
+    record.expectedFinalizedBlockHashHex !== undefined;
   if (hasExpectedHeight !== hasExpectedBlockHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -26629,11 +26433,9 @@ function buildSorafsPinListParams(options = {}) {
     );
   }
   if (hasExpectedHeight) {
-    params.expected_finalized_height = ToriiClient._normalizeUnsignedInteger(
-      record.expectedFinalizedHeight,
-      "sorafsPinList.expectedFinalizedHeight",
-      { allowZero: false },
-    );
+    const height = normalizeSorafsPinU64(record.expectedFinalizedHeight, "sorafsPinList.expectedFinalizedHeight");
+    if (height === 0) rejectType("sorafsPinList.expectedFinalizedHeight must be positive");
+    params.expected_finalized_height = String(height);
     params.expected_finalized_block_hash_hex = requireNonZeroLowerHex32String(
       record.expectedFinalizedBlockHashHex,
       "sorafsPinList.expectedFinalizedBlockHashHex",
@@ -26650,39 +26452,32 @@ function buildSorafsReplicationListParams(options = {}) {
     "listSorafsReplicationOrders options",
   );
   const params = {};
-  if (record.status !== undefined && record.status !== null) {
-    const normalized = requireNonEmptyString(
+  if (record.status !== undefined) {
+    const normalized = requireExactNonEmptyString(
       record.status,
       "sorafsReplicationList.status",
-    ).toLowerCase();
+    );
     if (!SORAFS_REPLICATION_STATUS_VALUES.has(normalized)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
-        "sorafsReplicationList.status must be pending, completed, or expired",
+        "sorafsReplicationList.status must be exactly pending, completed, cancelled, or expired",
         "sorafsReplicationList.status",
       );
     }
     params.status = normalized;
   }
-  if (record.manifestDigestHex !== undefined && record.manifestDigestHex !== null) {
-    params.manifest_digest = normalizeHex32String(
+  if (record.manifestDigestHex !== undefined) {
+    params.manifest_digest = requireNonZeroLowerHex32String(
       record.manifestDigestHex,
       "sorafsReplicationList.manifestDigestHex",
     );
   }
-  if (record.limit !== undefined && record.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      record.limit,
-      "sorafsReplicationList.limit",
-      { allowZero: false },
-    );
+  if (record.limit !== undefined) {
+    params.limit = normalizeSorafsPinU64(record.limit, "sorafsReplicationList.limit", 500n);
+    if (params.limit === 0) rejectType("sorafsReplicationList.limit must be positive");
   }
-  if (record.offset !== undefined && record.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      record.offset,
-      "sorafsReplicationList.offset",
-      { allowZero: true },
-    );
+  if (record.offset !== undefined) {
+    params.offset = normalizeSorafsPinU64(record.offset, "sorafsReplicationList.offset", 0xffff_ffffn);
   }
   return Object.keys(params).length === 0 ? undefined : params;
 }
@@ -28402,8 +28197,8 @@ function normalizeSorafsPinListResponse(
 ) {
   const record = requireExactSorafsPinObjectFields(
     ensureRecord(payload ?? {}, context),
-    ["finalized_cursor", "charged_usage", "manifests", "has_more"],
-    ["next_after_digest"],
+    ["finalized_cursor", "charged_usage", "manifests", "has_more", "next_after_digest"],
+    [],
     context,
   );
   const finalizedCursor = normalizeSorafsPinFinalizedCursor(
@@ -28432,7 +28227,7 @@ function normalizeSorafsPinListResponse(
     rejectType(`${context}.has_more must be a boolean`);
   }
   const nextAfterDigest =
-    record.next_after_digest === undefined || record.next_after_digest === null
+    record.next_after_digest === null
       ? null
       : normalizeExactJsonByteArray(
           record.next_after_digest,
@@ -28452,10 +28247,13 @@ function normalizeSorafsPinListResponse(
     }
   }
 
+  if (manifests.length > (requestParams?.limit ?? 50)) {
+    rejectType(`${context}.manifests exceeds the requested limit`);
+  }
   if (requestParams !== undefined) {
     if (
       requestParams.expected_finalized_height !== undefined &&
-      finalizedCursor.height !== requestParams.expected_finalized_height
+      BigInt(finalizedCursor.height) !== BigInt(requestParams.expected_finalized_height)
     ) {
       rejectType(`${context}.finalized_cursor.height does not match the request anchor`);
     }
@@ -28516,24 +28314,7 @@ function requireExactSorafsPinObjectFields(
 }
 
 function normalizeSorafsPinFinalizedCursor(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["height", "block_hash"],
-    [],
-    context,
-  );
-  const blockHash = normalizeExactJsonByteArray(record.block_hash, `${context}.block_hash`, {
-    exactLength: 32,
-  });
-  if (exactJsonBytesAreZero(blockHash)) {
-    rejectType(`${context}.block_hash must be non-zero`);
-  }
-  return {
-    height: ToriiClient._normalizeUnsignedInteger(record.height, `${context}.height`, {
-      allowZero: false,
-    }),
-    block_hash: blockHash,
-  };
+  return sorafsPinDetail.cursor(payload, context);
 }
 
 function normalizeSorafsPinResourceUsage(payload, context) {
@@ -28544,88 +28325,42 @@ function normalizeSorafsPinResourceUsage(payload, context) {
     context,
   );
   return {
-    manifest_count: ToriiClient._normalizeUnsignedInteger(
+    manifest_count: normalizeSorafsPinU64(
       record.manifest_count,
       `${context}.manifest_count`,
-      { allowZero: true },
     ),
-    content_bytes: ToriiClient._normalizeUnsignedInteger(
+    content_bytes: normalizeSorafsPinU64(
       record.content_bytes,
       `${context}.content_bytes`,
-      { allowZero: true },
     ),
   };
 }
 
 function normalizeSorafsPinManifestSummary(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "digest",
-      "submitted_by",
-      "submitted_epoch",
-      "content_length",
-      "retention_epoch",
-      "status",
-    ],
-    ["successor_of"],
-    context,
-  );
-  return {
-    digest: normalizeExactJsonByteArray(record.digest, `${context}.digest`, {
-      exactLength: 32,
-    }),
-    submitted_by: ToriiClient._requireAccountId(
-      record.submitted_by,
-      `${context}.submitted_by`,
-    ),
-    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_epoch,
-      `${context}.submitted_epoch`,
-      { allowZero: true },
-    ),
-    content_length: ToriiClient._normalizeUnsignedInteger(
-      record.content_length,
-      `${context}.content_length`,
-      { allowZero: true },
-    ),
-    retention_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.retention_epoch,
-      `${context}.retention_epoch`,
-      { allowZero: true },
-    ),
-    status: normalizeSorafsPinNativeStatus(record.status, `${context}.status`),
-    successor_of:
-      record.successor_of === undefined || record.successor_of === null
-        ? null
-        : normalizeExactJsonByteArray(record.successor_of, `${context}.successor_of`, {
-            exactLength: 32,
-          }),
+  const record = requireExactSorafsPinObjectFields(ensureRecord(payload, context), [
+    "digest", "submitted_by", "submitted_epoch", "approved_epoch", "content_length",
+    "retention_epoch", "status", "successor_of",
+  ], [], context);
+  const result = {
+    digest: normalizeExactJsonByteArray(record.digest, `${context}.digest`, { exactLength: 32 }),
+    submitted_by: ToriiClient._requireAccountId(record.submitted_by, `${context}.submitted_by`),
+    submitted_epoch: normalizeSorafsPinU64(record.submitted_epoch, `${context}.submitted_epoch`),
+    approved_epoch: record.approved_epoch === null ? null : normalizeSorafsPinU64(record.approved_epoch, `${context}.approved_epoch`),
+    content_length: normalizeSorafsPinU64(record.content_length, `${context}.content_length`),
+    retention_epoch: normalizeSorafsPinU64(record.retention_epoch, `${context}.retention_epoch`),
+    status: sorafsPinDetail.status(record.status, `${context}.status`),
+    successor_of: record.successor_of === null ? null : normalizeExactJsonByteArray(record.successor_of, `${context}.successor_of`, { exactLength: 32 }),
   };
-}
-
-function normalizeSorafsPinNativeStatus(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["status", "value"],
-    [],
-    context,
-  );
-  if (!new Set(["Pending", "Approved", "Retired"]).has(record.status)) {
-    rejectType(`${context}.status must be Pending, Approved, or Retired`);
-  }
-  if (record.status === "Pending") {
-    if (record.value !== null) {
-      rejectType(`${context}.value must be null for Pending`);
-    }
-    return { status: "Pending", value: null };
-  }
-  return {
-    status: record.status,
-    value: ToriiClient._normalizeUnsignedInteger(record.value, `${context}.value`, {
-      allowZero: true,
-    }),
-  };
+  if (result.submitted_by !== record.submitted_by) rejectType(`${context}.submitted_by must use its exact canonical identity`);
+  const submitted = BigInt(result.submitted_epoch), retention = BigInt(result.retention_epoch);
+  const approved = result.approved_epoch === null ? null : BigInt(result.approved_epoch);
+  const status = result.status;
+  const valid = status.status === "Pending" ? approved === null
+    : status.status === "Approved" ? approved === BigInt(status.value) && approved >= submitted && approved < retention
+    : BigInt(status.value) >= submitted && (approved === null || approved >= submitted && approved <= BigInt(status.value) && approved < retention);
+  if (!valid) rejectType(`${context} has inconsistent retained approval history`);
+  if (exactJsonBytesAreZero(result.digest) || result.successor_of !== null && exactJsonBytesAreZero(result.successor_of)) rejectType(`${context} has a zero digest`);
+  return result;
 }
 
 function sorafsPinStatusWireTag(status) {
@@ -28650,398 +28385,17 @@ function exactJsonBytesToLowerHex(bytes) {
   return Buffer.from(bytes).toString("hex");
 }
 
-function normalizeSorafsPinManifestResponse(
-  payload,
-  context = "sorafs pin manifest response",
-) {
-  const record = ensureRecord(payload ?? {}, context);
-  const aliasesValue = record.aliases;
-  if (!Array.isArray(aliasesValue)) {
-    rejectType(`${context}.aliases must be an array`);
-  }
-  const ordersValue = record.replication_orders;
-  if (!Array.isArray(ordersValue)) {
-    rejectType(`${context}.replication_orders must be an array`);
-  }
-  return {
-    attestation: optionalRecord(record.attestation, `${context}.attestation`),
-    manifest: normalizeSorafsManifestRecord(record.manifest, `${context}.manifest`),
-    aliases: aliasesValue.map((entry, index) =>
-      normalizeSorafsAliasRecord(entry, `${context}.aliases[${index}]`),
-    ),
-    replication_orders: ordersValue.map((entry, index) =>
-      normalizeSorafsReplicationOrderRecord(
-        entry,
-        `${context}.replication_orders[${index}]`,
-      ),
-    ),
-  };
-}
+const sorafsPinDetail = createSorafsPinDetailNormalizer({
+  bytes: normalizeExactJsonByteArray,
+  account: (value, context) => ToriiClient._requireAccountId(value, context),
+  asset: normalizeAssetDefinitionId,
+  quantity: requireCanonicalQuantity,
+});
 
-function normalizeSorafsManifestRecord(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    digest_hex: normalizeHex32String(record.digest_hex, `${context}.digest_hex`),
-    chunker: normalizeSorafsChunkerHandle(record.chunker, `${context}.chunker`),
-    chunk_digest_sha3_256_hex: normalizeHex32String(
-      record.chunk_digest_sha3_256_hex,
-      `${context}.chunk_digest_sha3_256_hex`,
-    ),
-    pin_policy: optionalRecord(record.pin_policy, `${context}.pin_policy`) ?? {},
-    submitted_by: ToriiClient._requireAccountId(record.submitted_by, `${context}.submitted_by`),
-    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_epoch,
-      `${context}.submitted_epoch`,
-      { allowZero: true },
-    ),
-    status: normalizeSorafsManifestStatus(record.status, `${context}.status`),
-    metadata: optionalRecord(record.metadata, `${context}.metadata`) ?? {},
-    alias:
-      record.alias === undefined || record.alias === null
-        ? null
-        : normalizeSorafsManifestAlias(record.alias, `${context}.alias`),
-    successor_of_hex:
-      record.successor_of_hex === undefined || record.successor_of_hex === null
-        ? null
-        : normalizeHex32String(record.successor_of_hex, `${context}.successor_of_hex`),
-    status_timestamp_unix: optionalNumber(
-      record.status_timestamp_unix,
-      `${context}.status_timestamp_unix`,
-    ),
-    governance_refs: Array.isArray(record.governance_refs)
-      ? record.governance_refs.map((entry, index) =>
-          normalizeSorafsGovernanceReference(entry, `${context}.governance_refs[${index}]`),
-        )
-      : [],
-    council_envelope_digest_hex:
-      record.council_envelope_digest_hex === undefined || record.council_envelope_digest_hex === null
-        ? null
-        : normalizeHex32String(
-            record.council_envelope_digest_hex,
-            `${context}.council_envelope_digest_hex`,
-          ),
-    lineage:
-      record.lineage === undefined || record.lineage === null
-        ? null
-        : normalizeSorafsLineage(record.lineage, `${context}.lineage`),
-  };
-}
-
-function normalizeSorafsChunkerHandle(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    profile_id: ToriiClient._normalizeUnsignedInteger(record.profile_id, `${context}.profile_id`, {
-      allowZero: false,
-    }),
-    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
-    name: requireNonEmptyString(record.name, `${context}.name`),
-    semver: requireNonEmptyString(record.semver, `${context}.semver`),
-    multihash_code: ToriiClient._normalizeUnsignedInteger(
-      record.multihash_code,
-      `${context}.multihash_code`,
-      { allowZero: true },
-    ),
-  };
-}
-
-function normalizeSorafsManifestStatus(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const rawState = requireNonEmptyString(record.state, `${context}.state`);
-  const state = rawState.toLowerCase();
-  if (!SORAFS_PIN_STATUS_VALUES.has(state)) {
-    rejectType(`${context}.state must be pending, approved, or retired`);
-  }
-  return {
-    state,
-    epoch:
-      record.epoch === undefined || record.epoch === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(record.epoch, `${context}.epoch`, {
-            allowZero: true,
-          }),
-  };
-}
-
-function normalizeSorafsManifestAlias(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
-    name: requireNonEmptyString(record.name, `${context}.name`),
-    proof_b64: requireNonEmptyString(record.proof_b64, `${context}.proof_b64`),
-  };
-}
-
-function normalizeSorafsGovernanceReference(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const targetsValue = optionalRecord(record.targets, `${context}.targets`) ?? {};
-  return {
-    cid: optionalString(record.cid, `${context}.cid`),
-    kind: requireNonEmptyString(record.kind, `${context}.kind`),
-    effective_at: optionalString(record.effective_at, `${context}.effective_at`),
-    effective_at_unix: optionalNumber(record.effective_at_unix, `${context}.effective_at_unix`),
-    targets: {
-      alias: optionalString(targetsValue.alias, `${context}.targets.alias`),
-      pin_digest_hex:
-        targetsValue.pin_digest_hex === undefined || targetsValue.pin_digest_hex === null
-          ? null
-          : normalizeHex32String(targetsValue.pin_digest_hex, `${context}.targets.pin_digest_hex`),
-    },
-    signers: optionalStringArray(record.signers, `${context}.signers`) ?? [],
-  };
-}
-
-function normalizeSorafsLineage(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  if (record.is_head === undefined || typeof record.is_head !== "boolean") {
-    rejectType(`${context}.is_head must be a boolean`);
-  }
-  return {
-    successor_of_hex:
-      record.successor_of_hex === undefined || record.successor_of_hex === null
-        ? null
-        : normalizeHex32String(record.successor_of_hex, `${context}.successor_of_hex`),
-    head_hex: normalizeHex32String(record.head_hex, `${context}.head_hex`),
-    depth_to_head: ToriiClient._normalizeUnsignedInteger(
-      record.depth_to_head,
-      `${context}.depth_to_head`,
-      { allowZero: true },
-    ),
-    is_head: record.is_head,
-    superseded_by:
-      record.superseded_by === undefined || record.superseded_by === null
-        ? null
-        : normalizeSorafsLineageSuccessor(record.superseded_by, `${context}.superseded_by`),
-    immediate_successor:
-      record.immediate_successor === undefined || record.immediate_successor === null
-        ? null
-        : normalizeSorafsLineageSuccessor(record.immediate_successor, `${context}.immediate_successor`),
-    anomalies: optionalStringArray(record.anomalies, `${context}.anomalies`) ?? [],
-  };
-}
-
-function normalizeSorafsLineageSuccessor(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    digest_hex: normalizeHex32String(record.digest_hex, `${context}.digest_hex`),
-    status: normalizeSorafsManifestStatus(record.status, `${context}.status`),
-    approved_epoch:
-      record.approved_epoch === undefined || record.approved_epoch === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(record.approved_epoch, `${context}.approved_epoch`, {
-            allowZero: true,
-          }),
-    approved_at: optionalString(record.approved_at, `${context}.approved_at`),
-    status_timestamp_unix: optionalNumber(
-      record.status_timestamp_unix,
-      `${context}.status_timestamp_unix`,
-    ),
-  };
-}
-
-function normalizeSorafsAliasListResponse(
-  payload,
-  context = "sorafs alias list response",
-) {
-  const record = ensureRecord(payload ?? {}, context);
-  const aliasesValue = record.aliases;
-  if (!Array.isArray(aliasesValue)) {
-    rejectType(`${context}.aliases must be an array`);
-  }
-  return {
-    attestation: optionalRecord(record.attestation, `${context}.attestation`),
-    total_count: ToriiClient._normalizeUnsignedInteger(
-      record.total_count,
-      `${context}.total_count`,
-      { allowZero: true },
-    ),
-    returned_count: ToriiClient._normalizeUnsignedInteger(
-      record.returned_count,
-      `${context}.returned_count`,
-      { allowZero: true },
-    ),
-    offset: ToriiClient._normalizeUnsignedInteger(record.offset, `${context}.offset`, {
-      allowZero: true,
-    }),
-    limit: ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
-      allowZero: false,
-    }),
-    aliases: aliasesValue.map((entry, index) =>
-      normalizeSorafsAliasRecord(entry, `${context}.aliases[${index}]`),
-    ),
-  };
-}
-
-function normalizeSorafsAliasRecord(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    alias: requireNonEmptyString(record.alias, `${context}.alias`),
-    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
-    name: requireNonEmptyString(record.name, `${context}.name`),
-    manifest_digest_hex: normalizeHex32String(
-      record.manifest_digest_hex,
-      `${context}.manifest_digest_hex`,
-    ),
-    bound_by: ToriiClient._requireAccountId(record.bound_by, `${context}.bound_by`),
-    bound_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.bound_epoch,
-      `${context}.bound_epoch`,
-      { allowZero: true },
-    ),
-    expiry_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.expiry_epoch,
-      `${context}.expiry_epoch`,
-      { allowZero: true },
-    ),
-    proof_b64: requireNonEmptyString(record.proof_b64, `${context}.proof_b64`),
-    cache_state: optionalString(record.cache_state, `${context}.cache_state`),
-    status_label: optionalString(record.status_label, `${context}.status_label`),
-    cache_rotation_due: optionalBoolean(
-      record.cache_rotation_due,
-      `${context}.cache_rotation_due`,
-    ),
-    cache_age_seconds: optionalNumber(record.cache_age_seconds, `${context}.cache_age_seconds`),
-    proof_generated_at_unix: optionalNumber(
-      record.proof_generated_at_unix,
-      `${context}.proof_generated_at_unix`,
-    ),
-    proof_expires_at_unix: optionalNumber(
-      record.proof_expires_at_unix,
-      `${context}.proof_expires_at_unix`,
-    ),
-    proof_expires_in_seconds: optionalNumber(
-      record.proof_expires_in_seconds,
-      `${context}.proof_expires_in_seconds`,
-    ),
-    policy_positive_ttl_secs: optionalNumber(
-      record.policy_positive_ttl_secs,
-      `${context}.policy_positive_ttl_secs`,
-    ),
-    policy_refresh_window_secs: optionalNumber(
-      record.policy_refresh_window_secs,
-      `${context}.policy_refresh_window_secs`,
-    ),
-    policy_hard_expiry_secs: optionalNumber(
-      record.policy_hard_expiry_secs,
-      `${context}.policy_hard_expiry_secs`,
-    ),
-    policy_rotation_max_age_secs: optionalNumber(
-      record.policy_rotation_max_age_secs,
-      `${context}.policy_rotation_max_age_secs`,
-    ),
-    policy_successor_grace_secs: optionalNumber(
-      record.policy_successor_grace_secs,
-      `${context}.policy_successor_grace_secs`,
-    ),
-    policy_governance_grace_secs: optionalNumber(
-      record.policy_governance_grace_secs,
-      `${context}.policy_governance_grace_secs`,
-    ),
-    cache_evaluation: optionalRecord(record.cache_evaluation, `${context}.cache_evaluation`),
-    cache_decision: optionalString(record.cache_decision, `${context}.cache_decision`),
-    cache_reasons: optionalStringArray(record.cache_reasons, `${context}.cache_reasons`),
-    lineage: optionalRecord(record.lineage, `${context}.lineage`),
-  };
-}
-
-function normalizeSorafsReplicationListResponse(
-  payload,
-  context = "sorafs replication list response",
-) {
-  const record = ensureRecord(payload ?? {}, context);
-  const ordersValue = record.replication_orders;
-  if (!Array.isArray(ordersValue)) {
-    rejectType(`${context}.replication_orders must be an array`);
-  }
-  return {
-    attestation: optionalRecord(record.attestation, `${context}.attestation`),
-    total_count: ToriiClient._normalizeUnsignedInteger(
-      record.total_count,
-      `${context}.total_count`,
-      { allowZero: true },
-    ),
-    returned_count: ToriiClient._normalizeUnsignedInteger(
-      record.returned_count,
-      `${context}.returned_count`,
-      { allowZero: true },
-    ),
-    offset: ToriiClient._normalizeUnsignedInteger(record.offset, `${context}.offset`, {
-      allowZero: true,
-    }),
-    limit: ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
-      allowZero: false,
-    }),
-    replication_orders: ordersValue.map((entry, index) =>
-      normalizeSorafsReplicationOrderRecord(entry, `${context}.replication_orders[${index}]`),
-    ),
-  };
-}
-
-function normalizeSorafsReplicationOrderRecord(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const receiptsValue = record.receipts ?? [];
-  if (!Array.isArray(receiptsValue)) {
-    rejectType(`${context}.receipts must be an array`);
-  }
-  return {
-    order_id_hex: normalizeHex32String(record.order_id_hex, `${context}.order_id_hex`),
-    manifest_digest_hex: normalizeHex32String(
-      record.manifest_digest_hex,
-      `${context}.manifest_digest_hex`,
-    ),
-    issued_by: ToriiClient._requireAccountId(record.issued_by, `${context}.issued_by`),
-    issued_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.issued_epoch,
-      `${context}.issued_epoch`,
-      { allowZero: true },
-    ),
-    deadline_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.deadline_epoch,
-      `${context}.deadline_epoch`,
-      { allowZero: true },
-    ),
-    status: normalizeSorafsReplicationStatus(record.status, `${context}.status`),
-    canonical_order_b64: requireNonEmptyString(
-      record.canonical_order_b64,
-      `${context}.canonical_order_b64`,
-    ),
-    order: optionalRecord(record.order, `${context}.order`) ?? {},
-    receipts: receiptsValue.map((entry, index) =>
-      normalizeSorafsReplicationReceipt(entry, `${context}.receipts[${index}]`),
-    ),
-    providers: requireStringArray(record.providers ?? [], `${context}.providers`),
-  };
-}
-
-function normalizeSorafsReplicationStatus(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    state: requireNonEmptyString(record.state, `${context}.state`),
-    epoch:
-      record.epoch === undefined || record.epoch === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(record.epoch, `${context}.epoch`, {
-            allowZero: true,
-          }),
-  };
-}
-
-function normalizeSorafsReplicationReceipt(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    provider_hex: normalizeHex32String(record.provider_hex, `${context}.provider_hex`),
-    status: requireNonEmptyString(record.status, `${context}.status`),
-    timestamp: ToriiClient._normalizeUnsignedInteger(record.timestamp, `${context}.timestamp`, {
-      allowZero: true,
-    }),
-    por_sample_digest_hex:
-      record.por_sample_digest_hex === undefined || record.por_sample_digest_hex === null
-        ? null
-        : normalizeHex32String(
-            record.por_sample_digest_hex,
-            `${context}.por_sample_digest_hex`,
-          ),
-  };
-}
+const { normalizeSorafsAliasListResponse } =
+  createSorafsAliasResponseNormalizers({
+    requireAccountId: (value, context) => ToriiClient._requireAccountId(value, context),
+  });
 
 function normalizeSorafsPinRegisterResponse(
   payload,

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -295,6 +298,34 @@ def test_contract_phase_contains_only_direct_contract_smoke() -> None:
     ) in trace
     for retired in RETIRED_STEMS:
         assert retired not in trace
+
+
+def test_real_tvm_phase_build_arguments_match_native_compiler_parser(tmp_path: Path) -> None:
+    environment = os.environ.copy()
+    environment["TMPDIR"] = str(tmp_path / "native compiler contract")
+    trace = dry_run("tvm-contract-smoke", env=environment).stdout
+    commands = [shlex.split(line[2:]) for line in trace.splitlines() if line.startswith("+ ")]
+    builds = [command for command in commands if "scripts/contract_artifact_corridor.py" in command]
+    assert len(builds) == 1
+    command = builds[0]
+    argument_start = command.index("scripts/contract_artifact_corridor.py") + 1
+    parse_only = (
+        "import json,sys;sys.path.insert(0,'scripts');"
+        "import contract_artifact_corridor as corridor;"
+        "args=corridor.parser().parse_args(sys.argv[1:]);"
+        "print(json.dumps({'command':args.command,'output_dir':str(args.output_dir)}))"
+    )
+    parsed = subprocess.run(
+        [sys.executable, "-c", parse_only, *command[argument_start:]], cwd=ROOT,
+        capture_output=True, text=True, check=True,
+    )
+    arguments = json.loads(parsed.stdout)
+    assert arguments["command"] == "build"
+    expected = Path(environment["TMPDIR"]) / "iroha-sccp-tvm-corridor.dry-run" / "artifacts"
+    assert Path(arguments["output_dir"]) == expected
+    assert commands[1] == ["bash", "scripts/contract_tvm_runner.sh", "--manifest",
+                           str(expected / "sccp-contract-artifacts-v1.json")]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_runtime_overrides_apply_only_to_script_runtimes() -> None:

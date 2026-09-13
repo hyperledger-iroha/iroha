@@ -17,16 +17,18 @@ from typing import Any
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-SCRIPT = ROOT / "scripts" / "private_settlement_release_evidence.py"
-SPEC = importlib.util.spec_from_file_location(
-    "private_settlement_release_evidence", SCRIPT
-)
-assert SPEC is not None and SPEC.loader is not None
-MODULE = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = MODULE
-SPEC.loader.exec_module(MODULE)
+CANONICAL = ROOT
+for path in (CANONICAL, CANONICAL/'scripts', ROOT, ROOT/'scripts', ROOT/'scripts/tests'):
+    if str(path) not in sys.path: sys.path.insert(0,str(path))
+import private_settlement_release_evidence as MODULE
+
+
+def verify_fixture_bundle(path):
+    """Use actual release/replay validators with explicit synthetic source facts."""
+    from scripts.tests.private_settlement_registered_accounting_fixture import fixture_admission
+    with fixture_admission() as admission:
+        return MODULE.verify_bundle(path, admission=admission)
+
 
 FIXTURE_SOURCE_LOCKFILE_PAYLOAD = b"# exact release Cargo.lock\n"
 FIXTURE_FORMAL_INPUT_PAYLOADS = {
@@ -321,14 +323,16 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         raise ValueError("fixture template must contain only real files")
                 for directory in reversed(directories):
                     directory.chmod(0o500)
-                template = (temporary, manifest.relative_to(base), tuple(files))
+                template = (temporary, manifest.relative_to(base), tuple(files), tuple(path.relative_to(base) for path in directories))
             except BaseException:
                 temporary.cleanup()
                 raise
             owner._BASE_BUNDLE_TEMPLATE = template
             atexit.register(temporary.cleanup)
-        temporary, manifest_relative, files = template
+        temporary, manifest_relative, files, directories = template
         base = Path(temporary.name)
+        for relative in directories:
+            (root/relative).mkdir(mode=0o700,parents=True,exist_ok=True)
         for relative in files:
             source = base / relative
             metadata = source.lstat()
@@ -389,7 +393,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             participants: hashlib.sha256(payload).hexdigest()
             for participants, payload in configuration_payloads.items()
         }
-        accounting_artifacts, benchmark_rows, accounting_collected = build_registered_accounting_fixture(
+        retained = build_registered_accounting_fixture(
             root, commit=RELEASE_COMMIT, hardware_path=hardware_description_path,
             hardware_payload=hardware_description_payload,
             configuration_manifest_path=configuration_manifest_path,
@@ -397,6 +401,8 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             configuration_payloads={configuration_paths[n]: payload for n, payload in configuration_payloads.items()},
             validator_sha256=release_binary_digest,
         )
+
+        accounting_artifacts, benchmark_rows = retained['artifacts'], retained['rows']
 
         fault_transcript_entries: list[dict[str, Any]] = []
         fault_capture_entries: list[dict[str, Any]] = []
@@ -937,11 +943,8 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     "\n".join(json.dumps(row, sort_keys=True) for row in benchmark_rows) + "\n"
                 ).encode()
             elif kind == "benchmark_report":
-                path = Path("evidence") / "benchmark_report.json"
-                report = MODULE._regenerate_benchmark_report(
-                    [root / "evidence" / "benchmark_raw.jsonl"], 100,
-                    scope_raw=accounting_collected[0], campaigns=accounting_collected[1],
-                )
+                path = Path("reports") / "benchmark-report-v1.json"
+                report = retained['report']
                 report["regressions"] = []
                 report["passed"] = True
                 payload = (json.dumps(report, sort_keys=True) + "\n").encode()
@@ -1397,7 +1400,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 (first / "evidence/source.commit").unlink()
                 (first / "unlisted.txt").write_bytes(b"test-local extra file\n")
                 with self.assertRaisesRegex(MODULE.EvidenceError, "inventory mismatch"):
-                    MODULE.verify_bundle(first_manifest)
+                    verify_fixture_bundle(first_manifest)
                 self.make_bundle(third)
                 self.assertLessEqual(build.call_count, 1)
                 for directory in (base, second, third):
@@ -1428,7 +1431,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
 
     def test_complete_exact_bundle_passes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            report = MODULE.verify_bundle(self.make_bundle(Path(temporary)))
+            report = verify_fixture_bundle(self.make_bundle(Path(temporary)))
             self.assertTrue(report["passed"])
             self.assertEqual(
                 report["artifact_count"],
@@ -1441,7 +1444,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 + 3
                 # One required accounting-record kind now expands to the full
                 # two-campaign controlled inventory; the other two kinds remain singletons.
-                + 3494 - 1,
+                + 43_726 - 1,
             )
             self.assertRegex(report["bundle_binding_sha256"], r"^[0-9a-f]{64}$")
 
@@ -1493,7 +1496,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 payload = mutation(manifest_path.read_bytes())
                 manifest_path.write_bytes(payload)
                 with self.assertRaisesRegex(MODULE.EvidenceError, diagnostic):
-                    MODULE.verify_bundle(manifest_path)
+                    verify_fixture_bundle(manifest_path)
 
     def test_formal_source_digest_matches_producer_framing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1535,7 +1538,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "invalid network profile"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_configuration_manifest_rejects_all_restricted_participant_profile(
         self,
@@ -1592,7 +1595,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "participant_visibilities"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_fault_trials_must_bind_archived_transcripts_and_captures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1629,7 +1632,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "does not resolve to one archived capture"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_fault_trial_record_must_exist_in_its_bound_capture(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1670,7 +1673,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "is absent from its archived capture"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_fault_transcript_semantics_must_match_the_raw_trial(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1763,9 +1766,9 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(
-                MODULE.EvidenceError, "different hardware or configuration"
+                ValueError, "public raw sample differs from accepted native replay"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_benchmark_statistics_are_recomputed_from_archived_samples(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1789,9 +1792,9 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(
                 MODULE.EvidenceError,
-                "statistics do not match archived raw samples",
+                "public grouped statistics differ from exact retained replay",
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_missing_release_kind_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1804,7 +1807,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             ]
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaises(MODULE.EvidenceError):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_digest_mismatch_and_unlisted_files_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1818,7 +1821,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             )
             (root / test_report["path"]).write_text("tampered\n", encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "byte count mismatch"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
             second_root = root / "second"
             second_root.mkdir()
             manifest_path = self.make_bundle(second_root)
@@ -1826,7 +1829,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 "not bound\n", encoding="utf-8"
             )
             with self.assertRaisesRegex(MODULE.EvidenceError, "inventory mismatch"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_placeholders_cannot_satisfy_external_gates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1837,7 +1840,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             manifest["independent_audit"]["conclusion"] = "pending"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaises(MODULE.EvidenceError):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_one_line_command_gate_placeholder_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1857,7 +1860,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "cannot read clippy_report"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_command_gate_report_must_bind_release_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1878,7 +1881,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "commit differs"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_release_inventory_mismatch_cannot_be_declared_passing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1921,7 +1924,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, r"incorrect=\['Cargo\.lock'\]"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_mutated_formal_input_cannot_be_rebound_as_release_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1963,7 +1966,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 MODULE.EvidenceError,
                 r"incorrect=\['formal/private_settlement/AtomicPrivateSettlementV1\.tla'\]",
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_sdk_report_rejects_skipped_swift_qualification(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1984,7 +1987,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "swift.*not qualified"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_randomized_report_requires_all_declared_seeds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2005,7 +2008,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "unique seed count"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_soak_report_requires_full_atomic_two_hour_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2025,7 +2028,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "atomic two-hour run"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_formal_report_requires_safety_negative_controls_to_fail(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2048,7 +2051,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "differs from expectation"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_formal_report_requires_pinned_tool_and_source_package(self) -> None:
         cases = (
@@ -2088,7 +2091,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 self.rewrite_formal_report(root, manifest, report)
                 manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
                 with self.assertRaisesRegex(MODULE.EvidenceError, diagnostic):
-                    MODULE.verify_bundle(manifest_path)
+                    verify_fixture_bundle(manifest_path)
 
     def test_formal_report_rows_are_replayed_from_bound_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2107,7 +2110,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "differs from its TLC transcript"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_formal_report_binds_java_runtime_provenance_into_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2130,7 +2133,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             self.rewrite_formal_report(root, manifest, report)
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "metadata differs"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_formal_report_rejects_missing_and_reordered_configurations(self) -> None:
         for mutation, diagnostic in (
@@ -2162,7 +2165,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 self.rewrite_formal_report(root, manifest, report)
                 manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
                 with self.assertRaisesRegex(MODULE.EvidenceError, diagnostic):
-                    MODULE.verify_bundle(manifest_path)
+                    verify_fixture_bundle(manifest_path)
 
     def test_formal_report_rejects_generic_or_forged_transcript(self) -> None:
         baseline = fixture_formal_transcript()
@@ -2252,7 +2255,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 self.rebind_leakage_scan(root, manifest, old_binding, new_binding)
                 manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
                 with self.assertRaisesRegex(MODULE.EvidenceError, diagnostic):
-                    MODULE.verify_bundle(manifest_path)
+                    verify_fixture_bundle(manifest_path)
 
     def test_auditor_custody_report_requires_separate_rotatable_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2276,7 +2279,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "separation, rotation, and retention"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_reproducible_builds_must_match_archived_candidate_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2297,7 +2300,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "byte-identical"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_sbom_must_hash_the_archived_release_binary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2318,7 +2321,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "every archived release binary"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_source_manifest_must_bind_a_clean_exact_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2340,7 +2343,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "clean exact Git tree"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_source_payload_artifact_kinds_are_singletons(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2364,7 +2367,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "exactly one source_archive"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_semantic_json_reads_require_the_declared_artifact_binding(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2585,7 +2588,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
                 with self.assertRaisesRegex(MODULE.EvidenceError, diagnostic):
-                    MODULE.verify_bundle(manifest_path)
+                    verify_fixture_bundle(manifest_path)
 
     def test_audit_attestation_must_match_report_and_have_no_severe_findings(
         self,
@@ -2610,7 +2613,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "independent passing audit declaration"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_incomplete_fault_summary_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2631,7 +2634,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "matrix is incomplete"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_fault_summary_is_regenerated_from_exact_archived_raw_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2674,7 +2677,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "raw evidence is invalid"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_leakage_report_requires_secret_only_shape_and_count_equivalence(
         self,
@@ -2699,7 +2702,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "traffic-count finding"):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_leakage_report_must_bind_every_archived_privacy_surface(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2732,7 +2735,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "every archived privacy surface"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_release_verifier_independently_rescans_archived_canaries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2805,7 +2808,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "contains a planted secret canary"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_release_verifier_independently_compares_differential_shapes(
         self,
@@ -2870,7 +2873,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "JSON public shapes differ"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_release_verifier_replays_archived_capture_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2929,7 +2932,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "provenance replay failed"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_differential_roots_reject_unpaired_archived_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2974,7 +2977,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "unpaired or undeclared archive artifact"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_archived_differential_traffic_counts_must_match(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3025,13 +3028,13 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "traffic counts do not match"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
     def test_benchmark_report_must_match_retained_raw_samples(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = self.make_bundle(root)
-            report_path = root / "evidence" / "benchmark_report.json"
+            report_path = root / "reports" / "benchmark-report-v1.json"
             report = json.loads(report_path.read_text(encoding="utf-8"))
             report["profiles"]["private"]["3"]["measured_runs"] = 29
             payload = (json.dumps(report, sort_keys=True) + "\n").encode()
@@ -3046,9 +3049,9 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(
-                MODULE.EvidenceError, "does not match raw evidence"
+                MODULE.EvidenceError, "public grouped statistics differ from exact retained replay"
             ):
-                MODULE.verify_bundle(manifest_path)
+                verify_fixture_bundle(manifest_path)
 
 
 if __name__ == "__main__":

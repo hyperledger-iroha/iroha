@@ -1284,6 +1284,8 @@ mod model {
         FindLaneRelayEnvelopeByRef(self::nexus::prelude::FindLaneRelayEnvelopeByRef),
         /// Fetch a fee sponsor program by identifier.
         FindFeeSponsorProgramById(self::nexus::prelude::FindFeeSponsorProgramById),
+        /// Fetch the immutable native business receipt, including every exact movement.
+        FindSettlementReceiptById(self::settlement::prelude::FindSettlementReceiptById),
         /// Fetch the protected native FX corridor policy registry.
         FindFxCorridorPolicyRegistry(self::settlement::prelude::FindFxCorridorPolicyRegistry),
         /// Fetch one native FX corridor policy by identifier.
@@ -1636,6 +1638,8 @@ mod model {
         ),
         /// Cursor-bounded page of committed moderation events.
         SorafsModerationEventPage(crate::sorafs::moderation_ledger::ModerationFinalizedEventPageV1),
+        /// Immutable native settlement business receipt with exact resolved movements.
+        SettlementReceipt(crate::isi::SettlementReceipt),
         /// Protected native FX corridor policy registry payload.
         FxCorridorPolicyRegistry(crate::isi::settlement::FxCorridorPolicyRegistry),
         /// Native FX corridor policy payload.
@@ -4398,6 +4402,7 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
     nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
     nexus::prelude::FindFeeSponsorProgramById => crate::nexus::FeeSponsorProgram,
+    settlement::prelude::FindSettlementReceiptById => crate::isi::SettlementReceipt,
     settlement::prelude::FindFxCorridorPolicyRegistry => crate::isi::settlement::FxCorridorPolicyRegistry,
     settlement::prelude::FindFxCorridorPolicyById => crate::isi::settlement::FxCorridorPolicy,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,

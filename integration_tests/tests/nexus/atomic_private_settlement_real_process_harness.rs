@@ -1,3 +1,10 @@
+#[path = "atomic_private_settlement_session.rs"]
+mod benchmark_session;
+
+#[path = "atomic_private_settlement_matched_workload.rs"]
+mod matched_benchmark_workload;
+use matched_benchmark_workload::*;
+
 use base64::Engine as _;
 use futures_util::StreamExt as _;
 use iroha::data_model::block::consensus_v2::{
@@ -183,7 +190,10 @@ struct RealProcessBenchmarkRequestV1 {
     minimum_signed_rs16_da_observations: u64,
     authenticated_message_control: bool,
     seed: u64,
-    run: u64,
+    session_id: String,
+    session_invocation_nonce: String,
+    workload_manifest_sha256: String,
+    session_attempt_index: u64,
     configuration: HarnessJsonValue,
     payload: RealProcessBenchmarkPayloadV1,
 }
@@ -316,11 +326,10 @@ struct RealProcessInventoryRowV1 {
 #[derive(Clone, Debug, norito::JsonSerialize, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct RealProcessBenchmarkResultPayloadV1 {
+    economic_vector_sha256: String,
+    primary_payment_count: usize,
+    monetary_movement_count: usize,
     stages_ms: HarnessJsonValue,
-    throughput_bundles_per_second: f64,
-    cpu_seconds: f64,
-    peak_rss_bytes: u64,
-    network_bytes: u64,
     proof_bytes: u64,
     receipt_bytes: u64,
     storage_growth_bytes: u64,
@@ -1177,20 +1186,37 @@ fn validate_real_process_request(request: &RealProcessBenchmarkRequestV1) -> Res
         "request contains a non-canonical profile stage inventory"
     );
     ensure!(
-        request.payload.resources
-            == [
-                "throughput_bundles_per_second",
-                "cpu_seconds",
-                "peak_rss_bytes",
-                "network_bytes",
-                "proof_bytes",
-                "receipt_bytes",
-                "storage_growth_bytes",
-            ],
+        request.payload.resources == ["proof_bytes", "receipt_bytes", "storage_growth_bytes",],
         "request contains a non-canonical resource inventory"
     );
-    let _ = request.payload.warmup;
-    let _ = request.run;
+    ensure!(
+        lowercase_digest(&request.session_id, &[64])
+            && lowercase_digest(&request.session_invocation_nonce, &[64])
+            && lowercase_digest(&request.workload_manifest_sha256, &[64]),
+        "benchmark request lacks exact session bindings"
+    );
+    let benchmark = request
+        .configuration
+        .get("benchmark")
+        .ok_or_else(|| eyre!("configuration lacks benchmark session policy"))?;
+    let warmups = benchmark
+        .get("warmups_per_session")
+        .and_then(HarnessJsonValue::as_u64)
+        .ok_or_else(|| eyre!("configuration lacks per-session warmups"))?;
+    ensure!(
+        (5..=1000).contains(&warmups)
+            && benchmark.get("warmups_per_profile").is_none()
+            && benchmark
+                .get("network_lifecycle")
+                .and_then(HarnessJsonValue::as_str)
+                == Some("one_retained_network_per_profile_participants_seed")
+            && benchmark
+                .get("prefunding_policy")
+                .and_then(HarnessJsonValue::as_str)
+                == Some("session_union_of_disjoint_attempts")
+            && request.payload.warmup == (request.session_attempt_index < warmups),
+        "benchmark session configuration or warmup classification differs"
+    );
     Ok(())
 }
 
@@ -1811,29 +1837,221 @@ fn sha256_regular_file(path: &Path) -> Result<String> {
     Ok(hex::encode(digest.finalize()))
 }
 
+/// Resolve the kernel-owned executable path, never a process display string.
+#[cfg_attr(target_os = "macos", allow(unsafe_code))]
 fn executable_for_pid(pid: u32) -> Result<PathBuf> {
+    ensure!(
+        pid > 0 && i32::try_from(pid).is_ok(),
+        "invalid process PID {pid}"
+    );
     #[cfg(target_os = "linux")]
     {
         return fs::read_link(format!("/proc/{pid}/exe"))
             .wrap_err_with(|| format!("resolve executable for PID {pid}"));
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        let output = Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "command="])
-            .output()
-            .wrap_err("run ps for executable identity")?;
-        ensure!(output.status.success(), "ps could not inspect PID {pid}");
-        let command = std::str::from_utf8(&output.stdout)
-            .wrap_err("ps command output is not UTF-8")?
-            .trim();
-        let executable = command
-            .split_whitespace()
-            .next()
-            .ok_or_else(|| eyre!("ps returned no executable for PID {pid}"))?;
-        return fs::canonicalize(executable)
-            .wrap_err_with(|| format!("resolve executable for PID {pid}"));
+        use std::{ffi::c_void, os::unix::ffi::OsStringExt as _};
+
+        #[link(name = "proc")]
+        unsafe extern "C" {
+            fn proc_pidpath(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
+        }
+        // The Darwin SDK defines PROC_PIDPATHINFO_MAXSIZE as 4 * MAXPATHLEN.
+        const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
+        let mut buffer = [0_u8; PROC_PIDPATHINFO_MAXSIZE];
+        let native_pid = i32::try_from(pid).expect("PID was checked above");
+        // SAFETY: the valid mutable buffer spans the exact supplied capacity;
+        // proc_pidpath writes at most that capacity and retains no pointer.
+        let count = unsafe {
+            proc_pidpath(
+                native_pid,
+                buffer.as_mut_ptr().cast(),
+                u32::try_from(buffer.len()).expect("Darwin path bound fits u32"),
+            )
+        };
+        if count <= 0 {
+            return Err(std::io::Error::last_os_error())
+                .wrap_err_with(|| format!("read kernel executable path for PID {pid}"));
+        }
+        let count = usize::try_from(count).expect("positive path length fits usize");
+        ensure!(
+            count < buffer.len() && buffer[count] == 0 && !buffer[..count].contains(&0),
+            "kernel executable path for PID {pid} is incomplete"
+        );
+        // Unix paths are byte strings. Neither the caller's locale nor lossy
+        // Unicode conversion may reinterpret the kernel's image identity.
+        let path = PathBuf::from(std::ffi::OsString::from_vec(buffer[..count].to_vec()));
+        ensure!(
+            path.is_absolute(),
+            "kernel executable path for PID {pid} is not absolute"
+        );
+        return fs::canonicalize(path)
+            .wrap_err_with(|| format!("resolve kernel executable path for PID {pid}"));
     }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(eyre!(
+            "kernel executable identity is unsupported on this platform"
+        ))
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn executable_identity_current_process_matches_kernel_image() {
+    let actual = executable_for_pid(std::process::id()).expect("current kernel image");
+    let expected = fs::canonicalize(std::env::current_exe().expect("current test image"))
+        .expect("canonical current test image");
+    assert_eq!(actual, expected);
+    assert_eq!(
+        sha256_regular_file(&actual).expect("kernel image digest"),
+        sha256_regular_file(&expected).expect("current image digest")
+    );
+}
+
+#[test]
+fn executable_identity_rejects_invalid_pid() {
+    for pid in [0, u32::MAX] {
+        assert!(
+            executable_for_pid(pid).is_err(),
+            "accepted invalid PID {pid}"
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn with_executable_identity_child(
+    observe: impl FnOnce(&mut Child, &Path),
+    reaped: &std::cell::Cell<bool>,
+) {
+    use std::os::unix::process::CommandExt as _;
+
+    let directory = tempfile::tempdir().expect("owned image fixture root");
+    let image = directory.path().join("証明 image with spaces");
+    let original = std::env::current_exe().expect("locally compiled test image");
+    fs::copy(&original, &image).expect("copy local test image, not a platform executable");
+    fs::set_permissions(&image, fs::Permissions::from_mode(0o700))
+        .expect("executable fixture mode");
+    let image = fs::canonicalize(image).expect("canonical fixture image");
+    let mut child = Command::new(&image)
+        .arg0("misleading argv0 that is not an executable path")
+        .args([
+            "--ignored",
+            "--exact",
+            "nexus::atomic_private_settlement_localnet::executable_identity_self_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("LC_ALL", "C")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn the owned local-image fixture");
+    // Every fallible observation/assertion is inside the unwind boundary. Close
+    // stdin and reap the actual child before propagating the original panic.
+    let mut output = None;
+    let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        use std::io::BufRead as _;
+        output = Some(std::io::BufReader::new(
+            child.stdout.take().expect("child stdout"),
+        ));
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert!(
+                output
+                    .as_mut()
+                    .expect("owned stdout reader")
+                    .read_line(&mut line)
+                    .expect("read child ready")
+                    > 0,
+                "child exited before entering the exact fixture"
+            );
+            if line.trim_end().ends_with("executable-identity-ready") {
+                break;
+            }
+        }
+        observe(&mut child, &image);
+    }));
+    drop(child.stdin.take());
+    let status = loop {
+        match child.wait() {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            status => break status.expect("reap the owned image fixture"),
+        }
+    };
+    // Keep the read end alive until the child finishes its bounded libtest output.
+    drop(output);
+    reaped.set(true);
+    assert!(status.success(), "owned image fixture failed: {status}");
+    if let Err(payload) = observed {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn executable_identity_preserves_unicode_spaces_and_ignores_argv0() {
+    let reaped = std::cell::Cell::new(false);
+    with_executable_identity_child(
+        |child, image| {
+            assert!(child.try_wait().expect("observe live child").is_none());
+            let actual = executable_for_pid(child.id()).expect("kernel child image");
+            assert_eq!(actual.as_path(), image);
+            assert_eq!(
+                sha256_regular_file(&actual).expect("actual child digest"),
+                sha256_regular_file(image).expect("copied image digest")
+            );
+        },
+        &reaped,
+    );
+    assert!(reaped.get());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn executable_identity_observation_unwind_reaps_child() {
+    let reaped = std::cell::Cell::new(false);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_executable_identity_child(
+            |_, _| {
+                std::panic::resume_unwind(Box::new("image observation panic"));
+            },
+            &reaped,
+        );
+    }))
+    .expect_err("the observation panic must remain visible");
+    assert!(
+        reaped.get(),
+        "the child must be reaped before the panic escapes"
+    );
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"image observation panic")
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+#[ignore = "owned executable-identity subprocess entrypoint"]
+fn executable_identity_self_child() {
+    assert_eq!(
+        std::env::args_os().next(),
+        Some(std::ffi::OsString::from(
+            "misleading argv0 that is not an executable path"
+        ))
+    );
+    println!("executable-identity-ready");
+    std::io::stdout().flush().expect("publish child ready");
+    let mut byte = [0_u8; 1];
+    assert_eq!(
+        std::io::stdin()
+            .read(&mut byte)
+            .expect("wait for parent EOF"),
+        0
+    );
 }
 
 /// Parse the portable ps CPU clock without accepting signed or nonfinite values.
@@ -2000,66 +2218,6 @@ impl Drop for ProcessResourceSampler {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn loopback_bytes() -> Result<u64> {
-    let receive = fs::read_to_string("/sys/class/net/lo/statistics/rx_bytes")?
-        .trim()
-        .parse::<u64>()?;
-    let transmit = fs::read_to_string("/sys/class/net/lo/statistics/tx_bytes")?
-        .trim()
-        .parse::<u64>()?;
-    receive
-        .checked_add(transmit)
-        .ok_or_else(|| eyre!("loopback byte counter overflow"))
-}
-
-#[cfg(target_os = "macos")]
-fn loopback_bytes() -> Result<u64> {
-    let output = Command::new("netstat")
-        .args(["-ibn", "-I", "lo0"])
-        .output()
-        .wrap_err("sample loopback counters")?;
-    ensure!(output.status.success(), "netstat loopback sampling failed");
-    let text = std::str::from_utf8(&output.stdout).wrap_err("netstat output is not UTF-8")?;
-    let mut input_index = None;
-    let mut output_index = None;
-    let mut maximum = None;
-    for line in text.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        if fields.first() == Some(&"Name") {
-            input_index = fields.iter().position(|field| *field == "Ibytes");
-            output_index = fields.iter().position(|field| *field == "Obytes");
-            continue;
-        }
-        if fields.first() != Some(&"lo0") {
-            continue;
-        }
-        let (Some(input), Some(output)) = (input_index, output_index) else {
-            continue;
-        };
-        let total = fields
-            .get(input)
-            .ok_or_else(|| eyre!("netstat lacks Ibytes"))?
-            .parse::<u64>()?
-            .checked_add(
-                fields
-                    .get(output)
-                    .ok_or_else(|| eyre!("netstat lacks Obytes"))?
-                    .parse::<u64>()?,
-            )
-            .ok_or_else(|| eyre!("loopback byte counter overflow"))?;
-        maximum = Some(maximum.map_or(total, |current: u64| current.max(total)));
-    }
-    maximum.ok_or_else(|| eyre!("netstat returned no loopback byte counter"))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn loopback_bytes() -> Result<u64> {
-    Err(eyre!(
-        "real network-byte measurement is unsupported on this operating system"
-    ))
-}
-
 fn regular_tree_bytes(root: &Path) -> Result<u64> {
     let mut total = 0_u64;
     let mut stack = vec![root.to_path_buf()];
@@ -2125,12 +2283,15 @@ fn leakage_evidence_root() -> Result<PathBuf> {
     Ok(root)
 }
 
-fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Result<()> {
-    let path = PathBuf::from(
-        std::env::var(HARNESS_PORT_MANIFEST_ENV)
-            .wrap_err("missing leakage capture port-manifest path")?,
+fn collect_network_port_manifest(
+    network: &Network,
+    shape: TopologyShape,
+) -> Result<LeakagePortManifestV1> {
+    shape.validate()?;
+    ensure!(
+        network.all_peers().count() == shape.process_count(),
+        "network endpoint process count differs"
     );
-    ensure!(!path.exists(), "leakage port manifest path already exists");
     let mut torii_ports = network
         .all_peers()
         .map(|peer| peer.api_address().port())
@@ -2170,20 +2331,32 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
         .collect::<BTreeSet<_>>();
     let (expected_public_p2p, expected_restricted_p2p) = shape.p2p_process_counts_by_visibility();
     ensure!(
-        torii_ports.len() == shape.process_count()
+        !all_ports.contains(&0)
+            && torii_ports.len() == shape.process_count()
             && public_p2p_ports.len() == expected_public_p2p
             && restricted_p2p_ports.len() == expected_restricted_p2p
             && all_ports.len()
                 == torii_ports.len() + public_p2p_ports.len() + restricted_p2p_ports.len(),
         "leakage capture ports are incomplete or overlap"
     );
-    let bytes = canonical_harness_json_bytes(&LeakagePortManifestV1 {
+    Ok(LeakagePortManifestV1 {
         version: 1,
         torii_ports,
         public_p2p_ports,
         restricted_p2p_ports,
-    })?;
-    write_owner_only_atomic(&path, &bytes)
+    })
+}
+
+fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Result<()> {
+    let path = PathBuf::from(
+        std::env::var(HARNESS_PORT_MANIFEST_ENV)
+            .wrap_err("missing leakage capture port-manifest path")?,
+    );
+    ensure!(!path.exists(), "leakage port manifest path already exists");
+    write_owner_only_atomic(
+        &path,
+        &canonical_harness_json_bytes(&collect_network_port_manifest(network, shape)?)?,
+    )
 }
 
 fn read_stable_leakage_source(path: &Path) -> Result<Vec<u8>> {
@@ -5218,7 +5391,13 @@ fn prepare_fault_bundle(
         .zip(committees)
         .enumerate()
         .map(|(ordinal, (leg, committee))| {
-            prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)
+            prepare_leg(
+                AtomicPrivateSettlementProverOptionsV1::CPU,
+                ordinal,
+                leg,
+                &manifest,
+                committee.authority.digest()?,
+            )
         })
         .collect::<Result<Vec<_>>>()?;
     let materials = provisional_materials(manifest.clone(), &prepared, committees)?;
@@ -7579,11 +7758,10 @@ fn run_real_process_fault_campaign(
     })
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct TransparentControlBalanceExpectation {
-    asset_ordinal: usize,
-    owner_ordinal: usize,
-    amount: u64,
+    asset_id: AssetId,
+    amount: Quantity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7600,17 +7778,17 @@ fn classify_transparent_control_values(
     ensure!(
         observed.len() == initial.len()
             && initial.len() == finalized.len()
-            && initial.iter().zip(finalized).all(|(before, after)| {
-                before.asset_ordinal == after.asset_ordinal
-                    && before.owner_ordinal == after.owner_ordinal
-            }),
+            && initial
+                .iter()
+                .zip(finalized)
+                .all(|(before, after)| { before.asset_id == after.asset_id }),
         "transparent-control atomicity vectors are not aligned"
     );
     let matches = |expected: &[TransparentControlBalanceExpectation]| {
         observed
             .iter()
             .zip(expected)
-            .all(|(value, expectation)| *value == Quantity::from(expectation.amount))
+            .all(|(value, expectation)| *value == expectation.amount)
     };
     if matches(initial) {
         Ok(TransparentControlSnapshotState::Initial)
@@ -7628,24 +7806,14 @@ fn observe_transparent_control_atomicity(
     initial: &[TransparentControlBalanceExpectation],
     finalized: &[TransparentControlBalanceExpectation],
 ) -> Result<TransparentControlSnapshotState> {
-    // One FindAssets response is a coherent snapshot from one validator's local WSV. Reading all
-    // relevant buckets in that response avoids manufacturing a mixed vector by crossing block
-    // boundaries between independent point queries.
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
-    let mut observed = Vec::with_capacity(initial.len());
-    for expectation in initial {
-        let expected_id =
-            transparent_control_asset_id(expectation.asset_ordinal, expectation.owner_ordinal);
-        let mut matching = assets.iter().filter(|asset| asset.id == expected_id);
-        let asset = matching
-            .next()
-            .ok_or_else(|| eyre!("transparent-control observer cannot find {expected_id}"))?;
-        ensure!(
-            matching.next().is_none(),
-            "transparent-control observer found a duplicate {expected_id}"
-        );
-        observed.push(asset.value().clone());
-    }
+    let ids = initial
+        .iter()
+        .map(|row| row.asset_id.clone())
+        .collect::<Vec<_>>();
+    let observed = coherent_control_balances(client, &ids)?
+        .into_iter()
+        .map(|row| row.amount)
+        .collect::<Vec<_>>();
     classify_transparent_control_values(&observed, initial, finalized)
 }
 
@@ -7800,86 +7968,6 @@ impl Drop for TransparentControlAtomicityObserver {
     }
 }
 
-fn transparent_control_amounts(counterparty_ordinal: usize) -> (u64, u64) {
-    let ordinal = u64::try_from(counterparty_ordinal).expect("counterparty ordinal fits u64");
-    (10 + ordinal, 20 + ordinal * 2)
-}
-
-fn transparent_control_dvps(request: &RealProcessBenchmarkRequestV1) -> Result<Vec<DvpIsi>> {
-    let authority = transparent_control_account_id(0);
-    (1..request.participants)
-        .map(|counterparty_ordinal| {
-            let counterparty = transparent_control_account_id(counterparty_ordinal);
-            Ok(DvpIsi::new(
-                format!(
-                    "apsctl_n{}_s{}_r{}_p{}",
-                    request.participants, request.seed, request.run, counterparty_ordinal
-                )
-                .parse()
-                .wrap_err("construct transparent-control settlement id")?,
-                SettlementLeg::new(
-                    transparent_control_asset_definition_id(0),
-                    Quantity::from(transparent_control_amounts(counterparty_ordinal).0),
-                    authority.clone(),
-                    counterparty.clone(),
-                ),
-                SettlementLeg::new(
-                    transparent_control_asset_definition_id(counterparty_ordinal),
-                    Quantity::from(transparent_control_amounts(counterparty_ordinal).1),
-                    counterparty,
-                    authority.clone(),
-                ),
-                SettlementPlan::new(
-                    SettlementExecutionOrder::DeliveryThenPayment,
-                    SettlementAtomicity::AllOrNothing,
-                ),
-            ))
-        })
-        .collect()
-}
-
-fn transparent_control_balance_expectations(
-    participants: usize,
-    finalized: bool,
-) -> Result<Vec<TransparentControlBalanceExpectation>> {
-    let mut expectations = Vec::with_capacity(participants.saturating_mul(3));
-    let delivered = (1..participants).try_fold(0_u64, |total, ordinal| {
-        total
-            .checked_add(transparent_control_amounts(ordinal).0)
-            .ok_or_else(|| eyre!("transparent-control delivery total overflow"))
-    })?;
-    expectations.push(TransparentControlBalanceExpectation {
-        asset_ordinal: 0,
-        owner_ordinal: 0,
-        amount: if finalized {
-            TRANSPARENT_CONTROL_SEED_BALANCE
-                .checked_sub(delivered)
-                .ok_or_else(|| eyre!("transparent-control authority is underfunded"))?
-        } else {
-            TRANSPARENT_CONTROL_SEED_BALANCE
-        },
-    });
-    for ordinal in 1..participants {
-        let (delivery, payment) = transparent_control_amounts(ordinal);
-        expectations.push(TransparentControlBalanceExpectation {
-            asset_ordinal: 0,
-            owner_ordinal: ordinal,
-            amount: TRANSPARENT_CONTROL_OUTPUT_BASELINE + if finalized { delivery } else { 0 },
-        });
-        expectations.push(TransparentControlBalanceExpectation {
-            asset_ordinal: ordinal,
-            owner_ordinal: 0,
-            amount: TRANSPARENT_CONTROL_OUTPUT_BASELINE + if finalized { payment } else { 0 },
-        });
-        expectations.push(TransparentControlBalanceExpectation {
-            asset_ordinal: ordinal,
-            owner_ordinal: ordinal,
-            amount: TRANSPARENT_CONTROL_SEED_BALANCE - if finalized { payment } else { 0 },
-        });
-    }
-    Ok(expectations)
-}
-
 fn wait_for_transparent_control_balances(
     network: &Network,
     shape: TopologyShape,
@@ -7887,44 +7975,24 @@ fn wait_for_transparent_control_balances(
     context: &str,
 ) -> Result<()> {
     let started = Instant::now();
-    let mut last_observed = Vec::new();
+    let ids = expectations
+        .iter()
+        .map(|row| row.asset_id.clone())
+        .collect::<Vec<_>>();
+    ensure!(
+        network.all_peers().count() == shape.process_count(),
+        "balance check omits a validator"
+    );
     while started.elapsed() <= FINALITY_TIMEOUT {
-        last_observed.clear();
-        let mut all_match = true;
-        for expectation in expectations {
-            let asset_id =
-                transparent_control_asset_id(expectation.asset_ordinal, expectation.owner_ordinal);
-            let owner_key = transparent_control_keypair(expectation.owner_ordinal);
-            let lane = expectation.asset_ordinal + 1;
-            for peer_index in shape.committee_range(lane) {
-                let client = process_peer(network, peer_index)
-                    .client_for(asset_id.account(), owner_key.private_key().clone());
-                match client
-                    .client()
-                    .query_single(FindAssetById::new(asset_id.clone()))
-                {
-                    Ok(asset) => {
-                        let observed = asset.value().clone();
-                        let expected = Quantity::from(expectation.amount);
-                        if observed != expected {
-                            all_match = false;
-                        }
-                        last_observed.push(format!(
-                            "peer#{peer_index}:asset{}:owner{}={observed}",
-                            expectation.asset_ordinal, expectation.owner_ordinal
-                        ));
-                    }
-                    Err(error) => {
-                        all_match = false;
-                        last_observed.push(format!(
-                            "peer#{peer_index}:asset{}:owner{}:error={error}",
-                            expectation.asset_ordinal, expectation.owner_ordinal
-                        ));
-                    }
+        let mut complete = 0;
+        for peer in network.all_peers() {
+            if let Ok(observed) = coherent_control_balances(&peer.client(), &ids) {
+                if observed == expectations {
+                    complete += 1;
                 }
             }
         }
-        if all_match {
+        if complete == shape.process_count() {
             return Ok(());
         }
         thread::sleep(POLL_INTERVAL);
@@ -7934,9 +8002,7 @@ fn wait_for_transparent_control_balances(
         FINALITY_TIMEOUT,
         started.elapsed(),
     )
-    .wrap_err(format!(
-        "{context}: transparent-control balances did not converge: {last_observed:?}"
-    )))
+    .wrap_err(format!("{context}: exact balances did not converge")))
 }
 
 fn native_receipt_from_diagnostics(
@@ -8141,88 +8207,91 @@ fn validate_transparent_native_receipt(
     Ok(())
 }
 
-fn transparent_control_permission(
-    settlement: &DvpIsi,
-    counterparty_ordinal: usize,
-) -> CanExecuteSettlement {
-    CanExecuteSettlement {
-        debited_asset: transparent_control_asset_id(counterparty_ordinal, counterparty_ordinal),
-        settlement_id: settlement.settlement_id().clone(),
-        intent_hash: settlement.intent_hash(),
-    }
+fn transparent_control_permissions(settlement: &SettleAtomic) -> Result<Vec<CanExecuteSettlement>> {
+    settlement.validate().map_err(|error| eyre!(error))?;
+    let intent_hash = settlement.intent_hash()?;
+    Ok(settlement
+        .movements
+        .as_slice()
+        .iter()
+        .map(|movement| movement.source.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|debited_asset| CanExecuteSettlement {
+            debited_asset,
+            settlement_id: settlement.settlement_id.clone(),
+            intent_hash,
+        })
+        .collect())
 }
 
-fn grant_transparent_control_consents(network: &Network, settlements: &[DvpIsi]) -> Result<()> {
-    let authority = transparent_control_account_id(0);
-    for (offset, settlement) in settlements.iter().enumerate() {
-        let counterparty_ordinal = offset + 1;
-        let counterparty_key = transparent_control_keypair(counterparty_ordinal);
-        let counterparty = transparent_control_account_id(counterparty_ordinal);
-        let client = network.validators()[0]
-            .client_for(&counterparty, counterparty_key.private_key().clone());
-        let permission = transparent_control_permission(settlement, counterparty_ordinal);
-        let transaction = {
-            let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    [InstructionBox::from(Grant::account_permission(
-                        permission,
-                        authority.clone(),
-                    ))],
-                    bounded_nexus_fee(),
-                    Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .wrap_err("build integration-test transaction")?;
+fn grant_transparent_control_consents(
+    network: &Network,
+    workload: &MatchedBenchmarkWorkloadV1,
+    settlement: &SettleAtomic,
+) -> Result<()> {
+    let permissions = transparent_control_permissions(settlement)?;
+    ensure!(
+        permissions.len() == workload.payments.len(),
+        "control consent source inventory differs"
+    );
+    for (ordinal, payment) in workload.payments.iter().enumerate() {
+        let payer_key = workload.payer_key(ordinal)?;
+        let payer = payment.source.account();
+        let client = network.validators()[0].client_for(payer, payer_key.private_key().clone());
+        let permission = permissions
+            .iter()
+            .find(|permission| permission.debited_asset == payment.source)
+            .ok_or_else(|| eyre!("missing exact owner-issued consent"))?
+            .clone();
+        let account = client.account_client();
+        let transaction = account
+            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(Grant::account_permission(
+                    permission,
+                    ALICE_ID.clone(),
+                ))],
+                bounded_nexus_fee(),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+            .wrap_err("build complete-intent payer consent")?;
         client
             .submit_transaction_and_wait(&transaction)
-            .wrap_err_with(|| {
-                format!(
-                    "commit exact transparent-control consent for counterparty {counterparty_ordinal}"
-                )
-            })?;
+            .wrap_err_with(|| format!("commit matched payer consent {ordinal}"))?;
     }
     Ok(())
 }
 
-fn wait_for_transparent_control_consents(network: &Network, settlements: &[DvpIsi]) -> Result<()> {
+fn wait_for_transparent_control_consents(
+    network: &Network,
+    settlement: &SettleAtomic,
+) -> Result<()> {
+    let expected = transparent_control_permissions(settlement)?
+        .into_iter()
+        .map(Permission::from)
+        .collect::<Vec<_>>();
     let started = Instant::now();
-    let authority = transparent_control_account_id(0);
-    let mut last_observed = Vec::new();
     while started.elapsed() <= FINALITY_TIMEOUT {
-        last_observed.clear();
-        let mut all_present = true;
-        for (offset, settlement) in settlements.iter().enumerate() {
-            let counterparty_ordinal = offset + 1;
-            let counterparty = transparent_control_account_id(counterparty_ordinal);
-            let counterparty_key = transparent_control_keypair(counterparty_ordinal);
-            let expected: Permission =
-                transparent_control_permission(settlement, counterparty_ordinal).into();
-            for (peer_index, peer) in network.all_peers().enumerate() {
-                let client = peer.client_for(&counterparty, counterparty_key.private_key().clone());
-                match client
-                    .client()
-                    .query(FindPermissionsByAccountId::new(counterparty.clone()))
-                    .execute_all()
+        let mut complete = 0;
+        for peer in network.all_peers() {
+            // Consents were granted TO the independent carrier sponsor. Query
+            // that exact grantee on every validator, not each granting payer.
+            if let Ok(permissions) = peer
+                .client()
+                .client()
+                .query(FindPermissionsByAccountId::new(ALICE_ID.clone()))
+                .execute_all()
+            {
+                if expected
+                    .iter()
+                    .all(|permission| permissions.contains(permission))
                 {
-                    Ok(permissions) => {
-                        let present = permissions.iter().any(|permission| permission == &expected);
-                        all_present &= present;
-                        last_observed.push(format!(
-                            "peer#{peer_index}:counterparty{counterparty_ordinal}:present={present}"
-                        ));
-                    }
-                    Err(error) => {
-                        all_present = false;
-                        last_observed.push(format!(
-                            "peer#{peer_index}:counterparty{counterparty_ordinal}:error={error}"
-                        ));
-                    }
+                    complete += 1;
                 }
             }
         }
-        if all_present {
+        if complete == network.all_peers().count() {
             return Ok(());
         }
         thread::sleep(POLL_INTERVAL);
@@ -8231,26 +8300,30 @@ fn wait_for_transparent_control_consents(network: &Network, settlements: &[DvpIs
         BenchmarkDeadlineStageV1::TransparentConsents,
         FINALITY_TIMEOUT,
         started.elapsed(),
-    ).wrap_err(format!(
-        "transparent-control consents did not converge before measurement: authority={authority}; {last_observed:?}"
-    )))
+    )
+    .wrap_err("matched complete-intent consents did not converge on the sponsor"))
 }
 
 fn build_transparent_control_carrier(
     client: &Client,
-    settlements: &[DvpIsi],
+    settlement: &SettleAtomic,
 ) -> Result<SignedTransaction> {
-    {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                settlements.iter().cloned().map(InstructionBox::from),
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")
+    settlement.validate().map_err(|error| eyre!(error))?;
+    let account = client.account_client();
+    let transaction = account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            [InstructionBox::from(settlement.clone())],
+            bounded_nexus_fee(),
+            Metadata::default(),
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+        .wrap_err("build the complete matched SettleAtomic carrier")?;
+    ensure!(
+        transaction.authority() == &*ALICE_ID
+            && transaction.network_id() == Some(&settlement.network_id),
+        "matched carrier context differs from its independent sponsor or network"
+    );
+    Ok(transaction)
 }
 
 #[test]
@@ -8259,7 +8332,7 @@ fn release_client_context_preserves_carrier_authority_and_preparation_errors() -
     let network_id = iroha::data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xD7)),
     );
-    let key_pair = transparent_control_keypair(0);
+    let key_pair = (*ALICE_KEYPAIR).clone();
     let table = Table::from_iter([
         (
             "chain".to_owned(),
@@ -8301,29 +8374,10 @@ fn release_client_context_preserves_carrier_authority_and_preparation_errors() -
         .expect("valid local client configuration");
     config.transaction_add_nonce = false;
     let client = Client::new(config)?;
-    let authority = transparent_control_account_id(0);
-    let counterparty = transparent_control_account_id(1);
-    let settlement = DvpIsi::new(
-        "aps_local_signing_test".parse()?,
-        SettlementLeg::new(
-            transparent_control_asset_definition_id(0),
-            Quantity::from(11_u64),
-            authority.clone(),
-            counterparty.clone(),
-        ),
-        SettlementLeg::new(
-            transparent_control_asset_definition_id(1),
-            Quantity::from(22_u64),
-            counterparty,
-            authority.clone(),
-        ),
-        SettlementPlan::new(
-            SettlementExecutionOrder::DeliveryThenPayment,
-            SettlementAtomicity::AllOrNothing,
-        ),
-    );
-    let transaction =
-        build_transparent_control_carrier(&client, std::slice::from_ref(&settlement))?;
+    let authority = ALICE_ID.clone();
+    let settlement =
+        MatchedBenchmarkWorkloadV1::new(2, 7, 0, false)?.settlement(network_id, 1000)?;
+    let transaction = build_transparent_control_carrier(&client, &settlement)?;
     assert_eq!(transaction.network_id(), Some(&network_id));
     assert_eq!(transaction.authority(), &authority);
     assert_eq!(transaction.fee_payment_intent(), &bounded_nexus_fee());
@@ -8348,17 +8402,17 @@ fn release_client_context_preserves_carrier_authority_and_preparation_errors() -
     assert_eq!(&restored.torii_api_url, client.account_client().endpoint());
     restored.transaction_ttl = Duration::ZERO;
     let invalid = Client::new(restored)?;
-    assert!(build_transparent_control_carrier(&invalid, &[settlement]).is_err());
+    assert!(build_transparent_control_carrier(&invalid, &settlement).is_err());
     Ok(())
 }
 
 fn fresh_transparent_control_replay(
     client: &Client,
-    settlements: &[DvpIsi],
+    settlement: &SettleAtomic,
     original_entrypoint: HashOf<TransactionEntrypoint>,
 ) -> Result<SignedTransaction> {
     for _ in 0..100 {
-        let candidate = build_transparent_control_carrier(client, settlements)?;
+        let candidate = build_transparent_control_carrier(client, settlement)?;
         if candidate.hash_as_entrypoint() != original_entrypoint {
             return Ok(candidate);
         }
@@ -8372,48 +8426,29 @@ fn fresh_transparent_control_replay(
 fn run_real_process_transparent_control_benchmark(
     request: RealProcessBenchmarkRequestV1,
     request_sha: String,
+    owner: &benchmark_session::RetainedBenchmarkNetwork,
+    evidence_root: &Path,
+    measurement_boundary: &mut impl FnMut(&'static str) -> Result<()>,
 ) -> Result<RealProcessBenchmarkResultV1> {
     let shape = TopologyShape::new(request.participants);
     shape.validate()?;
-    let context = format!(
-        "atomic_private_settlement_transparent_control_n{}_s{}_r{}",
-        request.participants, request.seed, request.run
-    );
-    let builder = localnet_builder(shape)
-        .with_base_seed(format!(
-            "atomic-private-settlement-transparent-control-v1-n{}-seed-{}-run-{}",
-            request.participants, request.seed, request.run
-        ))
-        .with_consensus_message_control();
-    let started = sandbox::start_network_blocking_or_skip(builder, &context)?;
-    let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, &context)?
-    else {
-        return Err(eyre!("real-process release network was skipped"));
-    };
-    verify_controller_readiness(&network, &runtime)?;
-    let coordinator = CoordinatorProcessV1::start(&network.client())?;
-    let inventory =
-        collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
-    let pids = inventory.iter().map(|row| row.pid).collect::<Vec<_>>();
-    let authority_key = transparent_control_keypair(0);
-    let authority_id = transparent_control_account_id(0);
-    let authority =
-        network.validators()[0].client_for(&authority_id, authority_key.private_key().clone());
-    let settlements = transparent_control_dvps(&request)?;
-    ensure!(
-        settlements.len() == request.participants - 1,
-        "transparent-control DvP batch does not cover every counterparty"
-    );
-    grant_transparent_control_consents(&network, &settlements)?;
-    wait_for_transparent_control_consents(&network, &settlements)?;
-    let initial_balances = transparent_control_balance_expectations(request.participants, false)?;
-    wait_for_transparent_control_balances(
-        &network,
-        shape,
-        &initial_balances,
-        "transparent-control pre-state",
-    )?;
-    let final_balances = transparent_control_balance_expectations(request.participants, true)?;
+    let network: &Network = &owner.network;
+    let workload = MatchedBenchmarkWorkloadV1::from_request(&request)?;
+    let economic_vector_sha256 = workload.digest()?;
+    publish_matched_workload(&request, &request_sha, network, &workload, evidence_root)?;
+    let inventory = owner.inventory(&request.commit)?;
+    let authority = network.client();
+    // Both profiles use a retained session whose mandatory profile-activation
+    // notice completed before these per-attempt consent and observation checks.
+    let activated_height = owner.current_height()?;
+    let expiry = activated_height
+        .checked_add(1000)
+        .ok_or_else(|| eyre!("expiry overflow"))?;
+    let settlement = workload.settlement(network.network_id(), expiry)?;
+    grant_transparent_control_consents(&network, &workload, &settlement)?;
+    wait_for_transparent_control_consents(&network, &settlement)?;
+    let initial_balances = read_matched_control_prestate(&network, shape, &workload)?;
+    let final_balances = transparent_control_balance_expectations(&workload, &initial_balances)?;
     let atomicity_clients = network
         .all_peers()
         .map(NetworkPeer::client)
@@ -8428,13 +8463,12 @@ fn run_real_process_transparent_control_benchmark(
         final_balances.clone(),
     )?;
 
-    let process_before = sample_process_resources(&pids)?;
-    let sampler = ProcessResourceSampler::start(pids.clone(), process_before.rss_bytes)?;
-    let network_before = loopback_bytes()?;
+    // Setup/prefunding is excluded; the storage baseline precedes measurement-ready.
     let storage_before = network_storage_bytes(&network)?;
+    measurement_boundary("ready")?;
     let end_to_end_started = Instant::now();
     atomicity_observer.begin()?;
-    let transaction = build_transparent_control_carrier(&authority, &settlements)?;
+    let transaction = build_transparent_control_carrier(&authority, &settlement)?;
     let transaction_hash = transaction.hash();
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let mut source_id = [0_u8; Hash::LENGTH];
@@ -8445,12 +8479,24 @@ fn run_real_process_transparent_control_benchmark(
         .wrap_err("submit production transparent Native AMX carrier")?;
     let receipt = wait_for_identical_native_amx_receipt(&network, source_id)?;
     validate_transparent_native_receipt(&receipt, &transaction, request.participants)?;
+    let carrier_started = Instant::now();
     let carrier = wait_for_identical_canonical_carrier(&network, entrypoint_hash)?;
+    let business_receipt =
+        wait_for_matched_business_receipt(&network, &settlement, &carrier, carrier_started)?;
     ensure!(
         receipt.authority_context_height == carrier.height().get(),
         "Native AMX receipt authority context differs from its canonical carrier"
     );
+    // Match the private endpoint: the expected authenticated receipts agree
+    // on every peer. Finalized balances and observer completion remain
+    // mandatory acceptance checks outside the measurement window.
     let global_finality = elapsed_ms(finality_started);
+    let end_to_end = elapsed_ms(end_to_end_started);
+    measurement_boundary("finished")?;
+    // Storage is a sequential all-peer Kura file-size snapshot immediately
+    // after the timing handshake, before replay or correctness postchecks.
+    // It brackets boundary handshakes too; it is not isolated transaction bytes.
+    let storage_after = network_storage_bytes(&network)?;
     wait_for_transparent_control_balances(
         &network,
         shape,
@@ -8465,34 +8511,33 @@ fn run_real_process_transparent_control_benchmark(
         );
     }
     let _atomicity_observations = atomicity_observer.finish(3)?;
-    let end_to_end = elapsed_ms(end_to_end_started);
 
-    // Transparent DvP/PvP V1 is bilateral. The N-participant control is therefore one
-    // production carrier containing N-1 bilateral star DvPs. Native AMX deduplicates their
-    // routes into exactly N certified participant legs, and the enclosing StateTransaction
-    // commits or rejects the complete DvP batch atomically.
-    let replay = fresh_transparent_control_replay(&authority, &settlements, entrypoint_hash)?;
-    let replay_entrypoint = replay.hash_as_entrypoint();
+    // The same complete N-payment-plus-reimbursement business intent must
+    // not apply twice, even in a fresh transaction carrier.
+    let replay = fresh_transparent_control_replay(&authority, &settlement, entrypoint_hash)?;
     let _replay_error = authority
         .submit_transaction_and_wait(&replay)
-        .expect_err("a fresh carrier reusing committed settlement ids was accepted");
+        .expect_err("a fresh carrier reusing the committed settlement id was accepted");
+    wait_for_matched_replay_rejection(&network, &replay, &settlement)?;
     wait_for_transparent_control_balances(
         &network,
         shape,
         &final_balances,
         "transparent-control state after rejected replay",
     )?;
+    let replay_business_receipt =
+        wait_for_matched_business_receipt(&network, &settlement, &carrier, Instant::now())?;
+    ensure!(
+        replay_business_receipt == business_receipt,
+        "business receipt changed after rejected replay"
+    );
     ensure!(
         wait_for_identical_native_amx_receipt(&network, source_id)? == receipt
             && wait_for_identical_canonical_carrier(&network, entrypoint_hash)? == carrier,
         "replay changed the durable Native AMX receipt or canonical carrier"
     );
-    for peer in network.all_peers() {
-        ensure!(
-            canonical_carrier_header(&peer.client(), replay_entrypoint)?.is_none(),
-            "rejected settlement-id replay appeared in canonical history"
-        );
-    }
+    // Rejected results may be recorded in canonical history. Their exact
+    // typed failure was authenticated on every peer above; no applied replay is accepted.
 
     let signed_rs16_da_observations =
         verify_signed_rs16_finality(&network, carrier.height().get())?.observations;
@@ -8500,26 +8545,15 @@ fn run_real_process_transparent_control_benchmark(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
     );
-    let receipt_bytes =
-        u64::try_from(norito::encode_canonical(&receipt)?.len()).expect("receipt length fits u64");
-    let storage_after = network_storage_bytes(&network)?;
-    let network_after = loopback_bytes()?;
-    let process_after = sample_process_resources(&pids)?;
-    let peak_rss_bytes = sampler.finish(process_after.rss_bytes)?;
-    let cpu_seconds = process_after.cpu_seconds - process_before.cpu_seconds;
-    let network_bytes = network_after
-        .checked_sub(network_before)
-        .ok_or_else(|| eyre!("loopback counter moved backwards"))?;
+    let receipt_bytes = u64::try_from(
+        norito::encode_canonical(&receipt)?.len()
+            + norito::encode_canonical(&business_receipt)?.len(),
+    )?;
     let storage_growth_bytes = storage_after
         .checked_sub(storage_before)
         .ok_or_else(|| eyre!("Kura storage shrank during benchmark"))?;
     ensure!(
-        global_finality > 0.0
-            && end_to_end > 0.0
-            && cpu_seconds > 0.0
-            && peak_rss_bytes > 0
-            && network_bytes > 0
-            && receipt_bytes > 0,
+        global_finality > 0.0 && end_to_end > 0.0 && receipt_bytes > 0,
         "one or more required genuine transparent-control measurements is empty"
     );
     Ok(RealProcessBenchmarkResultV1 {
@@ -8535,14 +8569,13 @@ fn run_real_process_transparent_control_benchmark(
         authenticated_message_control: true,
         process_inventory: inventory,
         payload: RealProcessBenchmarkResultPayloadV1 {
+            economic_vector_sha256,
+            primary_payment_count: request.participants,
+            monetary_movement_count: request.participants + 1,
             stages_ms: norito::json!({
                 "global_finality": global_finality,
                 "end_to_end": end_to_end,
             }),
-            throughput_bundles_per_second: 1_000.0 / end_to_end,
-            cpu_seconds,
-            peak_rss_bytes,
-            network_bytes,
             // Transparent Native AMX carries no private proof bytes by construction.
             proof_bytes: 0,
             receipt_bytes,
@@ -8719,6 +8752,7 @@ fn run_real_process_leakage_campaign(
             let mut capsule_rng = rand::rngs::OsRng;
             if ordinal == 0 {
                 prepare_leg_with_private_data_and_rngs(
+                    AtomicPrivateSettlementProverOptionsV1::CPU,
                     ordinal,
                     leg,
                     &manifest,
@@ -8730,6 +8764,7 @@ fn run_real_process_leakage_campaign(
             } else {
                 let private_data = default_private_settlement_leg_data(ordinal);
                 prepare_leg_with_private_data_and_rngs(
+                    AtomicPrivateSettlementProverOptionsV1::CPU,
                     ordinal,
                     leg,
                     &manifest,
@@ -9280,46 +9315,26 @@ fn run_real_process_leakage_campaign(
 fn run_real_process_private_benchmark(
     request: RealProcessBenchmarkRequestV1,
     request_sha: String,
+    owner: &benchmark_session::RetainedBenchmarkNetwork,
+    evidence_root: &Path,
+    measurement_boundary: &mut impl FnMut(&'static str) -> Result<()>,
 ) -> Result<RealProcessBenchmarkResultV1> {
     let shape = TopologyShape::new(request.participants);
     shape.validate()?;
-    let context = format!(
-        "atomic_private_settlement_real_process_n{}_s{}_r{}",
-        request.participants, request.seed, request.run
-    );
-    let builder = localnet_builder(shape)
-        .with_base_seed(format!(
-            "atomic-private-settlement-real-process-v1-n{}-seed-{}-run-{}",
-            request.participants, request.seed, request.run
-        ))
-        .with_consensus_message_control();
-    let started = sandbox::start_network_blocking_or_skip(builder, &context)?;
-    let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, &context)?
-    else {
-        return Err(eyre!("real-process release network was skipped"));
-    };
-    verify_controller_readiness(&network, &runtime)?;
-    let coordinator = CoordinatorProcessV1::start(&network.client())?;
-    let inventory =
-        collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
-    let pids = inventory.iter().map(|row| row.pid).collect::<Vec<_>>();
+    let network: &Network = &owner.network;
+    let workload = MatchedBenchmarkWorkloadV1::from_request(&request)?;
+    let economic_vector_sha256 = workload.digest()?;
+    publish_matched_workload(&request, &request_sha, network, &workload, evidence_root)?;
+    let inventory = owner.inventory(&request.commit)?;
     let sponsor = network.client();
-    let activated_height = activate_ivm_private_note(&sponsor)?;
+    let activated_height = owner.current_height()?;
     let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(routes.len() == request.participants, "route count mismatch");
     let committees = committees_from_network(&network, shape, &routes)?;
-    let governed = governed_legs(&routes, activated_height, expiry_height)?;
+    let governed = workload.governance(&routes, activated_height, expiry_height)?;
 
-    let process_before = sample_process_resources(&pids)?;
-    let sampler = ProcessResourceSampler::start(pids.clone(), process_before.rss_bytes)?;
-    let network_before = loopback_bytes()?;
-    let storage_before = network_storage_bytes(&network)?;
-    let end_to_end_started = Instant::now();
-
-    let private_data = (0..routes.len())
-        .map(default_private_settlement_leg_data)
-        .collect::<Vec<_>>();
+    let private_data = workload.private_data()?;
     let authority_context_height = activate_governed_private_pools(
         &sponsor,
         network.network_id(),
@@ -9334,22 +9349,8 @@ fn run_real_process_private_benchmark(
         &governed,
     )?;
 
-    let proof_started = Instant::now();
-    let prepared = governed
-        .into_iter()
-        .zip(&committees)
-        .enumerate()
-        .map(|(ordinal, (leg, committee))| {
-            prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let proof_generation = elapsed_ms(proof_started);
-    let proof_bytes = prepared.iter().try_fold(0_u64, |total, leg| {
-        total
-            .checked_add(u64::try_from(leg.prepared.proof.len()).expect("proof length fits u64"))
-            .ok_or_else(|| eyre!("proof byte total overflow"))
-    })?;
-
+    // Disjoint private pools are prepared outside the shared carrier/proof window.
+    // Baseline convergence and observer startup are setup for both profiles.
     let atomicity_before = wait_for_converged_fault_state_snapshot(&network, "benchmark-before")?;
     let atomicity_observer = FaultContinuousObserverV1::start(
         &network,
@@ -9358,6 +9359,34 @@ fn run_real_process_private_benchmark(
         &manifest.bundle_id,
         true,
     )?;
+
+    // Setup/prefunding is excluded; the storage baseline precedes measurement-ready.
+    let storage_before = network_storage_bytes(&network)?;
+    measurement_boundary("ready")?;
+    let end_to_end_started = Instant::now();
+
+    let proof_started = Instant::now();
+    let prepared = governed
+        .into_iter()
+        .zip(&committees)
+        .enumerate()
+        .map(|(ordinal, (leg, committee))| {
+            prepare_leg_with_private_data(
+                AtomicPrivateSettlementProverOptionsV1::CPU,
+                ordinal,
+                leg,
+                &manifest,
+                committee.authority.digest()?,
+                &private_data[ordinal],
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let proof_generation = elapsed_ms(proof_started);
+    let proof_bytes = prepared.iter().try_fold(0_u64, |total, leg| {
+        total
+            .checked_add(u64::try_from(leg.prepared.proof.len()).expect("proof length fits u64"))
+            .ok_or_else(|| eyre!("proof byte total overflow"))
+    })?;
 
     let upload_started = Instant::now();
     let materials = provisional_materials(manifest, &prepared, &committees)?;
@@ -9533,20 +9562,12 @@ fn run_real_process_private_benchmark(
     let submit = PrivateSettlementBundleSubmitRequestV1 {
         transaction: transaction.clone(),
     };
-    let finality_started = Instant::now();
     let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+    let finality_started = Instant::now();
     sponsor
         .client()
         .submit_private_settlement_bundle_v1(&submit)?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
-    let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
-    ensure_exact_private_settlement_carrier_fee(
-        &fee_before_finalization,
-        &fee_after_finalization,
-        "benchmark financial finalization",
-    )?;
-    let global_finality = elapsed_ms(finality_started);
-    let end_to_end = elapsed_ms(end_to_end_started);
     ensure!(
         receipt.legs.len() == request.participants,
         "receipt participant count mismatch"
@@ -9564,6 +9585,23 @@ fn run_real_process_private_benchmark(
             "receipt omitted, duplicated, or reordered a private leg"
         );
     }
+    // Both profiles stop after the expected authenticated receipt agrees on
+    // every peer. Convergence, observer completion, replay and RS16 remain
+    // mandatory acceptance checks outside this matched receipt window.
+    let global_finality = elapsed_ms(finality_started);
+    let end_to_end = elapsed_ms(end_to_end_started);
+    measurement_boundary("finished")?;
+    // Storage is a sequential all-peer Kura file-size snapshot immediately
+    // after the timing handshake, before replay or correctness postchecks.
+    // It brackets boundary handshakes too; it is not isolated transaction bytes.
+    let storage_after = network_storage_bytes(&network)?;
+
+    let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_finalization,
+        &fee_after_finalization,
+        "benchmark financial finalization",
+    )?;
     ensure!(
         sponsor
             .client()
@@ -9594,14 +9632,6 @@ fn run_real_process_private_benchmark(
     );
     let receipt_bytes =
         u64::try_from(norito::encode_canonical(&receipt)?.len()).expect("receipt length fits u64");
-    let storage_after = network_storage_bytes(&network)?;
-    let network_after = loopback_bytes()?;
-    let process_after = sample_process_resources(&pids)?;
-    let peak_rss_bytes = sampler.finish(process_after.rss_bytes)?;
-    let cpu_seconds = process_after.cpu_seconds - process_before.cpu_seconds;
-    let network_bytes = network_after
-        .checked_sub(network_before)
-        .ok_or_else(|| eyre!("loopback counter moved backwards"))?;
     let storage_growth_bytes = storage_after
         .checked_sub(storage_before)
         .ok_or_else(|| eyre!("Kura storage shrank during benchmark"))?;
@@ -9615,9 +9645,6 @@ fn run_real_process_private_benchmark(
             && commit > 0.0
             && global_finality > 0.0
             && end_to_end > 0.0
-            && cpu_seconds > 0.0
-            && peak_rss_bytes > 0
-            && network_bytes > 0
             && proof_bytes > 0
             && receipt_bytes > 0,
         "one or more required genuine benchmark measurements is empty"
@@ -9635,6 +9662,9 @@ fn run_real_process_private_benchmark(
         authenticated_message_control: true,
         process_inventory: inventory,
         payload: RealProcessBenchmarkResultPayloadV1 {
+            economic_vector_sha256,
+            primary_payment_count: request.participants,
+            monetary_movement_count: request.participants + 1,
             stages_ms: norito::json!({
                 "proof_generation": proof_generation,
                 "restricted_upload_availability": restricted_upload_availability,
@@ -9646,10 +9676,6 @@ fn run_real_process_private_benchmark(
                 "global_finality": global_finality,
                 "end_to_end": end_to_end,
             }),
-            throughput_bundles_per_second: 1_000.0 / end_to_end,
-            cpu_seconds,
-            peak_rss_bytes,
-            network_bytes,
             proof_bytes,
             receipt_bytes,
             storage_growth_bytes,
@@ -9730,48 +9756,21 @@ fn complete_benchmark_worker(
 }
 
 #[test]
-#[ignore = "release-only: starts 12-68 real validators and runs private or transparent Native AMX"]
-fn atomic_private_settlement_real_process_benchmark_harness() -> Result<()> {
-    let started = Instant::now();
-    let (bound, request_sha) = read_bound_real_process_request()?;
-    let RealProcessBoundRequestV1::Benchmark(request) = bound else {
-        return Err(eyre!(
-            "benchmark entrypoint received a non-benchmark request"
-        ));
-    };
-    let identity = BenchmarkTerminalIdentityV1::from_request(&request, request_sha.clone());
-    let worker = thread::Builder::new()
-        .name("atomic-private-settlement-real-process-harness".to_owned())
+#[ignore = "release-only: one retained 12-68 validator network per benchmark session"]
+fn atomic_private_settlement_real_process_benchmark_session_harness() -> Result<()> {
+    thread::Builder::new()
+        .name("atomic-private-settlement-benchmark-session".to_owned())
         .stack_size(TEST_STACK_BYTES)
-        .spawn(move || {
-            let profile = request.payload.profile.clone();
-            match profile.as_str() {
-                "private" => run_real_process_private_benchmark(request, request_sha),
-                "transparent_control" => {
-                    run_real_process_transparent_control_benchmark(request, request_sha)
-                }
-                _ => Err(eyre!("unsupported real-process benchmark profile")),
-            }
-        });
-    let handle = match worker {
-        Ok(handle) => handle,
-        Err(error) => {
-            write_real_process_result(&identity.terminal(
-                benchmark_duration_ms(started.elapsed())?,
-                RealProcessBenchmarkOutcomeV1::Failed(BenchmarkFailureReasonV1::WorkerSpawnError),
-            )?)?;
-            return Err(
-                eyre::Report::new(error).wrap_err("spawn real-process release harness thread")
-            );
-        }
-    };
-    let completion = handle.join();
-    complete_benchmark_worker(
-        identity,
-        benchmark_duration_ms(started.elapsed())?,
-        completion,
-        write_real_process_result,
-    )
+        .spawn(benchmark_session::run_from_environment)
+        .wrap_err("spawn retained benchmark session owner")?
+        .join()
+        .map_err(|_| eyre!("retained session owner panicked before terminal publication"))?
+}
+
+#[test]
+#[ignore = "offline native verifier: requires exact owner-only vector inputs; starts no network"]
+fn atomic_private_settlement_verify_benchmark_economic_vector() -> Result<()> {
+    benchmark_session::verify_vector_from_environment()
 }
 
 #[test]
@@ -10540,7 +10539,10 @@ fn benchmark_terminal_request_fixture() -> RealProcessBenchmarkRequestV1 {
         minimum_signed_rs16_da_observations: 1,
         authenticated_message_control: true,
         seed: 1,
-        run: 0,
+        session_id: "1".repeat(64),
+        session_invocation_nonce: "2".repeat(64),
+        workload_manifest_sha256: "3".repeat(64),
+        session_attempt_index: 5,
         configuration: norito::json!({}),
         payload: RealProcessBenchmarkPayloadV1 {
             profile: "private".to_owned(),
@@ -10570,11 +10572,10 @@ fn benchmark_terminal_fixture() -> (BenchmarkTerminalIdentityV1, RealProcessBenc
         authenticated_message_control: true,
         process_inventory: Vec::new(),
         payload: RealProcessBenchmarkResultPayloadV1 {
+            economic_vector_sha256: "a".repeat(64),
+            primary_payment_count: 3,
+            monetary_movement_count: 4,
             stages_ms: norito::json!({"end_to_end_ms": 1.5}),
-            throughput_bundles_per_second: 2.0,
-            cpu_seconds: 0.5,
-            peak_rss_bytes: 1,
-            network_bytes: 2,
             proof_bytes: 3,
             receipt_bytes: 4,
             storage_growth_bytes: 5,
@@ -10951,45 +10952,90 @@ fn leakage_memo_framing_and_raw_source_scan_are_fail_closed() {
 
 #[test]
 fn transparent_control_identifiers_are_distinct_and_dataspace_scoped() {
-    let shape = TopologyShape::new(16);
-    shape.validate().unwrap();
-    let accounts = (0..shape.participants)
-        .map(transparent_control_account_id)
+    let workload = MatchedBenchmarkWorkloadV1::new(16, 7, 0, false).unwrap();
+    let accounts = workload
+        .payments
+        .iter()
+        .flat_map(|p| [p.source.account().clone(), p.recipient.clone()])
         .collect::<BTreeSet<_>>();
-    let definitions = (0..shape.participants)
-        .map(transparent_control_asset_definition_id)
+    let definitions = workload
+        .payments
+        .iter()
+        .map(|p| p.source.definition())
         .collect::<BTreeSet<_>>();
-    assert_eq!(accounts.len(), shape.participants);
-    assert_eq!(definitions.len(), shape.participants);
-    for ordinal in 0..shape.participants {
+    assert_eq!(accounts.len(), 32);
+    assert_eq!(definitions.len(), 16);
+    assert!(!accounts.contains(&*ALICE_ID));
+    for (ordinal, payment) in workload.payments.iter().enumerate() {
         assert_eq!(
-            transparent_control_asset_id(ordinal, ordinal).scope(),
-            &AssetBalanceScope::Dataspace(DataSpaceId::new(u64::try_from(ordinal + 1).unwrap()))
+            payment.source.scope(),
+            &AssetBalanceScope::Dataspace(DataSpaceId::new((ordinal + 1) as u64))
         );
     }
 }
 
 #[test]
 fn transparent_control_atomicity_classifier_rejects_mixed_vectors() {
-    let initial = transparent_control_balance_expectations(3, false).unwrap();
-    let finalized = transparent_control_balance_expectations(3, true).unwrap();
+    let workload = MatchedBenchmarkWorkloadV1::new(3, 7, 0, false).unwrap();
+    let initial = workload
+        .movements()
+        .unwrap()
+        .as_slice()
+        .iter()
+        .flat_map(|m| [m.source.clone(), m.destination()])
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|asset_id| TransparentControlBalanceExpectation {
+            asset_id,
+            amount: Quantity::from(1000_u64),
+        })
+        .collect::<Vec<_>>();
+    let finalized = transparent_control_balance_expectations(&workload, &initial).unwrap();
     let initial_values = initial
         .iter()
-        .map(|expectation| Quantity::from(expectation.amount))
+        .map(|row| row.amount.clone())
         .collect::<Vec<_>>();
-    let finalized_values = finalized
+    let final_values = finalized
         .iter()
-        .map(|expectation| Quantity::from(expectation.amount))
+        .map(|row| row.amount.clone())
         .collect::<Vec<_>>();
     assert_eq!(
         classify_transparent_control_values(&initial_values, &initial, &finalized).unwrap(),
         TransparentControlSnapshotState::Initial
     );
     assert_eq!(
-        classify_transparent_control_values(&finalized_values, &initial, &finalized).unwrap(),
+        classify_transparent_control_values(&final_values, &initial, &finalized).unwrap(),
         TransparentControlSnapshotState::Finalized
     );
-    let mut mixed = initial_values;
-    mixed[1] = finalized_values[1].clone();
-    assert!(classify_transparent_control_values(&mixed, &initial, &finalized).is_err());
+    for ordinal in 0..initial.len() {
+        let mut mixed = initial_values.clone();
+        mixed[ordinal] = final_values[ordinal].clone();
+        assert!(classify_transparent_control_values(&mixed, &initial, &finalized).is_err());
+    }
+}
+
+#[test]
+fn benchmark_native_payload_excludes_adapter_measurements() {
+    let (_, result) = benchmark_terminal_fixture();
+    let value = norito::json::to_value(&result.payload).unwrap();
+    let decoded: RealProcessBenchmarkResultPayloadV1 =
+        norito::json::from_value(value.clone()).unwrap();
+    assert_eq!(
+        canonical_harness_json_bytes(&decoded).unwrap(),
+        canonical_harness_json_bytes(&result.payload).unwrap()
+    );
+    for key in [
+        "throughput_bundles_per_second",
+        "cpu_seconds",
+        "peak_rss_bytes",
+        "network_bytes",
+    ] {
+        assert!(value.get(key).is_none());
+        let mut changed = value.clone();
+        changed
+            .as_object_mut()
+            .unwrap()
+            .insert(key.to_owned(), 1.into());
+        assert!(norito::json::from_value::<RealProcessBenchmarkResultPayloadV1>(changed).is_err());
+    }
 }

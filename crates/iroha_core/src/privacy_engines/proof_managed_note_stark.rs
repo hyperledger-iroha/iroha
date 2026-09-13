@@ -129,7 +129,7 @@ pub(crate) const PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 2
 /// Protocol adapters bind a separate relation descriptor. The canonical
 /// profile digest frames this shared descriptor first and the relation
 /// descriptor second, so neither layer can silently restate stale geometry.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriPoseidonX7Goldilocks6x64:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=160:commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-shape-big-endian-digest384";
+pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriPoseidonX7Goldilocks6x64:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=160:commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-public-profile-length-big-endian-digest384:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1";
 /// Derive the canonical digest of shared proof geometry plus one relation.
 pub(crate) fn proof_managed_note_stark_profile_digest_v1(
     domains: aggregate::AggregateStarkDomainsV1,
@@ -203,9 +203,13 @@ pub(crate) enum ProofManagedNoteStarkErrorV1 {
     /// A checked internal invariant failed.
     #[error("proof-managed note STARK internal invariant failed")]
     Internal,
+    /// Explicit commitment execution failed without backend substitution.
+    #[error("proof-managed note STARK digest execution failed")]
+    DigestExecution,
 }
 fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ProofManagedNoteStarkErrorV1 {
     match error {
+        TransparentStarkErrorV1::DigestExecution => ProofManagedNoteStarkErrorV1::DigestExecution,
         TransparentStarkErrorV1::RandomnessUnavailable => ProofManagedNoteStarkErrorV1::Randomness,
         TransparentStarkErrorV1::AllocationFailure => ProofManagedNoteStarkErrorV1::Resource,
         TransparentStarkErrorV1::NonCanonicalField | TransparentStarkErrorV1::MalformedProof => {
@@ -221,6 +225,9 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ProofManagedNoteS
 }
 fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManagedNoteStarkErrorV1 {
     match error {
+        aggregate::AggregateStarkErrorV1::DigestExecution => {
+            ProofManagedNoteStarkErrorV1::DigestExecution
+        }
         aggregate::AggregateStarkErrorV1::InvalidLayout => {
             ProofManagedNoteStarkErrorV1::InvalidProfile
         }
@@ -1544,13 +1551,9 @@ fn challenge_extension_vector_v1(
     label: &[u8],
     count: usize,
 ) -> Result<Vec<E>, ProofManagedNoteStarkErrorV1> {
-    (0..count)
-        .map(|_| {
-            transcript
-                .challenge_fp4(label)
-                .map_err(map_transparent_error_v1)
-        })
-        .collect()
+    transcript
+        .challenge_fp4_sequence(label, count)
+        .map_err(map_transparent_error_v1)
 }
 fn derive_constraint_alphas_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -1922,6 +1925,26 @@ fn mixed_deep_fri_base_v1(
         .try_reserve_exact(rows)
         .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
     result.0.resize(rows, E::ZERO);
+    // Distributivity permits one denominator multiplication per current/next sum.
+    // The DEEP openings and mix coefficients are public and invariant across rows.
+    // Keep them outside the row loop; base-field trace values need only mul_base.
+    let current_offset = deep_trace
+        .base_current
+        .iter()
+        .zip(&trace_mix.base_current)
+        .chain(deep_trace.aux_current.iter().zip(&trace_mix.aux_current))
+        .chain(deep_composition.iter().zip(&mix.composition))
+        .fold(E::ZERO, |sum, (value, coefficient)| {
+            sum.add(value.mul(*coefficient))
+        });
+    let next_offset = deep_trace
+        .base_next
+        .iter()
+        .zip(&trace_mix.base_next)
+        .chain(deep_trace.aux_next.iter().zip(&trace_mix.aux_next))
+        .fold(E::ZERO, |sum, (value, coefficient)| {
+            sum.add(value.mul(*coefficient))
+        });
     // Fallible denominator construction and inversion run one canonical batch at a time. Only the
     // now-infallible row arithmetic is parallel, preserving the earliest batch error while keeping
     // denominator and prefix scratch bounded to one 4,096-row batch.
@@ -1952,48 +1975,25 @@ fn mixed_deep_fri_base_v1(
                 let index = start + local_index;
                 let current_inverse = inverse_denominators[2 * local_index];
                 let next_inverse = inverse_denominators[2 * local_index + 1];
-                let mut quotient = E::ZERO;
+                let mut current = E::ZERO;
+                let mut next = E::ZERO;
                 for (column_index, column) in base_lde.iter().enumerate() {
-                    let value = E::from_base(column[index]);
-                    quotient = quotient.add(
-                        value
-                            .sub(deep_trace.base_current[column_index])
-                            .mul(current_inverse)
-                            .mul(trace_mix.base_current[column_index]),
-                    );
-                    quotient = quotient.add(
-                        value
-                            .sub(deep_trace.base_next[column_index])
-                            .mul(next_inverse)
-                            .mul(trace_mix.base_next[column_index]),
-                    );
+                    let value = column[index];
+                    current = current.add(trace_mix.base_current[column_index].mul_base(value));
+                    next = next.add(trace_mix.base_next[column_index].mul_base(value));
                 }
                 for (column_index, column) in aux_lde.iter().enumerate() {
-                    let value = E::from_base(column[index]);
-                    quotient = quotient.add(
-                        value
-                            .sub(deep_trace.aux_current[column_index])
-                            .mul(current_inverse)
-                            .mul(trace_mix.aux_current[column_index]),
-                    );
-                    quotient = quotient.add(
-                        value
-                            .sub(deep_trace.aux_next[column_index])
-                            .mul(next_inverse)
-                            .mul(trace_mix.aux_next[column_index]),
-                    );
+                    let value = column[index];
+                    current = current.add(trace_mix.aux_current[column_index].mul_base(value));
+                    next = next.add(trace_mix.aux_next[column_index].mul_base(value));
                 }
-                for (chunk_index, (chunk, coefficient)) in
-                    composition.iter().zip(&mix.composition).enumerate()
-                {
-                    quotient = quotient.add(
-                        chunk[index]
-                            .sub(deep_composition[chunk_index])
-                            .mul(current_inverse)
-                            .mul(*coefficient),
-                    );
+                for (chunk, coefficient) in composition.iter().zip(&mix.composition) {
+                    current = current.add(chunk[index].mul(*coefficient));
                 }
-                *quotient_slot = quotient;
+                *quotient_slot = current
+                    .sub(current_offset)
+                    .mul(current_inverse)
+                    .add(next.sub(next_offset).mul(next_inverse));
             });
         Ok(())
     })?;
@@ -2007,19 +2007,49 @@ fn absorb_grinding_nonce_v1(
         .absorb(NOTE_GRINDING_LABEL_V1, &[&nonce.to_be_bytes()])
         .map_err(map_transparent_error_v1)
 }
-/// Construct the sole canonical proof wire with injected masking entropy.
+/// Opaque proof construction output that has not passed independent verification.
+///
+/// Only the shared builder can create this value. Releasing its owned wire bytes
+/// consumes it and runs the complete verifier against the caller's public adapter.
+pub(crate) struct ProofManagedNoteCandidateV1 {
+    encoded: Vec<u8>,
+}
+impl core::fmt::Debug for ProofManagedNoteCandidateV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ProofManagedNoteCandidateV1")
+            .field("encoded_len", &self.encoded.len())
+            .finish_non_exhaustive()
+    }
+}
+impl ProofManagedNoteCandidateV1 {
+    /// Verify the candidate against independently reconstructed public inputs.
+    ///
+    /// No bytes are returned on failure. This is the sole owned-byte extraction
+    /// operation, with no unchecked conversion or verification skip mode.
+    pub(crate) fn verify_into_bytes_v1<A: ProofManagedNoteStarkAdapterV1>(
+        self,
+        adapter: &A,
+    ) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
+        verify_proof_managed_note_stark_v1(adapter, &self.encoded)?;
+        Ok(self.encoded)
+    }
+}
+/// Construct an opaque canonical proof candidate with injected masking entropy.
 ///
 /// The caller supplies exact native base columns; the adapter reconstructs all
 /// statement-derived fixed policy and deterministic auxiliary columns. The
-/// emitted proof is self-verified before it is returned.
+/// emitted candidate must pass independent verification before owned bytes can be extracted.
 pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     A: ProofManagedNoteStarkAdapterV1,
     R: TryRngCore,
 >(
+    commitment_digest_execution: fastpq_prover::DigestExecutionV1,
+    nonce_digest_execution: fastpq_prover::DigestExecutionV1,
     adapter: &A,
     base_columns: &[Vec<F>],
     rng: &mut R,
-) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
+) -> Result<ProofManagedNoteCandidateV1, ProofManagedNoteStarkErrorV1> {
     let prepared = prepare_note_profile_v1(adapter)?;
     canonical_columns_v1(base_columns, prepared.base_width, prepared.trace_size)?;
     let public_digest = adapter.public_input_digest_v1()?;
@@ -2029,6 +2059,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         masked_lde_columns_v1(base_columns, prepared.trace_log2, lde_log2, rng)?;
     let base_lde = ZeroizingBaseFieldMatrixV1::from(base_lde);
     let base_tree = aggregate::row_tree_v1(
+        commitment_digest_execution,
         prepared.protocol.domains.digest_context,
         prepared.protocol.domains.base_leaf,
         prepared.protocol.domains.base_node,
@@ -2086,6 +2117,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         masked_lde_columns_v1(&aux_columns, prepared.trace_log2, lde_log2, rng)?;
     let aux_lde = ZeroizingBaseFieldMatrixV1::from(aux_lde);
     let aux_tree = aggregate::row_tree_v1(
+        commitment_digest_execution,
         prepared.protocol.domains.digest_context,
         prepared.protocol.domains.aux_leaf,
         prepared.protocol.domains.aux_node,
@@ -2116,9 +2148,13 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     let mut composition_trees = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
     let mut composition_roots = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
     for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
-        let tree =
-            aggregate::composition_tree_v1(prepared.protocol.domains, lane, &compositions[lane])
-                .map_err(map_aggregate_error_v1)?;
+        let tree = aggregate::composition_tree_v1(
+            commitment_digest_execution,
+            prepared.protocol.domains,
+            lane,
+            &compositions[lane],
+        )
+        .map_err(map_aggregate_error_v1)?;
         composition_roots.push(tree.root());
         composition_trees.push(tree);
     }
@@ -2130,6 +2166,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     )
     .map_err(map_aggregate_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        commitment_digest_execution,
         prepared.protocol.parameters,
         prepared.protocol.domains,
         &prepared.layout,
@@ -2242,6 +2279,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
             .map_err(map_aggregate_error_v1)?;
         fri_lanes.push(
             aggregate::build_fri_lane_v1(
+                commitment_digest_execution,
                 prepared.protocol.parameters,
                 prepared.protocol.domains,
                 &prepared.layout,
@@ -2254,6 +2292,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
+        nonce_digest_execution,
         prepared.protocol.domains.digest_context,
         &grinding_state,
         PROOF_MANAGED_NOTE_GRINDING_BITS_V1,
@@ -2330,16 +2369,21 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
         &prepared.layout,
     )
     .map_err(map_aggregate_error_v1)?;
-    verify_proof_managed_note_stark_v1(adapter, &encoded)?;
-    Ok(encoded)
+    Ok(ProofManagedNoteCandidateV1 { encoded })
 }
 /// Construct a canonical proof with operating-system masking entropy.
 #[allow(dead_code)]
 pub(crate) fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV1>(
     adapter: &A,
     base_columns: &[Vec<F>],
-) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
-    prove_proof_managed_note_stark_v1_with_rng(adapter, base_columns, &mut rand::rngs::OsRng)
+) -> Result<ProofManagedNoteCandidateV1, ProofManagedNoteStarkErrorV1> {
+    prove_proof_managed_note_stark_v1_with_rng(
+        fastpq_prover::DigestExecutionV1::Cpu,
+        fastpq_prover::DigestExecutionV1::Cpu,
+        adapter,
+        base_columns,
+        &mut rand::rngs::OsRng,
+    )
 }
 struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     adapter: &'a A,
@@ -2745,6 +2789,7 @@ mod tests {
         corrupt_schedule: bool,
         execution: bool,
         reject_fixed_materialization: bool,
+        public_input_reads: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     }
     impl Default for MockAdapterV1 {
         fn default() -> Self {
@@ -2756,6 +2801,7 @@ mod tests {
                 corrupt_schedule: false,
                 execution: false,
                 reject_fixed_materialization: false,
+                public_input_reads: None,
             }
         }
     }
@@ -2781,6 +2827,9 @@ mod tests {
         fn public_input_digest_v1(
             &self,
         ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+            if let Some(reads) = &self.public_input_reads {
+                reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             Ok(self.public_digest)
         }
         fn trace_log2_v1(&self) -> u8 {
@@ -3343,8 +3392,16 @@ mod tests {
             let adapter = MockAdapterV1::default();
             let base = mock_base_columns_v1();
             let mut rng = StdRng::from_seed([0xA5; 32]);
-            let proof = prove_proof_managed_note_stark_v1_with_rng(&adapter, &base, &mut rng)
-                .expect("canonical mock proof");
+            let proof = prove_proof_managed_note_stark_v1_with_rng(
+                fastpq_prover::DigestExecutionV1::Cpu,
+                fastpq_prover::DigestExecutionV1::Cpu,
+                &adapter,
+                &base,
+                &mut rng,
+            )
+            .expect("canonical mock candidate")
+            .verify_into_bytes_v1(&adapter)
+            .expect("independently verified mock proof");
             (adapter, base, proof)
         })
     }
@@ -3361,9 +3418,55 @@ mod tests {
         }
     }
     #[test]
+    fn candidate_debug_exposes_length_without_encoded_bytes() {
+        let candidate = ProofManagedNoteCandidateV1 {
+            encoded: b"OPAQUE_PROOF_SENTINEL".to_vec(),
+        };
+        let debug = format!("{candidate:?}");
+        assert!(debug.contains("encoded_len: 21"));
+        assert!(!debug.contains("OPAQUE_PROOF_SENTINEL"));
+        assert!(!debug.contains("79, 80, 65, 81"));
+    }
+    #[test]
+    fn candidate_releases_bytes_only_after_one_complete_public_input_verification() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let (adapter, _, bytes) = proof_fixture_v1();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut public_adapter = adapter.clone();
+        public_adapter.public_input_reads = Some(reads.clone());
+        let candidate = ProofManagedNoteCandidateV1 {
+            encoded: bytes.clone(),
+        };
+        let verified = candidate
+            .verify_into_bytes_v1(&public_adapter)
+            .expect("valid candidate releases bytes");
+        assert_eq!(&verified, bytes);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+
+        let mut corrupted = bytes.clone();
+        corrupted[0] ^= 1;
+        assert!(
+            ProofManagedNoteCandidateV1 { encoded: corrupted }
+                .verify_into_bytes_v1(&public_adapter)
+                .is_err()
+        );
+        public_adapter.public_digest =
+            GoldilocksDigest384V1::new([0x25; 6]).expect("substituted public digest");
+        assert!(
+            ProofManagedNoteCandidateV1 {
+                encoded: bytes.clone()
+            }
+            .verify_into_bytes_v1(&public_adapter)
+            .is_err()
+        );
+    }
+    #[test]
     fn shared_geometry_descriptor_and_digest_match_every_driver_constant() {
         let expected = format!(
-            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho-upper-bound={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:codec=fixed-shape-big-endian-digest384",
+            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho-upper-bound={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:codec=fixed-public-profile-length-big-endian-digest384:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1",
             std::str::from_utf8(PROOF_MANAGED_NOTE_STARK_SUITE_V1).expect("ASCII suite"),
             NOTE_COPY_WIDTH_V1,
             NOTE_COPY_LANES_V1,
@@ -3483,6 +3586,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         ];
         let base_tree = aggregate::row_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.base_leaf,
             MOCK_DOMAINS_V1.base_node,
@@ -3492,6 +3596,7 @@ mod tests {
         )
         .expect("base tree");
         let aux_tree = aggregate::row_tree_v1(
+            fastpq_prover::DigestExecutionV1::Cpu,
             MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.aux_leaf,
             MOCK_DOMAINS_V1.aux_node,
@@ -3521,16 +3626,22 @@ mod tests {
         .expect("materialized DEEP proof");
         let mix = aggregate::AggregateDeepLaneMixV1 {
             trace_groups: vec![aggregate::AggregateDeepTraceGroupMixV1 {
-                base_current: vec![E::from_base(F(23)), E::from_base(F(29))],
-                base_next: vec![E::from_base(F(31)), E::from_base(F(37))],
-                aux_current: vec![E::from_base(F(41))],
-                aux_next: vec![E::from_base(F(43))],
+                base_current: vec![
+                    E::canonical([23, 71, 73, 79]).unwrap(),
+                    E::canonical([29, 83, 89, 97]).unwrap(),
+                ],
+                base_next: vec![
+                    E::canonical([31, 101, 103, 107]).unwrap(),
+                    E::canonical([37, 109, 113, 127]).unwrap(),
+                ],
+                aux_current: vec![E::canonical([41, 131, 137, 139]).unwrap()],
+                aux_next: vec![E::canonical([43, 149, 151, 157]).unwrap()],
             }],
             composition: vec![
-                E::from_base(F(47)),
-                E::from_base(F(53)),
-                E::from_base(F(59)),
-                E::from_base(F(61)),
+                E::canonical([47, 64, 78, 90]).unwrap(),
+                E::canonical([53, 70, 84, 96]).unwrap(),
+                E::canonical([59, 76, 90, 102]).unwrap(),
+                E::canonical([61, 78, 92, 104]).unwrap(),
             ],
         };
         aggregate::validate_deep_lane_mixes_v1(core::slice::from_ref(&mix), parameters, &layout)
@@ -3557,6 +3668,7 @@ mod tests {
         };
         let codeword = build_codeword(1);
         assert_eq!(codeword, build_codeword(4));
+        assert_eq!(codeword, build_codeword(8));
         let deep_trace = aggregate::canonical_deep_trace_groups_v1(&deep, parameters, &layout)
             .expect("canonical DEEP trace");
         let deep_composition = aggregate::canonical_fp4_fields_v1(
@@ -3568,7 +3680,7 @@ mod tests {
             .next_stride(layout.common_lde_log2())
             .expect("next stride");
         let lde_root = goldilocks_primitive_root_v1(layout.common_lde_log2()).expect("LDE root");
-        for index in [0, 1, 17, rows - 1] {
+        for index in 0..rows {
             let next = (index + stride) % rows;
             let opened = aggregate::AggregateOpenedTraceGroupV1 {
                 base_current: row_at_columns_v1(&materials[0].base_lde, index)
@@ -3981,9 +4093,20 @@ mod tests {
         let mut changed = mock_base_columns_v1();
         changed[0][5] = F::ONE;
         let mut rng = StdRng::from_seed([3; 32]);
-        assert!(prove_proof_managed_note_stark_v1_with_rng(&adapter, &changed, &mut rng,).is_err());
+        assert!(
+            prove_proof_managed_note_stark_v1_with_rng(
+                fastpq_prover::DigestExecutionV1::Cpu,
+                fastpq_prover::DigestExecutionV1::Cpu,
+                &adapter,
+                &changed,
+                &mut rng,
+            )
+            .is_err()
+        );
         assert!(matches!(
             prove_proof_managed_note_stark_v1_with_rng(
+                fastpq_prover::DigestExecutionV1::Cpu,
+                fastpq_prover::DigestExecutionV1::Cpu,
                 &adapter,
                 &mock_base_columns_v1(),
                 &mut MaxValueRng,

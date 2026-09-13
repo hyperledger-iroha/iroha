@@ -226,8 +226,7 @@ impl Drop for LifecycleDirectoryOperationGuard<'_> {
         #[cfg(not(any(
             target_os = "horizon",
             target_os = "solaris",
-            target_os = "vita",
-            target_os = "wasi"
+            target_os = "vita"
         )))]
         let _ = rustix::fs::flock(
             &self.directory.directory,
@@ -317,8 +316,7 @@ impl BoundLifecycleLedgerDirectory {
         #[cfg(not(any(
             target_os = "horizon",
             target_os = "solaris",
-            target_os = "vita",
-            target_os = "wasi"
+            target_os = "vita"
         )))]
         rustix::fs::flock(&self.directory, rustix::fs::FlockOperation::LockExclusive)
             .map_err(std::io::Error::from)
@@ -328,8 +326,7 @@ impl BoundLifecycleLedgerDirectory {
         #[cfg(any(
             target_os = "horizon",
             target_os = "solaris",
-            target_os = "vita",
-            target_os = "wasi"
+            target_os = "vita"
         ))]
         return Err(LifecycleLedgerError::Io(format!(
             "exclusive lifecycle storage locking is unsupported at {}",

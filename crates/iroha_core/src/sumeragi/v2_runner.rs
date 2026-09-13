@@ -1357,7 +1357,7 @@ fn schedule_local_proposal(
             .is_some_and(|parent_creation_time| {
                 state.time_trigger_clock_progress_required_fast(parent_creation_time)
             });
-        if !candidate_block_has_proposal_work(&block, time_trigger_clock_progress_required) {
+        if !candidate_block_has_proposal_work(&block, state, time_trigger_clock_progress_required) {
             return Err(V2RunnerError::EmptyProposalWork);
         }
         let lane_binding = if context.height == 1 {

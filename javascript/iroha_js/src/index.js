@@ -628,11 +628,10 @@ export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 
 import * as toriiNamespace from "./toriiClient.js";
 import * as noritoNamespace from "./public/norito.js";
-import { decodeAccountIdNoritoValue } from "./norito.js";
 import * as cryptoNamespace from "./public/crypto.js";
 
 export const Torii = toriiNamespace;
-export const Norito = Object.freeze({ ...noritoNamespace, decodeAccountIdNoritoValue });
+export const Norito = Object.freeze({ ...noritoNamespace });
 export const Crypto = Object.freeze({ ...cryptoNamespace });
 export {
   ConnectError,

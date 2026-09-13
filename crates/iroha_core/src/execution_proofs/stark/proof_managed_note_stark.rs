@@ -3,7 +3,7 @@
 //!
 //! This module owns proof-system mechanics and relation-neutral note chips: canonical byte range
 //! checks, a three-lane byte-copy permutation, masked trace LDEs, verifier-fixed preprocessing,
-//! quotient composition, wide Poseidon2 vector-row commitments, binary FRI, grinding, and the exact
+//! quotient composition, six-lane Goldilocks Poseidon-x7 vector-row commitments, binary FRI, grinding, and the exact
 //! aggregate proof codec. Protocol adapters retain their statement policy, ordered hash schedule,
 //! profile-only rows, public-input digest, and error mapping.
 //!
@@ -128,7 +128,7 @@ pub(crate) const PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 2
 /// Protocol adapters bind a separate relation descriptor. The canonical
 /// profile digest frames this shared descriptor first and the relation
 /// descriptor second, so neither layer can silently restate stale geometry.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriPoseidon2X7GoldilocksW16R8C8Output6:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon2-x7-goldilocks-w16-r8-c8-output6:transcript=poseidon2-x7-goldilocks-w16-r8-c8-output6:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=19:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=every-binary-fold:folds=lde-log2-minus-terminal-log2:max-folds=12:extension-field-lower-bound-bits=252:query-error-bits=160:commitment-error-bits-min=187:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-shape-big-endian-digest384";
+pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriPoseidonX7Goldilocks6x64:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-six-independent-lanes-6x64:transcript=poseidon-x7-goldilocks-six-independent-lanes-6x64:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=19:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=every-binary-fold:folds=lde-log2-minus-terminal-log2:max-folds=12:extension-field-lower-bound-bits=252:query-error-bits=160:commitment-error-bits-min=187:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-shape-big-endian-digest384";
 /// Derive the canonical digest of shared proof geometry plus one relation.
 pub(crate) fn proof_managed_note_stark_profile_digest_v1(
     domains: aggregate::AggregateStarkDomainsV1,
@@ -263,7 +263,7 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
 pub(crate) struct ProofManagedNoteStarkProtocolV1 {
     /// Exact aggregate proof dimensions and wire limits.
     pub(crate) parameters: aggregate::AggregateStarkParametersV1,
-    /// Complete wide Poseidon2 Merkle and transcript domains.
+    /// Complete six-lane Goldilocks Poseidon-x7 Merkle and transcript domains.
     pub(crate) domains: aggregate::AggregateStarkDomainsV1,
     /// Maximum algebraic degree across shared and profile constraints.
     pub(crate) maximum_constraint_degree: u8,
@@ -2372,26 +2372,11 @@ pub(crate) fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV
 struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     adapter: &'a A,
     prepared: &'a PreparedNoteProfileV1,
-    fixed_openings: FixedOpeningsV1<'a>,
+    fixed_openings: &'a std::collections::BTreeMap<usize, Vec<F>>,
     copy_challenges: NoteCopyChallengesV1,
     profile_challenges: &'a A::ProfileChallenges,
     alphas: &'a [Vec<E>],
     lde_root: F,
-}
-enum FixedOpeningsV1<'a> {
-    FullLde(&'a [Vec<F>]),
-    ExecutionQueries(&'a std::collections::BTreeMap<usize, Vec<F>>),
-}
-impl FixedOpeningsV1<'_> {
-    fn row(&self, index: usize) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-        match self {
-            Self::FullLde(columns) => row_at_columns_v1(columns, index),
-            Self::ExecutionQueries(rows) => rows
-                .get(&index)
-                .cloned()
-                .ok_or(ProofManagedNoteStarkErrorV1::InvalidProfile),
-        }
-    }
 }
 impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
     for NoteOpenedRowEvaluatorV1<'_, A>
@@ -2414,8 +2399,9 @@ impl<A: ProofManagedNoteStarkAdapterV1> AggregateOpenedRowEvaluatorV1
             .ok_or(aggregate::AggregateStarkErrorV1::ConstraintOpening)?;
         let fixed = self
             .fixed_openings
-            .row(query_index)
-            .map_err(|_| aggregate::AggregateStarkErrorV1::ConstraintOpening)?;
+            .get(&query_index)
+            .cloned()
+            .ok_or(aggregate::AggregateStarkErrorV1::ConstraintOpening)?;
         let residues = all_constraint_residues_v1(
             self.adapter,
             self.prepared,
@@ -2456,15 +2442,9 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
     adapter: &A,
     proof_bytes: &[u8],
 ) -> Result<(), ProofManagedNoteStarkErrorV1> {
-    // Execution profiles can have much larger public traces than privacy
-    // profiles. Reject malformed wire, transcript and Merkle paths before
-    // materializing any execution fixed-column or copy-permutation matrix.
-    let execution = adapter
-        .protocol_v1()
-        .domains
-        .digest_context
-        .is_execution_v1();
-    let prepared = prepare_note_profile_with_fixed_v1(adapter, !execution)?;
+    // Reject malformed wire, transcript and Merkle paths before materializing
+    // any execution fixed-column or copy-permutation matrix.
+    let prepared = prepare_note_profile_with_fixed_v1(adapter, false)?;
     let (proof, deep) = aggregate::decode_proof_with_deep_v1(
         proof_bytes,
         prepared.protocol.parameters,
@@ -2556,30 +2536,18 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
         &expected_indices,
     )
     .map_err(map_aggregate_error_v1)?;
-    let fixed_lde;
-    let execution_rows;
-    let fixed_openings = if execution {
-        execution_rows = execution_fixed::query_rows_v1(
-            prepare_fixed_columns_v1(adapter, prepared.trace_size, prepared.fixed_width)?,
-            prepared.trace_log2,
-            prepared.layout.common_lde_log2(),
-            &expected_indices,
-        )?;
-        FixedOpeningsV1::ExecutionQueries(&execution_rows)
-    } else {
-        fixed_lde = fixed_lde_columns_v1(
-            &prepared.fixed_columns,
-            prepared.trace_log2,
-            prepared.layout.common_lde_log2(),
-        )?;
-        FixedOpeningsV1::FullLde(&fixed_lde)
-    };
+    let execution_rows = execution_fixed::query_rows_v1(
+        prepare_fixed_columns_v1(adapter, prepared.trace_size, prepared.fixed_width)?,
+        prepared.trace_log2,
+        prepared.layout.common_lde_log2(),
+        &expected_indices,
+    )?;
     let lde_root = goldilocks_primitive_root_v1(prepared.layout.common_lde_log2())
         .map_err(map_transparent_error_v1)?;
     let mut evaluator = NoteOpenedRowEvaluatorV1 {
         adapter,
         prepared: &prepared,
-        fixed_openings,
+        fixed_openings: &execution_rows,
         copy_challenges,
         profile_challenges: &profile_challenges,
         alphas: &alphas,

@@ -330,6 +330,9 @@ fn generated_queries() -> Vec<Value> {
         "corridor".parse().expect("policy name"),
     )]));
     rows.push(record([query::settlement::FindFxCorridorPolicyRegistry]));
+    rows.push(record([query::settlement::FindSettlementReceiptById::new(
+        "business_receipt".parse().expect("settlement identifier"),
+    )]));
     rows.push(record([
         query::smart_contract::FindContractManifestByCodeHash::new(Hash::new(b"query contract")),
     ]));
@@ -697,12 +700,12 @@ fn generated_queries() -> Vec<Value> {
 #[test]
 fn generated_queries_preserve_captured_frames() {
     let rows = generated_queries();
-    assert_eq!(rows.len(), 127);
+    assert_eq!(rows.len(), 128);
     assert_eq!(
         rows.iter()
             .map(|row| row.get("cases").unwrap().as_array().unwrap().len())
             .sum::<usize>(),
-        171,
+        172,
     );
     let captured: Value = json::from_str(include_str!(
         "fixtures/query_generated_identity_frames.json"

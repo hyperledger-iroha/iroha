@@ -1,0 +1,86 @@
+{
+  "schema": "fastpq-benchmark-v1-synthetic-contract-fixtures",
+  "hardware_evidence": false,
+  "files": [
+    {
+      "path": "metal-cpu-digest384_trace_columns.json",
+      "sha256": "ccc00c70049d3dff4d439d41626bbd69f12348ee6c41c3787c90c8e8aade319c",
+      "expected": "accept"
+    },
+    {
+      "path": "metal-gpu-digest384_trace_columns.json",
+      "sha256": "07bcbc3e6d46375d120989022cf5848f9e6e1839cbd747b84273b6d9a50397f5",
+      "expected": "accept"
+    },
+    {
+      "path": "cuda-cpu-digest384_trace_columns.json",
+      "sha256": "cc9811abd9710fbd5708637864568eaaefdcba6169b1aeac3e6fa17fcc5128a0",
+      "expected": "accept"
+    },
+    {
+      "path": "cuda-gpu-digest384_trace_columns.json",
+      "sha256": "47b28a1ebee2a2d4d744baefaa1e01ae632ce4ffa72ae442b6f4b0d477c4afe7",
+      "expected": "accept"
+    },
+    {
+      "path": "metal-cpu-digest384_merkle_pairs.json",
+      "sha256": "06f4c8332002ecf3e70f54c668f72063ebaa68991887324db1e3a3b58a4fb15c",
+      "expected": "accept"
+    },
+    {
+      "path": "metal-gpu-digest384_merkle_pairs.json",
+      "sha256": "1bfa9055f47b18bf04f1cbb2baa46f3e1d1c10705f99510233d8ac28b8190ce3",
+      "expected": "accept"
+    },
+    {
+      "path": "cuda-cpu-digest384_merkle_pairs.json",
+      "sha256": "cdc0fc33e2f5dd3e0d05fc134a3ca2c7647ddb24751a34b7acafef681adc224d",
+      "expected": "accept"
+    },
+    {
+      "path": "cuda-gpu-digest384_merkle_pairs.json",
+      "sha256": "ca2da78ea9a82da6806da63d876a3e3231db9a2095b434c5548e6ea93286cbab",
+      "expected": "accept"
+    },
+    {
+      "path": "reject-missing-raw-report.json",
+      "sha256": "a41117eecaa591369c7f24c02dd2eb9cc98f6e1f0b42eaf4cf795b1064c3f4a8",
+      "expected": "reject"
+    },
+    {
+      "path": "reject-missing-flat-nullable-field.json",
+      "sha256": "6e4ec8c2a427bd18df6979bdc912ee81bc6b9c0256864a1c113ebf45fdb01e01",
+      "expected": "reject"
+    },
+    {
+      "path": "reject-missing-raw-producer-tag.json",
+      "sha256": "1ef6c1ff514ddb19d2abde5dd4bf19235b971150009600a3ac265144fd7be4af",
+      "expected": "reject"
+    },
+    {
+      "path": "reject-missing-raw-column-count.json",
+      "sha256": "623e3c0fefb1961abc57f471db131910353ddf4616223adc4516f02d392e9de6",
+      "expected": "reject"
+    },
+    {
+      "path": "reject-typed-column-count-alias.json",
+      "sha256": "ca3b03ea9e26acd98dd85119e5b2505c9d86c255c95b172af260484d4c2908dd",
+      "expected": "reject"
+    },
+    {
+      "path": "reject-partial-parity.json",
+      "sha256": "112ef42e145525df119d33b9d3750b6431aa4031c243a253512d9acd94923b34",
+      "expected": "reject"
+    },
+    {
+      "path": "reject-scalar-queue.json",
+      "sha256": "750fa012b102a39586ada8c7d71da809c8d53e49c0715577699f377231b5b188",
+      "expected": "reject"
+    },
+    {
+      "path": "reject-scalar-geometry.json",
+      "sha256": "b1298c69187bdbc977fe81512475b037564a8b129857c9b6f6facd7acc44860c",
+      "expected": "reject"
+    }
+  ]
+}

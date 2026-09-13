@@ -3,10 +3,7 @@
   "namespace": "compute",
   "routes": [
     {
-      "auth": {
-        "mode": "Either",
-        "value": null
-      },
+      "auth": "Either",
       "codecs": [
         {
           "codec": "NoritoJson",
@@ -53,17 +50,7 @@
     "allow_gpu_hints": false,
     "allow_tee_hints": false,
     "deny_nondeterministic_syscalls": true,
-    "mode": {
-      "mode": "IvmOnly",
-      "value": null
-    },
-    "randomness": {
-      "randomness": "SeededFromRequest",
-      "value": null
-    },
-    "storage": {
-      "storage": "ReadOnly",
-      "value": null
-    }
+    "randomness": "SeededFromRequest",
+    "storage": "ReadOnly"
   }
 }

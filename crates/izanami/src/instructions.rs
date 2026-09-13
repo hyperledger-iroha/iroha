@@ -3653,7 +3653,8 @@ mod tests {
             SettlementInstructionBox::Dvp(isi) => {
                 assert_eq!(isi.delivery_leg.from, plan.signer.id);
             }
-            SettlementInstructionBox::Pvp(_)
+            SettlementInstructionBox::Atomic(_)
+            | SettlementInstructionBox::Pvp(_)
             | SettlementInstructionBox::SetFxCorridorPolicy(_)
             | SettlementInstructionBox::FundFxCorridorEscrow(_)
             | SettlementInstructionBox::RefundFxCorridorEscrow(_)

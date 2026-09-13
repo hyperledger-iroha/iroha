@@ -1,21 +1,18 @@
 //! FASTPQ CUDA benchmark harness.
 //!
-//! Records CPU vs GPU timings for FFT, IFFT, LDE, Poseidon column hashing,
+//! Records CPU vs GPU timings for FFT, IFFT, LDE, complete six-lane trace/Merkle hashing,
 //! and BN254 helper kernels with deterministic inputs so CUDA captures can be
 //! wrapped alongside the Metal bundles already used in release evidence.
 
 #![allow(clippy::missing_panics_doc)]
 use clap::Parser;
-use fastpq_isi::find_by_name;
-#[cfg(feature = "fastpq-gpu")]
-use fastpq_isi::poseidon::RATE as POSEIDON_RATE;
+use fastpq_isi::{GoldilocksDigest384V1, find_by_name};
 use fastpq_prover::{
-    Bn254PoseidonBatchSlice, CudaBackendError, ExecutionMode, Planner,
+    Bn254PoseidonBatchSlice, CudaBackendError, Digest384BenchmarkDeviceV1,
+    Digest384BenchmarkInputV1, ExecutionMode, Planner, TraceColumn, benchmark_digest384_v1,
     clear_execution_mode_observer, fastpq_bn254_fft, fastpq_bn254_lde, set_execution_mode_observer,
     try_hash_bn254_poseidon_word_batches,
 };
-#[cfg(feature = "fastpq-gpu")]
-use fastpq_prover::{PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch};
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 use norito::{
@@ -35,10 +32,6 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const BN254_LIMBS: usize = 4;
-#[cfg(feature = "fastpq-gpu")]
-const POSEIDON_COLUMN_DOMAIN_PREFIX: &str = "fastpq:v1:trace:column:";
-#[cfg(feature = "fastpq-gpu")]
-const POSEIDON_TRACE_NODE_DOMAIN: &str = "fastpq:v1:trace:node";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationFilter {
     All,
@@ -60,8 +53,8 @@ enum BenchOperation {
     Fft,
     Ifft,
     Lde,
-    Poseidon,
-    PoseidonMerklePairs,
+    Digest384TraceColumns,
+    Digest384MerklePairs,
     Bn254PoseidonWords,
 }
 impl BenchOperation {
@@ -70,29 +63,25 @@ impl BenchOperation {
             Self::Fft => "fft",
             Self::Ifft => "ifft",
             Self::Lde => "lde",
-            Self::Poseidon => "poseidon_hash_columns",
-            Self::PoseidonMerklePairs => "poseidon_merkle_pairs",
+            Self::Digest384TraceColumns => "digest384_trace_columns",
+            Self::Digest384MerklePairs => "digest384_merkle_pairs",
             Self::Bn254PoseidonWords => "bn254_poseidon_words",
         }
     }
 }
 fn parse_operation_filter(raw: &str) -> Result<OperationFilter, String> {
-    if raw.eq_ignore_ascii_case("all") {
+    if raw == "all" {
         return Ok(OperationFilter::All);
     }
     match raw {
         "fft" => Ok(OperationFilter::Only(BenchOperation::Fft)),
         "ifft" => Ok(OperationFilter::Only(BenchOperation::Ifft)),
         "lde" => Ok(OperationFilter::Only(BenchOperation::Lde)),
-        "poseidon_hash_columns" | "poseidon-hash" | "poseidon" => {
-            Ok(OperationFilter::Only(BenchOperation::Poseidon))
+        "digest384_trace_columns" => {
+            Ok(OperationFilter::Only(BenchOperation::Digest384TraceColumns))
         }
-        "poseidon_merkle_pairs" | "poseidon-merkle-pairs" | "merkle-pairs" => {
-            Ok(OperationFilter::Only(BenchOperation::PoseidonMerklePairs))
-        }
-        "bn254_poseidon_words" | "bn254-poseidon-words" => {
-            Ok(OperationFilter::Only(BenchOperation::Bn254PoseidonWords))
-        }
+        "digest384_merkle_pairs" => Ok(OperationFilter::Only(BenchOperation::Digest384MerklePairs)),
+        "bn254_poseidon_words" => Ok(OperationFilter::Only(BenchOperation::Bn254PoseidonWords)),
         _ => Err(format!("unknown --operation '{raw}'")),
     }
 }
@@ -135,7 +124,7 @@ struct Config {
     /// Fail if the GPU backend is unavailable.
     #[arg(long)]
     require_gpu: bool,
-    /// Restrict the benchmark to a single operation (`fft`, `ifft`, `lde`, `poseidon_hash_columns`, `poseidon_merkle_pairs`, `bn254_poseidon_words`, or `all`).
+    /// Restrict the benchmark to a single operation (`fft`, `ifft`, `lde`, `digest384_trace_columns`, `digest384_merkle_pairs`, `bn254_poseidon_words`, or `all`).
     #[arg(long, default_value = "all", value_parser = parse_operation_filter)]
     operation: OperationFilter,
 }
@@ -165,6 +154,7 @@ struct RowUsageSnapshot {
 }
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchmarksBlock {
+    producer_schema: &'static str,
     rows: usize,
     padded_rows: usize,
     iterations: usize,
@@ -188,17 +178,21 @@ struct OperationEntry {
     output_len: usize,
     input_bytes: usize,
     output_bytes: usize,
-    estimated_gpu_transfer_bytes: usize,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    estimated_gpu_transfer_bytes: Option<usize>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    gpu_payload_buffer_bytes: Option<usize>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    digest384: Option<Value>,
     cpu_mean_ms: f64,
-    #[norito(skip_serializing_if = "Option::is_none")]
     gpu_mean_ms: Option<f64>,
-    #[norito(skip_serializing_if = "Option::is_none")]
     speedup_ratio: Option<f64>,
-    #[norito(skip_serializing_if = "Option::is_none")]
     speedup_delta_ms: Option<f64>,
 }
 #[derive(Debug, Clone, JsonSerialize)]
 struct ReportBlock {
+    producer_schema: &'static str,
+    column_count: usize,
     rows: usize,
     padded_rows: usize,
     iterations: usize,
@@ -228,7 +222,12 @@ struct ReportOperation {
     output_len: usize,
     input_bytes: usize,
     output_bytes: usize,
-    estimated_gpu_transfer_bytes: usize,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    estimated_gpu_transfer_bytes: Option<usize>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    gpu_payload_buffer_bytes: Option<usize>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    digest384: Option<Value>,
     cpu: ReportSummary,
     #[norito(skip_serializing_if = "Option::is_none")]
     gpu: Option<ReportSummary>,
@@ -247,6 +246,7 @@ struct Speedup {
 }
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchOutput {
+    producer_schema: &'static str,
     metadata: BenchMetadata,
     benchmarks: BenchmarksBlock,
     report: ReportBlock,
@@ -351,8 +351,10 @@ fn run() -> Result<(), String> {
         eprintln!("fastpq_cuda_bench: warning: {warning}");
     }
     let output = BenchOutput {
+        producer_schema: "cuda_nested",
         metadata,
         benchmarks: BenchmarksBlock {
+            producer_schema: "cuda_nested",
             rows: config.rows,
             padded_rows: padded,
             iterations: config.iterations,
@@ -375,6 +377,8 @@ fn run() -> Result<(), String> {
                     input_bytes: entry.input_bytes,
                     output_bytes: entry.output_bytes,
                     estimated_gpu_transfer_bytes: entry.estimated_gpu_transfer_bytes,
+                    gpu_payload_buffer_bytes: entry.gpu_payload_buffer_bytes,
+                    digest384: entry.digest384.clone(),
                     cpu_mean_ms: entry.cpu_mean_ms,
                     gpu_mean_ms: entry.gpu_mean_ms,
                     speedup_ratio: entry.speedup_ratio,
@@ -414,6 +418,8 @@ fn build_report(
             input_bytes: entry.input_bytes,
             output_bytes: entry.output_bytes,
             estimated_gpu_transfer_bytes: entry.estimated_gpu_transfer_bytes,
+            gpu_payload_buffer_bytes: entry.gpu_payload_buffer_bytes,
+            digest384: entry.digest384.clone(),
             cpu: ReportSummary {
                 mean_ms: entry.cpu_mean_ms,
             },
@@ -427,6 +433,8 @@ fn build_report(
         })
         .collect();
     ReportBlock {
+        producer_schema: "cuda_nested",
+        column_count: config.column_count,
         rows: config.rows,
         padded_rows: padded_rows(config.rows),
         iterations: config.iterations,
@@ -556,16 +564,17 @@ fn collect_operations(
             lde.gpu.as_ref(),
         ));
     }
-    #[cfg(feature = "fastpq-gpu")]
-    if config.operation.includes(BenchOperation::Poseidon) {
-        entries.push(collect_poseidon_entry(config, columns, probe));
-    }
-    #[cfg(feature = "fastpq-gpu")]
     if config
         .operation
-        .includes(BenchOperation::PoseidonMerklePairs)
+        .includes(BenchOperation::Digest384TraceColumns)
     {
-        entries.push(collect_poseidon_merkle_pairs_entry(config, probe));
+        entries.push(collect_digest384_columns_entry(config, columns, probe));
+    }
+    if config
+        .operation
+        .includes(BenchOperation::Digest384MerklePairs)
+    {
+        entries.push(collect_digest384_merkle_pairs_entry(config, probe));
     }
     if config
         .operation
@@ -575,88 +584,68 @@ fn collect_operations(
     }
     entries
 }
-#[cfg(feature = "fastpq-gpu")]
-fn collect_poseidon_entry(
+fn collect_digest384_columns_entry(
     config: &Config,
     columns: &ColumnSets,
     probe: &ExecutionProbe,
 ) -> OperationEntry {
-    let poseidon_domains = poseidon_domains(config.column_count);
-    let poseidon_domain_refs: Vec<&str> = poseidon_domains.iter().map(String::as_str).collect();
-    let poseidon_input_len = poseidon_input_len(columns.coeff.first().map_or(0, Vec::len));
-    let poseidon = OperationTimings {
-        cpu: measure_map(
-            &columns.coeff,
-            config.warmups,
-            config.iterations,
-            |coeffs| {
-                hash_columns_cpu_batch_inputs(&poseidon_domain_refs, coeffs)
-                    .expect("cpu poseidon batch shape")
-            },
-        ),
-        gpu: if probe.gpu_available {
-            measure_map_optional(
-                &columns.coeff,
-                config.warmups,
-                config.iterations,
-                |coeffs| {
-                    let batch = PoseidonColumnBatch::from_domains_and_columns(
-                        &poseidon_domain_refs,
-                        coeffs,
-                    )
-                    .expect("gpu poseidon batch shape");
-                    hash_columns_gpu_batch(&batch)
-                },
-            )
-        } else {
-            None
-        },
-    };
-    operation_entry(
-        BenchOperation::Poseidon.as_str(),
-        poseidon_input_len,
-        1,
-        config.column_count,
-        &poseidon.cpu,
-        poseidon.gpu.as_ref(),
+    let named: Vec<_> = columns
+        .coeff
+        .iter()
+        .enumerate()
+        .map(|(index, values)| TraceColumn {
+            name: format!("bench_{index:02}"),
+            values: values.clone(),
+        })
+        .collect();
+    collect_digest384_entry(
+        config,
+        probe,
+        Digest384BenchmarkInputV1::TraceColumns(&named),
     )
 }
-#[cfg(feature = "fastpq-gpu")]
-fn collect_poseidon_merkle_pairs_entry(config: &Config, probe: &ExecutionProbe) -> OperationEntry {
-    let pairs = generate_merkle_pairs(config.rows);
-    let pair_columns = merkle_pair_columns(&pairs);
-    let cpu = measure_map(
-        &pair_columns,
+fn collect_digest384_merkle_pairs_entry(config: &Config, probe: &ExecutionProbe) -> OperationEntry {
+    let children = generate_digest384_children(config.rows);
+    collect_digest384_entry(
+        config,
+        probe,
+        Digest384BenchmarkInputV1::MerklePairs(&children),
+    )
+}
+fn collect_digest384_entry(
+    config: &Config,
+    probe: &ExecutionProbe,
+    input: Digest384BenchmarkInputV1<'_>,
+) -> OperationEntry {
+    let report = benchmark_digest384_v1(
+        find_by_name(&config.parameter).expect("validated parameter set"),
+        input,
+        probe
+            .gpu_available
+            .then_some(Digest384BenchmarkDeviceV1::Cuda),
         config.warmups,
         config.iterations,
-        |columns| hash_merkle_pairs_cpu(columns).expect("cpu Merkle pair batch shape"),
-    );
-    let gpu = if probe.gpu_available {
-        measure_map_optional(
-            &pair_columns,
-            config.warmups,
-            config.iterations,
-            |columns| {
-                let pairs = columns_to_merkle_pairs(columns);
-                let batch = PoseidonColumnBatch::from_domain_and_pairs(
-                    POSEIDON_TRACE_NODE_DOMAIN.as_bytes(),
-                    &pairs,
-                )
-                .expect("gpu Merkle pair batch shape");
-                hash_columns_gpu_batch(&batch)
-            },
-        )
-    } else {
-        None
-    };
-    operation_entry(
-        BenchOperation::PoseidonMerklePairs.as_str(),
-        4,
-        1,
-        pairs.len(),
+    )
+    .expect("complete six-lane benchmark dispatch and every output lane must verify");
+    let cpu = Summary::from_samples(&report.cpu_samples_ms).expect("CPU samples");
+    let gpu = report
+        .gpu_samples_ms
+        .as_ref()
+        .map(|samples| Summary::from_samples(samples).expect("GPU samples"));
+    let mut entry = operation_entry(
+        report.operation,
+        report.input_len,
+        6,
+        report.columns,
         &cpu,
         gpu.as_ref(),
-    )
+    );
+    entry.input_bytes = report.input_bytes;
+    entry.output_bytes = report.output_bytes;
+    entry.estimated_gpu_transfer_bytes = None;
+    entry.gpu_payload_buffer_bytes = Some(report.gpu_payload_buffer_bytes);
+    entry.digest384 = Some(report.evidence);
+    entry
 }
 #[derive(Clone)]
 struct Bn254PoseidonWordBatch {
@@ -669,9 +658,12 @@ fn collect_bn254_poseidon_words_entry(config: &Config, probe: &ExecutionProbe) -
         hash_bn254_poseidon_words_cpu(&input.words, &input.slices)
     });
     let gpu = if probe.gpu_available {
-        measure_word_batch_optional(&batch, config.warmups, config.iterations, |input| {
-            try_hash_bn254_poseidon_word_batches(&input.words, &input.slices)
-        })
+        Some(measure_word_batch_required(
+            &batch,
+            config.warmups,
+            config.iterations,
+            |input| try_hash_bn254_poseidon_word_batches(&input.words, &input.slices),
+        ))
     } else {
         None
     };
@@ -683,23 +675,25 @@ fn collect_bn254_poseidon_words_entry(config: &Config, probe: &ExecutionProbe) -
         &cpu,
         gpu.as_ref(),
     );
-    entry.estimated_gpu_transfer_bytes = batch
-        .words
-        .len()
-        .saturating_mul(core::mem::size_of::<u64>())
-        .saturating_add(
-            batch
-                .slices
-                .len()
-                .saturating_mul(core::mem::size_of::<u32>() * 2),
-        )
-        .saturating_add(
-            batch
-                .slices
-                .len()
-                .saturating_mul(BN254_LIMBS)
-                .saturating_mul(core::mem::size_of::<u64>()),
-        );
+    entry.estimated_gpu_transfer_bytes = Some(
+        batch
+            .words
+            .len()
+            .saturating_mul(core::mem::size_of::<u64>())
+            .saturating_add(
+                batch
+                    .slices
+                    .len()
+                    .saturating_mul(core::mem::size_of::<u32>() * 2),
+            )
+            .saturating_add(
+                batch
+                    .slices
+                    .len()
+                    .saturating_mul(BN254_LIMBS)
+                    .saturating_mul(core::mem::size_of::<u64>()),
+            ),
+    );
     entry
 }
 fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
@@ -728,42 +722,22 @@ fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
     }
     Bn254PoseidonWordBatch { words, slices }
 }
-#[cfg(feature = "fastpq-gpu")]
-fn generate_merkle_pairs(pair_count: usize) -> Vec<[u64; 2]> {
-    (0..pair_count)
+fn generate_digest384_children(pair_count: usize) -> Vec<GoldilocksDigest384V1> {
+    let count = pair_count
+        .checked_mul(2)
+        .expect("digest child count fits usize");
+    (0..count)
         .map(|index| {
-            let left = (index as u64)
-                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-                .wrapping_add(0xd1b5_4a32_d192_ed03)
-                % GOLDILOCKS_MODULUS;
-            let right = (index as u64)
-                .wrapping_mul(0x94d0_49bb_1331_11eb)
-                .rotate_left(17)
-                .wrapping_add(0x2545_f491_4f6c_dd1d)
-                % GOLDILOCKS_MODULUS;
-            [left, right]
+            let words = std::array::from_fn(|lane| {
+                (index as u64)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .wrapping_add((lane as u64).wrapping_mul(0xd1b5_4a32_d192_ed03))
+                    .rotate_left(17)
+                    % GOLDILOCKS_MODULUS
+            });
+            GoldilocksDigest384V1::new(words).expect("synthetic canonical six-lane child")
         })
         .collect()
-}
-#[cfg(feature = "fastpq-gpu")]
-fn merkle_pair_columns(pairs: &[[u64; 2]]) -> Vec<Vec<u64>> {
-    pairs.iter().map(|pair| pair.to_vec()).collect()
-}
-#[cfg(feature = "fastpq-gpu")]
-fn columns_to_merkle_pairs(columns: &[Vec<u64>]) -> Vec<[u64; 2]> {
-    columns
-        .iter()
-        .map(|column| {
-            let left = *column.first().expect("Merkle pair column has left value");
-            let right = *column.get(1).expect("Merkle pair column has right value");
-            [left, right]
-        })
-        .collect()
-}
-#[cfg(feature = "fastpq-gpu")]
-fn hash_merkle_pairs_cpu(columns: &[Vec<u64>]) -> Option<Vec<u64>> {
-    let domains = vec![POSEIDON_TRACE_NODE_DOMAIN; columns.len()];
-    hash_columns_cpu_batch_inputs(&domains, columns)
 }
 fn hash_bn254_poseidon_words_cpu(
     words: &[u64],
@@ -942,7 +916,9 @@ fn operation_entry(
         output_len,
         input_bytes,
         output_bytes,
-        estimated_gpu_transfer_bytes: input_bytes.saturating_add(output_bytes),
+        estimated_gpu_transfer_bytes: Some(input_bytes.saturating_add(output_bytes)),
+        gpu_payload_buffer_bytes: None,
+        digest384: None,
         cpu_mean_ms: cpu.mean_ms(),
         gpu_mean_ms: gpu.map(Summary::mean_ms),
         speedup_ratio: speedup_ratio.map(round3),
@@ -985,24 +961,6 @@ fn bn254_metrics_value(entries: &[Bn254MetricEntry], backend_label: &str) -> Opt
         None
     } else {
         Some(Value::Object(map))
-    }
-}
-#[cfg(feature = "fastpq-gpu")]
-fn poseidon_domains(column_count: usize) -> Vec<String> {
-    (0..column_count)
-        .map(|index| format!("{POSEIDON_COLUMN_DOMAIN_PREFIX}bench{index}"))
-        .collect()
-}
-#[cfg(feature = "fastpq-gpu")]
-fn poseidon_input_len(column_len: usize) -> usize {
-    let payload_len = column_len
-        .checked_add(2)
-        .expect("poseidon payload length fits usize");
-    let remainder = payload_len % POSEIDON_RATE;
-    if remainder == 0 {
-        payload_len
-    } else {
-        payload_len + (POSEIDON_RATE - remainder)
     }
 }
 fn prepare_columns(planner: &Planner, padded: usize, column_count: usize) -> ColumnSets {
@@ -1216,50 +1174,29 @@ fn measure_word_batch<R>(
     }
     Summary::from_samples(&samples).expect("at least one iteration recorded")
 }
-#[cfg(any(feature = "fastpq-gpu", test))]
-fn measure_map_optional<T: Clone, R>(
-    template: &[Vec<T>],
-    warmups: usize,
-    iterations: usize,
-    mut op: impl FnMut(&[Vec<T>]) -> Option<R>,
-) -> Option<Summary> {
-    let mut samples = Vec::with_capacity(iterations);
-    for _ in 0..warmups {
-        let data = template.to_vec();
-        let result = op(&data)?;
-        black_box(result);
-    }
-    for _ in 0..iterations {
-        let data = template.to_vec();
-        let start = Instant::now();
-        let result = op(&data)?;
-        let elapsed = elapsed_ms(start.elapsed());
-        samples.push(elapsed);
-        black_box(result);
-    }
-    Some(Summary::from_samples(&samples).expect("at least one iteration recorded"))
-}
-fn measure_word_batch_optional<R>(
+fn measure_word_batch_required<R>(
     template: &Bn254PoseidonWordBatch,
     warmups: usize,
     iterations: usize,
     mut op: impl FnMut(&Bn254PoseidonWordBatch) -> Option<R>,
-) -> Option<Summary> {
+) -> Summary {
     let mut samples = Vec::with_capacity(iterations);
     for _ in 0..warmups {
         let data = template.clone();
-        let result = op(&data)?;
+        let result =
+            op(&data).expect("BN254 GPU word benchmark requires a successful device dispatch");
         black_box(result);
     }
     for _ in 0..iterations {
         let data = template.clone();
         let start = Instant::now();
-        let result = op(&data)?;
+        let result =
+            op(&data).expect("BN254 GPU word benchmark requires a successful device dispatch");
         let elapsed = elapsed_ms(start.elapsed());
         samples.push(elapsed);
         black_box(result);
     }
-    Some(Summary::from_samples(&samples).expect("at least one iteration recorded"))
+    Summary::from_samples(&samples).expect("at least one iteration recorded")
 }
 fn measure_flat_in_place_result<T: Clone, E>(
     template: &[T],
@@ -1321,6 +1258,7 @@ fn resolve_execution_metadata(require_gpu: bool) -> Result<ExecutionProbe, Strin
     let resolved_mode = requested.resolve();
     clear_execution_mode_observer();
     let backend_label = label.into_option().unwrap_or_else(|| "none".to_owned());
+    validate_cuda_execution_identity(resolved_mode, &backend_label)?;
     let gpu_available = matches!(resolved_mode, ExecutionMode::Gpu);
     if require_gpu && !gpu_available {
         return Err(format!(
@@ -1334,6 +1272,12 @@ fn resolve_execution_metadata(require_gpu: bool) -> Result<ExecutionProbe, Strin
         backend_label,
         gpu_available,
     })
+}
+fn validate_cuda_execution_identity(mode: ExecutionMode, backend: &str) -> Result<(), String> {
+    match (mode, backend) {
+        (ExecutionMode::Cpu, "none") | (ExecutionMode::Gpu, "cuda") => Ok(()),
+        _ => Err("cuda_nested requires explicit CPU/none or GPU/cuda execution".into()),
+    }
 }
 #[derive(Clone, Default)]
 struct ArcString(std::sync::Arc<std::sync::Mutex<Option<String>>>);
@@ -1526,8 +1470,7 @@ mod tests {
                 .collect::<Vec<_>>()
         });
         assert!(map_summary.mean >= 0.0);
-        let optional = measure_map_optional(&template, 0, 1, |_cols| None::<Vec<u64>>);
-        assert!(optional.is_none());
+        assert!(Summary::from_samples(&[]).is_none());
     }
     #[test]
     fn operation_entry_records_shapes_and_transfer_bytes() {
@@ -1538,7 +1481,7 @@ mod tests {
         assert_eq!(entry.output_len, 16);
         assert_eq!(entry.input_bytes, 128);
         assert_eq!(entry.output_bytes, 256);
-        assert_eq!(entry.estimated_gpu_transfer_bytes, 384);
+        assert_eq!(entry.estimated_gpu_transfer_bytes, Some(384));
         assert_eq!(entry.speedup_ratio, Some(2.0));
     }
     #[test]
@@ -1569,22 +1512,30 @@ mod tests {
             gpu_available: false,
         };
         let operations = collect_operations(&planner, &config, padded, eval_len, &columns, &probe);
-        #[cfg(feature = "fastpq-gpu")]
         assert_eq!(operations.len(), 6);
-        #[cfg(not(feature = "fastpq-gpu"))]
-        assert_eq!(operations.len(), 4);
         assert_eq!(operations[0].operation, "fft");
         assert_eq!(operations[1].operation, "ifft");
         assert_eq!(operations[2].operation, "lde");
         assert_eq!(operations[2].input_len, padded);
         assert_eq!(operations[2].output_len, eval_len);
-        #[cfg(feature = "fastpq-gpu")]
-        {
-            assert_eq!(operations[3].operation, "poseidon_hash_columns");
-            assert_eq!(operations[3].output_len, 1);
-            assert_eq!(operations[4].operation, "poseidon_merkle_pairs");
-            assert_eq!(operations[4].input_len, 4);
-            assert_eq!(operations[4].output_len, 1);
+        assert_eq!(operations[3].operation, "digest384_trace_columns");
+        assert_eq!(operations[3].columns, config.column_count);
+        assert_eq!(operations[3].input_len, padded);
+        assert_eq!(operations[3].output_len, 6);
+        assert_eq!(operations[4].operation, "digest384_merkle_pairs");
+        assert_eq!(operations[4].columns, config.rows);
+        assert_eq!(operations[4].input_len, 12);
+        assert_eq!(operations[4].output_len, 6);
+        for entry in &operations[3..5] {
+            let encoded = json::to_value(entry).expect("six-lane operation JSON");
+            assert!(encoded.get("estimated_gpu_transfer_bytes").is_none());
+            assert!(encoded.get("gpu_payload_buffer_bytes").is_some());
+            let evidence = encoded.get("digest384").expect("exact six-lane evidence");
+            assert_eq!(
+                evidence.get("digest_lanes").and_then(Value::as_u64),
+                Some(6)
+            );
+            assert!(evidence.get("gpu").is_none());
         }
         assert_eq!(
             operations.last().expect("bn254 words op").operation,
@@ -1633,52 +1584,97 @@ mod tests {
             assert!(message.contains("requires an actual GPU dispatch"));
         }
     }
-    #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn poseidon_domains_follow_trace_prefix() {
-        let domains = poseidon_domains(3);
-        assert_eq!(domains[0], "fastpq:v1:trace:column:bench0");
-        assert_eq!(domains[2], "fastpq:v1:trace:column:bench2");
+    fn cuda_producer_rejects_other_backends_and_unresolved_execution() {
+        validate_cuda_execution_identity(ExecutionMode::Cpu, "none").unwrap();
+        validate_cuda_execution_identity(ExecutionMode::Gpu, "cuda").unwrap();
+        for (mode, backend) in [
+            (ExecutionMode::Gpu, "metal"),
+            (ExecutionMode::Cpu, "cuda"),
+            (ExecutionMode::Auto, "none"),
+            (ExecutionMode::Gpu, "none"),
+        ] {
+            assert!(validate_cuda_execution_identity(mode, backend).is_err());
+        }
+        let cpu = Summary::from_samples(&[1.0]).unwrap();
+        let entry = operation_entry("fft", 4, 4, 2, &cpu, None);
+        let value = json::to_value(&entry).unwrap();
+        for field in ["gpu_mean_ms", "speedup_ratio", "speedup_delta_ms"] {
+            assert_eq!(value.get(field), Some(&Value::Null));
+        }
     }
-    #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn merkle_pair_generation_is_deterministic_and_cpu_hashable() {
-        let first = generate_merkle_pairs(4);
-        let second = generate_merkle_pairs(4);
-        assert_eq!(first, second);
-        let columns = merkle_pair_columns(&first);
-        assert_eq!(columns_to_merkle_pairs(&columns), first);
-        let hashes = hash_merkle_pairs_cpu(&columns).expect("Merkle pair columns hash");
-        assert_eq!(hashes.len(), first.len());
+    fn missing_bn254_gpu_dispatch_aborts_every_requested_capture() {
+        let input = generate_bn254_poseidon_word_batch(2);
+        for warmups in [0, 1] {
+            let calls = std::cell::Cell::new(0);
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                measure_word_batch_required(&input, warmups, 1, |_| {
+                    calls.set(calls.get() + 1);
+                    None::<()>
+                })
+            }));
+            assert!(failed.is_err());
+            assert_eq!(
+                calls.get(),
+                1,
+                "missing GPU work must not retry or emit CPU timings"
+            );
+        }
     }
     #[test]
-    fn operation_filter_parser_accepts_poseidon_aliases() {
+    fn six_lane_merkle_inputs_are_complete_deterministic_and_canonical() {
+        let first = generate_digest384_children(4);
+        assert_eq!(first, generate_digest384_children(4));
+        assert_eq!(first.len(), 8);
+        assert_ne!(first[0], first[1]);
+        let params = find_by_name("fastpq-state-transition-stark-v1").unwrap();
+        let report = benchmark_digest384_v1(
+            params,
+            Digest384BenchmarkInputV1::MerklePairs(&first),
+            None,
+            0,
+            1,
+        )
+        .unwrap();
+        assert_eq!(report.columns, 4);
+        assert_eq!(report.input_bytes, 384);
+        assert_eq!(report.output_bytes, 192);
+    }
+    #[test]
+    fn operation_filter_parser_accepts_only_final_digest384_ids() {
         assert_eq!(parse_operation_filter("all").unwrap(), OperationFilter::All);
-        assert_eq!(
-            parse_operation_filter("fft").unwrap(),
-            OperationFilter::Only(BenchOperation::Fft)
-        );
-        assert_eq!(
-            parse_operation_filter("poseidon").unwrap(),
-            OperationFilter::Only(BenchOperation::Poseidon)
-        );
-        assert_eq!(
-            parse_operation_filter("poseidon-hash").unwrap(),
-            OperationFilter::Only(BenchOperation::Poseidon)
-        );
-        assert_eq!(
-            parse_operation_filter("poseidon_merkle_pairs").unwrap(),
-            OperationFilter::Only(BenchOperation::PoseidonMerklePairs)
-        );
-        assert_eq!(
-            parse_operation_filter("merkle-pairs").unwrap(),
-            OperationFilter::Only(BenchOperation::PoseidonMerklePairs)
-        );
-        assert_eq!(
-            parse_operation_filter("bn254_poseidon_words").unwrap(),
-            OperationFilter::Only(BenchOperation::Bn254PoseidonWords)
-        );
-        assert!(parse_operation_filter("bogus").is_err());
+        for (id, operation) in [
+            ("fft", BenchOperation::Fft),
+            (
+                "digest384_trace_columns",
+                BenchOperation::Digest384TraceColumns,
+            ),
+            (
+                "digest384_merkle_pairs",
+                BenchOperation::Digest384MerklePairs,
+            ),
+            ("bn254_poseidon_words", BenchOperation::Bn254PoseidonWords),
+        ] {
+            assert_eq!(
+                parse_operation_filter(id).unwrap(),
+                OperationFilter::Only(operation)
+            );
+        }
+        for retired in [
+            "poseidon",
+            "poseidon-hash",
+            "poseidon_hash_columns",
+            "poseidon_merkle_pairs",
+            "poseidon-merkle-pairs",
+            "merkle-pairs",
+            "bn254-poseidon-words",
+            "ALL",
+            " all",
+            "bogus",
+        ] {
+            assert!(parse_operation_filter(retired).is_err(), "{retired}");
+        }
     }
     #[test]
     fn collect_operations_honors_single_operation_filter() {
@@ -1836,6 +1832,7 @@ mod tests {
             norito::json!("bn254 fft gpu timing skipped: cudaError_t(1)")
         );
         let benchmarks = BenchmarksBlock {
+            producer_schema: "cuda_nested",
             rows: config.rows,
             padded_rows: padded_rows(config.rows),
             iterations: config.iterations,
@@ -1852,6 +1849,10 @@ mod tests {
         let benchmarks_value: Value =
             json::from_slice(&json::to_vec_pretty(&benchmarks).expect("serialize benchmarks"))
                 .expect("parse benchmarks");
+        assert_eq!(
+            benchmarks_value["producer_schema"],
+            norito::json!("cuda_nested")
+        );
         assert_eq!(benchmarks_value["operation_filter"], norito::json!("lde"));
         assert_eq!(
             benchmarks_value["bn254_metrics"]["acceleration.bn254_fft_ms"]["cpu"],
