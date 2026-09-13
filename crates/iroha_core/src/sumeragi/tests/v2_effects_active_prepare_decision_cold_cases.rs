@@ -922,6 +922,12 @@ fn recover_stale_prepare_decision_crash_fixture(
         let request_before = launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
             executor.recovered_decision_fetch_owner_for_test()
         });
+        let completion_before = planner_io.recovered_decision_fetch_completions_for_test();
+        assert_eq!(completion_before.len(), 1);
+        assert_eq!(
+            Some(completion_before[0].0),
+            request_before.map(|(key, _)| key)
+        );
         launched.fail_decision_fetch_store_publication_for_test(directory.path());
         launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
             assert!(executor.recovered_bodies.is_empty());
@@ -933,8 +939,17 @@ fn recover_stale_prepare_decision_crash_fixture(
             );
         });
         assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_before);
+        assert_eq!(
+            planner_io.recovered_decision_fetch_completions_for_test(),
+            completion_before,
+            "failed publication must retain the exact callback identity and response hash"
+        );
         let failed = planner_io.lifecycle_validate_io_snapshot();
-        assert_eq!(failed.physical_admissions(), 1);
+        assert_eq!(
+            failed.physical_admissions(),
+            0,
+            "activation releases the command slot while its dedicated completion remains owned"
+        );
         assert_eq!(failed.command_depth(), 0);
         assert_eq!(failed.completion_pending(), 0, "Validate has not begun");
         assert_eq!(
