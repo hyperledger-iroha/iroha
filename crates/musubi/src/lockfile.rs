@@ -1,8 +1,8 @@
 //! Consumer-owned Musubi V1 exact lock graphs.
 //!
-//! The lock records only stable registry identities and immutable commitments.
+//! The lock explicitly distinguishes local manifest graphs from finalized registry commitments.
 //! It deliberately contains no cache paths, provider URLs, source plans,
-//! timestamps, credentials, or bearer material.
+//! timestamps, credentials, or bearer material. Local graphs carry no deployment identity.
 use crate::{
     atomic_io::{AtomicWriteError, AtomicWriteRoot},
     local_file::read_bounded_single_link_regular_file_v1,
@@ -55,6 +55,8 @@ pub const MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1: usize = 512;
 const ROOT_KEYS: &[&str] = &[
     "schema",
     "version",
+    "context",
+    "graph-digest",
     "network-id",
     "finalized-height",
     "finalized-block-hash",
@@ -62,6 +64,22 @@ const ROOT_KEYS: &[&str] = &[
     "root",
     "node",
 ];
+/// Authority under which a consumer dependency graph was resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LockContextV1 {
+    /// Local manifests fully determine the graph; no deployment identity is claimed.
+    Local {
+        /// Domain-separated commitment to the effective local manifest graph.
+        graph_digest: [u8; 32],
+    },
+    /// Immutable registry commitments resolved against one exact deployment.
+    Registry {
+        /// Exact genesis-derived deployment identity.
+        network_id: NetworkId,
+        /// Finalized resolver snapshot that selected the immutable graph.
+        snapshot: MusubiRegistrySnapshotV1,
+    },
+}
 const ROOT_ENTRY_KEYS: &[&str] = &["package", "dependency"];
 const NODE_KEYS: &[&str] = &[
     "home-dataspace",
@@ -111,10 +129,8 @@ pub struct LockfileV1 {
     pub schema: String,
     /// Fixed schema version.
     pub version: u8,
-    /// Exact genesis-derived deployment identity.
-    pub network_id: NetworkId,
-    /// Finalized universal resolver snapshot used when this graph last changed.
-    pub snapshot: MusubiRegistrySnapshotV1,
+    /// Explicit local-manifest or finalized-registry authority.
+    pub context: LockContextV1,
     /// Sorted selected workspace and recursively reachable local path roots.
     pub roots: Vec<LockedRootV1>,
     /// Sorted exact immutable registry nodes. Parallel package versions are allowed.
@@ -123,8 +139,7 @@ pub struct LockfileV1 {
 impl LockfileV1 {
     /// Construct, canonicalize, and validate a first-release lock.
     pub fn new(
-        network_id: NetworkId,
-        snapshot: MusubiRegistrySnapshotV1,
+        context: LockContextV1,
         roots: Vec<LockedRootV1>,
         nodes: Vec<MusubiVerificationNodeV1>,
     ) -> Result<Self, LockfileError> {
@@ -132,14 +147,25 @@ impl LockfileV1 {
         let mut lock = Self {
             schema: LOCK_SCHEMA.to_owned(),
             version: LOCK_VERSION,
-            network_id,
-            snapshot,
+            context,
             roots,
             nodes,
         };
         lock.canonicalize();
         lock.validate()?;
         Ok(lock)
+    }
+    /// Return the exact registry authority, rejecting a local-only graph.
+    pub fn registry_context(&self) -> Result<(NetworkId, MusubiRegistrySnapshotV1), LockfileError> {
+        match self.context {
+            LockContextV1::Registry {
+                network_id,
+                snapshot,
+            } => Ok((network_id, snapshot)),
+            LockContextV1::Local { .. } => Err(LockfileError::invalid(
+                "local manifest graph has no authenticated registry context",
+            )),
+        }
     }
     /// Sort every set-like collection without erasing duplicates.
     pub fn canonicalize(&mut self) {
@@ -159,14 +185,31 @@ impl LockfileV1 {
         if self.schema != LOCK_SCHEMA || self.version != LOCK_VERSION {
             return Err(LockfileError::Legacy);
         }
-        if self.network_id.as_bytes()[31] & 1 != 1 {
-            return Err(LockfileError::invalid(
-                "network id must be an exact marked genesis identity",
-            ));
+        match self.context {
+            LockContextV1::Local { graph_digest } => {
+                if graph_digest == [0; 32]
+                    || !self.nodes.is_empty()
+                    || self.roots.iter().any(|root| !root.dependencies.is_empty())
+                {
+                    return Err(LockfileError::invalid(
+                        "local context requires a nonzero graph digest and no registry nodes or edges",
+                    ));
+                }
+            }
+            LockContextV1::Registry {
+                network_id,
+                snapshot,
+            } => {
+                if network_id.as_bytes()[31] & 1 != 1 {
+                    return Err(LockfileError::invalid(
+                        "network id must be an exact marked genesis identity",
+                    ));
+                }
+                snapshot
+                    .validate()
+                    .map_err(|error| LockfileError::invalid(error.reason()))?;
+            }
         }
-        self.snapshot
-            .validate()
-            .map_err(|error| LockfileError::invalid(error.reason()))?;
         if self.roots.is_empty() {
             return Err(LockfileError::invalid(
                 "lock graph must contain at least one selected workspace root",
@@ -218,13 +261,45 @@ impl LockfileV1 {
             return Err(LockfileError::Legacy);
         }
         reject_unknown(&table, ROOT_KEYS, "lock document")?;
-        let network_id = required_string(&table, "network-id")?
-            .parse::<NetworkId>()
-            .map_err(|error| LockfileError::invalid(error.to_string()))?;
-        let snapshot = MusubiRegistrySnapshotV1 {
-            finalized_height: parse_u64_string(&table, "finalized-height")?,
-            finalized_block_hash: parse_digest(required_string(&table, "finalized-block-hash")?)?,
-            index_revision: parse_u64_string(&table, "index-revision")?,
+        let context = match required_string(&table, "context")? {
+            "local" => {
+                for key in [
+                    "network-id",
+                    "finalized-height",
+                    "finalized-block-hash",
+                    "index-revision",
+                ] {
+                    if table.contains_key(key) {
+                        return Err(LockfileError::invalid(
+                            "local context cannot carry registry authority",
+                        ));
+                    }
+                }
+                LockContextV1::Local {
+                    graph_digest: parse_digest(required_string(&table, "graph-digest")?)?,
+                }
+            }
+            "registry" => {
+                if table.contains_key("graph-digest") {
+                    return Err(LockfileError::invalid(
+                        "registry context cannot carry a local graph digest",
+                    ));
+                }
+                LockContextV1::Registry {
+                    network_id: required_string(&table, "network-id")?
+                        .parse::<NetworkId>()
+                        .map_err(|error| LockfileError::invalid(error.to_string()))?,
+                    snapshot: MusubiRegistrySnapshotV1 {
+                        finalized_height: parse_u64_string(&table, "finalized-height")?,
+                        finalized_block_hash: parse_digest(required_string(
+                            &table,
+                            "finalized-block-hash",
+                        )?)?,
+                        index_revision: parse_u64_string(&table, "index-revision")?,
+                    },
+                }
+            }
+            _ => return Err(LockfileError::invalid("context must be local or registry")),
         };
         let root_values = parse_table_array(&table, "root")?;
         let node_values = parse_table_array(&table, "node")?;
@@ -237,7 +312,7 @@ impl LockfileV1 {
             .iter()
             .map(parse_node)
             .collect::<Result<Vec<_>, _>>()?;
-        Self::new(network_id, snapshot, roots, nodes)
+        Self::new(context, roots, nodes)
     }
     /// Load and strictly parse a lock document.
     ///
@@ -266,30 +341,43 @@ impl LockfileV1 {
         let mut output = BoundedLockDocumentV1::new();
         writeln!(output, "schema = {}", quote(LOCK_SCHEMA)).expect("write to string");
         writeln!(output, "version = {LOCK_VERSION}").expect("write to string");
-        writeln!(
-            output,
-            "network-id = {}",
-            quote(&self.network_id.to_string())
-        )
-        .expect("write to string");
-        writeln!(
-            output,
-            "finalized-height = {}",
-            quote(&self.snapshot.finalized_height.to_string())
-        )
-        .expect("write to string");
-        writeln!(
-            output,
-            "finalized-block-hash = {}",
-            quote(&hex_digest(self.snapshot.finalized_block_hash))
-        )
-        .expect("write to string");
-        writeln!(
-            output,
-            "index-revision = {}",
-            quote(&self.snapshot.index_revision.to_string())
-        )
-        .expect("write to string");
+        match self.context {
+            LockContextV1::Local { graph_digest } => {
+                writeln!(output, "context = \"local\"").expect("write to string");
+                writeln!(
+                    output,
+                    "graph-digest = {}",
+                    quote(&hex_digest(graph_digest))
+                )
+                .expect("write to string");
+            }
+            LockContextV1::Registry {
+                network_id,
+                snapshot,
+            } => {
+                writeln!(output, "context = \"registry\"").expect("write to string");
+                writeln!(output, "network-id = {}", quote(&network_id.to_string()))
+                    .expect("write to string");
+                writeln!(
+                    output,
+                    "finalized-height = {}",
+                    quote(&snapshot.finalized_height.to_string())
+                )
+                .expect("write to string");
+                writeln!(
+                    output,
+                    "finalized-block-hash = {}",
+                    quote(&hex_digest(snapshot.finalized_block_hash))
+                )
+                .expect("write to string");
+                writeln!(
+                    output,
+                    "index-revision = {}",
+                    quote(&snapshot.index_revision.to_string())
+                )
+                .expect("write to string");
+            }
+        }
         for root in &self.roots {
             if output.is_exhausted() {
                 break;
@@ -335,6 +423,7 @@ impl LockfileV1 {
         published_root: MusubiReleaseIdV1,
     ) -> Result<MusubiVerificationLockV1, LockfileError> {
         self.validate()?;
+        self.registry_context()?;
         let root = self
             .roots
             .binary_search_by(|candidate| candidate.package.cmp(workspace_root))
@@ -1069,11 +1158,13 @@ mod tests {
             MusubiDependencyKindV1::Development,
         );
         LockfileV1::new(
-            network_id(),
-            MusubiRegistrySnapshotV1 {
-                finalized_height: 17,
-                finalized_block_hash: [8; 32],
-                index_revision: 3,
+            LockContextV1::Registry {
+                network_id: network_id(),
+                snapshot: MusubiRegistrySnapshotV1 {
+                    finalized_height: 17,
+                    finalized_block_hash: [8; 32],
+                    index_revision: 3,
+                },
             },
             vec![LockedRootV1 {
                 package: "test/app".parse().expect("root package"),
@@ -1104,6 +1195,81 @@ mod tests {
         ] {
             assert!(!first.contains(forbidden));
         }
+    }
+    #[test]
+    fn local_context_roundtrips_without_claiming_registry_authority() {
+        let local = LockfileV1::new(
+            LockContextV1::Local {
+                graph_digest: [9; 32],
+            },
+            vec![LockedRootV1 {
+                package: "test/app".parse().expect("selector"),
+                dependencies: vec![],
+            }],
+            vec![],
+        )
+        .expect("local lock");
+        let document = local.render().expect("render local lock");
+        assert!(document.contains("context = \"local\""));
+        for field in [
+            "network-id",
+            "finalized-height",
+            "finalized-block-hash",
+            "index-revision",
+        ] {
+            assert!(!document.contains(field));
+        }
+        assert_eq!(
+            LockfileV1::parse(&document).expect("parse local lock"),
+            local
+        );
+        assert!(local.registry_context().is_err());
+        assert!(
+            local
+                .verification_lock(
+                    &"test/app".parse().expect("selector"),
+                    MusubiReleaseIdV1::new(package(9, "app"), "1.0.0".parse().expect("version"))
+                )
+                .is_err()
+        );
+    }
+    #[test]
+    fn local_and_registry_context_fields_are_mutually_exclusive() {
+        let registry = lock().render().expect("registry document");
+        assert!(LockfileV1::parse(&registry.replace("context = \"registry\"\n", "")).is_err());
+        assert!(
+            LockfileV1::parse(&registry.replace("context = \"registry\"", "context = \"local\""))
+                .is_err()
+        );
+        assert!(
+            LockfileV1::parse(&registry.replace(
+                "context = \"registry\"",
+                &format!(
+                    "context = \"registry\"\ngraph-digest = \"{}\"",
+                    "09".repeat(32)
+                )
+            ))
+            .is_err()
+        );
+        let mut invalid = lock();
+        invalid.context = LockContextV1::Local {
+            graph_digest: [9; 32],
+        };
+        assert!(
+            invalid.validate().is_err(),
+            "local locks cannot retain registry evidence"
+        );
+        invalid.nodes.clear();
+        for root in &mut invalid.roots {
+            root.dependencies.clear();
+        }
+        invalid.context = LockContextV1::Local {
+            graph_digest: [0; 32],
+        };
+        assert!(
+            invalid.validate().is_err(),
+            "zero graph digest is not a local graph"
+        );
     }
     #[test]
     fn render_rejects_mutated_noncanonical_or_oversized_fields_without_repair() {

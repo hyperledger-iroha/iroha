@@ -95,7 +95,7 @@ fn provider_world(provider: Option<[u8; 32]>) -> World {
     let mut world = World::with([], [Account::new(owner.clone()).build(&owner)], []);
     if let Some(provider) = provider {
         world
-            .provider_owners
+            .provider_owners_mut_for_testing()
             .insert(ProviderId::new(provider), owner);
     }
     world

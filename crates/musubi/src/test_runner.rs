@@ -8,11 +8,12 @@ use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     compiler::validate_exact_registry_interfaces_v1,
     compiler_identity::{local_package, registry_release},
-    graph::collect_local_members,
+    graph::{collect_local_members, resolve_workspace_local},
     local_file::read_bounded_single_link_regular_file_v1,
-    lockfile::{LockedRootV1, LockfileV1},
+    lockfile::{LockContextV1, LockedRootV1, LockfileV1},
     manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
     package::{is_excluded_directory, is_sensitive_component},
+    resolver::ResolveModeV1,
     workspace::{DependencyKind, EffectiveDependency, Workspace, WorkspaceMember},
 };
 #[cfg(all(test, unix))]
@@ -25,7 +26,8 @@ use ivm::{
     SyscallPolicy,
     koto_test_driver::{
         KotoTestModuleGraphV1, KotoTestRunReportV1, KotoTestRunRequestV1,
-        discover_declared_test_names_source_v1, run_tests_structured_source_with_modules_v1,
+        declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
+        run_tests_structured_source_set_with_modules_v1,
     },
     kotodama::{
         compiler::{CompilerMode, CompilerOptions},
@@ -167,6 +169,19 @@ impl AuthenticatedTestRegistryV1 for MusubiCache {
             .and_then(|cached| cached_source_package(node, cached))
     }
 }
+impl AuthenticatedTestRegistryV1 for Option<&MusubiCache> {
+    fn load(
+        &self,
+        node: &MusubiVerificationNodeV1,
+    ) -> Result<SourcePackageUnit, WorkspaceTestErrorV1> {
+        self.ok_or_else(|| {
+            WorkspaceTestErrorV1::Cache(
+                "registry test inputs require an authenticated cache".to_owned(),
+            )
+        })?
+        .load(node)
+    }
+}
 /// Run tests for exactly `selected` workspace roots after authenticating their lock graph.
 ///
 /// Development dependencies are considered only on explicitly selected roots; registry nodes are
@@ -179,14 +194,14 @@ impl AuthenticatedTestRegistryV1 for MusubiCache {
 /// the cache, workspace, lock, options, or declared test sources. On Unix, returns a categorized
 /// authentication, graph, compilation, or execution failure.
 pub fn execute_workspace_tests_v1(
-    cache: &MusubiCache,
+    cache: Option<&MusubiCache>,
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
     lock: &LockfileV1,
     options: &WorkspaceTestOptionsV1,
 ) -> Result<WorkspaceTestReportV1, WorkspaceTestErrorV1> {
     ensure_test_runner_platform_supported_v1()?;
-    execute_workspace_tests_with_source(cache, workspace, selected, lock, options)
+    execute_workspace_tests_with_source(&cache, workspace, selected, lock, options)
 }
 fn ensure_test_runner_platform_supported_v1() -> Result<(), WorkspaceTestErrorV1> {
     if cfg!(unix) {
@@ -212,6 +227,20 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
     lock.validate()
         .map_err(|error| WorkspaceTestErrorV1::Lock(error.to_string()))?;
     let selected = canonical_selected(selected)?;
+    if matches!(lock.context, LockContextV1::Local { .. }) {
+        let resolved = resolve_workspace_local(
+            workspace,
+            &selected,
+            Some(lock.clone()),
+            ResolveModeV1::Locked,
+        )
+        .map_err(|error| WorkspaceTestErrorV1::Lock(error.to_string()))?;
+        if resolved.is_none() {
+            return Err(WorkspaceTestErrorV1::Lock(
+                "local test graph now requires registry dependencies".to_owned(),
+            ));
+        }
+    }
     let members = workspace
         .select_members(false, &selected, &[])
         .map_err(|error| WorkspaceTestErrorV1::Workspace(error.to_string()))?;
@@ -293,11 +322,29 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
             imports: test_root_imports(member, root, &local_identities)?,
             packages: packages.clone(),
         };
+        let mut contract_sources = BTreeMap::new();
+        let mut source_budget = DeclaredTestSourceBudgetV1::default();
         for target in &member.manifest.tests {
             for source in declared_test_sources(member, &target.path.to_path_buf())? {
+                consume_test_entry_budget(&mut source_budget)?;
+                source_budget.source_bytes = source_budget
+                    .source_bytes
+                    .saturating_add(source.unit.source.len() as u64);
+                if source_budget.source_bytes > MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1 {
+                    return Err(WorkspaceTestErrorV1::Target(
+                        "selected test source set exceeds the source-byte budget".to_owned(),
+                    ));
+                }
+                let contract = declared_contract_for_test_source(
+                    member,
+                    &source.unit,
+                    &mut contract_sources,
+                    &mut source_budget,
+                )?;
                 if let Some(filter) = options.filter.as_deref() {
-                    let names = discover_declared_test_names_source_v1(&source.unit)
-                        .map_err(WorkspaceTestErrorV1::Runner)?;
+                    let names =
+                        discover_declared_test_names_source_set_v1(&source.unit, contract.as_ref())
+                            .map_err(WorkspaceTestErrorV1::Runner)?;
                     let matches = names.iter().any(|name| {
                         if options.exact {
                             name == filter
@@ -317,9 +364,10 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
                 request.jobs = options.jobs;
                 request.seed = options.seed;
                 request.zk_enabled = options.zk_enabled;
-                let report = run_tests_structured_source_with_modules_v1(
+                let report = run_tests_structured_source_set_with_modules_v1(
                     &request,
                     &source.unit,
+                    contract.as_ref(),
                     &module_graph,
                 )
                 .map_err(|error| WorkspaceTestErrorV1::Runner(error.to_string()))?;
@@ -410,6 +458,9 @@ fn validate_declared_edges(
         .values()
         .chain(member.dev_dependencies.values().filter(|_| include_dev))
     {
+        if dependency.local_manifest.is_some() {
+            continue;
+        }
         let Some((package, requirement)) = registry_requirement(dependency)? else {
             continue;
         };
@@ -776,6 +827,50 @@ struct DeclaredTestSourceV1 {
 struct DeclaredTestSourceBudgetV1 {
     entries: usize,
     source_bytes: u64,
+}
+fn declared_contract_for_test_source(
+    member: &WorkspaceMember,
+    source: &SourceModuleUnit,
+    contracts: &mut BTreeMap<String, SourceModuleUnit>,
+    budget: &mut DeclaredTestSourceBudgetV1,
+) -> Result<Option<SourceModuleUnit>, WorkspaceTestErrorV1> {
+    let Some(target) =
+        declared_test_target_source_v1(source).map_err(WorkspaceTestErrorV1::Target)?
+    else {
+        return Ok(None);
+    };
+    if !member.manifest.contracts.iter().any(|contract| {
+        let declared = contract.path.as_str();
+        declared == target || declared == "." || target.starts_with(&format!("{declared}/"))
+    }) {
+        return Err(WorkspaceTestErrorV1::Target(format!(
+            "test source `{}` targets `{target}`, which is not a manifest-declared contract",
+            source.source_name
+        )));
+    }
+    if let Some(contract) = contracts.get(&target) {
+        return Ok(Some(contract.clone()));
+    }
+    let relative = Path::new(&target);
+    if relative
+        .extension()
+        .and_then(|extension| extension.to_str())
+        != Some("ko")
+    {
+        return Err(WorkspaceTestErrorV1::Target(
+            "standalone test target must be a `.ko` contract source".to_owned(),
+        ));
+    }
+    validate_test_ancestors(&member.package_root, relative)?;
+    consume_test_entry_budget(budget)?;
+    let contract = read_declared_test_source(
+        &member.package_root,
+        &member.package_root.join(relative),
+        target.clone(),
+        budget,
+    )?;
+    contracts.insert(target, contract.unit.clone());
+    Ok(Some(contract.unit))
 }
 fn declared_test_sources(
     member: &WorkspaceMember,
@@ -1262,13 +1357,16 @@ path = "tests/unit.ko"
     }
     fn lock(roots: Vec<LockedRootV1>, nodes: Vec<MusubiVerificationNodeV1>) -> LockfileV1 {
         LockfileV1::new(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                .parse()
-                .expect("network id"),
-            MusubiRegistrySnapshotV1 {
-                finalized_height: 7,
-                finalized_block_hash: [8; 32],
-                index_revision: 3,
+            LockContextV1::Registry {
+                network_id:
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                        .parse()
+                        .expect("network id"),
+                snapshot: MusubiRegistrySnapshotV1 {
+                    finalized_height: 7,
+                    finalized_block_hash: [8; 32],
+                    index_revision: 3,
+                },
             },
             roots,
             nodes,
@@ -1337,6 +1435,143 @@ path = "tests/unit.ko"
         )
         .expect("typed package fixture");
         MusubiContentDigestV1::new(*validated.interface_fingerprint.as_ref())
+    }
+    fn standalone_fixture(test_source: &str) -> (tempfile::TempDir, Workspace) {
+        let (temporary, _) = declared_source_fixture(test_source);
+        let manifest = format!(
+            "{}\n[[contract]]\nname = \"app\"\npath = \"contracts/app.ko\"\n",
+            package_manifest("app", "")
+        );
+        write(&temporary.path().join("Musubi.toml"), &manifest);
+        write(
+            &temporary.path().join("contracts/app.ko"),
+            "seiyaku App { fn reward() -> int { return 7; } view fn current() -> int { return reward(); } }",
+        );
+        let workspace =
+            load_workspace(&temporary.path().join("Musubi.toml")).expect("standalone workspace");
+        (temporary, workspace)
+    }
+    #[test]
+    fn local_standalone_suite_runs_without_registry_cache_or_ambient_tests() {
+        let (temporary, workspace) = standalone_fixture(
+            r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn reward_is_seven() { test::assert(reward() == 7); } }"#,
+        );
+        write(
+            &temporary.path().join("tests/ambient.ko"),
+            "this undeclared source must never be parsed",
+        );
+        let selected = vec!["test/app".parse().expect("selector")];
+        let lock = resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock)
+            .expect("local resolver")
+            .expect("local graph")
+            .lockfile;
+        let report = execute_workspace_tests_v1(
+            None,
+            &workspace,
+            &selected,
+            &lock,
+            &WorkspaceTestOptionsV1::new(753),
+        )
+        .expect("native standalone suite without cache");
+        assert_eq!(report.passed(), 1);
+        assert_eq!(report.targets[0].source, "tests/unit.ko");
+        let mut options = WorkspaceTestOptionsV1::new(753);
+        options.filter = Some("reward_is_seven".to_owned());
+        options.exact = true;
+        assert_eq!(
+            execute_workspace_tests_v1(None, &workspace, &selected, &lock, &options)
+                .expect("filter standalone tests")
+                .passed(),
+            1
+        );
+        write(
+            &temporary.path().join("tests/unit.ko"),
+            r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn wrong_import() { test::assert(missing::value() == 7); } }"#,
+        );
+        assert!(
+            matches!(execute_workspace_tests_v1(None, &workspace, &selected, &lock, &WorkspaceTestOptionsV1::new(753)), Err(WorkspaceTestErrorV1::Runner(reason)) if reason.contains("missing"))
+        );
+    }
+    #[test]
+    fn standalone_contract_is_read_once_and_reused_as_immutable_source() {
+        let (temporary, workspace) = standalone_fixture(
+            r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn check() { test::assert(reward() == 7); } }"#,
+        );
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let test = declared_test_sources(member, Path::new("tests/unit.ko"))
+            .expect("test source")
+            .remove(0);
+        let mut sources = BTreeMap::new();
+        let mut budget = DeclaredTestSourceBudgetV1::default();
+        let first =
+            declared_contract_for_test_source(member, &test.unit, &mut sources, &mut budget)
+                .expect("contract source")
+                .expect("indirect target");
+        let bytes = budget.source_bytes;
+        write(
+            &temporary.path().join("contracts/app.ko"),
+            "changed after source snapshot",
+        );
+        let second =
+            declared_contract_for_test_source(member, &test.unit, &mut sources, &mut budget)
+                .expect("reuse exact source")
+                .expect("indirect target");
+        assert_eq!(first, second);
+        assert_eq!(budget.entries, 1);
+        assert_eq!(budget.source_bytes, bytes);
+    }
+    #[test]
+    fn standalone_contract_target_rejects_unknown_and_outside_paths() {
+        for target in ["../contracts/unknown.ko", "../../outside.ko"] {
+            let source = format!(
+                "module Tests {{ koto_test {{ target: \"{target}\" }} #[test] fn check() {{ test::assert(true); }} }}"
+            );
+            let (_temporary, workspace) = standalone_fixture(&source);
+            let member = workspace
+                .members()
+                .values()
+                .next()
+                .expect("workspace member");
+            let test = declared_test_sources(member, Path::new("tests/unit.ko"))
+                .expect("test source")
+                .remove(0);
+            assert!(
+                matches!(
+                    declared_contract_for_test_source(
+                        member,
+                        &test.unit,
+                        &mut BTreeMap::new(),
+                        &mut DeclaredTestSourceBudgetV1::default()
+                    ),
+                    Err(WorkspaceTestErrorV1::Target(_))
+                ),
+                "{target}"
+            );
+        }
+    }
+    #[test]
+    fn standalone_contract_target_rejects_symlinks() {
+        let (temporary, workspace) = standalone_fixture(
+            r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn check() { test::assert(true); } }"#,
+        );
+        let target = temporary.path().join("contracts/app.ko");
+        fs::rename(&target, temporary.path().join("real.ko")).expect("move contract");
+        std::os::unix::fs::symlink("../real.ko", &target).expect("symlink target");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let test = declared_test_sources(member, Path::new("tests/unit.ko"))
+            .expect("test source")
+            .remove(0);
+        assert!(
+            matches!(declared_contract_for_test_source(member, &test.unit, &mut BTreeMap::new(), &mut DeclaredTestSourceBudgetV1::default()), Err(WorkspaceTestErrorV1::Target(reason)) if reason.contains("symlink"))
+        );
     }
     #[test]
     fn rejects_invalid_controls_and_ambiguous_selection() {
@@ -1410,7 +1645,7 @@ default-members = ["app"]
         );
         let cache = MusubiCache::open(temp.path().join("cache")).expect("private test cache");
         let report = execute_workspace_tests_v1(
-            &cache,
+            Some(&cache),
             &workspace,
             &selected,
             &lock,
@@ -1698,7 +1933,7 @@ core = { package = "test/core", version = "^1.0.0" }
         );
         let cache = MusubiCache::open(temp.path().join("cache")).expect("private test cache");
         let report = execute_workspace_tests_v1(
-            &cache,
+            Some(&cache),
             &workspace,
             &selected,
             &lock,
@@ -1745,7 +1980,7 @@ core = { package = "test/core", version = "^1.0.0" }
         );
         let cache = MusubiCache::open(temp.path().join("cache")).expect("private test cache");
         let error = execute_workspace_tests_v1(
-            &cache,
+            Some(&cache),
             &workspace,
             &selected,
             &lock,

@@ -2746,9 +2746,12 @@ fn merge_execution_canonical_order_key(
 }
 /// Charge the same signed runtime bounds and deterministic native instruction meter as Queue.
 /// This is reservation accounting, not an estimate from a previous execution's gas usage.
-pub(crate) fn merge_execution_proposal_gas<'a>(
-    entrypoints: impl IntoIterator<Item = &'a TransactionEntrypoint>,
-) -> Result<u64, MergeLedgerCommitError> {
+pub(crate) fn merge_execution_proposal_gas<'a, I>(
+    entrypoints: I,
+) -> Result<u64, MergeLedgerCommitError>
+where
+    I: IntoIterator<Item = &'a TransactionEntrypoint>,
+{
     entrypoints.into_iter().try_fold(0u64, |total, entrypoint| {
         let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
             std::borrow::Cow::Borrowed(entrypoint),
@@ -24648,6 +24651,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_value: AccountValue,
     ) -> Option<AccountValue> {
         self.accounts.insert(account_id, account_value)
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Remove a provider-owner binding within a transaction for deterministic test setup.
+    pub fn remove_provider_owner_for_testing(
+        &mut self,
+        provider_id: ProviderId,
+    ) -> Option<AccountId> {
+        self.provider_owners.remove(provider_id)
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the pin-manifest registry for test scaffolding.

@@ -1,0 +1,21 @@
+manifest-version = 1
+
+[package]
+namespace = "demo"
+name = "coffee-club"
+version = "0.1.0"
+edition = "1"
+abi-version = 1
+description = "Coffee rewards in Kotodama"
+
+[lib]
+source-dir = "src"
+exports = []
+
+[[contract]]
+name = "coffee-club"
+path = "contracts/coffee-club.ko"
+
+[[test]]
+name = "coffee-rewards"
+path = "tests/coffee-rewards.test.ko"

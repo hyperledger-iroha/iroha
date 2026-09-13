@@ -8180,10 +8180,7 @@ impl Kura {
             BoundProgressPair::Present(bound) => &bound.namespace,
         }
     }
-    #[expect(
-        dead_code,
-        reason = "retained by the proof-ledger structural sidecar source contract"
-    )]
+    #[cfg(all(test, unix))]
     fn open_bound_progress_sidecar(
         &self,
         data_path: &Path,

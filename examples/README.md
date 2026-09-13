@@ -37,6 +37,8 @@ traps.
 
 ## Files
 
+- `coffee-club/` packages a small rewards contract with Musubi and includes four
+  Kotodama VM tests; see its README for the local workflow.
 - `hello/hello.ko` logs a greeting and calls
   `ledger::account::set_detail` for `context::authority()`.
 - `transfer/transfer.ko` uses typed pointer constructors and

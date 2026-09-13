@@ -22304,9 +22304,11 @@ pub(super) mod tests {
         pub(in crate::sumeragi) requester: PeerId,
         pub(in crate::sumeragi) request: crate::merge_sidecar::CertifiedMergeSidecarRequestV1,
     }
-    /// Persist one canonical merge entry and construct its exact server request.
+    /// Persist a canonical parent chain and merge entry for the exact server request.
+    /// Certified view rollover can immediately refresh merge work, so the server
+    /// must retain the same authenticated committed parent in State and Kura.
     pub(in crate::sumeragi) fn certified_sidecar_server_fixture() -> CertifiedSidecarServerFixture {
-        let (adapter, validators) = fixture(wire::ConsensusMode::Permissioned);
+        let (adapter, validators) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let entry = pending_sidecar_entry(&adapter, &validators, 1);
         let entry_hash = adapter
             .kura
@@ -24865,7 +24867,7 @@ pub(super) mod tests {
     }
     #[test]
     fn repeated_carrier_state_retention_scans_kura_only_on_transition() {
-        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         adapter
             .retain_merge_sidecars_for_global_view(0, None, None)
             .expect("install initial unprotected carrier state");
@@ -24884,7 +24886,7 @@ pub(super) mod tests {
     }
     #[test]
     fn certified_view_supersedes_only_unprotected_validate_sidecar_waits() {
-        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let subject = wire::BlockSubject {
             parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
                 b"superseded Validate sidecar parent",
@@ -24922,7 +24924,7 @@ pub(super) mod tests {
     }
     #[test]
     fn certified_view_change_releases_stale_native_amx_owners_and_vote_buckets() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         adapter.native_sessions = NativeAmxSessionCache::with_limits(
             NonZeroUsize::new(1).expect("non-zero session capacity"),
             NonZeroUsize::new(1).expect("non-zero body capacity"),
@@ -31587,12 +31589,59 @@ pub(super) mod tests {
     }
     include!("v2_lane_work_autonomous_ready_durability_tests.rs");
     #[test]
+    fn candidate_providers_require_the_installed_unlocked_reducer_view() {
+        let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        let context = adapter.context.clone();
+        for view in 0..=1 {
+            // Construction authenticates the durable parent; the runner still
+            // owns installation of the reducer's current view before admission.
+            let ordinary = (&mut adapter)
+                .prepare(&context, view, &[])
+                .expect_err("ordinary admission waits for the exact reducer directive");
+            let certified = adapter
+                .prepare_certified_execution_carrier(&context, view, &[])
+                .expect_err("certified admission waits for the exact reducer directive");
+            assert_eq!(ordinary.reason(), "merge frontier is changing");
+            assert_eq!(certified.reason(), "merge frontier is changing");
+            assert!(ordinary.indices().is_empty());
+            assert!(certified.indices().is_empty());
+            assert!(
+                !adapter.output_guard.restart_required()
+                    && adapter.output_guard.acquire().is_some(),
+                "a missing or stale reducer directive is retryable"
+            );
+            assert!(
+                !adapter
+                    .planned_lane_proposals
+                    .contains_key(&wire::ConsensusRound {
+                        context_id: context.id(),
+                        height: context.height,
+                        view,
+                    }),
+                "deferred admission must not publish proposal ownership for the requested view"
+            );
+            adapter
+                .retain_merge_sidecars_for_global_view(view, None, None)
+                .expect("install the exact unlocked reducer directive");
+            let ordinary = (&mut adapter)
+                .prepare(&context, view, &[])
+                .expect("ordinary admission resumes after exact view installation");
+            assert!(ordinary.lane_payload_ownerships.is_empty());
+            let certified = adapter
+                .prepare_certified_execution_carrier(&context, view, &[])
+                .expect("certified admission resumes after exact view installation");
+            assert!(certified.lane_payload_ownerships.is_empty());
+        }
+    }
+    #[test]
     fn candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced()
     {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = native_multilane_signing_fixture();
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
-        enable_multilane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install the runner's exact unlocked candidate view");
         assert!(proposal_lookahead_enabled(
             &adapter.state.nexus_snapshot(),
             adapter.context.height,
@@ -31658,7 +31707,10 @@ pub(super) mod tests {
     }
     #[test]
     fn candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        adapter
+            .retain_merge_sidecars_for_global_view(0, None, None)
+            .expect("install the runner's exact unlocked candidate view");
         let (block, mut proposal) =
             planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
         proposal.payload_block_hint = None;
