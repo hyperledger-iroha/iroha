@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 665_813
-EXPECTED_ASSET_SHA256 = "e3902d1b2490bc5542a5a02a2bf712ca82ae4cd3e8edf43031f12c9bdbdc040b"
+EXPECTED_ASSET_LENGTH = 665_989
+EXPECTED_ASSET_SHA256 = "963b4c2c72ac484a32001b8587563afce90276e10b68a6e15e1c5854ccaac332"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -56,7 +56,7 @@ NEW_CASE_CONTRACT_COUNTS = {
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 95,
 }
 MIGRATED_CASE_SHA256 = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "a64fc75b6813b66d8616225b7c45c9c54b6104c2bea774f0037900ea978e71a9",
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "be7471d4e85fcfbbcadbae26edf7628c422d9ca60b2244a11041f089a79108c5",
     "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
@@ -170,6 +170,7 @@ BOUNDARY_CASE_REGIONS = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": (
         "leader_wire_replay_lock_authority",
         "actual_consumer_factory",
+        "actual_consumer_locked_certificate",
         "consumer_frozen_context",
         "consumer_adapter_constructor",
         "actual_consumer_publication",
@@ -196,6 +197,17 @@ BOUNDARY_SOURCE_PATHS = {
     "turn_driver": "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
     "queue": "crates/iroha_core/src/queue.rs",
 }
+# Select the complete lock projection: Prepare and Decision independently use
+# the same round/subject expressions and must not shadow a broken lock guard.
+ACTUAL_LOCKED_CERTIFICATE_PROJECTION = """let protected_lock = durable
+            .locked()
+            .map(|certificate| {
+                Ok::<_, AdapterError>((
+                    adapter.registry.round_to_wire(certificate.proposal_round()),
+                    adapter.registry.subject(certificate.subject())?,
+                ))
+            })
+            .transpose()?;"""
 BOUNDARY_MUTATIONS = (
     (
         "actual consumer rejects a foreign context",
@@ -242,8 +254,18 @@ BOUNDARY_MUTATIONS = (
     (
         "actual locked proposal round",
         "leader_wire_consumer",
-        "adapter.registry.round_to_wire(certificate.proposal_round())",
-        "adapter.registry.round_to_wire(certificate.round())",
+        ACTUAL_LOCKED_CERTIFICATE_PROJECTION,
+        ACTUAL_LOCKED_CERTIFICATE_PROJECTION.replace(
+            "certificate.proposal_round()", "certificate.round()"
+        ),
+    ),
+    (
+        "actual locked subject",
+        "leader_wire_consumer",
+        ACTUAL_LOCKED_CERTIFICATE_PROJECTION,
+        ACTUAL_LOCKED_CERTIFICATE_PROJECTION.replace(
+            "adapter.registry.subject(certificate.subject())?", "foreign_subject"
+        ),
     ),
     (
         "historical CommitIntent authority",

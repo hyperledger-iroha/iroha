@@ -1224,6 +1224,7 @@ region|adapter_recovered_validation_high|adapter|at|pub(crate) fn recovered_vali
 region|adapter_high_accessor|adapter|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the full current-view Prepare observed durably before validation
 region|leader_wire_replay_lock_authority|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
 region|actual_consumer_factory|leader_wire_consumer|at|pub(super) fn from_adapter(|before|pub(crate) fn matches_geometry(
+region|actual_consumer_locked_certificate|leader_wire_consumer|at|let protected_lock = durable\n            .locked()|before|\n            .transpose()?;
 region|consumer_frozen_context|adapter|at|fn frozen_wire_context_id(&self)|before|/// Return the reducer body state for one wire identity in seam tests.
 region|consumer_adapter_constructor|adapter|at|fn open_with_aggregator_and_publication_with_capacity(|before|/// Return the tag which must accompany a new asynchronous operation.
 region|actual_consumer_publication|worker|at|fn finish_runtime_step_reconciliation(|before|fn complete_leader_wire_runtime_terminal(
@@ -1327,8 +1328,8 @@ forbidden|leader_wire_replay_lock_authority|from_replayed_adapter|adapter must n
 required|actual_consumer_factory|adapter.ensure_ingress()?|actual consumer factory must reject a failed adapter
 required|actual_consumer_factory|let durable = adapter.reducer.durable_state();|actual consumer factory must read the replayed durable frontier
 required|actual_consumer_factory|let tag = adapter.reducer.current_tag();|actual consumer factory must retain the actual reducer generation and view
-required|actual_consumer_factory|adapter.registry.round_to_wire(certificate.proposal_round())|actual consumer must convert the exact replayed lock round
-required|actual_consumer_factory|adapter.registry.subject(certificate.subject())?|actual consumer must authenticate the exact replayed lock subject
+required|actual_consumer_locked_certificate|adapter.registry.round_to_wire(certificate.proposal_round())|actual consumer must convert the exact replayed lock round
+required|actual_consumer_locked_certificate|adapter.registry.subject(certificate.subject())?|actual consumer must authenticate the exact replayed lock subject
 required|actual_consumer_factory|locked.round().view() == tag.view()|actual consumer must distinguish current-round Commit collection
 required|actual_consumer_factory|durable.commit_intent_for_lock(locked).is_some()|historical Commit collection requires the exact durable CommitIntent
 required|actual_consumer_factory|vote_statement_hash(|protected Commit authority must bind the complete vote statement
