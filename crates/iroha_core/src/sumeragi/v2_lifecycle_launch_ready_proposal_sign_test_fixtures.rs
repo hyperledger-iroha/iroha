@@ -508,6 +508,7 @@ impl LaunchedProductionLifecycleV1 {
                 _ => panic!("the outer Completion turn must select the physical recovered Fetch"),
             },
         )
+        .0
     }
 
     /// Retire launch ingress and return the settled synchronous body fixture.
