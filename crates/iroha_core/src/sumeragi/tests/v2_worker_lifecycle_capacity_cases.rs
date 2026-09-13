@@ -1567,6 +1567,26 @@ pub(in crate::sumeragi) fn install_lifecycle_ingress_for_test(
 }
 
 impl LifecyclePlannerIoFixture {
+    /// Capture the exact dedicated recovered Fetch callbacks whose command
+    /// slots have already been released but publication acknowledgement remains.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_completions_for_test(
+        &self,
+    ) -> Vec<(
+        RecoveredDecisionFetchDispatchKeyV1,
+        crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceIdV1,
+        HashOf<wire::CertifiedBodyResponse>,
+    )> {
+        let state = self.command_rx.queue.lock();
+        state
+            .recovered_decision_fetch_bodies
+            .iter()
+            .map(|(key, tracked)| {
+                assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+                (*key, tracked.id, tracked.response_hash)
+            })
+            .collect()
+    }
+
     /// Persist a genuinely queued recovered Decision response using the production task.
     pub(in crate::sumeragi) fn execute_one_recovered_decision_fetch_for_test(
         &mut self,

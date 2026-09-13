@@ -348,14 +348,14 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
       payout_lifecycle_proposal_id: null,
     },
   };
-  const encoded = noritoEncodeInstruction(instruction);
-  const decoded = noritoDecodeInstruction(encoded);
+  const encoded = noritoEncodeInstruction(instruction, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(Object.keys(decoded.ProposeValidationFeePolicy).sort(), [
     "payout_lifecycle_proposal_id",
     "policy",
   ]);
   assert.deepEqual(
-    noritoEncodeInstruction(decoded),
+    noritoEncodeInstruction(decoded, 753),
     encoded,
     "native decode/encode must preserve exact InstructionBox bytes",
   );

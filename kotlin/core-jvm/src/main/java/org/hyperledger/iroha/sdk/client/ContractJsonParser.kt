@@ -57,6 +57,7 @@ object ContractJsonParser {
             feePayment = response.operationReceipt.feePayment,
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
+            expectedAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             context = "contract call response",
             expectedAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
         )
@@ -142,6 +143,7 @@ object ContractJsonParser {
             feePayment = response.feePayment,
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
+            expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
             context = "multisig response",
             expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
         )
@@ -470,6 +472,7 @@ object ContractJsonParser {
         feePayment: FeePaymentIntent?,
         transactionPayloadB64: String?,
         signingMessageB64: String?,
+        expectedAdmissionIntent: TransactionAdmissionIntent,
         context: String,
         expectedAdmissionIntent: TransactionAdmissionIntent,
     ) {

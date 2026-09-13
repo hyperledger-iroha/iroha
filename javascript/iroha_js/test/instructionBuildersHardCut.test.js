@@ -123,7 +123,7 @@ function canonicalizeClone(value) {
 
 function encodeAndDecode(instruction) {
   return canonicalizeValue(
-    noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
+    noritoDecodeInstruction(noritoEncodeInstruction(instruction, 753), 753),
   );
 }
 
@@ -270,12 +270,12 @@ descriptorTest("public native instruction adapters reject every retired confiden
   for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
     const instruction = retiredInstruction(variant);
     assertRetiredInstructionRejected(
-      () => noritoEncodeInstruction(instruction),
+      () => noritoEncodeInstruction(instruction, 753),
       variant,
     );
     assertRetiredInstructionRejected(
       () => withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
-        noritoEncodeInstruction(instruction)),
+        noritoEncodeInstruction(instruction, 753)),
       variant,
     );
   }
@@ -284,7 +284,7 @@ descriptorTest("public native instruction adapters reject every retired confiden
     () =>
       withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
         noritoDecodeInstruction(
-          Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
+          Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"), 753,
         ),
       ),
     { message: "length mismatch" },
@@ -296,7 +296,7 @@ test("native codec rejects every retired confidential instruction", () => {
     assert.throws(
       () =>
         nativeBinding.noritoEncodeInstruction(
-          JSON.stringify(retiredInstruction(variant)),
+          JSON.stringify(retiredInstruction(variant)), 753,
         ),
       /unsupported zk instruction variant/u,
       variant,
@@ -305,7 +305,7 @@ test("native codec rejects every retired confidential instruction", () => {
   assert.throws(
     () =>
       nativeBinding.noritoDecodeInstruction(
-        Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
+        Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"), 753,
       ),
     /decode|canonical|trailing|field|length mismatch|not registered|unknown instruction/u,
   );

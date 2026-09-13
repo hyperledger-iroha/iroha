@@ -241,10 +241,20 @@ public protocol KagemushaHardwareProviderV1: AnyObject {
   func rotateHardwareEpoch() throws -> Data
 }
 
+/// Opaque identity of one complete cached wallet state. Only the owning wallet
+/// can create it; equality covers the instance, qualification, epoch/state and journal.
+public struct KagemushaWalletOwnerSnapshotV1: Equatable, Sendable {
+  fileprivate let walletID: UUID
+  fileprivate let qualification: KagemushaHardwareQualificationV1
+  fileprivate let aggregateState: KagemushaAggregateStateCommitmentV1
+  fileprivate let journalRevision: KagemushaUInt128V1
+}
+
 /// Aggregate-balance KAGEMUSHA V1 orchestration over the authoritative hardware boundary.
 public final class KagemushaWalletV1: @unchecked Sendable {
   private let provider: KagemushaHardwareProviderV1
   private let lock: KagemushaForegroundGateV1
+  private let walletID = UUID()
   private var qualificationValue: KagemushaHardwareQualificationV1
   private var aggregateStateValue: KagemushaAggregateStateCommitmentV1
   private var journalRevisionValue: KagemushaUInt128V1
@@ -288,6 +298,28 @@ public final class KagemushaWalletV1: @unchecked Sendable {
 
   public func journalRevision() -> KagemushaUInt128V1 {
     lock.withLock { journalRevisionValue }
+  }
+
+  /// Capture on the worker that verified the retained native operation. This
+  /// method may wait for native work; it must not run inside a MainActor resume guard.
+  public func ownerSnapshot() -> KagemushaWalletOwnerSnapshotV1 {
+    lock.withLock { cachedOwnerSnapshot() }
+  }
+
+  /// Never waits for the SDK foreground gate or a native provider's operation
+  /// lock. Busy, replaced, rotated or otherwise changed state rejects dispatch.
+  public func withCurrentOwnerSnapshot(_ expected: KagemushaWalletOwnerSnapshotV1,
+    perform: () throws -> Void) rethrows -> Bool {
+    try lock.tryWithLock {
+      guard cachedOwnerSnapshot() == expected else { return false }
+      try perform()
+      return true
+    } ?? false
+  }
+
+  private func cachedOwnerSnapshot() -> KagemushaWalletOwnerSnapshotV1 {
+    KagemushaWalletOwnerSnapshotV1(walletID: walletID, qualification: qualificationValue,
+      aggregateState: aggregateStateValue, journalRevision: journalRevisionValue)
   }
 
   @discardableResult
@@ -772,8 +804,9 @@ public final class KagemushaWalletV1: @unchecked Sendable {
 }
 
 /// Private host scheduling only: one monetary transition at a time.
-private final class KagemushaForegroundGateV1 {
+final class KagemushaForegroundGateV1: @unchecked Sendable {
   private let sharedLock: NSRecursiveLock
+  private let snapshotProbeLock = NSLock()
   init(sharedLock: NSRecursiveLock) { self.sharedLock = sharedLock }
   private let condition = NSCondition()
   private var occupied = false
@@ -787,11 +820,22 @@ private final class KagemushaForegroundGateV1 {
     try withLease(background: true, body)
   }
 
+  /// Cached state only: this closure must never perform native work or wait for
+  /// another actor. The shared lock also catches work entered directly by the provider.
+  func tryWithLock<T>(_ body: () throws -> T) rethrows -> T? {
+    guard snapshotProbeLock.try() else { return nil }
+    defer { snapshotProbeLock.unlock() }
+    guard sharedLock.try() else { return nil }
+    defer { sharedLock.unlock() }
+    return try body()
+  }
+
   private func withLease<T>(background: Bool, _ body: () throws -> T) rethrows -> T {
     condition.lock()
     if !background { foregroundWaiters += 1 }
     while occupied || (background && foregroundWaiters > 0) { condition.wait() }
     if !background { foregroundWaiters -= 1 }
+    snapshotProbeLock.lock()
     occupied = true
     condition.unlock()
     defer {
@@ -800,6 +844,7 @@ private final class KagemushaForegroundGateV1 {
       condition.broadcast()
       condition.unlock()
     }
+    defer { snapshotProbeLock.unlock() }
     sharedLock.lock()
     defer { sharedLock.unlock() }
     return try body()

@@ -64,8 +64,8 @@ export interface BrowserTransferInput {
   creationTimeMs?: BrowserTransactionUnsigned;
   ttlMs?: BrowserTransactionUnsigned | null;
   nonce?: BrowserTransactionUnsigned | null;
-  networkPrefix?: BrowserTransactionUnsigned;
-  chainDiscriminant?: BrowserTransactionUnsigned;
+  /** Required caller-selected I105 deployment prefix (u16). */
+  networkPrefix: number;
 }
 
 export interface BrowserInstructionTransactionInput {
@@ -81,8 +81,8 @@ export interface BrowserInstructionTransactionInput {
   creationTimeMs?: BrowserTransactionUnsigned;
   ttlMs?: BrowserTransactionUnsigned | null;
   nonce?: BrowserTransactionUnsigned | null;
-  networkPrefix?: BrowserTransactionUnsigned;
-  chainDiscriminant?: BrowserTransactionUnsigned;
+  /** Required caller-selected I105 deployment prefix (u16). */
+  networkPrefix: number;
 }
 
 export type BrowserExecutableBatchEntry =
@@ -113,13 +113,14 @@ export interface BrowserExecutableBatchInput {
   creationTimeMs?: BrowserTransactionUnsigned;
   ttlMs?: BrowserTransactionUnsigned | null;
   nonce?: BrowserTransactionUnsigned | null;
-  networkPrefix?: BrowserTransactionUnsigned;
-  chainDiscriminant?: BrowserTransactionUnsigned;
+  /** Required caller-selected I105 deployment prefix (u16). */
+  networkPrefix: number;
 }
 
 export interface BrowserTransactionSignable {
   /** Application-pinned exact NetworkId expected in payloadBytes. */
   networkId: NetworkId;
+  networkPrefix: number;
   payloadBytes: BrowserTransactionBytes;
   payloadHashHex?: string;
   authority: string;
@@ -129,12 +130,14 @@ export interface BrowserTransactionSignable {
 
 export interface BrowserTransactionSignableConstraints {
   networkId?: NetworkId | null;
+  networkPrefix?: number;
   authority?: string | null;
   signingPublicKey?: BrowserTransactionBytes | string | null;
 }
 
 export interface ValidatedBrowserTransactionSignable {
   networkId: NetworkId;
+  networkPrefix: number;
   payloadBytes: Uint8Array;
   payloadHashHex: string;
   authority: string;
@@ -180,6 +183,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   constraints: {
     expectedNetworkId: NetworkId;
     expectedAuthority: string;
+    networkPrefix: number;
     operation: "register" | "update";
   },
 ): {
@@ -193,6 +197,7 @@ export function buildBrowserExecutableBatchPayload(
 
 export function browserTransactionPayloadHashHex(
   payloadBytes: BrowserTransactionBytes,
+  networkPrefix: number,
 ): string;
 
 export function validateBrowserTransferSignable(
@@ -230,6 +235,7 @@ export function finalizeBrowserExecutableBatchTransaction(
 
 export function browserSignedTransactionHashHex(
   signedTransaction: BrowserTransactionBytes,
+  networkPrefix: number,
 ): string;
 
 export const browserTransactionCodec: Readonly<NexusTransactionCodec> & Readonly<{

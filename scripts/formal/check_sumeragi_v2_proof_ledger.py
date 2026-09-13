@@ -68508,7 +68508,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                     f"{observed_sha256}"
                 )
     for item, expected, description in (
-        (lane_ack_items.get("V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"), "queue_plan_admission_handoff_retry_required: false, queue_plan_admission_handoff_cursor: 0,", "lane construction must initialize QueuePlan handoff retry and fair cursor state exactly once"),
+        (lane_ack_items.get("V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"), "queue_plan_admission_handoff: QueuePlanAdmissionHandoffState::Unobserved, queue_plan_admission_handoff_cursor: 0,", "lane construction must initialize the typed QueuePlan handoff state and fair cursor exactly once"),
         (lane_ack_items.get("V2LaneWorkAdapter::accept_relay_message"), """self.decision_pending() && !matches!(&message, LaneRelayMessage::CertifiedMergeSidecar { .. } | LaneRelayMessage::QueuePlanAdmissionCertificate { .. })""", "Decision-pending relay admission must preserve only certified sidecar and QueuePlan durable handoffs"),
         (lane_ack_items.get("V2LaneWorkAdapter::accept_relay_message"), """LaneRelayMessage :: QueuePlanAdmissionCertificate { sender , certificate , } => self . accept_queue_plan_admission_certificate ( sender , certificate , active_view ) ,""", "QueuePlan relay admission must delegate its exact sender, bytes, and active view"),
         (lane_ack_items.get("V2LaneWorkAdapter::retire_inactive_merge_sidecar_requests"), "| V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. } => None,", "sidecar retirement must leave topology-owned QueuePlan handoffs untouched"),

@@ -2668,6 +2668,27 @@ pub(crate) fn prepare_v2_lane_payload_validation_plan(
         true,
     )
 }
+/// Read each requested canonical frontier once within this planning operation.
+///
+/// Preserve first-occurrence order so storage failures remain deterministic.
+/// Absence is also a completed read; repeated transactions on an empty route
+/// must not repeat the scan. Candidate routing and transaction order stay intact.
+fn read_canonical_lane_tips_once(
+    routing_decisions: &[RoutingDecision],
+    mut read_tip: impl FnMut(&RoutingDecision) -> Result<Option<LaneBlockTip>, V2LanePayloadPlanError>,
+) -> Result<BTreeMap<(LaneId, DataSpaceId), LaneBlockTip>, V2LanePayloadPlanError> {
+    let mut seen = BTreeSet::new();
+    let mut tips = BTreeMap::new();
+    for route in routing_decisions {
+        if !seen.insert((route.lane_id, route.dataspace_id)) {
+            continue;
+        }
+        if let Some(tip) = read_tip(route)? {
+            tips.insert((tip.lane_id, tip.dataspace_id), tip);
+        }
+    }
+    Ok(tips)
+}
 #[allow(clippy::too_many_arguments)]
 fn prepare_v2_lane_payload_plan_inner(
     state: &State,
@@ -2714,8 +2735,7 @@ fn prepare_v2_lane_payload_plan_inner(
         V2LanePayloadPlanError::new("committed height does not fit the v2 lane planner")
     })?;
     let canonical_unapplied_tips = if allow_canonical_unapplied_predecessor {
-        let mut tips = BTreeMap::new();
-        for route in routing_decisions {
+        read_canonical_lane_tips_once(routing_decisions, |route| {
             let Some(artifact) = kura
                 .latest_lane_block_artifact_matching(route.lane_id, |artifact| {
                     let ownership = &artifact.ownership;
@@ -2741,7 +2761,7 @@ fn prepare_v2_lane_payload_plan_inner(
                     ))
                 })?
             else {
-                continue;
+                return Ok(None);
             };
             // A matching global block hash is not enough: bind the raw
             // sidecar to the exact ownership embedded in that canonical
@@ -2763,18 +2783,14 @@ fn prepare_v2_lane_payload_plan_inner(
                 ));
             }
             let ownership = artifact.ownership;
-            tips.insert(
-                (ownership.lane_id, ownership.dataspace_id),
-                LaneBlockTip {
-                    lane_id: ownership.lane_id,
-                    dataspace_id: ownership.dataspace_id,
-                    lane_incarnation: ownership.lane_incarnation,
-                    latest_lane_block_height: ownership.lane_block_height,
-                    latest_lane_block_descriptor_hash: ownership.lane_block_descriptor_hash,
-                },
-            );
-        }
-        tips
+            Ok(Some(LaneBlockTip {
+                lane_id: ownership.lane_id,
+                dataspace_id: ownership.dataspace_id,
+                lane_incarnation: ownership.lane_incarnation,
+                latest_lane_block_height: ownership.lane_block_height,
+                latest_lane_block_descriptor_hash: ownership.lane_block_descriptor_hash,
+            }))
+        })?
     } else {
         BTreeMap::new()
     };

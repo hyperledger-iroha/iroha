@@ -274,6 +274,24 @@ impl RegistryPublicConfigImageV1 {
         iroha::config::resolve_account_chain_discriminant(profile, explicit)
             .map_err(|_| invalid_public_config())
     }
+    /// Read the explicit exact deployment identity and public account-address profile.
+    ///
+    /// Offline registry selection uses this projection of the retained bounded image without
+    /// loading a signer, endpoint, or cache. The network identity must use its canonical checked
+    /// spelling; it has no default. Parsing failures disclose neither source text nor credentials.
+    pub(crate) fn registry_binding(&self) -> Result<(NetworkId, u16), RegistryErrorV1> {
+        let source = std::str::from_utf8(&self.bytes).map_err(|_| invalid_public_config())?;
+        let table = source
+            .parse::<toml::Table>()
+            .map_err(|_| invalid_public_config())?;
+        let network_id = table
+            .get("network_id")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(invalid_public_config)?
+            .parse::<NetworkId>()
+            .map_err(|_| invalid_public_config())?;
+        Ok((network_id, self.account_chain_discriminant()?))
+    }
     /// Return the original path used to resolve relative platform-owned files.
     pub(crate) fn path(&self) -> &Path {
         &self.path
@@ -2632,6 +2650,75 @@ private_key = "{}"
         assert_eq!(
             RegistryReadClientV1::load_from_config_bytes(image.path(), image.bytes())
                 .expect_err("authenticated access still requires valid signer configuration")
+                .code(),
+            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn public_registry_binding_uses_the_retained_image_without_signer_or_endpoint() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("public.toml");
+        let network_id = test_network_id(0x15);
+        for profile in ["profile = 'taira'", "chain_discriminant = 369"] {
+            let source = format!("network_id = '{network_id}'\n[account]\n{profile}\n");
+            fs::write(&path, &source).expect("write public binding");
+            let image = RegistryPublicConfigImageV1::load(Some(&path)).expect("bounded image");
+            fs::remove_file(&path).expect("remove original configuration");
+            let binding = image
+                .registry_binding()
+                .expect("signer-free registry binding");
+            assert_eq!(binding, (network_id, 369));
+            assert_eq!(image.bytes(), source.as_bytes());
+            assert_eq!(binding.0.to_string(), network_id.to_string());
+        }
+    }
+    #[test]
+    fn public_registry_binding_rejects_missing_or_invalid_identity_without_disclosure() {
+        let network_id = test_network_id(0x15).to_string();
+        let invalid_sources = [
+            "[account]\nprofile = 'taira'\n".to_owned(),
+            "network_id = 369\n[account]\nprofile = 'taira'\n".to_owned(),
+            "network_id = 'secret-invalid-network'\n[account]\nprofile = 'taira'\n".to_owned(),
+            format!(
+                "network_id = '{}'\n[account]\nprofile = 'taira'\n",
+                "15".repeat(32)
+            ),
+            format!(
+                "network_id = '{}'\n[account]\nprofile = 'taira'\n",
+                test_network_id(0xab).to_string().to_lowercase()
+            ),
+            format!("network_id = '{network_id}'\n[account]\nprofile = 'secret-invalid-profile'\n"),
+            format!(
+                "network_id = '{network_id}'\n[account]\nprofile = 'taira'\nchain_discriminant = 753\n"
+            ),
+            format!("network_id = '{network_id}'\n"),
+            "network_id = 'unterminated-secret\n".to_owned(),
+        ];
+        for source in invalid_sources {
+            let image = RegistryPublicConfigImageV1 {
+                path: PathBuf::from("must-not-be-opened-secret.toml"),
+                bytes: source.as_bytes().to_vec(),
+            };
+            let error = image
+                .registry_binding()
+                .expect_err("invalid public binding");
+            assert_eq!(error.class(), RegistryFailureClassV1::Permanent);
+            assert_eq!(error.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+            for rendered in [error.to_string(), format!("{error:?}")] {
+                assert!(!rendered.contains("secret"));
+                assert!(!rendered.contains(&network_id));
+                assert!(!rendered.contains(&source));
+            }
+        }
+        let image = RegistryPublicConfigImageV1 {
+            path: PathBuf::from("must-not-be-opened-secret.toml"),
+            bytes: vec![0xff],
+        };
+        assert_eq!(
+            image
+                .registry_binding()
+                .expect_err("UTF-8 is required")
                 .code(),
             "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
         );

@@ -4674,6 +4674,8 @@ pub enum ReducerError {
     ConflictingDecision,
     /// An apply completion did not match the durable validated decision.
     InvalidApplicationCompletion,
+    /// Authenticated retained body custody does not match this reducer incarnation.
+    InvalidRetainedBodyPipeline,
     /// Height finalization was requested before successful local application.
     HeightNotApplied,
     /// Height finalization was requested while a safety effect was outstanding.
@@ -4737,6 +4739,9 @@ impl fmt::Display for ReducerError {
             Self::InvalidApplicationCompletion => {
                 formatter.write_str("application completion does not match the decision")
             }
+            Self::InvalidRetainedBodyPipeline => {
+                formatter.write_str("retained body custody does not match the reducer")
+            }
             Self::HeightNotApplied => formatter.write_str("decided height is not applied"),
             Self::HeightStillBusy => {
                 formatter.write_str("height still has an outstanding safety effect")
@@ -4760,6 +4765,7 @@ impl From<ReplayError> for ReducerError {
         Self::Replay(error)
     }
 }
+include!("reducer/retained_body_pipeline_recovery.rs");
 #[cfg(test)]
 mod source_link_tests {
     use super::super::{ContextId, Digest, NetworkId, Validator, VotingMode, VotingPower};
@@ -4937,6 +4943,7 @@ mod source_link_tests {
         (before, event)
     }
     include!("tests/reducer_timeout_and_projection.rs");
+    include!("tests/reducer_retained_body_pipeline_recovery.rs");
     include!("tests/v2_core_reducer_primitive_projection.rs");
     #[test]
     fn certificate_evidence_priority_and_signer_bitmap_match_the_roster_bound() {

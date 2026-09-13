@@ -134,6 +134,8 @@ mod tests {
     };
     use norito::json::{self, Value};
 
+    const FIXTURE_NETWORK_PREFIX: u16 = 753;
+
     use super::*;
     use crate::{
         decode_instruction_archive, decode_instruction_frame, encode_instruction_archive,
@@ -178,22 +180,27 @@ mod tests {
         validate_manifest_schemas(manifest).expect("current schema preflight");
         let source = instruction_json(manifest);
         let expected: Value = json::from_json(&source).expect("instruction JSON");
-        let frame = encode_instruction_frame(&source).expect("native frame");
-        let archive = encode_instruction_archive(&source).expect("native archive");
+        let frame =
+            encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).expect("native frame");
+        let archive =
+            encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).expect("native archive");
         for decoded in [
-            decode_instruction_frame(&frame).expect("native frame decode"),
-            decode_instruction_archive(&archive).expect("native archive decode"),
+            decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX).expect("native frame decode"),
+            decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX)
+                .expect("native archive decode"),
         ] {
             assert_eq!(
                 json::from_json::<Value>(&decoded).expect("decoded JSON"),
                 expected
             );
             assert_eq!(
-                encode_instruction_frame(&decoded).expect("frame re-encode"),
+                encode_instruction_frame(&decoded, FIXTURE_NETWORK_PREFIX)
+                    .expect("frame re-encode"),
                 frame
             );
             assert_eq!(
-                encode_instruction_archive(&decoded).expect("archive re-encode"),
+                encode_instruction_archive(&decoded, FIXTURE_NETWORK_PREFIX)
+                    .expect("archive re-encode"),
                 archive
             );
         }
@@ -203,11 +210,11 @@ mod tests {
         assert!(validate_manifest_schemas(manifest).is_err());
         let source = instruction_json(manifest);
         assert!(
-            encode_instruction_frame(&source).is_err(),
+            encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).is_err(),
             "invalid manifest frame accepted"
         );
         assert!(
-            encode_instruction_archive(&source).is_err(),
+            encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).is_err(),
             "invalid manifest archive accepted"
         );
         // Serialize directly through the model to bypass the JSON preflight. The
@@ -222,11 +229,11 @@ mod tests {
         norito::codec::encode_adaptive_into(&instruction, &mut archive)
             .expect("canonical adversarial archive");
         assert!(
-            decode_instruction_frame(&frame).is_err(),
+            decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX).is_err(),
             "invalid manifest frame decoded"
         );
         assert!(
-            decode_instruction_archive(&archive).is_err(),
+            decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX).is_err(),
             "invalid manifest archive decoded"
         );
     }
@@ -314,8 +321,8 @@ mod tests {
                     &norito::json!({ "RegisterSmartContractCode": { "manifest": manifest } }),
                 )
                 .expect("JSON");
-                assert!(encode_instruction_frame(&source).is_err());
-                assert!(encode_instruction_archive(&source).is_err());
+                assert!(encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).is_err());
+                assert!(encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).is_err());
             }
         }
     }
@@ -418,7 +425,8 @@ mod tests {
             let frame = norito::encode_canonical(&instruction).unwrap();
             let source = json::to_json(&Value::String(STANDARD.encode(frame))).unwrap();
             for encode in [encode_instruction_frame, encode_instruction_archive] {
-                let error = encode(&source).expect_err("generic string envelope must be rejected");
+                let error = encode(&source, FIXTURE_NETWORK_PREFIX)
+                    .expect_err("generic string envelope must be rejected");
                 assert_eq!(error.kind(), CodecErrorKind::InvalidArgument);
             }
         }
@@ -435,8 +443,8 @@ mod tests {
                 .unwrap()
                 .insert("unexpected".to_owned(), Value::Null);
             let source = json::to_json(&extra).unwrap();
-            assert!(encode_instruction_frame(&source).is_err());
-            assert!(encode_instruction_archive(&source).is_err());
+            assert!(encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).is_err());
+            assert!(encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).is_err());
         }
     }
 }

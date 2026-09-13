@@ -68,6 +68,8 @@ mod signed_block_roundtrip;
 mod sm_norito_roundtrip;
 #[path = "../soracloud_manifest_fixtures.rs"]
 mod soracloud_manifest_fixtures;
+#[path = "../soranet_ticket_errors.rs"]
+mod soranet_ticket_errors;
 #[path = "../streaming_events_roundtrip.rs"]
 mod streaming_events_roundtrip;
 #[path = "../sumeragi_v2_cross_sdk_fixtures.rs"]

@@ -816,5 +816,9 @@ fn lane_order(lane: &MergeLaneExecution) -> (LaneId, DataSpaceId, Hash, u64, u64
 }
 
 #[cfg(test)]
+#[path = "scaling_evidence/fixture.rs"]
+mod fixture;
+
+#[cfg(test)]
 #[path = "scaling_evidence/tests.rs"]
 mod tests;

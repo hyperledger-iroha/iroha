@@ -404,8 +404,8 @@ declare namespace Kagemusha {
   function encodeTopUpRequest(value: TopUpRequest): Uint8Array;
   function decodeTopUpRequest(raw: Bytes): TopUpRequest;
   function buildTopUpInstruction(value: TopUpRequest): TopUpInstruction;
-  function encodeTopUpInstruction(value: TopUpRequest): Uint8Array;
-  function decodeTopUpInstruction(raw: Bytes): TopUpRequest;
+  function encodeTopUpInstruction(value: TopUpRequest, networkPrefix: number): Uint8Array;
+  function decodeTopUpInstruction(raw: Bytes, networkPrefix: number): TopUpRequest;
   function encodeRedemptionRequest(value: RedemptionRequest): Uint8Array;
   function decodeRedemptionRequest(raw: Bytes): RedemptionRequest;
   function encodeText(kind: PayloadKind, raw: Bytes): `kgm1:${string}`;

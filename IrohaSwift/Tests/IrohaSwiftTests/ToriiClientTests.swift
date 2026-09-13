@@ -10888,43 +10888,21 @@ final class ToriiClientTests: XCTestCase {
                 noritoDecodeFrame(KagemushaNoritoV1.encodeTopUpRequestShape(topUp))
             ).payload
         )
-        let topUpBody = Data([1, 0x51, 0x52, 0x53])
-        let topUpTransaction = SignedTransactionEnvelope(
-            norito: topUpBody,
-            signedTransaction: Data(topUpBody.dropFirst()),
-            payload: nil,
-            transactionHash: Data(repeating: 0x54, count: 32)
-        )
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/kagemusha/top-up")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            XCTAssertEqual(
-                request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            XCTAssertEqual(
-                request.value(forHTTPHeaderField: "Idempotency-Key"),
-                topUp.operationID.hexEncodedString())
-            XCTAssertEqual(self.bodyData(from: request), topUpBody)
-            let response = HTTPURLResponse(
-                url: request.url!, statusCode: 202, httpVersion: nil,
-                headerFields: [
-                    "Content-Type": "application/json",
-                    "Location": "/v1/kagemusha/operations/\(topUp.operationID.hexEncodedString())",
-                    "Retry-After": "1",
-                ]
-            )!
-            return (
-                response,
-                try self.kagemushaStatusJSON(
-                    operationID: topUp.operationID, kind: "top_up", state: "pending")
-            )
+        // Deliberately malformed bytes must not acquire the SDK's prepared type.
+        // The prior fabricated envelope never proved a valid signed top-up route.
+        StubURLProtocol.handler = { _ in
+            XCTFail("Unverified transaction must not reach HTTP")
+            throw URLError(.unsupportedURL)
         }
-        let topUpStatus = try await makeClient().submitKagemushaTopUp(
-            topUpTransaction,
-            operationID: topUp.operationID
-        )
-        XCTAssertEqual(topUpStatus.kind, .topUp)
-        XCTAssertEqual(topUpStatus.state, .pending)
+        do {
+            let prepared = try KagemushaPreparedTopUpSubmissionV1(
+                signedTransaction: Data([1, 0x51, 0x52, 0x53]), expectedRequest: topUp)
+            _ = try await makeClient().submitKagemushaTopUp(prepared, withCurrentOwner: { try $0() })
+            XCTFail("Expected native signed-request rejection")
+        } catch {
+            let failure = error as? KagemushaTopUpSubmissionErrorV1
+            XCTAssertTrue(failure == .requestMismatch || failure == .bridgeUnavailable)
+        }
 
         let redemption = try kagemushaRedemptionRequest()
         let redemptionBody = try KagemushaNoritoV1.encodeRedemptionRequestShape(redemption)
@@ -10953,6 +10931,181 @@ final class ToriiClientTests: XCTestCase {
         let redemptionStatus = try await makeClient().submitKagemushaRedemption(redemption)
         XCTAssertEqual(redemptionStatus.kind, .redemption)
         XCTAssertEqual(redemptionStatus.state, .applied)
+    }
+
+    /// These tests exercise actual SDK task scheduling and streaming bounds only;
+    /// their arbitrary HTTP body is not a prepared submission or native fixture.
+    @MainActor
+    func testOwnedTopUpTaskOwnerChangeBeforeResumeSendsNothing() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        StubURLProtocol.handler = { _ in XCTFail("stale owner dispatched"); throw URLError(.unsupportedURL) }
+        let task = ToriiOwnedTopUpResponseTask(maximumBytes: 64, validateResponse: { _ in })
+        do {
+            _ = try await task.execute(session: session, request: URLRequest(url: URL(string: "https://example.test/v1/kagemusha/top-up")!),
+                withCurrentOwner: { _ in throw OwnedTopUpTestFailure.ownerRevoked })
+            XCTFail("owner check should reject before task resume")
+        } catch { XCTAssertEqual(error as? OwnedTopUpTestFailure, .ownerRevoked) }
+        try await requireNoOwnedTopUpTasks(session)
+    }
+
+    @MainActor
+    func testOwnedTopUpTaskCancellationBeforeStartSendsNothing() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        StubURLProtocol.handler = { _ in XCTFail("cancelled owner dispatched"); throw URLError(.unsupportedURL) }
+        let child = Task { @MainActor in
+            let task = ToriiOwnedTopUpResponseTask(maximumBytes: 64, validateResponse: { _ in })
+            return try await task.execute(session: session,
+                request: URLRequest(url: URL(string: "https://example.test/v1/kagemusha/top-up")!), withCurrentOwner: { try $0() })
+        }
+        child.cancel()
+        do { _ = try await child.value; XCTFail("cancelled task should fail") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        try await requireNoOwnedTopUpTasks(session)
+    }
+
+    @MainActor
+    func testOwnedTopUpTaskPreservesExactBodyAndDoesNotRetry429() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        var requests = 0
+        let exactBody = Data([1, 2, 3])
+        StubURLProtocol.handler = { request in
+            requests += 1
+            XCTAssertEqual(self.bodyData(from: request), exactBody)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "original-operation")
+            return (HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil,
+                headerFields: ["Content-Length": "2", "Retry-After": "3"])!, Data([4, 5]))
+        }
+        var request = URLRequest(url: URL(string: "https://example.test/v1/kagemusha/top-up")!)
+        request.httpMethod = "POST"; request.httpBody = exactBody
+        request.setValue("original-operation", forHTTPHeaderField: "Idempotency-Key")
+        let task = ToriiOwnedTopUpResponseTask(maximumBytes: 64, validateResponse: { _ in })
+        let (body, response) = try await task.execute(session: session, request: request, withCurrentOwner: { try $0() })
+        XCTAssertEqual(response.statusCode, 429); XCTAssertEqual(body, Data([4, 5])); XCTAssertEqual(requests, 1)
+        try await requireNoOwnedTopUpTasks(session)
+    }
+
+    @MainActor
+    func testOwnedTopUpTaskEnforcesStreamingResponseBound() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: [:])!, Data(repeating: 1, count: 65))
+        }
+        let task = ToriiOwnedTopUpResponseTask(maximumBytes: 64, validateResponse: { _ in })
+        do {
+            _ = try await task.execute(session: session,
+                request: URLRequest(url: URL(string: "https://example.test/v1/kagemusha/top-up")!), withCurrentOwner: { try $0() })
+            XCTFail("oversize response must fail while streaming")
+        } catch {
+            guard case ToriiClientError.invalidPayload(let message) = error else { return XCTFail("unexpected bound failure: \(error)") }
+            XCTAssertEqual(message, "KAGEMUSHA operation response exceeded its byte limit")
+        }
+        try await requireNoOwnedTopUpTasks(session)
+    }
+
+    @MainActor
+    func testOwnedTopUpTaskRejectsZeroOrRepeatedResumeAndWrapperFailure() async throws {
+        let cases: [(ToriiTopUpOwnershipV1, String?)] = [
+            ({ _ in }, "top-up owner did not invoke dispatch"),
+            ({ action in try action(); try action() }, "top-up owner invoked dispatch more than once"),
+            ({ action in try action(); try? action() }, "top-up owner invoked dispatch more than once"),
+            ({ action in try action(); throw OwnedTopUpTestFailure.ownerRevoked }, nil)
+        ]
+        for (owner, message) in cases {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [StubURLProtocol.self]
+            let session = URLSession(configuration: configuration)
+            defer { session.invalidateAndCancel() }
+            var requests = 0
+            StubURLProtocol.handler = { request in
+                requests += 1
+                return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: [:])!, Data([1]))
+            }
+            let task = ToriiOwnedTopUpResponseTask(maximumBytes: 64, validateResponse: { _ in })
+            do {
+                _ = try await task.execute(session: session,
+                    request: URLRequest(url: URL(string: "https://example.test/v1/kagemusha/top-up")!), withCurrentOwner: owner)
+                XCTFail("invalid owner wrapper must not return a fast successful response")
+            } catch {
+                if let message {
+                    guard case ToriiClientError.invalidPayload(let actual) = error else { XCTFail("wrong terminal error: \(error)"); continue }
+                    XCTAssertEqual(actual, message)
+                } else { XCTAssertEqual(error as? OwnedTopUpTestFailure, .ownerRevoked) }
+            }
+            XCTAssertLessThanOrEqual(requests, message == "top-up owner did not invoke dispatch" ? 0 : 1)
+            try await requireNoOwnedTopUpTasks(session)
+        }
+    }
+
+    @MainActor
+    func testOwnedTopUpTaskCancelsSuspendedTaskWhenWrapperSwallowsActionCancellation() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        StubURLProtocol.handler = { _ in XCTFail("cancelled action dispatched"); throw URLError(.unsupportedURL) }
+        let child = Task { @MainActor in
+            let task = ToriiOwnedTopUpResponseTask(maximumBytes: 64, validateResponse: { _ in })
+            return try await task.execute(session: session,
+                request: URLRequest(url: URL(string: "https://example.test/v1/kagemusha/top-up")!), withCurrentOwner: { action in
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    try? action()
+                })
+        }
+        do { _ = try await child.value; XCTFail("swallowed action failure must remain terminal") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        try await requireNoOwnedTopUpTasks(session)
+    }
+
+    @MainActor
+    func testOwnedTopUpTaskWithholdsSynchronousDelegateSuccessUntilWrapperCompletes() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let request = URLRequest(url: URL(string: "https://example.test/v1/kagemusha/top-up")!)
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: [:])!, Data([1]))
+        }
+        let task = ToriiOwnedTopUpResponseTask(maximumBytes: 64, validateResponse: { _ in })
+        do {
+            _ = try await task.execute(session: session, request: request, withCurrentOwner: { action in
+                try action()
+                // Deterministically deliver real delegate callbacks before the wrapper returns.
+                // This models an arbitrarily fast transport without a prepared/native bypass.
+                let callbackTask = session.dataTask(with: request)
+                defer { callbackTask.cancel() }
+                task.urlSession(session, dataTask: callbackTask,
+                    didReceive: HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: [:])!) { _ in }
+                task.urlSession(session, dataTask: callbackTask, didReceive: Data([1]))
+                task.urlSession(session, task: callbackTask, didCompleteWithError: nil)
+                throw OwnedTopUpTestFailure.ownerRevoked
+            })
+            XCTFail("Delegate success before owner completion must stay withheld")
+        } catch { XCTAssertEqual(error as? OwnedTopUpTestFailure, .ownerRevoked) }
+        try await requireNoOwnedTopUpTasks(session)
+    }
+
+    private func requireNoOwnedTopUpTasks(_ session: URLSession) async throws {
+        for _ in 0..<100 {
+            let tasks: [URLSessionTask] = await withCheckedContinuation { continuation in
+                session.getAllTasks { continuation.resume(returning: $0) }
+            }
+            if tasks.isEmpty { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Original live URLSession retained an owned top-up task before invalidation")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -17916,8 +18069,20 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             )
         }
 
-        for boundKind in ["", "Range", "Take", "all", "prefix", "range ", " take"] {
-            XCTAssertThrowsError(try decode(boundKind: boundKind))
+        for boundKind in ["", "range", "Range", "Take", "all", "prefix", "range ", " take"] {
+            XCTAssertThrowsError(try decode(boundKind: boundKind)) { error in
+                if boundKind == "range" {
+                    guard case DecodingError.dataCorrupted(let context) = error else {
+                        XCTFail("Expected dataCorrupted for retired bound_kind, got \(error)")
+                        return
+                    }
+                    XCTAssertEqual(context.codingPath.last?.stringValue, "bound_kind")
+                    XCTAssertEqual(
+                        context.debugDescription,
+                        "dynamic access hint bound_kind must be take or page"
+                    )
+                }
+            }
             XCTAssertThrowsError(
                 try JSONEncoder().encode(
                     ToriiContractDynamicAccessHint(
@@ -17927,7 +18092,19 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                         maxKeys: 1
                     )
                 )
-            )
+            ) { error in
+                if boundKind == "range" {
+                    guard case EncodingError.invalidValue(_, let context) = error else {
+                        XCTFail("Expected invalidValue for retired bound_kind, got \(error)")
+                        return
+                    }
+                    XCTAssertEqual(
+                        context.debugDescription,
+                        "dynamic access hint must use a canonical state declaration, "
+                            + "StateMap key type, take/page bound, and max_keys in 1...64"
+                    )
+                }
+            }
         }
         for maxKeys in [-1, 0, 65, 4_294_967_296] {
             XCTAssertThrowsError(try decode(maxKeys: maxKeys))
@@ -20737,3 +20914,5 @@ private func loadTxStatusErrorContractCases() throws -> [TxStatusErrorContractCa
     }
     return rawCases.compactMap(TxStatusErrorContractCase.init(raw:))
 }
+
+private enum OwnedTopUpTestFailure: Error, Equatable { case ownerRevoked }

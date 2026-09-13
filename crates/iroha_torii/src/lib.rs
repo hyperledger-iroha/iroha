@@ -32423,43 +32423,71 @@ async fn handler_post_contract_call(
         "call",
     )
     .await?;
-    let crate::routing::PreparedContractCallRequest {
-        mut response,
-        transaction,
-    } = crate::routing::prepare_contract_call_request(
+    let telemetry = app.telemetry.clone();
+    let result = match crate::routing::prepare_contract_call_request(
         app.queue.clone(),
         app.state.clone(),
         request.0,
-    )
-    .inspect_err(|_| {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("call"));
-    })?;
-    if let Some(transaction) = transaction {
-        let tx_hash_hex = hex::encode(transaction.hash().as_ref());
-        let entrypoint_hash_hex = hex::encode(transaction.hash_as_entrypoint().as_ref());
-        let admitted = submit_signed_transaction_for_ingress_strict_durable(
-            app.clone(),
-            headers,
-            None,
-            transaction,
-        )
-        .await?;
-        if admitted.status() != StatusCode::ACCEPTED {
-            return Ok(admitted);
-        }
-        // A certified acceptance proves admission. It does not prove local queue presence or Applied.
-        response.submitted = true;
-        response.tx_hash_hex = Some(tx_hash_hex.clone());
-        response.entrypoint_hash_hex = Some(entrypoint_hash_hex.clone());
-        response.transaction_payload_b64 = None;
-        response.signing_message_b64 = None;
-        response.operation_receipt.status = "submitted".to_owned();
-        response.operation_receipt.tx_hash_hex = Some(tx_hash_hex);
-        response.operation_receipt.entrypoint_hash_hex = Some(entrypoint_hash_hex);
+    ) {
+        Ok(prepared) => submit_prepared_contract_call(app, headers, prepared).await,
+        Err(err) => Err(err),
+    };
+    if !matches!(&result, Ok(response) if response.status().is_success()) {
+        telemetry.with_metrics(|tel| tel.inc_torii_contract_error("call"));
     }
-    Ok(JsonBody(response).into_response())
+    result
 }
+#[cfg(feature = "app_api")]
+async fn submit_prepared_contract_call(
+    app: SharedAppState,
+    headers: axum::http::HeaderMap,
+    prepared: crate::routing::PreparedContractCallRequest,
+) -> Result<AxResponse, Error> {
+    let crate::routing::PreparedContractCallRequest {
+        response,
+        transaction,
+    } = prepared;
+    let Some(transaction) = transaction else {
+        return Ok(JsonBody(response).into_response());
+    };
+    let tx_hash_hex = hex::encode(transaction.hash().as_ref());
+    let entrypoint_hash_hex = hex::encode(transaction.hash_as_entrypoint().as_ref());
+    // Preserve the caller's exact signature-bound bytes and the canonical
+    // owner's failure/ambiguity evidence. A prepared receipt is not admission.
+    let accept = headers
+        .get(axum::http::header::ACCEPT)
+        .cloned()
+        .map(crate::utils::extractors::ExtractAccept);
+    let admitted = submit_signed_transaction_for_ingress(app, headers, accept, transaction).await?;
+    Ok(contract_call_response_after_admission(
+        response,
+        admitted,
+        tx_hash_hex,
+        entrypoint_hash_hex,
+    ))
+}
+#[cfg(feature = "app_api")]
+fn contract_call_response_after_admission(
+    mut response: crate::routing::ContractCallResponseDto,
+    admitted: AxResponse,
+    tx_hash_hex: String,
+    entrypoint_hash_hex: String,
+) -> AxResponse {
+    if admitted.status() != StatusCode::ACCEPTED {
+        return admitted;
+    }
+    // Certified acceptance proves admission, not local queue presence or Applied.
+    response.submitted = true;
+    response.tx_hash_hex = Some(tx_hash_hex.clone());
+    response.entrypoint_hash_hex = Some(entrypoint_hash_hex.clone());
+    response.transaction_payload_b64 = None;
+    response.signing_message_b64 = None;
+    response.operation_receipt.status = "submitted".to_owned();
+    response.operation_receipt.tx_hash_hex = Some(tx_hash_hex);
+    response.operation_receipt.entrypoint_hash_hex = Some(entrypoint_hash_hex);
+    JsonBody(response).into_response()
+}
+
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_batch_prepare(
     State(app): State<SharedAppState>,

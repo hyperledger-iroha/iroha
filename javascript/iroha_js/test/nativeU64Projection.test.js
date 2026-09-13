@@ -18,13 +18,13 @@ const boundaries = [0n, 1n, safe - 1n, safe, safe + 1n, (1n << 64n) - 1n];
 const projected = (number) => number <= safe ? Number(number) : number.toString();
 
 function assertNativeRoundtrip(instruction) {
-  const frame = noritoEncodeInstruction(instruction);
-  const archive = noritoEncodeInstructionBoxArchive(instruction);
-  assert.deepEqual(noritoDecodeInstruction(frame), instruction);
-  assert.deepEqual(JSON.parse(noritoDecodeInstruction(frame, { parseJson: false })), instruction);
-  assert.deepEqual(noritoDecodeInstructionBoxArchive(archive), instruction);
-  assert.deepEqual(noritoEncodeInstruction(JSON.stringify(instruction)), frame);
-  assert.deepEqual(noritoEncodeInstructionBoxArchive(noritoDecodeInstructionBoxArchive(archive)), archive);
+  const frame = noritoEncodeInstruction(instruction, 753);
+  const archive = noritoEncodeInstructionBoxArchive(instruction, 753);
+  assert.deepEqual(noritoDecodeInstruction(frame, 753), instruction);
+  assert.deepEqual(JSON.parse(noritoDecodeInstruction(frame, 753, { parseJson: false })), instruction);
+  assert.deepEqual(noritoDecodeInstructionBoxArchive(archive, 753), instruction);
+  assert.deepEqual(noritoEncodeInstruction(JSON.stringify(instruction), 753), frame);
+  assert.deepEqual(noritoEncodeInstructionBoxArchive(noritoDecodeInstructionBoxArchive(archive, 753), 753), archive);
 }
 
 function gameExamples(value) {
@@ -116,9 +116,9 @@ test("native Game and verifying-key JSON reject integer aliases and overflow", (
       verifyingKey("UpdateVerifyingKey", value),
     ];
     for (const instruction of instructions) {
-      assert.throws(() => noritoEncodeInstruction(instruction));
-      assert.throws(() => noritoEncodeInstruction(JSON.stringify(instruction)));
-      assert.throws(() => noritoEncodeInstructionBoxArchive(instruction));
+      assert.throws(() => noritoEncodeInstruction(instruction, 753));
+      assert.throws(() => noritoEncodeInstruction(JSON.stringify(instruction), 753));
+      assert.throws(() => noritoEncodeInstructionBoxArchive(instruction, 753));
     }
   }
 });
@@ -131,7 +131,7 @@ test("native execution instruction codecs reject an empty proof payload", () => 
     { SettleGameSessionV1: { session_id: proof.statement.session_id, proof, outcome: row("GameOutcomeV1") } },
   ];
   for (const instruction of instructions) {
-    assert.throws(() => noritoEncodeInstruction(instruction), /proof_bytes must not be empty/u);
-    assert.throws(() => noritoEncodeInstructionBoxArchive(instruction), /proof_bytes must not be empty/u);
+    assert.throws(() => noritoEncodeInstruction(instruction, 753), /proof_bytes must not be empty/u);
+    assert.throws(() => noritoEncodeInstructionBoxArchive(instruction, 753), /proof_bytes must not be empty/u);
   }
 });

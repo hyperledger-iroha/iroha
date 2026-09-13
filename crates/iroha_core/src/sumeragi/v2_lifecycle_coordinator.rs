@@ -181,9 +181,11 @@ pub(crate) use ledger::{
 };
 #[cfg(all(test, feature = "bls"))]
 pub(in crate::sumeragi) use ledger::{
+    append_terminal_validate_before_current_control_for_test,
     control_timeout_supersession_persistence_failure_for_test,
     control_timeout_supersession_summary_for_test,
     install_non_timeout_broadcast_before_current_control_for_test,
+    install_proposal_broadcast_before_current_control_for_test,
     install_timeout_broadcasts_before_current_control_for_test,
 };
 pub(in crate::sumeragi) use open::AuthenticatedRecoveredReleasedValidateNoSuccessorV1;
@@ -215,16 +217,16 @@ pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLin
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 #[allow(unused_imports, reason = "reviewed replay-evidence namespace")]
 pub(in crate::sumeragi) use replay_authority::{
-    AuthenticatedRecoveredLifecycleOutputV1, DurableCertifiedFetchPendingMintPermit,
-    DurableLifecycleOutputPendingMintPermit, DurableStandaloneValidatePendingMintPermit,
-    DurableValidateReplayEvidenceV1, InvalidBodyReportReplayEvidenceV1,
-    LocalBodyPreIntentReplaySealV1, LocalProposalIntentReplayEvidenceV1,
-    LocalProposalReadyReplayEvidenceV1, LocalValidateReplayEvidenceV1,
-    PreparedLifecycleLocalProposalReadyV1, PublishedLifecycleLocalProposalReadyV1,
-    RecoveredDecisionApplyReplayLineageV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
-    RecoveredLifecycleNextWalVoteSealV1, RemoteProposalFetchReplayEvidenceV1,
-    RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
-    RemoteProposalValidateReplayEvidenceV1,
+    AuthenticatedBodyPipelineColdReplayOriginV1, AuthenticatedRecoveredLifecycleOutputV1,
+    DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
+    DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
+    InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
+    LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
+    LocalValidateReplayEvidenceV1, PreparedLifecycleLocalProposalReadyV1,
+    PublishedLifecycleLocalProposalReadyV1, RecoveredDecisionApplyReplayLineageV1,
+    RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
+    RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
+    RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
 };
 pub(crate) use replay_authority::{
     RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
@@ -428,8 +430,8 @@ pub(crate) struct ProductionLifecycleOwnerV1 {
     kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>,
     apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>,
     adapter_startup: Option<crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1>,
-    timeout_supersession_successor:
-        Option<ledger::AuthenticatedRecoveredTimeoutSupersessionSuccessorV1>,
+    owner_open_successor:
+        Option<ledger::AuthenticatedRecoveredOwnerOpenSuccessorV1>,
 }
 // PRODUCTION_LIFECYCLE_OWNER_DECLARATION_END
 /// Move-only permit for transferring the recovery-replay Apply service.

@@ -203,6 +203,64 @@ fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
     );
 }
 #[test]
+fn merge_frontier_rechecks_preserve_proposal_shape_and_retire_with_owner() {
+    let (context, _) = context();
+    let tag = EventTag::new(context.height, 3, Generation::new(18));
+    let owner = proposal_owner(&context, tag, None, None);
+    let subject = proposal_subject(b"merge frontier preserves local proposal");
+    let started_at = Instant::now();
+    for existing_retry in [None, Some(owner)] {
+        let mut state = LocalProposalState {
+            attempted: Some(owner),
+            submitted: Some((owner, subject)),
+            non_empty_retry: existing_retry,
+            pending_events: Some(PendingLocalEvents {
+                owner,
+                subject,
+                events: Vec::new(),
+            }),
+            ..LocalProposalState::default()
+        };
+        // Even a long publication delay must not arm the ordinary non-empty
+        // fallback or consume an already-owned proposal or recovery retry.
+        for elapsed_seconds in [0, 2, 60, 3_600] {
+            let now = started_at
+                .checked_add(Duration::from_secs(elapsed_seconds))
+                .expect("frontier fixture time is representable");
+            state.defer_merge_frontier(owner, now);
+            let wait = state
+                .candidate_work_wait
+                .expect("frontier recheck is armed");
+            assert_eq!(wait.owner, owner);
+            assert_eq!(wait.started_at, started_at);
+            assert_eq!(wait.next_retry, deadline_after(now, CANDIDATE_WORK_RECHECK));
+            assert!(wait.next_retry > now);
+            assert_eq!(state.attempted, Some(owner));
+            assert_eq!(state.submitted, Some((owner, subject)));
+            assert_eq!(state.non_empty_retry, existing_retry);
+            let pending = state.pending_events.as_ref().expect("events remain owned");
+            assert_eq!(pending.owner, owner);
+            assert_eq!(pending.subject, subject);
+            assert!(pending.events.is_empty());
+            assert!(state.global_selection.is_none());
+        }
+        let successor = proposal_owner(
+            &context,
+            EventTag::new(context.height, 4, Generation::new(19)),
+            None,
+            None,
+        );
+        state.reconcile(successor);
+        assert!(state.is_pristine(), "a new owner retires the old recheck");
+        state.defer_merge_frontier(successor, started_at);
+        assert_eq!(
+            state.candidate_work_wait.expect("successor recheck").owner,
+            successor
+        );
+        assert!(state.non_empty_retry.is_none());
+    }
+}
+#[test]
 fn first_same_subject_lock_preserves_pending_local_proposal_events() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 5, Generation::new(14));

@@ -34,7 +34,7 @@ const assetId = `${assetDefinitionId}#${authority}`;
 const feePayment = { payer: "authority", chargeLimits: [] };
 
 function inspectInstruction(label, instruction) {
-  const decoded = noritoDecodeInstruction(noritoEncodeInstruction(instruction));
+  const decoded = noritoDecodeInstruction(noritoEncodeInstruction(instruction, 753), 753);
   console.log(`\\n=== ${label} ===`);
   console.log(JSON.stringify(decoded, null, 2));
 }

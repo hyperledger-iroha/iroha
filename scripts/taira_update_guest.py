@@ -19,6 +19,17 @@ import time
 # One isolated remote process serves one explicit deployment and operation.
 SNAPSHOT_ARTIFACTS = {'snapshot.data', 'snapshot.sha256', 'snapshot.sig',
                       'snapshot.fast.norito', 'snapshot.merkle.json'}
+FAILED_START_CHAIN_SCHEMA = 'taira.failed-start-chain.v1'
+MAX_FAILED_START_ATTEMPTS = 16
+MAX_FAILED_START_RECORD_BYTES = 8 * 1024 * 1024
+MAX_FAILED_START_CHAIN_BYTES = 32 * 1024 * 1024
+COHORT_STALL_TIMEOUT_SECONDS = 600
+COHORT_MAX_TIMEOUT_SECONDS = 90 * 60
+COHORT_OBSERVATION_SCHEMA = 'taira.cohort-observation-intent.v1'
+COHORT_REMAINING_ACTIONS = ('observe_cohort', 'verify_strict_restore',
+                          'public_basic_doctor', 'publish_completion_receipts')
+FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
+                      'start-intent.json', 'failure.json')
 BOUND = False
 
 
@@ -35,8 +46,9 @@ def configure(plan):
     GENESIS_MANIFEST = Path(deployment['genesis_manifest'])
     CONFIG_RELEASE = deployment['config_release']
     PREDECESSOR = deployment['current']
-    OLD = PREDECESSOR['commit']
-    PREVIOUS_DAEMON = Path(PREDECESSOR['daemon'])
+    installed = plan.get('failed_start', {}).get('installed', PREDECESSOR)
+    OLD = installed['commit']
+    PREVIOUS_DAEMON = Path(installed['daemon'])
     DAEMON = BASE / ('release-' + plan['commit'] + '-' + plan['operation']) / 'bin/iroha3d_taira'
     CLI = DAEMON.with_name('iroha')
     ATTEMPT = BASE / plan['operation']
@@ -55,6 +67,219 @@ ENV = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/root', 'LC_ALL': 'C'}
 def need(value, reason):
     if not value:
         raise RuntimeError(reason)
+
+
+def validate_failed_start_inputs(deployment, baseline, failed, records, operation,
+                                previous_plan, previous_installed):
+    """Authenticate public failed-start lineage without inventing a completed runtime."""
+    current = deployment['current']
+    roles = deployment['roles']
+    units = [f'iroha3d-{role}.service' for role in roles]
+    need(failed.get('schema') == 'taira.daemon-update.plan.v1'
+         and failed.get('deployment') == deployment
+         and failed.get('network_id') == deployment['network_id']
+         and failed.get('renderer_sha256') == deployment['renderer_sha256'],
+         'failed-start baseline or plan differs')
+    commit, attempt = failed.get('commit', ''), failed.get('operation', '')
+    need(re.fullmatch('[0-9a-f]{40}', commit) and commit != current['commit']
+         and re.fullmatch('update-[0-9a-f]{32}', attempt) and attempt != operation
+         and attempt != current['attempt_name'], 'failed-start source or operation differs')
+    need(failed.get('retained_predecessor') == {
+        'attempt_name': current['attempt_name'],
+        'intent_sha256': hashlib.sha256(json.dumps(baseline, sort_keys=True,
+                                                   separators=(',', ':')).encode()).hexdigest()},
+        'failed-start completed predecessor proof differs')
+    artifacts = failed.get('artifacts', [])
+    need([row.get('name') for row in artifacts] == ['iroha3d_taira', 'iroha']
+         and all(row.get('package') == package
+                 and re.fullmatch('[0-9a-f]{64}', row.get('sha256', ''))
+                 and type(row.get('size')) is int and 1_000_000 < row['size'] < 1024 ** 3
+                 for row, package in zip(artifacts, ('irohad', 'iroha_cli'), strict=True)),
+         'failed-start artifact identities differ')
+    installed = {'commit': commit, 'attempt_name': attempt,
+                 'daemon': str(Path(deployment['runtime_root']) /
+                               ('release-' + commit + '-' + attempt) / 'bin/iroha3d_taira')}
+    need([row.get('role') for row in failed.get('units', [])] == roles
+         and [row.get('role') for row in baseline.get('units', [])] == roles,
+         'failed-start unit cohort differs')
+    for previous, row in zip(previous_plan['units'], failed['units'], strict=True):
+        before = base64.b64decode(row['before'], validate=True)
+        after = base64.b64decode(row['after'], validate=True)
+        old = previous_installed['daemon'].encode()
+        need(row['before'] == previous['after']
+             and row['before_sha256'] == previous['after_sha256']
+             and hashlib.sha256(before).hexdigest() == row['before_sha256']
+             and hashlib.sha256(after).hexdigest() == row['after_sha256']
+             and before.count(old) == 1
+             and before.replace(old, installed['daemon'].encode(), 1) == after
+             and unit_command(before) == [previous_installed['daemon'], '--config',
+                 str(Path(deployment['config_root']) / row['role'] / 'current/config/config.toml'), '--sora']
+             and unit_command(after)[0] == installed['daemon'],
+             'failed-start unit lineage differs')
+    need(set(records) == set(FAILED_START_RECORDS) and records['intent.json'] == failed,
+         'failed-start intent record differs')
+    need(records['start-intent.json'] == {
+        'units': units, 'automatic_old_binary_rollback_after_start': False},
+        'failed-start startup marker differs')
+    failure = records['failure.json']
+    need(set(failure) == {'error', 'new_start_attempted', 'installed_units'}
+         and isinstance(failure['error'], str) and failure['new_start_attempted'] is True
+         and failure['installed_units'] == roles, 'failed-start failure marker differs')
+    before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
+    need([row.get('role') for row in before] == roles
+         and [row.get('role') for row in checkpoints] == roles,
+         'failed-start retained evidence lacks exact cohort')
+    for row, checkpoint in zip(before, checkpoints, strict=True):
+        need(row['public']['commit'] == current['commit']
+             and row['public']['network_id'] == deployment['network_id']
+             and type(row['public']['height']) is int and row['public']['height'] > 0
+             and checkpoint.get('cohort_stopped') is True
+             and checkpoint.get('invocation_id') == row['systemd']['InvocationID']
+             and re.fullmatch('[0-9a-f]{32}', checkpoint['invocation_id'])
+             and type(checkpoint.get('checkpoint_height')) is int
+             and checkpoint['checkpoint_height'] >= deployment['replay_floor']
+             and type(checkpoint['kura_tip']['height']) is int
+             and checkpoint['kura_tip']['height'] >= max(checkpoint['checkpoint_height'], row['public']['height'])
+             and re.fullmatch('[0-9a-f]{64}', checkpoint['kura_tip']['hash']),
+             'failed-start checkpoint or historical observation differs')
+    return installed
+
+
+class FailedStartRecordBudget:
+    """Bound public evidence before JSON decoding, including duplicate reference reads."""
+    def __init__(self):
+        self.consumed = 0
+
+    def consume(self, raw):
+        need(len(raw) <= MAX_FAILED_START_RECORD_BYTES,
+             'failed-start public record exceeds byte bound')
+        self.consumed += len(raw)
+        need(self.consumed <= MAX_FAILED_START_CHAIN_BYTES,
+             'failed-start chain exceeds aggregate byte bound')
+
+
+def artifact_identity(artifacts):
+    """Canonical identity ignores storage paths, never binary bytes or package identity."""
+    need(isinstance(artifacts, list) and len(artifacts) == 2,
+         'exact daemon and CLI artifacts required')
+    identity = []
+    for row, (name, package) in zip(artifacts,
+            (('iroha3d_taira', 'irohad'), ('iroha', 'iroha_cli')), strict=True):
+        need(row.get('name') == name and row.get('package') == package
+             and isinstance(row.get('sha256'), str)
+             and re.fullmatch('[0-9a-f]{64}', row['sha256'])
+             and type(row.get('size')) is int and 1_000_000 < row['size'] < 1024 ** 3,
+             'invalid ordered daemon or CLI artifact identity')
+        identity.append((name, package, row['sha256'], row['size']))
+    return tuple(identity)
+
+
+def validate_candidate_transition(commit, artifacts, completed_commit, installed_plan):
+    """A new operation may reuse the installed source only with identical artifacts."""
+    need(re.fullmatch('[0-9a-f]{40}', commit) and commit != completed_commit,
+         'candidate cannot repeat the completed runtime')
+    candidate = artifact_identity(artifacts)
+    if commit == installed_plan['commit']:
+        need(candidate == artifact_identity(installed_plan['artifacts']),
+             'same source commit has different prepared daemon or CLI bytes')
+
+
+def failed_attempt_reference_identity(reference):
+    """Validate reference shape and compare immutable bytes independently of capture paths."""
+    need(set(reference) == {'operation', 'plan', 'records'}
+         and re.fullmatch('update-[0-9a-f]{32}', reference['operation'])
+         and set(reference['records']) == set(FAILED_START_RECORDS),
+         'failed-start attempt reference fields differ')
+    for ref in (reference['plan'], *reference['records'].values()):
+        need(set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str)
+             and Path(ref['path']).is_absolute()
+             and isinstance(ref['sha256'], str)
+             and re.fullmatch('[0-9a-f]{64}', ref['sha256']),
+             'failed-start public record reference differs')
+    need(reference['plan']['sha256'] == reference['records']['intent.json']['sha256'],
+         'failed-start plan and installed intent bytes differ')
+    return (reference['operation'], reference['plan']['sha256'],
+            tuple((name, reference['records'][name]['sha256']) for name in FAILED_START_RECORDS))
+
+
+def validate_failed_start_prefix(failed, prefix, installed):
+    """Historical intents must authenticate exactly the earlier chain, without following paths."""
+    ancestry = failed.get('failed_start')
+    if not prefix:
+        need('failed_start' not in failed, 'first failed attempt has an unbound ancestor')
+        return
+    need(isinstance(ancestry, dict) and ancestry.get('installed') == installed,
+         'failed-start ancestor installed identity differs')
+    if ancestry.get('schema') == 'taira.failed-start-reference.v1':
+        # This is immutable incident evidence, not an accepted operator input.
+        need(len(prefix) == 1 and set(ancestry) == {'schema', 'plan', 'records', 'installed'},
+             'historical failed-start reference does not bind the complete prefix')
+        actual = [{'operation': installed['attempt_name'], 'plan': ancestry['plan'],
+                   'records': ancestry['records']}]
+    else:
+        need(set(ancestry) == {'schema', 'attempts', 'installed'}
+             and ancestry['schema'] == FAILED_START_CHAIN_SCHEMA
+             and isinstance(ancestry['attempts'], list)
+             and len(ancestry['attempts']) == len(prefix),
+             'failed-start ancestry does not bind the complete prefix')
+        actual = ancestry['attempts']
+    need([failed_attempt_reference_identity(ref) for ref in actual]
+         == [failed_attempt_reference_identity(ref) for ref in prefix],
+         'failed-start ancestor record identities differ')
+
+
+def validate_failed_start_chain(reference, deployment, baseline, operation, load_attempt,
+                                baseline_observations=None, candidate=None):
+    """Authenticate a bounded oldest-to-newest chain while keeping completed health separate."""
+    need(set(reference) == {'schema', 'attempts'}
+         and reference['schema'] == FAILED_START_CHAIN_SCHEMA
+         and isinstance(reference['attempts'], list)
+         and 1 <= len(reference['attempts']) <= MAX_FAILED_START_ATTEMPTS,
+         'bounded failed-start chain required')
+    current = deployment['current']
+    seen = {operation, current['attempt_name']}
+    installed, previous_plan = current, baseline
+    entries = []
+    source_artifacts = {}
+    previous_checkpoints = None
+    historical_health = baseline_observations
+    for index, ref in enumerate(reference['attempts']):
+        failed_attempt_reference_identity(ref)
+        need(ref['operation'] not in seen, 'failed-start chain repeats an operation')
+        seen.add(ref['operation'])
+        failed, records = load_attempt(ref)
+        need(failed.get('operation') == ref['operation'], 'failed-start operation differs')
+        validate_failed_start_prefix(failed, reference['attempts'][:index], installed)
+        next_installed = validate_failed_start_inputs(
+            deployment, baseline, failed, records, operation, previous_plan, installed)
+        validate_candidate_transition(failed['commit'], failed['artifacts'],
+                                      current['commit'], previous_plan)
+        identity = artifact_identity(failed['artifacts'])
+        need(source_artifacts.setdefault(failed['commit'], identity) == identity,
+             'failed-start ancestry reused a source with different binary bytes')
+        before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
+        if historical_health is None:
+            historical_health = before
+        for original, observed in zip(historical_health, before, strict=True):
+            compare_retained_identity(original, observed)
+            need(original['public'] == observed['public'],
+                 'failed-start historical health differs from completed predecessor')
+        if previous_checkpoints is not None:
+            for previous, checkpoint in zip(previous_checkpoints, checkpoints, strict=True):
+                old, new = previous['kura_tip'], checkpoint['kura_tip']
+                need(new['height'] >= old['height']
+                     and checkpoint['checkpoint_height'] >= previous['checkpoint_height']
+                     and (new['height'] != old['height'] or new['hash'] == old['hash']),
+                     'failed-start checkpoint ancestry regressed')
+        installed, previous_plan, previous_checkpoints = next_installed, failed, checkpoints
+        entries.append((failed, records))
+    if candidate is not None:
+        validate_candidate_transition(candidate['commit'], candidate['artifacts'],
+                                      current['commit'], previous_plan)
+        if candidate['commit'] in source_artifacts:
+            need(artifact_identity(candidate['artifacts']) == source_artifacts[candidate['commit']],
+                 'candidate source differs from its retained ancestry artifacts')
+    return installed, entries
 
 
 def stamp(path, directory=False):
@@ -93,16 +318,25 @@ def record(name, value):
     write_new(ATTEMPT / name, (json.dumps(value, sort_keys=True) + '\n').encode())
 
 
-def command(argv, *, timeout=60, name=None):
+class NativeCommandFailure(RuntimeError):
+    """Expose a native exit code without copying stdout, stderr or argv."""
+    def __init__(self, label, exit_code):
+        self.exit_code = exit_code
+        super().__init__(f'native command failed: {label} (exit {exit_code})')
+
+
+def command(argv, *, timeout=60, name=None, pass_fds=()):
     # Output may contain native configuration diagnostics; retain it privately,
     # never include arbitrary stderr/config-related output in the public report.
     result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL,
-                            capture_output=True, timeout=timeout, env=ENV)
+                            capture_output=True, timeout=timeout, env=ENV,
+                            pass_fds=pass_fds)
     if name:
         write_new(ATTEMPT / (name + '.stdout'), result.stdout)
         write_new(ATTEMPT / (name + '.stderr'), result.stderr)
         record(name + '.result.json', {'exit_code': result.returncode})
-    need(result.returncode == 0, 'native command failed: ' + (name or Path(argv[0]).name))
+    if result.returncode != 0:
+        raise NativeCommandFailure(name or Path(argv[0]).name, result.returncode)
     return result.stdout
 
 
@@ -156,7 +390,7 @@ def replace_daemon(raw, role):
 def systemd(unit):
     names = ('LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlPID',
              'FragmentPath', 'DropInPaths', 'NeedDaemonReload', 'InvocationID', 'Job',
-             'Result', 'ExecMainCode', 'ExecMainStatus')
+             'Result', 'ExecMainCode', 'ExecMainStatus', 'NRestarts')
     raw = command(['/usr/bin/systemctl', 'show', '--all',
                    *['--property=' + name for name in names], unit], timeout=15)
     result = dict(line.split('=', 1) for line in raw.decode().splitlines())
@@ -168,21 +402,44 @@ def systemd(unit):
     return result
 
 
+def public_probe(index, route, *, name=None):
+    need(route in ('/status', '/v1/accounts/faucet/puzzle', '/readyz'),
+         'unexpected public probe route')
+    label = f'role={ROLES[index]} endpoint={route}'
+    accept = 'text/plain' if route == '/readyz' else 'application/json'
+    try:
+        return command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
+                        '-H', 'Accept: ' + accept, f'http://127.0.0.1:{PORTS[index]}{route}'],
+                       timeout=10, name=name)
+    except NativeCommandFailure as error:
+        raise RuntimeError(f'public probe failed: {label} curl_exit={error.exit_code}') from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f'public probe failed: {label} timeout') from None
+    except (RuntimeError, OSError):
+        raise RuntimeError(f'public probe failed: {label} native_probe_unavailable') from None
+
+
 def public_get(index, route):
-    raw = command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                   '-H', 'Accept: application/json', f'http://127.0.0.1:{PORTS[index]}{route}'], timeout=10)
-    need(len(raw) <= 2 * 1024 * 1024, 'public response exceeds bound')
-    return json.loads(raw)
+    raw = public_probe(index, route)
+    label = f'role={ROLES[index]} endpoint={route}'
+    need(len(raw) <= 2 * 1024 * 1024, 'public response exceeds bound: ' + label)
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('public identity is not valid JSON: ' + label) from None
+    need(isinstance(value, dict), 'public identity is not an object: ' + label)
+    return value
 
 
 def public_identity(index):
     status = public_get(index, '/status')
     puzzle = public_get(index, '/v1/accounts/faucet/puzzle')
     need(puzzle.get('network_id') == NETWORK and puzzle.get('chain_discriminant') == 369,
-         'live NetworkId or Taira prefix changed')
+         f'live NetworkId or Taira prefix changed: role={ROLES[index]} endpoint=/v1/accounts/faucet/puzzle')
     build = status.get('build', {})
     height = status.get('blocks')
-    need(type(height) is int and height > 0, 'positive retained height missing')
+    need(isinstance(build, dict) and type(height) is int and height > 0,
+         f'public build identity or positive retained height missing: role={ROLES[index]} endpoint=/status')
     return {'network_id': puzzle['network_id'], 'height': height,
             'commit': build.get('git_commit_sha')}
 
@@ -208,10 +465,23 @@ def retained_identity(row, *, after=False):
             'current_target': os.readlink(selector), 'executable': expected_exe}
 
 
+def process_summary(props):
+    """Render only bounded systemd state fields, never native diagnostic text."""
+    fields = ('ActiveState', 'SubState', 'MainPID', 'InvocationID', 'NRestarts',
+              'Result', 'ExecMainStatus')
+    values = []
+    for key in fields:
+        value = props.get(key, 'unavailable')
+        safe = value if isinstance(value, str) and re.fullmatch('[A-Za-z0-9_-]{1,64}', value) else 'invalid'
+        values.append(key + '=' + safe)
+    return ','.join(values)
+
+
 def observe(row, *, after=False):
     props = systemd(f'iroha3d-{row["role"]}.service')
     need(props['ActiveState'] == 'active' and props['SubState'] == 'running'
-         and props['ControlPID'] == '0', 'validator not running: ' + row['role'])
+         and props['ControlPID'] == '0',
+         'validator not running: ' + row['role'] + ' ' + process_summary(props))
     pid = int(props['MainPID'])
     need(pid > 0, 'validator PID missing')
     identity = retained_identity(row, after=after)
@@ -220,9 +490,20 @@ def observe(row, *, after=False):
     need(actual == cmd, 'daemon argv differs: ' + row['role'])
     need(os.readlink(f'/proc/{pid}/exe') == identity['executable'],
          'daemon executable differs: ' + row['role'])
-    identity.update(systemd=props, public=public_identity(ROLES.index(row['role'])))
-    need(systemd(f'iroha3d-{row["role"]}.service') == props,
-         'validator changed during observation: ' + row['role'])
+    try:
+        public = public_identity(ROLES.index(row['role']))
+    except RuntimeError as error:
+        try:
+            current = systemd(f'iroha3d-{row["role"]}.service')
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            current = {}
+        raise RuntimeError(str(error) + '; observed=' + process_summary(props)
+                           + '; current=' + process_summary(current)) from None
+    identity.update(systemd=props, public=public)
+    current = systemd(f'iroha3d-{row["role"]}.service')
+    need(current == props,
+         'validator changed during observation: ' + row['role']
+         + ' observed=' + process_summary(props) + '; current=' + process_summary(current))
     return identity
 
 
@@ -453,61 +734,256 @@ def compare_retained_identity(old, new):
         need(old[key] == new[key], 'retained identity changed: ' + key)
 
 
-def wait_for_cohort(rows, before, *, after, commit, timeout=180):
-    deadline = time.monotonic() + timeout
+def cohort_retained_tip(checkpoints):
+    """Freeze the existing cohort's highest committed prefix before startup."""
+    need(tuple(row['role'] for row in checkpoints) == ROLES,
+         'retained Kura checkpoint cohort differs')
+    tips = [row['kura_tip'] for row in checkpoints]
+    need(all(type(tip['height']) is int and tip['height'] >= REPLAY_BARRIER
+             and re.fullmatch('[0-9a-f]{64}', tip['hash']) for tip in tips),
+         'retained cohort Kura tip is invalid')
+    height = max(tip['height'] for tip in tips)
+    hashes = {tip['hash'] for tip in tips if tip['height'] == height}
+    need(len(hashes) == 1, 'highest retained Kura tips disagree')
+    return {'height': height, 'hash': hashes.pop()}
+
+
+def verify_cohort_processes(observations, expected=None):
+    """Reject exits/restarts during the complete cohort observation window."""
+    for observed, original in zip(observations, expected or observations, strict=True):
+        role = observed['role']
+        props = observed['systemd']
+        need(role == original['role']
+             and props['ActiveState'] == 'active' and props['SubState'] == 'running'
+             and props['ControlPID'] == '0' and int(props['MainPID']) > 0
+             and re.fullmatch('[0-9a-f]{32}', props['InvocationID'])
+             and all(props[key] == original['systemd'][key]
+                     for key in ('MainPID', 'InvocationID')),
+             'validator process changed across cohort verification: ' + role
+             + ' expected=' + process_summary(original['systemd'])
+             + '; observed=' + process_summary(props))
+        current = systemd(f'iroha3d-{role}.service')
+        need(current == props, 'validator process changed across cohort verification: ' + role
+             + ' observed=' + process_summary(props) + '; current=' + process_summary(current))
+
+
+def observe_healthy_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
+    """Observe every candidate process, including healthy peers still catching up."""
+    observations = [observe(row, after=after) for row in rows]
+    for old, new in zip(before, observations, strict=True):
+        compare_retained_identity(old, new)
+        need(new['public']['commit'] == commit
+             and new['public']['height'] >= old['public']['height'],
+             'revision or retained validator height is not ready: ' + new['role'])
+        if new['public']['height'] >= retained_tip['height']:
+            require_retained_tip(new['role'], retained_tip)
+    for row in rows:
+        index = ROLES.index(row['role'])
+        public_probe(index, '/readyz')
+    verify_cohort_processes(observations, expected_processes)
+    return observations
+
+
+def observe_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
+    observations = observe_healthy_cohort(rows, before, after=after, commit=commit,
+                                        retained_tip=retained_tip, expected_processes=expected_processes)
+    for observed in observations:
+        need(observed['public']['height'] >= retained_tip['height'],
+             'common retained cohort height is not ready: ' + observed['role'])
+    return observations
+
+
+def wait_for_cohort(rows, before, *, after, commit, retained_tip,
+                    timeout=COHORT_STALL_TIMEOUT_SECONDS,
+                    max_timeout=COHORT_MAX_TIMEOUT_SECONDS):
+    """Extend catch-up only for advancing peers; never restart or rebuild here."""
+    need(0 < timeout <= max_timeout <= COHORT_MAX_TIMEOUT_SECONDS,
+         'cohort observation time bounds are invalid')
+    started = time.monotonic()
+    hard_deadline = started + max_timeout
+    progress_deadlines = [started + timeout for _ in rows]
+    pending = list(range(len(rows)))
+    previous_heights = None
+    expected_processes = None
+    last_healthy = started
+    deadline = min(hard_deadline, started + timeout)
     latest = None
     while time.monotonic() < deadline:
         try:
-            observations = [observe(row, after=after) for row in rows]
-            for old, new in zip(before, observations, strict=True):
-                compare_retained_identity(old, new)
-                need(new['public']['commit'] == commit
-                     and new['public']['height'] >= old['public']['height'],
-                     'revision or retained height is not ready')
-            for index in range(len(rows)):
-                command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                         '-H', 'Accept: text/plain', f'http://127.0.0.1:{PORTS[index]}/readyz'], timeout=10)
-            return observations
+            observations = observe_healthy_cohort(
+                rows, before, after=after, commit=commit, retained_tip=retained_tip,
+                expected_processes=expected_processes)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
             latest = str(error)
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                time.sleep(min(2, remaining))
+        else:
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            heights = [row['public']['height'] for row in observations]
+            if previous_heights is not None:
+                for index, (previous, height) in enumerate(zip(previous_heights, heights, strict=True)):
+                    need(height >= previous, 'committed catch-up height regressed: ' + rows[index]['role'])
+                    if previous < retained_tip['height'] and height > previous:
+                        progress_deadlines[index] = now + timeout
+            if expected_processes is None:
+                expected_processes = [{'role': row['role'], 'systemd': dict(row['systemd'])}
+                                      for row in observations]
+            previous_heights = heights
+            last_healthy = now
+            pending = [index for index, height in enumerate(heights) if height < retained_tip['height']]
+            if not pending:
+                return observations
+            latest = 'common retained cohort height is not ready: ' + ', '.join(
+                rows[index]['role'] for index in pending)
+        deadline = min(hard_deadline, last_healthy + timeout,
+                       *(progress_deadlines[index] for index in pending))
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(2, remaining))
     raise RuntimeError('cohort observation deadline: ' + str(latest))
 
 
+def read_bounded_proc(path, limit):
+    """Read only an explicitly selected public procfs projection."""
+    with path.open('rb') as source:
+        raw = source.read(limit + 1)
+    need(len(raw) <= limit, 'public updater process projection exceeds bound')
+    return raw
+
+
+def cohort_process_start_time(pid):
+    """Read a live process's public start-time field without its environment."""
+    need(type(pid) is int and pid > 0, 'invalid updater process PID')
+    raw = read_bounded_proc(Path('/proc') / str(pid) / 'stat', 4096)
+    parts = raw.rsplit(b') ', 1)
+    need(len(parts) == 2, 'updater process stat is malformed')
+    prefix, fields = parts
+    fields = fields.split()
+    need(prefix.split(b' ', 1)[0] == str(pid).encode() and len(fields) >= 20
+         and fields[0] not in (b'Z', b'X') and fields[19].isdigit(),
+         'updater process identity is not live')
+    return int(fields[19])
+
+
+def cohort_observation_owner(pid=None):
+    """Identify a live guest Python process holding the exact update flock."""
+    pid = os.getpid() if pid is None else pid
+    start_time = cohort_process_start_time(pid)
+    process = Path('/proc') / str(pid)
+    argv = read_bounded_proc(process / 'cmdline', 4096).split(b'\0')
+    need(argv == [b'/usr/bin/python3', b'-I', b'-', b''], 'updater process argv differs')
+    lock_path = BASE / '.routine-update.lock'
+    lock = stamp(lock_path)
+    need(stat.S_ISREG(lock[2]) and lock[3] == 0 and lock[5] == 1
+         and stat.S_IMODE(lock[2]) == 0o600, 'invalid guest update lock')
+    device, inode = lock[:2]
+    matches = []
+    for line in read_bounded_proc(Path('/proc/locks'), 1024 * 1024).splitlines():
+        row = line.split()
+        if len(row) != 8 or row[1:5] != [b'FLOCK', b'ADVISORY', b'WRITE', str(pid).encode()]:
+            continue
+        identity = row[5].split(b':')
+        if len(identity) == 3 and row[6:] == [b'0', b'EOF']:
+            major, minor, number = int(identity[0], 16), int(identity[1], 16), int(identity[2])
+            if (major, minor, number) == (os.major(device), os.minor(device), inode):
+                matches.append(row)
+    need(len(matches) == 1, 'updater no longer holds the exact update flock')
+    need(stamp(lock_path) == lock and cohort_process_start_time(pid) == start_time
+         and read_bounded_proc(process / 'cmdline', 4096).split(b'\0') == argv,
+         'updater process or lock changed during observation')
+    return {'pid': pid, 'start_time_ticks': start_time,
+            'argv': ['/usr/bin/python3', '-I', '-'], 'lock': {'device': device, 'inode': inode}}
+
+
+def stopped_owner_maintenance(operation):
+    """Let the native custody owner retire only the proven stopped cohort."""
+    request_name = 'stopped-owner-maintenance-request.json'
+    record(request_name, {
+        'schema': 'taira.stopped-owner-maintenance.request.v1',
+        'operation_directory': str(ATTEMPT), 'owner': cohort_observation_owner()})
+    # The candidate verifies its direct parent, the held update flock, all four
+    # stopped units and retained roots before taking the existing slot locks.
+    # Only public process/plan identities cross this descriptor; Python never
+    # opens custody files or performs native owner cleanup itself.
+    request_fd = os.open(ATTEMPT / request_name, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        raw = command([CLI, 'taira', 'stopped-owner-maintenance',
+                       '--request-fd', str(request_fd)], timeout=150,
+                      name='stopped-owner-maintenance-command', pass_fds=(request_fd,))
+    finally:
+        os.close(request_fd)
+    need(len(raw) <= 16_384, 'native stopped-owner maintenance report exceeds bound')
+    try:
+        report = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('native stopped-owner maintenance report is not valid JSON') from None
+    need(isinstance(report, dict)
+         and set(report) == {'schema', 'operation', 'all_four_stopped_owners_clean'}
+         and report['schema'] == 'taira.stopped-owner-maintenance.result.v1'
+         and report['operation'] == operation
+         and report['all_four_stopped_owners_clean'] is True,
+         'native stopped-owner maintenance did not prove the exact stopped cohort')
+
+
+def verify_cohort_observation_owner(intent):
+    """Read-only proof of an active observation owner; never acquire its lock."""
+    need(intent.get('schema') == COHORT_OBSERVATION_SCHEMA
+         and intent.get('operation') == ATTEMPT.name and intent.get('phase') == 'cohort_observation'
+         and re.fullmatch('[0-9a-f]{40}', intent.get('commit', ''))
+         and DAEMON == BASE / ('release-' + intent['commit'] + '-' + ATTEMPT.name) / 'bin/iroha3d_taira'
+         and intent.get('automatic_restart_or_rollback_after_start') is False
+         and intent.get('remaining_actions') == list(COHORT_REMAINING_ACTIONS),
+         'cohort observation intent differs')
+    terminal = [ATTEMPT / name for name in ('result.json', 'failure.json', 'rollback.json')]
+    need(not any(os.path.lexists(path) for path in terminal), 'cohort observation already terminated')
+    expected = intent['owner']
+    owner = cohort_observation_owner(expected['pid'])
+    need(owner == expected and not any(os.path.lexists(path) for path in terminal),
+         'cohort observation owner changed or terminated')
+    return owner
+
+
+def retained_public_record(directory, name, digest=None, budget=None):
+    """Read a bounded root-owned public receipt, optionally pinned by captured bytes."""
+    path = directory / name
+    before = stamp(path)
+    need(before[6] <= 8 * 1024 * 1024, 'retained public record exceeds bound')
+    raw = path.read_bytes()
+    need(before == stamp(path), 'retained public record changed during read')
+    if digest is not None:
+        need(re.fullmatch('[0-9a-f]{64}', digest)
+             and hashlib.sha256(raw).hexdigest() == digest, 'failed-start public record digest differs')
+    if budget is not None:
+        budget.consume(raw)
+    return json.loads(raw)
+
+
 def retained_attempt(plan):
-    """Use the exact installed predecessor public receipts; no previous runtime HTTP required."""
+    """Verify completion separately from an explicitly authenticated failed installation."""
     prior = plan['retained_predecessor']
     need(prior['attempt_name'] == PREDECESSOR['attempt_name'], 'installed predecessor required')
     directory = BASE / prior['attempt_name']
     stamp(directory, True)
 
     def public_record(name):
-        path = directory / name
-        before = stamp(path)
-        need(before[6] <= 8 * 1024 * 1024, 'retained public record exceeds bound')
-        value = json.loads(path.read_bytes())
-        need(before == stamp(path), 'retained public record changed during read')
-        return value
+        return retained_public_record(directory, name)
 
     intent = public_record('intent.json')
     digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     need(digest == prior['intent_sha256'], 'predecessor intent differs')
     need(intent.get('schema') == PREDECESSOR['plan_schema']
-         and intent['network_id'] == plan['network_id'] and intent['commit'] == OLD
-         and plan['commit'] != OLD, 'installed predecessor source or candidate differs')
+         and intent['network_id'] == plan['network_id'] and intent['commit'] == PREDECESSOR['commit']
+         and plan['commit'] != PREDECESSOR['commit'],
+         'installed predecessor source or candidate differs')
     need(tuple(row['role'] for row in intent['units']) == ROLES, 'predecessor plan lacks exact cohort')
-    for original, current in zip(intent['units'], plan['units'], strict=True):
-        need(original['after'] == current['before'] and original['after_sha256'] == current['before_sha256'],
-             'successor changed installed predecessor unit')
     before = public_record('after.json')
     checkpoints = public_record('checkpoint-stopped.json')
     restored = public_record('checkpoint-restored.json')
     need(tuple(row['role'] for row in before) == ROLES
          and tuple(row['role'] for row in checkpoints) == ROLES
          and tuple(row['role'] for row in restored) == ROLES, 'predecessor evidence lacks exact cohort')
-    need(all(row['public']['commit'] == OLD and row['public']['network_id'] == NETWORK for row in before),
+    need(all(row['public']['commit'] == PREDECESSOR['commit']
+             and row['public']['network_id'] == NETWORK for row in before),
          'installed predecessor runtime differs')
     need(all(row.get('native_strict_checkpoint_verified') is True for row in restored),
          'predecessor Strict restoration is not verified')
@@ -516,15 +992,56 @@ def retained_attempt(plan):
          and completed.get('runtime_update_complete') is True
          and completed.get('state_preserved') is True
          and completed.get('retained_native_snapshot_verified') is True
-         and completed.get('commit') == OLD and completed.get('network_id') == NETWORK,
+         and completed.get('commit') == PREDECESSOR['commit'] and completed.get('network_id') == NETWORK,
          'installed predecessor completion receipt differs')
+    installed_plan = intent
+    if 'failed_start' in plan:
+        reference = plan['failed_start']
+        need(set(reference) == {'schema', 'attempts', 'installed'}
+             and set(reference['installed']) == {'commit', 'attempt_name', 'daemon'},
+             'failed-start chain plan fields differ')
+        budget = FailedStartRecordBudget()
+
+        def load_attempt(ref):
+            directory = BASE / ref['operation']
+            stamp(directory, True)
+            # Partial observations never substitute for a terminal outcome.
+            for name in ('result.json', 'rollback.json'):
+                need(not os.path.lexists(directory / name),
+                     'failed-start attempt has a success or rollback marker: ' + name)
+            records = {name: retained_public_record(directory, name, value['sha256'], budget)
+                       for name, value in ref['records'].items()}
+            return records['intent.json'], records
+
+        public_reference = {key: value for key, value in reference.items() if key != 'installed'}
+        installed, entries = validate_failed_start_chain(
+            public_reference, plan['deployment'], intent, plan['operation'], load_attempt,
+            baseline_observations=before, candidate=plan)
+        need(installed == reference['installed'] and installed['commit'] == OLD
+             and installed['daemon'] == str(PREVIOUS_DAEMON), 'failed-start installed identity differs')
+        # Verify every retained ancestor prefix in the live journal. The final
+        # stop barrier independently freezes and verifies the newest prefix.
+        for failed, records in entries:
+            for checkpoint in records['checkpoint-stopped.json']:
+                require_retained_tip(checkpoint['role'], checkpoint['kura_tip'])
+        installed_plan, records = entries[-1]
+        for artifact, path in zip(installed_plan['artifacts'],
+                                  (PREVIOUS_DAEMON, PREVIOUS_DAEMON.with_name('iroha')), strict=True):
+            need(native_digest(path) == artifact['sha256'] and stamp(path)[6] == artifact['size'],
+                 'failed-start installed artifact differs')
+        before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
+    validate_candidate_transition(plan['commit'], plan['artifacts'], PREDECESSOR['commit'],
+                                  installed_plan)
+    for original, current in zip(installed_plan['units'], plan['units'], strict=True):
+        need(original['after'] == current['before'] and original['after_sha256'] == current['before_sha256'],
+             'successor changed installed predecessor unit')
     return before, checkpoints
 
 
 def apply(plan):
     configure(plan)
     need(os.geteuid() == 0 and plan['network_id'] == NETWORK, 'guest or network differs')
-    need(plan['commit'] != OLD, 'candidate must replace the current runtime')
+    need(plan['commit'] != PREDECESSOR['commit'], 'candidate cannot repeat the completed runtime')
     need(tuple(row['role'] for row in plan['units']) == ROLES, 'four ordered roles required')
     need([row['name'] for row in plan['artifacts']] == ['iroha3d_taira', 'iroha'],
          'exact candidate daemon and same-revision CLI required')
@@ -555,9 +1072,15 @@ def apply(plan):
         after = base64.b64decode(row['after'], validate=True)
         need(replace_daemon(raw, row['role']) == after, 'unit changes exceed approved cmd[0]')
         snapshot = dict(retained[0][index])
-        compare_retained_identity(snapshot, retained_identity(row))
+        identity = retained_identity(row)
+        compare_retained_identity(snapshot, identity)
+        # Health stays the last completed observation. Unit metadata and the
+        # executable describe the installed release, which may have failed.
+        snapshot['unit_stamp'] = identity['unit_stamp']
+        if 'executable' in identity:
+            snapshot['executable'] = identity['executable']
         snapshot.pop('config_sha256', None)  # The exact retained metadata is checked; no private rehash.
-        need(snapshot['public']['commit'] == OLD, 'predecessor runtime differs')
+        need(snapshot['public']['commit'] == PREDECESSOR['commit'], 'predecessor runtime differs')
         before.append(snapshot)
         write_new(ATTEMPT / (row['role'] + '.before.service'), raw)
         write_new(ATTEMPT / (f'iroha3d-{row["role"]}.service'), after, snapshot['unit_stamp'][2] & 0o7777)
@@ -581,6 +1104,9 @@ def apply(plan):
         checkpoints = [checkpoint_barrier(row, stopped=True, prior=prior)
                        for row, prior in zip(before, retained[1], strict=True)]
         record('checkpoint-stopped.json', checkpoints)
+        retained_tip = cohort_retained_tip(checkpoints)
+        record('cohort-retained-tip.json', retained_tip)
+        stopped_owner_maintenance(plan['operation'])
         for row, original in zip(plan['units'], before, strict=True):
             path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
             install_unit(path, base64.b64decode(row['after']), base64.b64decode(row['before']),
@@ -595,15 +1121,20 @@ def apply(plan):
                  'stopped Kura tip changed before new runtime startup')
         new_start_attempted = True
         command(['/usr/bin/systemctl', 'start', *UNITS], timeout=150, name='start')
-        after = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'])
+        record('cohort-observation-intent.json', {
+            'schema': COHORT_OBSERVATION_SCHEMA, 'operation': plan['operation'],
+            'commit': plan['commit'], 'phase': 'cohort_observation',
+            'owner': cohort_observation_owner(),
+            'automatic_restart_or_rollback_after_start': False,
+            'remaining_actions': list(COHORT_REMAINING_ACTIONS)})
+        after = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'],
+                                retained_tip=retained_tip)
         record('after.json', after)
         restored = [verify_restored_checkpoint(row, checkpoint)
                     for row, checkpoint in zip(after, checkpoints, strict=True)]
         record('checkpoint-restored.json', restored)
         for index in range(4):
-            command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                     '-H', 'Accept: text/plain', f'http://127.0.0.1:{PORTS[index]}/readyz'],
-                    timeout=10, name=f'ready-{index+1}')
+            public_probe(index, '/readyz', name=f'ready-{index+1}')
         report = json.loads(command([CLI, 'taira', 'doctor',
                                      '--scope', 'basic', '--json', '--public-root', PUBLIC_ORIGIN],
                                     timeout=90, name='public-doctor'))
@@ -611,10 +1142,16 @@ def apply(plan):
              and report.get('scope') == 'basic' and report.get('failures') == []
              and len(report.get('checks', [])) == 10
              and all(row.get('ok') is True for row in report['checks']), 'public basic doctor failed')
+        final = observe_cohort(plan['units'], before, after=True, commit=plan['commit'],
+                               retained_tip=retained_tip, expected_processes=after)
+        record('cohort-ready.json', {'retained_tip': retained_tip, 'observations': final,
+                                     'startup_processes_unchanged': True})
         result = {'schema': 'taira.daemon-update.result.v1', 'runtime_update_complete': True,
                   'commit': plan['commit'], 'network_id': NETWORK, 'state_preserved': True,
                   'canary_applied_verified': False, 'application_ready': False,
                   'retained_native_snapshot_verified': True,
+                  'cohort_retained_tip_verified': retained_tip,
+                  'cohort_processes_verified_after_public_doctor': True,
                   'historical_genesis_replay_supported': False,
                   'historical_replay_limitation': 'Preserve the authenticated current snapshot at or after the deployment replay floor. No historical blocks were rewritten.',
                   'next_action': 'prove a fresh signed transaction Applied under the new runtime'}

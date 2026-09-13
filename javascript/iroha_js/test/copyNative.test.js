@@ -67,6 +67,11 @@ function nativeProbeFixtureSource({
       if (name === "privacyValidateExact12CapabilityManifestV1") {
         return `${name}() { return 8; }`;
       }
+      if (/^norito(?:Encode|Decode)Instruction(?:BoxArchive)?$/u.test(name)) {
+        const result = name.startsWith("noritoEncode")
+          ? "Buffer.from(input)" : "Buffer.from(input).toString()";
+        return `${name}(input, prefix) { if (!Number.isInteger(prefix) || prefix < 0 || prefix > 65535) throw new TypeError("network prefix"); return ${result}; }`;
+      }
       const result = REQUIRED_NATIVE_EXPORT_RESULTS[name];
       return `${name}() {${
         result === undefined ? "" : ` return ${JSON.stringify(result)};`
@@ -1623,6 +1628,17 @@ test("required-export probe rejects missing strict boundary symbols", (t) => {
       missing,
     );
   }
+});
+
+test("required-export probe rejects codecs that ignore the selected network context", (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-context-probe-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fixture = path.join(root, "implicit-context.cjs");
+  writeFileSync(fixture, nativeProbeFixtureSource().replaceAll(
+    'if (!Number.isInteger(prefix) || prefix < 0 || prefix > 65535) throw new TypeError("network prefix"); ',
+    "",
+  ));
+  assert.throws(() => probeNativeBindingExports(fixture), /invalid native instruction network context contract.*accepted a missing or invalid network prefix/u);
 });
 
 test("required-export probe fail-closes on adversarial compiled-profile catalogs", (t) => {

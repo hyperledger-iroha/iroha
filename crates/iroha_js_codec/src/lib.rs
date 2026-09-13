@@ -15,9 +15,6 @@ pub use error::{CodecError, CodecErrorKind, CodecResult};
 mod archive;
 pub use archive::{decode_instruction_archive, encode_instruction_archive};
 
-#[cfg(test)]
-mod tests;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use iroha_crypto::Hash;
@@ -26,6 +23,7 @@ use iroha_data_model::account::AccountId;
 use iroha_data_model::account::NewAccount;
 use iroha_data_model::account::address::AccountAddress;
 use iroha_data_model::account::address::AccountAddressError;
+use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
 use iroha_data_model::asset::AssetDefinitionAlias;
 use iroha_data_model::asset::AssetTransferAvailability;
 use iroha_data_model::asset::AssetTransferControlWindow;
@@ -219,13 +217,25 @@ pub fn account_address_render(
     })
 }
 
-/// Parse an instruction account operand using the native encoded-account contract.
+/// Admit a JavaScript numeric network prefix without truncation or integer wrapping.
+pub fn checked_network_prefix(prefix: f64) -> CodecResult<u16> {
+    if !prefix.is_finite() || prefix.fract() != 0.0 || !(0.0..=65535.0).contains(&prefix) {
+        return Err(CodecError::new(
+            CodecErrorKind::InvalidArgument,
+            "network prefix must be an integer between 0 and 65535",
+        ));
+    }
+    Ok(prefix as u16)
+}
+
+/// Parse an instruction account operand under the caller's selected network scope.
+///
+/// Typed native callers must enter `ChainDiscriminantGuard` before calling this helper.
 pub fn parse_account_id(input: &str, label: &str) -> CodecResult<AccountId> {
-    let raw = input.trim();
-    let parsed = match AccountAddress::parse_encoded(raw, None) {
+    let parsed = match AccountAddress::parse_encoded(input, Some(chain_discriminant())) {
         Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
         Err(AccountAddressError::UnsupportedAddressFormat) => {
-            AccountId::parse_encoded(raw).map_err(|err| err.to_string())
+            AccountId::parse_encoded(input).map_err(|err| err.to_string())
         }
         Err(err) => Err(err.to_string()),
     };
@@ -238,14 +248,20 @@ pub fn parse_account_id(input: &str, label: &str) -> CodecResult<AccountId> {
 }
 
 /// Encode the strict JavaScript instruction JSON contract into a public Norito frame.
-pub fn encode_instruction_frame(json_payload: &str) -> CodecResult<Vec<u8>> {
+///
+/// `network_prefix` selects account admission and rendering for this operation only.
+pub fn encode_instruction_frame(json_payload: &str, network_prefix: u16) -> CodecResult<Vec<u8>> {
+    let _network = ChainDiscriminantGuard::enter(network_prefix);
     let instruction = instruction_from_json(json_payload)?;
     let encoded = norito::encode_canonical(&instruction).map_err(codec_error)?;
     Ok(encoded)
 }
 
 /// Decode an exact public instruction frame into the strict JavaScript JSON contract.
-pub fn decode_instruction_frame(bytes: &[u8]) -> CodecResult<String> {
+///
+/// Domainless account identities are rendered with the required `network_prefix`.
+pub fn decode_instruction_frame(bytes: &[u8], network_prefix: u16) -> CodecResult<String> {
+    let _network = ChainDiscriminantGuard::enter(network_prefix);
     let decode = catch_unwind(AssertUnwindSafe(|| {
         let slice = bytes;
         let instruction = decode_instruction_aligned(slice).map_err(codec_error)?;
@@ -1204,6 +1220,60 @@ pub fn validate_governance_instruction_selectors(value: &json::Value) -> CodecRe
     Ok(())
 }
 
+fn instruction_envelope(name: &str, payload: json::Value) -> json::Value {
+    let mut outer = json::Map::new();
+    outer.insert(name.to_owned(), payload);
+    json::Value::Object(outer)
+}
+
+fn strict_typed_instruction<T>(payload: &json::Value, name: &str) -> CodecResult<T>
+where
+    T: json::JsonDeserialize + json::JsonSerialize,
+{
+    let instruction: T = json::from_value(payload.clone()).map_err(|error| {
+        CodecError::new(CodecErrorKind::InvalidArgument, format!("{name}: {error}"))
+    })?;
+    if json::to_value(&instruction).map_err(codec_error)? != *payload {
+        return Err(CodecError::new(
+            CodecErrorKind::InvalidArgument,
+            format!("{name} must contain exactly its canonical typed JSON fields and values"),
+        ));
+    }
+    Ok(instruction)
+}
+
+fn kagemusha_instruction_from_json(value: &json::Value) -> Option<CodecResult<InstructionBox>> {
+    let json::Value::Object(fields) = value else {
+        return None;
+    };
+    let payload = fields.get("TopUpKagemushaV1")?;
+    Some((|| {
+        exact_json_object_fields(value, &["TopUpKagemushaV1"], "instruction envelope")?;
+        let instruction: iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1 =
+            strict_typed_instruction(payload, "TopUpKagemushaV1")?;
+        Ok(Box::new(instruction).into_instruction_box())
+    })())
+}
+
+fn kagemusha_instruction_to_json(instruction: &InstructionBox) -> Option<CodecResult<json::Value>> {
+    let typed = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()?;
+    Some((|| {
+        let payload = json::to_value(typed).map_err(codec_error)?;
+        let reconstructed: iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1 =
+            strict_typed_instruction(&payload, "TopUpKagemushaV1")?;
+        if norito::encode_canonical(typed).map_err(codec_error)?
+            != norito::encode_canonical(&reconstructed).map_err(codec_error)?
+        {
+            return Err(CodecError::failure(
+                "typed instruction JSON changes canonical Norito bytes",
+            ));
+        }
+        Ok(instruction_envelope("TopUpKagemushaV1", payload))
+    })())
+}
+
 /// Admit a JSON instruction value with the existing explicit variant checks.
 pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
     if let Some(instruction) = activation_instructions::from_json(&value) {
@@ -1216,6 +1286,9 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
         return instruction;
     }
     if let Some(instruction) = verifying_key_instructions::from_json(&value) {
+        return instruction;
+    }
+    if let Some(instruction) = kagemusha_instruction_from_json(&value) {
         return instruction;
     }
     validate_governance_instruction_selectors(&value)?;
@@ -1243,6 +1316,9 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                 || lifecycle_instructions::is_lifecycle_instruction(&instruction)
                 || instruction.as_any().is::<CancelSmartContractCodeUpload>()
                 || instruction.as_any().is::<RegisterSmartContractCode>()
+                || instruction
+                    .as_any()
+                    .is::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
             {
                 return Err(CodecError::new(
                     CodecErrorKind::InvalidArgument,
@@ -3250,7 +3326,23 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
     if let Some(value) = verifying_key_instructions::to_json(instruction) {
         return value;
     }
+    if let Some(value) = kagemusha_instruction_to_json(instruction) {
+        return value;
+    }
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(limit) = instruction_ref
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::asset_transfer_control::SetAssetHoldingLimit>(
+    ) {
+        return Ok(norito::json!({
+            "name": "SetAssetHoldingLimit",
+            "params": {
+                "account_id": (account_id_to_canonical_i105(&limit.account_id)?),
+                "asset_definition_id": (limit.asset_definition_id.to_string()),
+                "holding_limit": (limit.holding_limit.as_ref().map(|value| value.to_string())),
+            },
+        }));
+    }
     if let Some(availability) = instruction_ref
         .as_any()
         .downcast_ref::<SetAssetTransferAvailability>()
@@ -4188,6 +4280,12 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
             json::to_value(finalize).map_err(codec_error)?,
         ));
     }
+    if let Some(parameter) = instruction_ref.as_any().downcast_ref::<SetParameter>() {
+        return Ok(instruction_envelope(
+            "SetParameter",
+            json::to_value(&parameter.0).map_err(codec_error)?,
+        ));
+    }
     if let Some(register_code) = instruction_ref
         .as_any()
         .downcast_ref::<RegisterSmartContractCode>()
@@ -4534,3 +4632,6 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     outer.insert("zk".to_owned(), json::Value::Object(variant));
     json::Value::Object(outer)
 }
+
+#[cfg(test)]
+mod tests;

@@ -2386,6 +2386,14 @@ pub(crate) fn resolve_with_external_environment(
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
     resolve_with_imports_and_externals(ast, source, false, external)
 }
+/// Resolve immutable standalone tests with their target interface and explicit import calls.
+pub(crate) fn resolve_with_imports_and_external_environment(
+    ast: SpannedProgram,
+    source: &SourceFile,
+    external: &ExternalResolutionEnvironment,
+) -> Result<ResolvedProgram, DiagnosticBundle> {
+    resolve_with_imports_and_externals(ast, source, true, external)
+}
 fn resolve_with_imports_and_externals(
     ast: SpannedProgram,
     source: &SourceFile,

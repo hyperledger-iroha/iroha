@@ -85,6 +85,7 @@ function compactHashSignedTransactionFixture() {
   );
   const authority = AccountAddress.fromAccount({ publicKey }).toI105();
   const payload = buildBrowserTransferPayload({
+    networkPrefix: 753,
     networkId,
     authority,
     sourceAssetHoldingId: `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${authority}`,
@@ -95,12 +96,12 @@ function compactHashSignedTransactionFixture() {
     ttlMs: 5_000,
     nonce: 42,
   });
-  const payloadHashHex = browserTransactionPayloadHashHex(payload);
+  const payloadHashHex = browserTransactionPayloadHashHex(payload, 753);
   const signature = Buffer.from(
     ed25519.sign(Buffer.from(payloadHashHex, "hex"), privateKey),
   );
   return finalizeBrowserSignedTransaction(
-    { networkId, payloadBytes: payload, payloadHashHex, authority, signingPublicKey: publicKey },
+    { networkPrefix: 753, networkId, payloadBytes: payload, payloadHashHex, authority, signingPublicKey: publicKey },
     { algorithm: "ed25519", signature },
     publicKey,
   ).signedTransaction;
@@ -111,6 +112,7 @@ test("ToriiBrowserClient preserves payer-signed KAGEMUSHA top-up bytes", async (
   const signedTransaction = compactHashSignedTransactionFixture();
   let captured = null;
   const client = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async (url, init) => {
       captured = { url: String(url), init };
       return jsonResponse(
@@ -153,6 +155,7 @@ test("ToriiBrowserClient preserves payer-signed KAGEMUSHA top-up bytes", async (
   );
 
   const missingHeaders = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async () => jsonResponse(
       {
         version: 1,
@@ -1921,7 +1924,7 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
       submitted: false,
     });
   };
-  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
+  const client = new ToriiBrowserClient("https://torii.example", { networkPrefix: 753, fetchImpl });
 
   await client.submitMultisigPropose({
     multisigAccountAlias: "cbdc@banka",
@@ -1953,7 +1956,7 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
 
 test("ToriiBrowserClient requires canonical raw lowercase receipt identities", async () => {
   const signedTransaction = compactHashSignedTransactionFixture();
-  const entrypointHash = browserSignedTransactionHashHex(signedTransaction);
+  const entrypointHash = browserSignedTransactionHashHex(signedTransaction, 753);
 
   const correctHeaders = {
     "x-iroha-entrypoint-hash": entrypointHash,
@@ -1961,6 +1964,7 @@ test("ToriiBrowserClient requires canonical raw lowercase receipt identities", a
   };
   let acceptedInit;
   const acceptedClient = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async (_url, init) => {
       acceptedInit = init;
       return jsonResponse(
@@ -2002,6 +2006,7 @@ test("ToriiBrowserClient requires canonical raw lowercase receipt identities", a
     ],
   ]) {
     const client = new ToriiBrowserClient("https://torii.example", {
+      networkPrefix: 753,
       fetchImpl: async () =>
         jsonResponse(
           { accepted: true },
@@ -2019,6 +2024,7 @@ test("ToriiBrowserClient requires canonical raw lowercase receipt identities", a
     const headers = { ...correctHeaders };
     delete headers[missing];
     const client = new ToriiBrowserClient("https://torii.example", {
+      networkPrefix: 753,
       fetchImpl: async () => jsonResponse({ accepted: true }, { status: 202, headers }),
     });
     await assert.rejects(
@@ -2033,6 +2039,7 @@ for (const status of [200, 201, 204]) {
     const signedTransaction = compactHashSignedTransactionFixture();
     let attempts = 0;
     const client = new ToriiBrowserClient("https://torii.example", {
+      networkPrefix: 753,
       fetchImpl: async () => {
         attempts += 1;
         return status === 204
@@ -2053,6 +2060,7 @@ test("ToriiBrowserClient keeps transaction admission statuses immutable", () => 
   const signedTransaction = compactHashSignedTransactionFixture();
   let attempts = 0;
   const client = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async () => {
       attempts += 1;
       return jsonResponse({ accepted: true }, { status: 202 });
@@ -2073,6 +2081,7 @@ for (const redirectStatus of [307, 308]) {
     const signedTransaction = compactHashSignedTransactionFixture();
     let attempts = 0;
     const client = new ToriiBrowserClient("https://torii.example", {
+      networkPrefix: 753,
       fetchImpl: async (_url, init) => {
         attempts += 1;
         assert.equal(init.redirect, "error");
@@ -2299,6 +2308,7 @@ test("ToriiBrowserClient keeps diagnostic scopes separate from global-only waits
   const hash = "57".repeat(32);
   const urls = [];
   const client = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async (url) => {
       urls.push(String(url));
       return new Response("", { status: 404 });
@@ -2331,6 +2341,7 @@ test("ToriiBrowserClient keeps diagnostic scopes separate from global-only waits
 
   let submissions = 0;
   const submittingClient = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async () => {
       submissions += 1;
       return new Response("", { status: 204 });
@@ -2351,6 +2362,7 @@ test("ToriiBrowserClient transaction finality policy cannot be overridden", asyn
   const hash = "57".repeat(32);
   let fetchCalls = 0;
   const client = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async () => {
       fetchCalls += 1;
       return new Response(null, { status: 404 });
@@ -2378,6 +2390,7 @@ test("ToriiBrowserClient transaction finality policy cannot be overridden", asyn
 test("ToriiBrowserClient route success statuses cannot be overridden", async () => {
   let fetchCalls = 0;
   const client = new ToriiBrowserClient("https://torii.example", {
+    networkPrefix: 753,
     fetchImpl: async () => {
       fetchCalls += 1;
       return jsonResponse({ accepted: true }, { status: 500 });

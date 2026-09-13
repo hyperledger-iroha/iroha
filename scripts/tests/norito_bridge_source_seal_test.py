@@ -65,6 +65,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "scripts/exec_with_file_lock.py": "#!/usr/bin/env python3\n",
             "scripts/norito_bridge_source_seal.py": "# fixture\n",
             "scripts/normalize_pqcrypto_archive.py": "# archive normalization fixture\n",
+            "scripts/norito_bridge_local_integration.py": "# local integration policy fixture\n",
             "scripts/norito_bridge_apple_slice_handoff.py": "#!/usr/bin/env python3\n",
             "scripts/package_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
             "scripts/render_norito_bridge_podspec.py": "#!/usr/bin/env python3\n",
@@ -124,6 +125,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("scripts/archive_norito_xcframework.py", apple)
         self.assertIn("scripts/norito_bridge_apple_slice_handoff.py", apple)
         self.assertIn("scripts/normalize_pqcrypto_archive.py", apple)
+        self.assertIn("scripts/norito_bridge_local_integration.py", apple)
         self.assertIn("scripts/package_mobile_sdk_artifacts.sh", apple)
         self.assertIn("scripts/render_norito_bridge_podspec.py", apple)
         self.assertIn("scripts/update_norito_bridge_swift_pins.py", apple)
@@ -182,12 +184,16 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
     def test_apple_fingerprint_authenticates_archive_normalizer_logic(self) -> None:
         inputs = self.inputs("apple")
         original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
-        normalizer = self.root / "scripts/normalize_pqcrypto_archive.py"
-        normalizer.write_text(
-            normalizer.read_text(encoding="utf-8") + "# changed normalization logic\n",
-            encoding="utf-8",
-        )
-        self.assertNotEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
+        for relative in (
+            "scripts/normalize_pqcrypto_archive.py",
+            "scripts/norito_bridge_local_integration.py",
+        ):
+            with self.subTest(source_owner=relative):
+                source_owner = self.root / relative
+                original_contents = source_owner.read_text(encoding="utf-8")
+                source_owner.write_text(original_contents + "# changed admission logic\n", encoding="utf-8")
+                self.assertNotEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
+                source_owner.write_text(original_contents, encoding="utf-8")
 
     def test_selected_lock_is_root_lock_in_metadata_and_fingerprint(self) -> None:
         root_lock = self.root / "Cargo.lock"

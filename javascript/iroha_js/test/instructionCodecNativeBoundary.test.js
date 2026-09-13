@@ -21,8 +21,8 @@ test("instruction adapter propagates native unavailability without an alternate 
   const instruction = {
     Register: { Domain: { id: "wonderland", logo: null, metadata: {} } },
   };
-  assert.throws(() => api.noritoEncodeInstruction(instruction), (error) => error === unavailable);
-  assert.throws(() => api.noritoEncodeInstruction(JSON.stringify(instruction)), (error) => error === unavailable);
-  assert.throws(() => api.noritoDecodeInstruction(Buffer.of(1)), (error) => error === unavailable);
+  assert.throws(() => api.noritoEncodeInstruction(instruction, 753), (error) => error === unavailable);
+  assert.throws(() => api.noritoEncodeInstruction(JSON.stringify(instruction), 753), (error) => error === unavailable);
+  assert.throws(() => api.noritoDecodeInstruction(Buffer.of(1), 753), (error) => error === unavailable);
   assert.deepEqual(calls, ["encode", "encode", "decode"]);
 });

@@ -112,7 +112,7 @@ required|control_authority|LifecycleStageKind::SignTimeoutVote|missing exact con
 region|durable|ledger|after|pub(in crate::sumeragi) fn open_recovered_control_startup(|before|/// Bind one paired recovered-WAL open
 region|timeout_successor_tokens|ledger|at|/// Purely staged proof that one exact recovered timeout Broadcast was retired.|before|/// Complete durable proof that one canonical CompleteTip predecessor retired.
 required|timeout_successor_tokens|struct StagedRecoveredTimeoutSupersessionSuccessorV1|missing sealed staged timeout-supersession token
-required|timeout_successor_tokens|struct AuthenticatedRecoveredTimeoutSupersessionSuccessorV1|missing sealed authenticated timeout-supersession witness
+required|timeout_successor_tokens|struct AuthenticatedRecoveredOwnerOpenSuccessorV1|missing sealed authenticated owner-open publication witness
 forbidden|timeout_successor_tokens|#[derive(|timeout-supersession tokens must remain move-only
 forbidden|timeout_successor_tokens|impl Clone for|timeout-supersession tokens must not implement Clone
 forbidden|timeout_successor_tokens|impl Copy for|timeout-supersession tokens must not implement Copy
@@ -122,7 +122,7 @@ forbidden|timeout_successor_tokens|pub fn|timeout-supersession tokens must expos
 forbidden|timeout_successor_tokens|pub(super) fn|timeout-supersession tokens must expose no module-visible constructor or accessor
 forbidden|timeout_successor_tokens|pub(in crate::sumeragi) fn|timeout-supersession tokens must expose no Sumeragi-visible constructor or accessor
 region|timeout_successor_cas|ledger|after|fn persist_recovered_timeout_supersession_successor(|before|/// Open a height-local ledger under the coordinator's sealed size bounds.
-order|timeout_successor_cas|4|staged.exactly_matches_successor(|self.persist_exact_successor(opened, successor)?|self.load()? != *successor|staged.into_authenticated(self, successor)|timeout-supersession authorization, exact CAS, exact reload, and witness mint must remain ordered inside one private store method
+order|timeout_successor_cas|3|staged.exactly_matches_successor(|self.persist_exact_successor(opened, successor)?|self.load()? != *successor|timeout-supersession authorization, exact CAS, and exact reload must remain ordered inside one private store method
 required|durable|stage_authenticated_wal_control_sign|locate recovered control durable staging
 required|durable|reconcile_superseded_timeout_broadcast|locate exact obsolete-timeout reconciliation
 required|durable|persist_exact_successor|locate recovered control durable publication
@@ -1224,6 +1224,7 @@ region|adapter_recovered_validation_high|adapter|at|pub(crate) fn recovered_vali
 region|adapter_high_accessor|adapter|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the full current-view Prepare observed durably before validation
 region|leader_wire_replay_lock_authority|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
 region|actual_consumer_factory|leader_wire_consumer|at|pub(super) fn from_adapter(|before|pub(crate) fn matches_geometry(
+region|actual_consumer_locked_certificate|leader_wire_consumer|at|let protected_lock = durable\n            .locked()|before|\n            .transpose()?;
 region|consumer_frozen_context|adapter|at|fn frozen_wire_context_id(&self)|before|/// Return the reducer body state for one wire identity in seam tests.
 region|consumer_adapter_constructor|adapter|at|fn open_with_aggregator_and_publication_with_capacity(|before|/// Return the tag which must accompany a new asynchronous operation.
 region|actual_consumer_publication|worker|at|fn finish_runtime_step_reconciliation(|before|fn complete_leader_wire_runtime_terminal(
@@ -1327,8 +1328,8 @@ forbidden|leader_wire_replay_lock_authority|from_replayed_adapter|adapter must n
 required|actual_consumer_factory|adapter.ensure_ingress()?|actual consumer factory must reject a failed adapter
 required|actual_consumer_factory|let durable = adapter.reducer.durable_state();|actual consumer factory must read the replayed durable frontier
 required|actual_consumer_factory|let tag = adapter.reducer.current_tag();|actual consumer factory must retain the actual reducer generation and view
-required|actual_consumer_factory|adapter.registry.round_to_wire(certificate.proposal_round())|actual consumer must convert the exact replayed lock round
-required|actual_consumer_factory|adapter.registry.subject(certificate.subject())?|actual consumer must authenticate the exact replayed lock subject
+required|actual_consumer_locked_certificate|adapter.registry.round_to_wire(certificate.proposal_round())|actual consumer must convert the exact replayed lock round
+required|actual_consumer_locked_certificate|adapter.registry.subject(certificate.subject())?|actual consumer must authenticate the exact replayed lock subject
 required|actual_consumer_factory|locked.round().view() == tag.view()|actual consumer must distinguish current-round Commit collection
 required|actual_consumer_factory|durable.commit_intent_for_lock(locked).is_some()|historical Commit collection requires the exact durable CommitIntent
 required|actual_consumer_factory|vote_statement_hash(|protected Commit authority must bind the complete vote statement
@@ -1823,14 +1824,14 @@ required|live_store_publication|transition.commit_after_publication();|live Stor
 required|live_store_publication|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|live Store publication stopped installing its active retry marker
 required|live_store_publication|operation.complete();|live Store publication stopped closing its fail-stop output operation
 order|live_store_publication|6|.prepare_published_lifecycle_store_retry_marker(|.bind_store_successor(|transition.persist_exact_successor()|transition.commit_after_publication();|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|operation.complete();|live Store marker must bind before persistence and install only after lifecycle publication
-required|recovered_store_publication|.prepare_published_lifecycle_store_retry_marker(body.durable())|recovered Decision Fetch-to-Store publication stopped reserving its active marker before adapter projection
+required|recovered_store_publication|.prepare_recovered_decision_fetch_store_publication(&body)|recovered Decision Fetch-to-Store publication stopped reserving its body catalogs and active marker before adapter projection
 required|recovered_store_publication|.bind_store_successor(|recovered Decision Store publication stopped binding the sealed successor
 required|recovered_store_publication|transition.persist_exact_successor()|recovered Decision Store marker must not commit before its exact lifecycle row is durable
 required|recovered_store_publication|transition.commit_after_publication();|recovered Decision Store marker lost its committed lifecycle predecessor
-required|recovered_store_publication|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|recovered Decision Store publication stopped installing its active retry marker
+required|recovered_store_publication|executor.commit_recovered_decision_fetch_store_publication(body_publication);|recovered Decision Store publication stopped installing its exact body catalogs and active retry marker
 required|recovered_store_publication|executor.commit_recovered_decision_fetch_owner_retirement(retirement);|recovered Decision Fetch owner stopped retiring after Store marker publication
 required|recovered_store_publication|operation.complete();|recovered Decision Store publication stopped closing its fail-stop output operation
-order|recovered_store_publication|7|.prepare_published_lifecycle_store_retry_marker(|.bind_store_successor(|transition.persist_exact_successor()|transition.commit_after_publication();|executor.commit_published_lifecycle_store_retry_marker(retry_marker);|executor.commit_recovered_decision_fetch_owner_retirement(retirement);|operation.complete();|recovered Store marker must bind before persistence and install before predecessor retirement
+order|recovered_store_publication|7|.prepare_recovered_decision_fetch_store_publication(|.bind_store_successor(|transition.persist_exact_successor()|transition.commit_after_publication();|executor.commit_recovered_decision_fetch_store_publication(body_publication);|executor.commit_recovered_decision_fetch_owner_retirement(retirement);|operation.complete();|recovered Store marker must bind before persistence and install before predecessor retirement
 required|recovered_store_projection|if !work.validate_exact()|cold Store marker census stopped authenticating every complete lifecycle row
 required|recovered_store_projection|ConcreteLifecycleWorkKind::DurableStoreBody(store)|cold Store marker census omitted ordinary durable Store rows
 required|recovered_store_projection|ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store)|cold Store marker census omitted recovered Decision Store rows

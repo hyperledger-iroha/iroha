@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { requireNetworkPrefix } from "./networkPrefix.js";
 
 import { AccountAddress } from "./address.js";
 import {
@@ -501,7 +502,9 @@ function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
   proofNorito,
   bindingValue,
   checkpointValue,
+  networkPrefix,
 ) {
+  requireNetworkPrefix(networkPrefix);
   const binding = normalizeValidationFeeLedgerBindingV1(bindingValue);
   const checkpoint = normalizeValidationFeeCheckpointV1(checkpointValue);
   const proof = Buffer.from(proofNorito ?? []);
@@ -520,6 +523,7 @@ function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
     Buffer.from(binding.policyChainGenesisHash, "hex"),
     checkpoint.height,
     Buffer.from(checkpoint.contextId, "hex"),
+    networkPrefix,
   );
   if (typeof json !== "string" || json.length === 0) {
     throw new Error("native validation-fee verifier returned no projection");
@@ -605,12 +609,14 @@ export function createValidationFeeConsensusApi(nativeRuntime) {
       proofNorito,
       bindingValue,
       checkpointValue,
+      networkPrefix,
     ) =>
       verifyValidationFeeCurrentPolicyProofV1WithRuntime(
         nativeRuntime,
         proofNorito,
         bindingValue,
         checkpointValue,
+        networkPrefix,
       ),
   });
 }
@@ -632,11 +638,13 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   proofNorito,
   bindingValue,
   checkpointValue,
+  networkPrefix,
 ) {
   return DEFAULT_VALIDATION_FEE_CONSENSUS_API
     .verifyValidationFeeCurrentPolicyProofV1(
       proofNorito,
       bindingValue,
       checkpointValue,
+      networkPrefix,
     );
 }

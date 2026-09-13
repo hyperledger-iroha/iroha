@@ -82,7 +82,7 @@ test("buildExecuteTriggerInstruction and buildExecuteTriggerNorito round-trip ca
     action: "create",
     request_id: "mr1",
   });
-  assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+  assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
 });
 
 test("buildMultisigTriggerArgs normalizes lifecycle and lookup presets", () => {

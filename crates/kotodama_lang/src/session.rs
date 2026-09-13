@@ -853,7 +853,7 @@ fn semantic_error_diagnostic(
         source_start_span(source_name),
     ))
 }
-fn validate_test_module_source(
+pub(crate) fn validate_test_module_source(
     program: &Program,
     source_name: Option<&str>,
     target_source_name: &str,
@@ -929,7 +929,7 @@ fn normalize_logical_path(path: &Path) -> PathBuf {
     }
     normalized
 }
-fn reject_duplicate_test_graph_symbols<'program>(
+pub(crate) fn reject_duplicate_test_graph_symbols<'program>(
     units: impl IntoIterator<
         Item = (
             &'program crate::resolved::ResolvedProgram,
@@ -972,7 +972,7 @@ fn reject_duplicate_test_graph_symbols<'program>(
         Err(DiagnosticBundle::new(diagnostics))
     }
 }
-fn merge_source_files(
+pub(crate) fn merge_source_files(
     target: &mut TypedProgram,
     source: &mut TypedProgram,
     source_name: &str,

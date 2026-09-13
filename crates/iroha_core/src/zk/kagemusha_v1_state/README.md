@@ -173,3 +173,26 @@ Core repeats full local equality after that exchange. The borrowed view exposes 
 immutable owner, original credential floor, current hardware epoch/key and original
 checkpoint only. Native open must separately verify its account/device possession
 challenge; this metadata selection grants no new-work or monetary authority.
+
+`KagemushaPendingRecoveryJournalsV1::open_existing` can hold advanced coordinator
+and response journals together without exposing either one or appending retirement
+records. Its consuming `bind` accepts an already restored Core machine, checks both
+selected prefix ancestries and exact lane/incarnation, reconciles the complete Core
+operation index, asks the existing current-recovery owner to revalidate the full
+checkpoint and fresh hardware selection, then checks both held journals again before
+transferring all three owners. A failure drops the pending owners without truncating
+or appending either journal. Complete validated suffixes are retained; torn tails
+remain errors. Identical initial histories remain byte-equivalent, while divergence
+at or before either selected advanced prefix is rejected.
+
+This paired reopen is a byte-binding and ownership boundary. It does not make a
+retained response authoritative, retire a sender, manufacture a fresh observation,
+implement the qualified guard, or enable the native product recovery kernels. Native
+integration must still authenticate device possession and the selected hardware
+checkpoint, including any speculative suffix, through the qualified backend.
+The current native recovery kernels remain test-only. The guard contract requires
+checking descriptor-owned selected material and speculative suffixes, but the current
+concrete freshness verifier accepts certificate/prefix inputs without these held
+journal descriptors. The pending pair intentionally exposes no unverified read or
+response capability to fill that gap. A future native owner needs a read-only material
+integration before this path can qualify as complete hardware-backed recovery.

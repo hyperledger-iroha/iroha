@@ -139,12 +139,12 @@ baseTest("native instruction adapter roundtrips directional asset availability",
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    const encoded = noritoEncodeInstruction(instruction, 753);
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
   });
 });
 
-baseTest("asset availability preserves the complete u64 revision domain", () => {
+test("asset availability preserves the complete u64 revision domain", () => {
   const instruction = buildSetAssetTransferAvailabilityInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -160,8 +160,8 @@ baseTest("asset availability preserves the complete u64 revision domain", () => 
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    const encoded = noritoEncodeInstruction(instruction, 753);
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
   });
   assert.throws(
     () =>
@@ -193,7 +193,7 @@ baseTest("native instruction adapter rejects noncanonical availability reasons",
               ...base.SetAssetTransferAvailability,
               reason,
             },
-          }),
+          }, 753),
         undefined,
       );
     }
@@ -232,8 +232,8 @@ baseTest("asset transfer blacklist builder and native instruction adapter use th
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    const encoded = noritoEncodeInstruction(instruction, 753);
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
   });
   for (const blacklisted of [0, "true", null, undefined]) {
     assert.throws(() =>
@@ -246,7 +246,7 @@ baseTest("asset transfer blacklist builder and native instruction adapter use th
   }
 });
 
-baseTest("asset transfer control builder canonicalizes complete window caps", () => {
+test("asset transfer control builder canonicalizes complete window caps", () => {
   const instruction = buildSetAssetTransferControlInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -271,8 +271,8 @@ baseTest("asset transfer control builder canonicalizes complete window caps", ()
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    const encoded = noritoEncodeInstruction(instruction, 753);
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
   });
   assert.deepEqual(
     buildSetAssetTransferControlInstruction({
@@ -428,14 +428,14 @@ baseTest("native instruction adapter roundtrips CancelAssetLock and rejects the 
       lockId: "merchant-lock-001",
       expectedRemainingAmount: "1.25",
     });
-    const encoded = noritoEncodeInstruction(instruction);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    const encoded = noritoEncodeInstruction(instruction, 753);
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
 
     assert.throws(
       () =>
         noritoEncodeInstruction({
           CancelAssetLock: { escrow_id: instruction.CancelAssetLock.escrow_id },
-        }),
+        }, 753),
       /CancelAssetLock is missing field\(s\): expected_remaining_amount/u,
     );
     for (const expected_remaining_amount of ["0", "01", "1.0"]) {
@@ -446,7 +446,7 @@ baseTest("native instruction adapter roundtrips CancelAssetLock and rejects the 
               escrow_id: instruction.CancelAssetLock.escrow_id,
               expected_remaining_amount,
             },
-          }),
+          }, 753),
         undefined,
         `native instruction adapter accepted ${expected_remaining_amount}`,
       );
@@ -466,7 +466,7 @@ baseTest("native instruction adapter roundtrips CancelAssetLock and rejects the 
               ...instruction.CancelAssetLock,
               escrow_id,
             },
-          }),
+          }, 753),
         /canonical uppercase checksummed hash literal/u,
       );
     }
@@ -484,20 +484,20 @@ test("public adapter and native codec byte-match and cross-decode CancelAssetLoc
   );
 
   const adapterEncoded = withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
-    noritoEncodeInstruction(instruction),
+    noritoEncodeInstruction(instruction, 753),
   );
   const nativeEncoded = nativeBinding.noritoEncodeInstruction(
-    JSON.stringify(instruction),
+    JSON.stringify(instruction), 753,
   );
   assert.deepEqual(toByteArray(adapterEncoded), toByteArray(nativeEncoded));
 
   assert.deepEqual(
-    JSON.parse(nativeBinding.noritoDecodeInstruction(adapterEncoded)),
+    JSON.parse(nativeBinding.noritoDecodeInstruction(adapterEncoded, 753)),
     instruction,
   );
   assert.deepEqual(
     withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(nativeEncoded),
+      noritoDecodeInstruction(nativeEncoded, 753),
     ),
     instruction,
   );
@@ -509,7 +509,7 @@ test("public adapter and native codec byte-match and cross-decode CancelAssetLoc
           CancelAssetLock: {
             escrow_id: instruction.CancelAssetLock.escrow_id,
           },
-        }),
+        }), 753,
       ),
     /CancelAssetLock is missing field\(s\): expected_remaining_amount/u,
   );
@@ -521,7 +521,7 @@ test("public adapter and native codec byte-match and cross-decode CancelAssetLoc
             escrow_id: instruction.CancelAssetLock.escrow_id,
             expected_remaining_amount: "0",
           },
-        }),
+        }), 753,
       ),
     /must be positive/,
   );
@@ -537,7 +537,7 @@ test("public adapter and native codec byte-match and cross-decode CancelAssetLoc
               ...instruction.CancelAssetLock,
               escrow_id: escrowId,
             },
-          }),
+          }), 753,
         ),
       /canonical|hash:|uppercase|checksum/u,
     );

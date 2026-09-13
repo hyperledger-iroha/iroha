@@ -11,6 +11,8 @@ let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
 let requiredBridgeAbiVersion = 23
 let repositoryDirectory = packageDirectory.deletingLastPathComponent().standardizedFileURL
+let localIntegrationArtifactDirectory = repositoryDirectory
+    .appendingPathComponent("target/norito-bridge-local/artifacts", isDirectory: true).path
 let configuredArtifactDirectory = ProcessInfo.processInfo.environment[
     "MOBILE_SDK_APPLE_ARTIFACT_DIR"
 ]
@@ -89,6 +91,7 @@ if let configuredArtifactDirectory {
     guard
         resolvedURL.path != repositoryDirectory.path,
         !resolvedURL.path.hasPrefix(repositoryDirectory.path + "/")
+            || (!requireExternalArtifact && resolvedURL.path == localIntegrationArtifactDirectory)
     else {
         fatalError(
             "error: MOBILE_SDK_APPLE_ARTIFACT_DIR must be outside the reviewed Iroha source tree."
@@ -154,6 +157,18 @@ func validateBridgeArtifact(at artifactRoot: URL) -> String? {
         let bridgeAbiVersion = manifest["native_bridge_abi_version"] as? Int
     else {
         return "error: NoritoBridge.xcframework is missing readable ABI-bound artifact metadata."
+    }
+    let isLocalIntegration = artifactRoot.deletingLastPathComponent().path
+        == localIntegrationArtifactDirectory
+    if isLocalIntegration {
+        guard !requireExternalArtifact,
+            manifest["artifact_scope"] as? String == "local-integration",
+            canonicalExistingFilesystemPath(artifactRoot.path) == artifactRoot.path
+        else {
+            return "error: checkout-local NoritoBridge requires its local-integration scope; release use is forbidden."
+        }
+    } else if manifest["artifact_scope"] != nil {
+        return "error: a local-integration NoritoBridge cannot be consumed as a release artifact."
     }
     guard bridgeAbiVersion == requiredBridgeAbiVersion else {
         return "error: NoritoBridge.xcframework requires exact native bridge ABI \(requiredBridgeAbiVersion); found \(bridgeAbiVersion)."

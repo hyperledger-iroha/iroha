@@ -24,20 +24,20 @@ export function toByteArray(bytes) {
 export function assertNativeInstructionAdapterParity(instruction, context) {
   const adapterEncoded = Buffer.from(
     withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(instruction)),
+      noritoEncodeInstruction(instruction, 753)),
   );
   const nativeEncoded = Buffer.from(
-    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction), 753),
   );
   assert.deepEqual(adapterEncoded, nativeEncoded, `${context} bytes`);
   assert.deepEqual(
-    JSON.parse(nativeBinding.noritoDecodeInstruction(adapterEncoded)),
+    JSON.parse(nativeBinding.noritoDecodeInstruction(adapterEncoded, 753)),
     instruction,
     `${context} native decode`,
   );
   assert.deepEqual(
     withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(nativeEncoded)),
+      noritoDecodeInstruction(nativeEncoded, 753)),
     instruction,
     `${context} adapter decode`,
   );

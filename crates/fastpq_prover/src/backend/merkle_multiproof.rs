@@ -25,6 +25,8 @@ use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use super::{MERKLE_NODE_PHASE_V1, MerkleTreeRoleV1, digest_domain_prefix_v1, hash_at_prefix_v1};
 use crate::{Error, Result};
 
+const MAX_PARALLEL_PARENT_JOBS: usize = 32;
+
 // One immutable prefix is borrowed for every parent at the current level.
 // Reconstruction walks levels in order, so retaining earlier prefixes would
 // consume memory without avoiding any further work. Role and FRI round belong
@@ -312,6 +314,115 @@ impl MultiproofPlan {
     ) -> Result<MultiproofWork> {
         let computed = self.reconstruct(leaves, siblings, hash)?;
         if computed != root {
+            return Err(Error::QueryMerklePathMismatch { index: 0 });
+        }
+        Ok(self.work)
+    }
+
+    /// Authenticate independent parents with at most 32 indexed jobs per level.
+    ///
+    /// The callback must be a pure hash of its arguments. Jobs may evaluate
+    /// later parents in the same level after an earlier parent fails; each job
+    /// stops at its first failure, and results are consumed in canonical parent
+    /// order before any later level starts. This preserves the serial error,
+    /// root and work counters, without promising serial callback side effects.
+    ///
+    /// Reconstruction-owned heap storage stays within the original current/next
+    /// digest frontiers. The next frontier temporarily carries input positions
+    /// in its existing index words; additional reconstruction result storage is
+    /// a fixed 32-result stack array. Rayon runtime and the hash callback retain
+    /// their own allocations and are not covered by this frontier-storage bound.
+    /// Small frontiers and single-worker pools use the serial reference path.
+    pub(super) fn verify_parallel_with(
+        &self,
+        root: Digest,
+        leaves: &[Digest],
+        siblings: &[Digest],
+        hash: impl Fn(usize, usize, Digest, Digest) -> Result<Digest> + Sync,
+    ) -> Result<MultiproofWork> {
+        use rayon::prelude::*;
+
+        if leaves.len() != self.indices.len() || siblings.len() != self.siblings.len() {
+            return Err(shape("multiproof leaf or sibling count mismatch"));
+        }
+        let workers = rayon::current_num_threads().min(MAX_PARALLEL_PARENT_JOBS);
+        if workers == 1 || self.indices.len() < MAX_PARALLEL_PARENT_JOBS {
+            return self.verify_with(root, leaves, siblings, hash);
+        }
+        let mut current = reserved(self.indices.len())?;
+        current.extend(self.indices.iter().copied().zip(leaves.iter().copied()));
+        let mut consumed = 0;
+        for level in 0..self.depth {
+            let mut next = reserved(current.len())?;
+            let level_siblings = consumed;
+            let mut position = 0;
+            while position < current.len() {
+                let index = current[position].0;
+                let paired = index.is_multiple_of(2)
+                    && current.get(position + 1).map(|node| node.0) == Some(index + 1);
+                // Reuse the output index word for this parent's input position.
+                // No per-parent job descriptor or duplicate digest is retained.
+                next.push((position, Digest::default()));
+                position += if paired { 2 } else { 1 };
+                consumed += usize::from(!paired);
+            }
+            let jobs = if next.len() < MAX_PARALLEL_PARENT_JOBS {
+                1
+            } else {
+                workers
+            };
+            let chunk_width = next.len().div_ceil(jobs);
+            let job_count = next.len().div_ceil(chunk_width);
+            let hash_chunk = |ordinal: usize, output: &mut [(usize, Digest)]| -> Result<()> {
+                let mut position = output[0].0;
+                // Before parent k, p inputs consumed implies p-k paired and
+                // 2*k-p unpaired parents. Only unpaired parents use siblings.
+                let first_parent = ordinal * chunk_width;
+                let paired_before = position - first_parent;
+                let mut sibling = level_siblings + (first_parent - paired_before);
+                for node in output {
+                    let (index, value) = current[position];
+                    let paired = index.is_multiple_of(2)
+                        && current.get(position + 1).map(|node| node.0) == Some(index + 1);
+                    let (left, right) = if paired {
+                        (value, current[position + 1].1)
+                    } else {
+                        let other = siblings[sibling];
+                        sibling += 1;
+                        if index.is_multiple_of(2) {
+                            (value, other)
+                        } else {
+                            (other, value)
+                        }
+                    };
+                    *node = (index / 2, hash(level + 1, index / 2, left, right)?);
+                    position += if paired { 2 } else { 1 };
+                }
+                Ok(())
+            };
+            if job_count == 1 {
+                hash_chunk(0, &mut next)?;
+            } else {
+                let mut results: [Result<()>; MAX_PARALLEL_PARENT_JOBS] =
+                    core::array::from_fn(|_| Ok(()));
+                next.par_chunks_mut(chunk_width)
+                    .enumerate()
+                    .zip(results[..job_count].par_iter_mut())
+                    .for_each(|((ordinal, output), result)| {
+                        *result = hash_chunk(ordinal, output);
+                    });
+                for result in results.into_iter().take(job_count) {
+                    result?;
+                }
+            }
+            current = next;
+        }
+        if consumed != siblings.len() || current.len() != 1 || current[0].0 != 0 {
+            return Err(shape(
+                "multiproof frontier did not terminate at the unique root",
+            ));
+        }
+        if current[0].1 != root {
             return Err(Error::QueryMerklePathMismatch { index: 0 });
         }
         Ok(self.work)
@@ -1167,3 +1278,7 @@ mod tests {
         assert!(MultiproofPlan::new(1_usize << 33, &indices, bounded).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "merkle_multiproof/parallel_tests.rs"]
+mod parallel_tests;

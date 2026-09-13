@@ -1,45 +1,82 @@
 #[test]
-fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
-    let (mut service, _) = fixture();
-    service.clean_teardown = false;
-    let output_guard = Arc::clone(&service.output_guard);
-    let permit_guard = Arc::clone(&output_guard);
-    let (permit_ready_tx, permit_ready_rx) = mpsc::sync_channel(1);
-    let (release_permit_tx, release_permit_rx) = mpsc::sync_channel(1);
-    let permit_holder = thread::spawn(move || {
-        let admitted_output = permit_guard.acquire().expect("admit earlier output");
-        permit_ready_tx.send(()).expect("publish admitted output");
-        release_permit_rx
-            .recv()
-            .expect("release admitted output after worker shutdown");
-        drop(admitted_output);
-    });
-    permit_ready_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("earlier output must be admitted before abnormal teardown");
-    let (command_tx, command_rx, admission) = test_io_command_channel(1);
-    let (completion_tx, completion_rx) = mpsc::sync_channel(1);
-    let (shutdown_seen_tx, shutdown_seen_rx) = mpsc::sync_channel(1);
+fn service_failure_and_drop_finish_before_outer_operation_drains() {
+    for report_failure in [false, true] {
+        let (mut service, _) = fixture();
+        service.clean_teardown = false;
+        let output_guard = Arc::clone(&service.output_guard);
+        let outer = output_guard
+            .begin_fail_stop_operation()
+            .expect("admit outer lifecycle construction");
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let (shutdown_seen_tx, shutdown_seen_rx) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Shutdown)));
+            shutdown_seen_tx.send(()).expect("publish worker shutdown");
+            drop(completion_tx);
+        });
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: Some(worker),
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let teardown = thread::spawn(move || {
+            if report_failure {
+                service.fail_closed("retained output service failed");
+                assert_eq!(
+                    service.fatal_reason.as_deref(),
+                    Some("retained output service failed")
+                );
+            }
+            drop(service);
+            finished_tx
+                .send(())
+                .expect("publish complete service teardown");
+        });
+        let finished_while_outer_live = finished_rx.recv_timeout(Duration::from_secs(2));
+        let closed_while_outer_live = output_guard.restart_required();
+        let rejected_later_output = output_guard.acquire().is_none();
+        // Keep the outer permit in this thread so a regression can release it
+        // before joining. A same-thread deadlock would strand the test worker.
+        outer.complete();
+        teardown.join().expect("join service teardown");
+        finished_while_outer_live
+            .expect("service failure and worker teardown must not drain the outer operation");
+        shutdown_seen_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("service teardown must still stop its I/O worker");
+        assert!(closed_while_outer_live);
+        assert!(rejected_later_output);
+        assert_output_guard_closed(&output_guard);
+    }
+}
+#[test]
+fn abnormal_io_worker_exit_finishes_before_outer_operation_drains() {
+    let output_guard = ConsensusOutputGuard::isolated();
+    let outer = output_guard
+        .begin_fail_stop_operation()
+        .expect("admit parent lifecycle construction");
+    let worker_output_guard = Arc::clone(&output_guard);
+    let (finished_tx, finished_rx) = mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
-        assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Shutdown)));
-        shutdown_seen_tx.send(()).expect("publish worker shutdown");
-        release_permit_tx
-            .send(())
-            .expect("release output after worker shutdown");
-        drop(completion_tx);
+        let failure_guard =
+            V2IoWorkerFailureGuard::new(worker_output_guard, Arc::new(AtomicBool::new(false)));
+        drop(failure_guard);
+        finished_tx.send(()).expect("publish abnormal worker exit");
     });
-    service.io = Some(V2IoHandle {
-        command_tx,
-        completion_rx,
-        join: Some(worker),
-        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-        admission,
-    });
-    drop(service);
-    shutdown_seen_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("abnormal teardown must stop the worker before draining admitted output");
-    permit_holder.join().expect("join admitted-output holder");
+    let finished_while_outer_live = finished_rx.recv_timeout(Duration::from_secs(2));
+    let closed_while_outer_live = output_guard.restart_required();
+    let rejected_later_output = output_guard.acquire().is_none();
+    // Release even on timeout so the previous blocking implementation exits
+    // and can be joined before this regression reports its assertion failure.
+    outer.complete();
+    worker.join().expect("join abnormal I/O worker");
+    finished_while_outer_live.expect("abnormal worker exit must not wait for its parent operation");
+    assert!(closed_while_outer_live);
+    assert!(rejected_later_output);
     assert_output_guard_closed(&output_guard);
 }
 #[test]
@@ -451,13 +488,14 @@ pub(in crate::sumeragi) fn durable_finality_fixture(
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finalized worker block")),
         payload_hash: Hash::new(b"finalized worker payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"worker parent state"),
-        Hash::new(b"worker post state"),
-        Hash::new(b"worker ordinary writes"),
-        1,
-        Hash::new(b"worker executed block wire"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"worker parent state"),
+            Hash::new(b"worker post state"),
+            Hash::new(b"worker ordinary writes"),
+            1,
+            Hash::new(b"worker executed block wire"),
+        );
     let artifact = signed_worker_finality_artifact(
         &service.context,
         keys,

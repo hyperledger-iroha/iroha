@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import errno
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -351,12 +352,12 @@ def _parser(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             f"--memory-limit-gib must be positive and at most {ABSOLUTE_MEMORY_LIMIT_GIB:g}"
         )
-    if args.timeout_seconds <= 0:
-        parser.error("--timeout-seconds must be positive")
+    if not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
+        parser.error("--timeout-seconds must be finite and positive")
     if not 0.05 <= args.sample_interval_seconds <= 1.0:
         parser.error("--sample-interval-seconds must be between 0.05 and 1.0")
-    if args.progress_interval_seconds <= 0:
-        parser.error("--progress-interval-seconds must be positive")
+    if not math.isfinite(args.progress_interval_seconds) or args.progress_interval_seconds <= 0:
+        parser.error("--progress-interval-seconds must be finite and positive")
     return args
 
 
@@ -631,9 +632,11 @@ def _run(args: argparse.Namespace) -> int:
             start_new_session=True,
         )
         while True:
-            now = time.monotonic()
             returncode = process.poll()
             sample = accounting.sample(process.pid)
+            # Accounting can cross the deadline. Admit completion against the
+            # time after the whole observation, rather than a stale loop start.
+            now = time.monotonic()
             sample_count += 1
             peak = MemorySample(
                 max(peak.rss_bytes, sample.rss_bytes),
@@ -653,16 +656,20 @@ def _run(args: argparse.Namespace) -> int:
                 _terminate_process_group(process, accounting, graceful=False)
                 child_exit_code = process.returncode
                 break
-            if returncode is not None and sample.process_count == 0:
-                child_exit_code = returncode
-                exit_reason = "completed" if returncode == 0 else "child_exit"
-                exit_code = returncode
-                break
+            completed = returncode is not None and sample.process_count == 0
             if now >= deadline:
                 exit_reason = "timeout"
                 exit_code = TIMEOUT_EXIT_CODE
-                _terminate_process_group(process, accounting)
+                # A reaped leader with an empty group needs no termination;
+                # late observation still cannot qualify as an in-time result.
+                if not completed:
+                    _terminate_process_group(process, accounting)
                 child_exit_code = process.returncode
+                break
+            if completed:
+                child_exit_code = returncode
+                exit_reason = "completed" if returncode == 0 else "child_exit"
+                exit_code = returncode
                 break
             if now >= next_progress:
                 print(

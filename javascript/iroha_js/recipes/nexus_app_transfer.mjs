@@ -53,7 +53,7 @@ const toriiClient = {
   async submitTransaction(signedTransaction) {
     return {
       accepted: true,
-      hashHex: browserSignedTransactionHashHex(signedTransaction),
+      hashHex: browserSignedTransactionHashHex(signedTransaction, accountChainDiscriminant),
     };
   },
   async waitForTransactionStatus(hashHex) {

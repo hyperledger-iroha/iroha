@@ -35,12 +35,12 @@ test("public manifest builder preserves the Rust fixture and canonical instructi
   assert.notEqual(instruction.RegisterSmartContractCode.manifest, manifest);
   assert.notEqual(instruction.RegisterSmartContractCode.manifest.entrypoints, manifest.entrypoints);
 
-  const encoded = noritoEncodeInstruction(instruction);
+  const encoded = noritoEncodeInstruction(instruction, 753);
   const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
   assert.notEqual(encoded.indexOf(rustManifest), -1, "instruction must contain exact Rust manifest bytes");
-  const decoded = noritoDecodeInstruction(encoded);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded, instruction);
-  assert.deepEqual(noritoEncodeInstruction(decoded), encoded);
+  assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
 });
 
 test("entrypoint getters retain their validation order", () => {

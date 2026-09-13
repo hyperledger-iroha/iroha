@@ -10,3 +10,10 @@
 -keep class * implements org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorFactoryV1 {
     public <init>();
 }
+
+# The maintained native reserve verifier resolves this exact Kotlin JNI class.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaReserveFinalityJniV1 {
+    native <methods>;
+}
+
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaTopUpSubmissionJniV1 { *; }

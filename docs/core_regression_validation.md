@@ -5,6 +5,44 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## Follow-up from the 27-failure admission run
+
+The reported full Core run passed 14,951 tests, failed 27 and ignored 32.
+The failing fixtures constructed transactions with wall-clock timestamps but
+validated their signed TTL against the process-wide network clock. NTS advances
+from a monotonic UTC anchor; wall-clock corrections during a long run can make
+these clocks diverge. The near-identical expiry deltas across otherwise unrelated
+admission checks are consistent with that mismatch. NTS unit tests keep their
+service, sampler and output-floor state local.
+
+Signature, byte/attachment limits, gas, sequence, height-expiry and validation-fee
+fixtures now use an explicit admission instant taken from the signed fixture.
+The three tests exercising live cache/decoded ingress construct transactions
+from the same network clock used by those entrypoints. Both positive and negative
+validation-fee helpers use fixture time. The height-expiry test name now states
+that height expiry is optional; signature-bound wall-clock TTL remains mandatory.
+
+Regressions cover acceptance at the exact TTL deadline and rejection one
+millisecond later, plus historical short-TTL fee fixtures reaching acceptance
+and rejecting a signature from a different payload. Production clocks, TTL
+limits and validation order are unchanged.
+
+The fresh harness rebuilt without warnings in 9 minutes 57 seconds:
+
+```sh
+cargo test --locked -p iroha_core --lib \
+  --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run
+RAYON_NUM_THREADS=2 target/debug/deps/iroha_core-32e940501cee3ff7 \
+  tx::tests:: validation_fee_admission_tests:: time::tests:: --test-threads=16
+```
+
+The selection passed all 442 tests with no failures or ignored tests in 74.30
+seconds. An exact-name audit confirms all 27 reported failures passed, including
+the renamed height-expiry case. The filters also cover related transaction
+history and runtime tests. Changed Rust sources remained byte-identical throughout
+execution. Scoped Rust formatting, diff checks and historical-archive verification
+pass. Full Core/workspace execution was not rerun.
+
 ## Group 01 integration fixtures
 
 The reported group passed 56 tests and failed 11. Its fixtures and assertions
@@ -155,6 +193,63 @@ still reports 233 existing source-binding errors in Kura, QueuePlan, lane
 planning and two test anchors. The affected items were compared with the
 starting revision; none of these errors was introduced by this patch. The
 changed runner binding is current. This is not a full formal qualification.
+
+## Follow-up from the 10-failure Core run
+
+The reported full Core run passed 14,967 tests, failed ten and ignored 32.
+All ten failures reproduce in the retained test executable. Their causes are
+incomplete fixture authority and an incorrectly scoped source assertion:
+
+- Unlocked certified-view retention refreshes merge candidates immediately.
+  Its fixtures now persist the exact canonical parent chain and signed finality
+  in Kura, matching the committed State parent. The shared sidecar-server
+  fixture provides that same durable foundation for rollover and recovery.
+- Candidate-provider fixtures install the runner's exact unlocked reducer view
+  before admission. Multiroute geometry is established before genesis; the
+  single-route QueuePlan fixture freezes its authority before voting journals
+  open. Repeated retries retain all FIFO and autonomous-ownership assertions.
+- A new regression exercises both candidate providers with absent and stale
+  reducer directives. Both defer without closing output or publishing proposal
+  ownership, then resume after the exact view is installed.
+- The Apply ordering assertion is scoped to the Apply-owned recovery branch.
+  The earlier decided Validate-sidecar drain has its own sealed permit. The
+  assertion still requires Decision cleanup, terminal output reconciliation
+  and the open-ingress permit before the Apply drain.
+
+Production frontier, signing, quorum and recovery guards are unchanged. No
+compatibility path or ignored test is introduced.
+
+The fresh Core harness built without warnings in 9 minutes 57 seconds:
+
+```sh
+cargo test --locked -p iroha_core --lib \
+  --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run
+```
+
+The exact ten reported failures and the new reducer-view regression pass with
+16 test workers in 25.29 seconds. Using that executable as `CORE_TEST_BIN`, the
+broader selection passes all 455 tests, with no failures or ignored tests, in
+221.50 seconds:
+
+```sh
+RAYON_NUM_THREADS=2 "$CORE_TEST_BIN" \
+  sumeragi::v2_lane_work:: \
+  sumeragi::v2_lifecycle_coordinator::launch:: \
+  sumeragi::v2_runner:: \
+  sumeragi::v2_apply::tests::merge_frontier_ \
+  apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers \
+  --test-threads=16
+```
+
+This includes all shared sidecar-fixture callers and the eight State/Kura
+frontier tests for publication races, missing or contradictory parent headers,
+damaged indexes and retained signing authority. The changed Rust inputs and
+executable remain byte-identical throughout the broader run. All nine focused
+lifecycle source tests also pass independently without Core dependencies;
+six temporary source mutations confirm that the Apply assertion still rejects
+missing handoffs, reordered recovery and missing ingress authority. Changed-file
+formatting, diff and historical-archive checks pass. Full Core/workspace and
+four-validator network suites were not rerun.
 
 ## Changes
 

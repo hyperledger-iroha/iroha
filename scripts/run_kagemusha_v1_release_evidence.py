@@ -1416,9 +1416,28 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def _quiesce_process_group(process_group_id: int) -> None:
+def _reap_exited_leader(process: subprocess.Popen[bytes]) -> None:
+    """Observe an owned leader without blocking or waiting for it twice."""
+    if process.returncode is None:
+        waited, status, usage = os.wait4(process.pid, os.WNOHANG)
+        if waited:
+            process.returncode = os.waitstatus_to_exitcode(status)
+            process._kagemusha_usage = usage  # type: ignore[attr-defined]
+
+
+def _quiesce_process_group(
+    process_group_id: int, *, leader: subprocess.Popen[bytes] | None = None,
+) -> None:
     """Terminate descendants left in a completed command's process group."""
 
+    if leader is not None and leader.pid != process_group_id:
+        _fail("cleanup leader does not belong to its owned process group")
+    try:
+        if leader is not None:
+            _reap_exited_leader(leader)
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return
     try:
         os.killpg(process_group_id, signal.SIGTERM)
     except ProcessLookupError:
@@ -1426,6 +1445,10 @@ def _quiesce_process_group(process_group_id: int) -> None:
     deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
     while time.monotonic() < deadline:
         try:
+            # A killed but unreaped leader can keep the group visible. Reap
+            # it during draining, rather than waiting on our own zombie.
+            if leader is not None:
+                _reap_exited_leader(leader)
             os.killpg(process_group_id, 0)
         except ProcessLookupError:
             return
@@ -1437,6 +1460,8 @@ def _quiesce_process_group(process_group_id: int) -> None:
     deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
     while time.monotonic() < deadline:
         try:
+            if leader is not None:
+                _reap_exited_leader(leader)
             os.killpg(process_group_id, 0)
         except ProcessLookupError:
             return
@@ -1563,7 +1588,14 @@ def _run_process(
         while True:
             waited, status, candidate_usage = os.wait4(process.pid, os.WNOHANG)
             if waited:
+                # Record reaping before another observation can raise. Cleanup
+                # must never wait for or terminate this leader a second time.
+                process.returncode = os.waitstatus_to_exitcode(status)
                 usage = candidate_usage
+            # Completion first observed at or after the deadline cannot qualify
+            # as an in-time run, even when wait4 has already reaped the child.
+            timed_out = (time.monotonic() - started) * 1_000 >= timeout_ms
+            if waited:
                 break
             if (
                 os.fstat(stdout_fd).st_size > transcript_limit
@@ -1575,7 +1607,7 @@ def _run_process(
                     usage = process._kagemusha_usage  # type: ignore[attr-defined]
                     status = 0
                     break
-            if (time.monotonic() - started) * 1_000 >= timeout_ms:
+            if timed_out or (time.monotonic() - started) * 1_000 >= timeout_ms:
                 timed_out = True
                 _terminate_process_group(process)
                 if hasattr(process, "_kagemusha_usage"):
@@ -1604,11 +1636,25 @@ def _run_process(
             transcript_limit=transcript_limit,
             require_nonempty=require_nonempty_streams,
         )
+    except BaseException:
+        if process is not None:
+            try:
+                if process.returncode is None:
+                    _terminate_process_group(process)
+            finally:
+                # Even a failed termination/reap must attempt to stop surviving
+                # descendants before closing the parent-owned transcript files.
+                _quiesce_process_group(process.pid, leader=process)
+                if process.returncode is None:
+                    _fail("command cleanup did not reap its owned child")
+        raise
     finally:
-        if stdout_fd >= 0:
-            os.close(stdout_fd)
-        if stderr_fd >= 0:
-            os.close(stderr_fd)
+        try:
+            if stdout_fd >= 0:
+                os.close(stdout_fd)
+        finally:
+            if stderr_fd >= 0:
+                os.close(stderr_fd)
     if process is None or usage is None:
         _fail("command could not be observed")
     if exceeded:
@@ -1617,6 +1663,10 @@ def _run_process(
         _fail("command exceeded its timeout")
 
     elapsed_ms = max(1, math.ceil((time.monotonic() - started) * 1_000))
+    # Duration includes descendant quiescence and stable transcript capture.
+    # A successful child cannot admit a result whose full observation overran.
+    if elapsed_ms >= timeout_ms:
+        _fail("command exceeded its timeout")
     cpu_millis = max(1, math.ceil((usage.ru_utime + usage.ru_stime) * 1_000))
     peak_rss = int(usage.ru_maxrss)
     if sys.platform.startswith("linux"):

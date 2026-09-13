@@ -1624,9 +1624,9 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         fixture.manifest.round,
         fixture.manifest.subject,
         None,
-        sources,
-        Some(certificate),
-        certified_ownership,
+        sources.clone(),
+        Some(certificate.clone()),
+        certified_ownership.clone(),
         None,
         &mut services,
     );
@@ -1638,6 +1638,40 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
     assert_eq!(executor.body_ownership_projection(), ownership_before);
     assert_eq!(services.fetch_tasks, service_fetches_before);
     assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+    executor.runtime.decided_body = Some((
+        certificate.round,
+        certificate.proposal_round,
+        certificate.subject,
+        certificate.execution_commitment,
+    ));
+    let previous_tag = executor.runtime.round_tag.replace(tag(0));
+    for incoming_tag in [tag(1), tag(0)] {
+        let result = executor.begin_fetch(
+            incoming_tag,
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            None,
+            sources.clone(),
+            Some(certificate.clone()),
+            certified_ownership.clone(),
+            None,
+            &mut services,
+        );
+        if incoming_tag == tag(0) {
+            result.expect("the exact durable Decision rediscovery keeps its recovered owner");
+        } else {
+            assert!(matches!(result, Err(EffectExecutorError::Contract(_))));
+        }
+        assert_eq!(executor.body_ownership_projection(), ownership_before);
+        assert_eq!(services.fetch_tasks, service_fetches_before);
+        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+        assert_eq!(
+            executor.recovered_decision_fetch_owner_for_test(),
+            Some((key, request_hash))
+        );
+    }
+    executor.runtime.decided_body = None;
+    executor.runtime.round_tag = previous_tag;
     let collision_id = EffectWorkId::for_test(73);
     executor.pending_fetches.insert(
         collision_id,

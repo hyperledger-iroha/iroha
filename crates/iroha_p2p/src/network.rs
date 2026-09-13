@@ -5049,6 +5049,11 @@ impl Drop for NetworkActorProgressLease {
 }
 mod reliable_actor;
 use reliable_actor::*;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[path = "network/actor_admission_fixture.rs"]
+mod actor_admission_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use actor_admission_fixture::NetworkActorAdmissionTestFixture;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TopicFrameCaps {
     consensus: usize,

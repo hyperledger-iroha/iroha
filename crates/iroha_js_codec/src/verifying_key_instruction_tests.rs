@@ -1,5 +1,7 @@
 //! Verifying-key namespace, native record preservation and strict shape tests.
 
+const FIXTURE_NETWORK_PREFIX: u16 = 753;
+
 use super::*;
 use crate::{
     decode_instruction_archive, decode_instruction_frame, encode_instruction_archive,
@@ -57,7 +59,8 @@ fn envelope(name: &str, payload: Value) -> Value {
 
 fn rejects(value: &Value) {
     for encode in [encode_instruction_frame, encode_instruction_archive] {
-        let error = encode(&text(value)).expect_err("closed VK admission must reject");
+        let error = encode(&text(value), FIXTURE_NETWORK_PREFIX)
+            .expect_err("closed VK admission must reject");
         assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");
     }
 }
@@ -72,16 +75,24 @@ fn verifying_key_records_roundtrip_both_native_encodings_without_height_loss() {
             }
             let value = emit(name, &id(), &record).expect("canonical native record JSON");
             let source = text(&value);
-            let frame = encode_instruction_frame(&source).expect("VK frame");
-            let archive = encode_instruction_archive(&source).expect("VK archive");
+            let frame =
+                encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).expect("VK frame");
+            let archive =
+                encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).expect("VK archive");
             for decoded in [
-                decode_instruction_frame(&frame),
-                decode_instruction_archive(&archive),
+                decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX),
+                decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX),
             ] {
                 let decoded = decoded.expect("native VK decode");
                 assert_eq!(json::from_json::<Value>(&decoded).unwrap(), value);
-                assert_eq!(encode_instruction_frame(&decoded).unwrap(), frame);
-                assert_eq!(encode_instruction_archive(&decoded).unwrap(), archive);
+                assert_eq!(
+                    encode_instruction_frame(&decoded, FIXTURE_NETWORK_PREFIX).unwrap(),
+                    frame
+                );
+                assert_eq!(
+                    encode_instruction_archive(&decoded, FIXTURE_NETWORK_PREFIX).unwrap(),
+                    archive
+                );
             }
             let native: InstructionBox = match name {
                 "RegisterVerifyingKey" => RegisterVerifyingKey { id: id(), record }.into(),
@@ -91,7 +102,7 @@ fn verifying_key_records_roundtrip_both_native_encodings_without_height_loss() {
             assert_eq!(archive, native.encode());
             let mut trailing = archive;
             trailing.push(0);
-            assert!(decode_instruction_archive(&trailing).is_err());
+            assert!(decode_instruction_archive(&trailing, FIXTURE_NETWORK_PREFIX).is_err());
         }
     }
 }
@@ -102,8 +113,8 @@ fn verifying_key_instructions_reject_namespace_aliases_and_incomplete_nested_rec
     for name in ["RegisterVerifyingKey", "UpdateVerifyingKey"] {
         rejects(&object([(name, payload.clone())]));
         let alias = object([("VerifyingKeys", object([(name, payload.clone())]))]);
-        assert!(encode_instruction_frame(&text(&alias)).is_err());
-        assert!(encode_instruction_archive(&text(&alias)).is_err());
+        assert!(encode_instruction_frame(&text(&alias), FIXTURE_NETWORK_PREFIX).is_err());
+        assert!(encode_instruction_archive(&text(&alias), FIXTURE_NETWORK_PREFIX).is_err());
         rejects(&object([
             ("verifying_keys", object([(name, payload.clone())])),
             ("extra", Value::Null),
@@ -186,9 +197,12 @@ fn verifying_key_record_bytes_and_registry_ids_keep_native_owner_bounds() {
     }
     .into();
     assert_eq!(
-        decode_instruction_frame(&norito::encode_canonical(&native).unwrap())
-            .unwrap_err()
-            .kind(),
+        decode_instruction_frame(
+            &norito::encode_canonical(&native).unwrap(),
+            FIXTURE_NETWORK_PREFIX
+        )
+        .unwrap_err()
+        .kind(),
         CodecErrorKind::InvalidArgument
     );
     let valid: InstructionBox = RegisterVerifyingKey {
@@ -230,11 +244,17 @@ fn verifying_key_height_projection_has_one_lossless_sdk_representation() {
             let source = text(&value);
             let frame = norito::encode_canonical(&native).unwrap();
             let archive = native.encode();
-            assert_eq!(encode_instruction_frame(&source).unwrap(), frame);
-            assert_eq!(encode_instruction_archive(&source).unwrap(), archive);
+            assert_eq!(
+                encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).unwrap(),
+                frame
+            );
+            assert_eq!(
+                encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).unwrap(),
+                archive
+            );
             for decoded in [
-                decode_instruction_frame(&frame),
-                decode_instruction_archive(&archive),
+                decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX),
+                decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX),
             ] {
                 assert_eq!(json::from_json::<Value>(&decoded.unwrap()).unwrap(), value);
             }

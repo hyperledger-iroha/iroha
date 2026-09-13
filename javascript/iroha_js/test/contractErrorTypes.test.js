@@ -81,11 +81,11 @@ test("native Norito manifest codecs roundtrip Unit and nominal error schemas", a
   manifest.entrypoints[0].return_type = `Result<(), ${error.identity}>`;
   manifest.entrypoints[0].return_schema = returnSchema;
   const instruction = { RegisterSmartContractCode: { manifest } };
-  const encoded = noritoEncodeInstruction(instruction);
-  const decoded = noritoDecodeInstruction(encoded);
+  const encoded = noritoEncodeInstruction(instruction, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.error_types, [error]);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, returnSchema);
-  assert.deepEqual(noritoEncodeInstruction(decoded), encoded);
+  assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
 });
 
 test("canonical Norito manifest codec preserves nominal state cursor key schemas", async () => {
@@ -94,10 +94,10 @@ test("canonical Norito manifest codec preserves nominal state cursor key schemas
   const schema = { nodes: [{ kind: "Option", value: null }, { kind: "StateCursor", value: { kind: "Int", value: null } }] };
   manifest.entrypoints[0].return_type = "Option<StateCursor<int>>";
   manifest.entrypoints[0].return_schema = schema;
-  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } });
-  const decoded = noritoDecodeInstruction(encoded);
+  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, schema);
-  assert.deepEqual(noritoEncodeInstruction(decoded), encoded);
+  assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
 });
 
 
@@ -115,8 +115,8 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
   const manifest = structuredClone(fixture.manifest);
   manifest.entrypoints[0].return_type = "()";
   manifest.entrypoints[0].return_schema = { nodes: [{ kind: "Unit", value: null }] };
-  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } });
-  const decoded = noritoDecodeInstruction(encoded).RegisterSmartContractCode.manifest;
+  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753).RegisterSmartContractCode.manifest;
   assert.deepEqual(decoded.entrypoints[0].return_schema, manifest.entrypoints[0].return_schema);
   buildRegisterSmartContractCodeInstruction({ manifest });
   const fetchManifest = async (value) => new ToriiClient("http://localhost:8080", {
@@ -132,7 +132,7 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
         if (omitted) delete invalid.entrypoints[0][field];
         else invalid.entrypoints[0][field] = null;
       }
-      assert.throws(() => noritoEncodeInstruction({ RegisterSmartContractCode: { manifest: invalid } }), /return_type.*return_schema/u);
+      assert.throws(() => noritoEncodeInstruction({ RegisterSmartContractCode: { manifest: invalid } }, 753), /return_type.*return_schema/u);
       assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest: invalid }), /return_type.*return_schema/u);
       await assert.rejects(fetchManifest(invalid), /return_type.*return_schema/u);
     }
@@ -161,11 +161,11 @@ test("exported structs retain locked identity in public and durable schemas", as
   }
   const base = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
   const manifest = { ...base.manifest, ...fixture.manifest };
-  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } });
-  const decoded = noritoDecodeInstruction(encoded);
+  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, fixture.manifest.entrypoints[0].return_schema);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.states, fixture.manifest.states);
-  assert.deepEqual(noritoEncodeInstruction(decoded), encoded);
+  assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
   manifest.error_types = [];
   assert.throws(() => validateManifestErrorTypeBindingsV1(manifest), /error_types catalog/u);
 });
@@ -174,7 +174,7 @@ test("exported structs retain locked identity in public and durable schemas", as
 test("manifest instruction encoding and decoding reject unavailable native bindings", async () => {
   const fixture = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
   const instruction = { RegisterSmartContractCode: { manifest: fixture.manifest } };
-  const encoded = noritoEncodeInstruction(instruction);
+  const encoded = noritoEncodeInstruction(instruction, 753);
   const directory = await mkdtemp(join(tmpdir(), "iroha-manifest-codec-native-absence-"));
   try {
     const script = `
@@ -183,11 +183,11 @@ test("manifest instruction encoding and decoding reject unavailable native bindi
       const instruction = ${JSON.stringify(instruction)};
       const encoded = Buffer.from(${JSON.stringify(encoded.toString("base64"))}, "base64");
       for (const operation of [
-        () => noritoEncodeInstruction(instruction),
-        () => noritoEncodeInstruction(JSON.stringify(instruction)),
-        () => noritoEncodeInstruction(encoded),
-        () => noritoDecodeInstruction(encoded),
-        () => noritoDecodeInstruction(encoded, { parseJson: false }),
+        () => noritoEncodeInstruction(instruction, 753),
+        () => noritoEncodeInstruction(JSON.stringify(instruction), 753),
+        () => noritoEncodeInstruction(encoded, 753),
+        () => noritoDecodeInstruction(encoded, 753),
+        () => noritoDecodeInstruction(encoded, 753, { parseJson: false }),
       ]) {
         assert.throws(operation, { code: "ERR_IROHA_NATIVE_BINDING", nativeStatus: "missing_file" });
       }

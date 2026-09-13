@@ -3907,6 +3907,31 @@ impl ProductionV2Services {
             .filter(|message| *message == expected)
             .count()
     }
+    /// Verify the incident's sole Prepare crossed the real network actor admission boundary.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn assert_pending_kura_prepare_actor_admission_for_test(
+        &self,
+        expected: &wire::Vote,
+    ) {
+        assert_eq!(expected.phase, wire::GlobalPhase::Prepare);
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(expected.clone()));
+        assert_eq!(
+            self.consensus_broadcasts.as_slice(),
+            std::slice::from_ref(&message),
+        );
+        assert_eq!(self.remote_voters().len(), 3);
+        let pending = self
+            .lock_pending_exact_output()
+            .expect("lock actual pending Prepare output");
+        assert!(!pending.is_pending());
+        assert_eq!(
+            pending
+                .scheduler_snapshot(false)
+                .remaining_message_occurrences,
+            0,
+        );
+    }
     /// Count all retained exact fanouts and those carrying one exact PrepareQC.
     #[cfg(test)]
     pub(in crate::sumeragi) fn pending_exact_prepare_qc_fanouts_for_test(

@@ -295,6 +295,149 @@ fn assert_fastpq_batch_rejected(
     }
 }
 include!("autonomous_merge_fastpq_shape_tests.rs");
+state_test!(consensus_stack future_historical_merge_rejects_reservation_and_payload_drift
+    future_historical_merge_rejects_reservation_and_payload_drift_on_consensus_stack();
+);
+#[expect(
+    clippy::too_many_lines,
+    reason = "one future-carrier fixture isolates reservation framing, immutable bindings, and authenticated payload commitments"
+)]
+fn future_historical_merge_rejects_reservation_and_payload_drift_on_consensus_stack() {
+    let (state, entry, _) = autonomous_merge_transfer_commit_authorization_fixture();
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries an autonomous transfer batch");
+    let restored_height = u64::try_from(state.view().height()).expect("fixture height fits u64");
+    assert!(
+        batch.application_block_header.height().get() > restored_height,
+        "every structural negative must exercise future historical preflight"
+    );
+    let state_before = crate::snapshot::canonical_state_snapshot_hash(&state);
+    let historical = |candidate: &MergeExecutionBatch| {
+        // Exercise structural validation inside an exact carrier. Authentication
+        // of that carrier's QC belongs to the recovery boundary tests.
+        let mut candidate_entry = entry.clone();
+        candidate_entry.execution_batch = Some(candidate.clone());
+        state.validate_merge_execution_batch(
+            &entry.active_lanes,
+            candidate,
+            MergeExecutionValidationAuthority::Historical(HistoricalMergeExecutionAuthority {
+                entry: &candidate_entry,
+            }),
+        )
+    };
+    historical(batch).expect("the unchanged future batch is structurally authentic");
+    let rejected = |mut candidate: MergeExecutionBatch, expected: &str| {
+        // Keep redundant outer commitments coherent so each mutation reaches
+        // the intended immutable reservation or payload guard.
+        rebind_mutated_fastpq_batch(&mut candidate);
+        assert!(crate::merge::merge_execution_batch_commitments_match(
+            &candidate
+        ));
+        assert!(matches!(
+            state.validate_merge_execution_batch(
+                &entry.active_lanes,
+                &candidate,
+                MergeExecutionValidationAuthority::Historical(HistoricalMergeExecutionAuthority {
+                    entry: &entry,
+                }),
+            ),
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
+                if reason == "historical execution differs from its authenticated canonical carrier"
+        ));
+        match historical(&candidate) {
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
+                assert_eq!(reason, expected);
+            }
+            other => panic!("future historical preflight returned an unexpected result: {other:?}"),
+        }
+    };
+    let mutated_key = |mutate: fn(&mut crate::queue::LaneQueueReservationKeyV1)| {
+        let mut candidate = batch.clone();
+        let mut key =
+            decode_canonical_merge_reservation_key(&candidate.lanes[0].reservation_keys[0])
+                .expect("decode the authentic reservation before mutation");
+        mutate(&mut key);
+        candidate.lanes[0].reservation_keys[0] =
+            norito::encode_canonical(&key).expect("encode the mutated reservation canonically");
+        candidate
+    };
+    let mut malformed_frame = batch.clone();
+    malformed_frame.lanes[0].reservation_keys[0] = vec![0xff];
+    rejected(
+        malformed_frame,
+        "encoded lane reservation key is not valid exact framed Norito",
+    );
+    rejected(
+        mutated_key(|key| key.version = 0),
+        "encoded lane reservation key failed validation: unsupported lane queue reservation key version",
+    );
+    rejected(
+        mutated_key(|key| key.version = crate::queue::LaneQueueReservationKeyV1::VERSION + 1),
+        "encoded lane reservation key failed validation: unsupported lane queue reservation key version",
+    );
+    rejected(
+        mutated_key(|key| {
+            key.queue_plan_admission_binding_hash = Hash::prehashed([0; Hash::LENGTH])
+        }),
+        "encoded lane reservation key failed validation: lane reservation cryptographic identity contains a zero hash",
+    );
+    rejected(
+        mutated_key(|key| key.reservation_owner_hash = Hash::prehashed([0; Hash::LENGTH])),
+        "encoded lane reservation key failed validation: lane reservation cryptographic identity contains a zero hash",
+    );
+    let binding_mismatch =
+        "embedded reservation key does not match its entrypoint, route, or lane session";
+    rejected(
+        mutated_key(|key| {
+            key.entrypoint_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"different entrypoint"));
+        }),
+        binding_mismatch,
+    );
+    rejected(
+        mutated_key(|key| key.routing_plan_digest = Hash::new(b"different routing plan")),
+        binding_mismatch,
+    );
+    rejected(
+        mutated_key(|key| {
+            key.lane_block_view = key
+                .lane_block_view
+                .checked_add(1)
+                .expect("fixture view fits u64");
+        }),
+        binding_mismatch,
+    );
+    // These nonzero identities survive shape checks and the deferred registry
+    // lookup, but cannot change the producer-authenticated executable payload.
+    rejected(
+        mutated_key(|key| {
+            key.queue_plan_admission_binding_hash = Hash::new(b"different admission binding");
+        }),
+        "autonomous executable payload hash mismatch",
+    );
+    rejected(
+        mutated_key(|key| key.reservation_owner_hash = Hash::new(b"different reservation owner")),
+        "autonomous executable payload hash mismatch",
+    );
+    let mut mismatched_source_hash = batch.clone();
+    mismatched_source_hash.lanes[0].source_bundle_hash = Hash::new(b"different source bundle");
+    rejected(
+        mismatched_source_hash,
+        "embedded autonomous source bundle hash mismatch",
+    );
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state),
+        state_before,
+        "rejected future historical batches must not publish State effects"
+    );
+    assert_eq!(
+        u64::try_from(state.view().height()).expect("fixture height fits u64"),
+        restored_height,
+        "historical preflight must not advance the coherent State frontier"
+    );
+}
 state_test!(consensus_stack live_autonomous_merge_rejects_historical_sealed_signed_execution_alias
     live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_consensus_stack();
 );
@@ -3130,6 +3273,65 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
             ConsensusMode::Permissioned,
         )
         .expect("candidate is valid with exact committed pre-carrier authority");
+
+    let batch = base
+        .execution_batch
+        .as_ref()
+        .expect("the fixture has an execution batch");
+    let restored_height = u64::try_from(state.view().height()).expect("fixture height fits u64");
+    assert!(
+        batch.application_block_header.height().get() > restored_height,
+        "registry deferral must exercise a carrier beyond the coherent State frontier"
+    );
+    let historical_entry = merge_entry_from_candidate(
+        base.clone(),
+        merge_qc_for_candidate(&state, &base, &validator_keypairs, &[0, 1, 2]),
+    );
+    let historical = |candidate: &MergeExecutionBatch| {
+        state.validate_merge_execution_batch(
+            &active_lanes,
+            candidate,
+            MergeExecutionValidationAuthority::Historical(HistoricalMergeExecutionAuthority {
+                entry: &historical_entry,
+            }),
+        )
+    };
+    historical(batch).expect("exact future execution passes historical structural validation");
+    let registry_key = State::queue_plan_admission_registry_marker_key(&binding.registry_key())
+        .expect("exact fixture registry key");
+    let registry_payload = state
+        .world
+        .smart_contract_state
+        .view()
+        .get(&registry_key)
+        .cloned()
+        .expect("exact fixture registry payload");
+    {
+        let mut world = state.world.block();
+        world.smart_contract_state.remove(registry_key.clone());
+        world.commit();
+    }
+    historical(batch).expect("future historical preflight defers the not-yet-replayed registry");
+    assert_fastpq_batch_rejected(
+        &state,
+        &active_lanes,
+        batch.clone(),
+        "embedded reservation key lacks its exact QueuePlan admission registry binding",
+    );
+    {
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(registry_key, registry_payload);
+        world.commit();
+    }
+    state
+        .validate_merge_execution_batch(
+            &active_lanes,
+            batch,
+            MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
+        )
+        .expect("restoring only the exact registry owner restores live authorization");
 }
 #[test]
 fn pending_queue_plan_admission_accepts_unchanged_source_after_height_only_advance() {

@@ -7,6 +7,8 @@ use norito::{
     json::{self, Value},
 };
 
+const FIXTURE_NETWORK_PREFIX: u16 = 753;
+
 use super::*;
 use crate::{
     decode_instruction_archive, decode_instruction_frame, encode_instruction_archive,
@@ -42,8 +44,8 @@ fn roundtrip(value: &Value) -> InstructionBox {
     let native = instruction_from_json(&source).expect("typed instruction");
     assert!(is_lifecycle_instruction(&native));
     assert_eq!(instruction_to_json_value(&native).unwrap(), *value);
-    let archive = encode_instruction_archive(&source).expect("archive");
-    let frame = encode_instruction_frame(&source).expect("frame");
+    let archive = encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).expect("archive");
+    let frame = encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).expect("frame");
     assert_eq!(
         archive,
         native.encode(),
@@ -55,29 +57,32 @@ fn roundtrip(value: &Value) -> InstructionBox {
         "frame must be native canonical encoding"
     );
     for decoded in [
-        decode_instruction_archive(&archive),
-        decode_instruction_frame(&frame),
+        decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX),
+        decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX),
     ] {
         assert_eq!(json::from_json::<Value>(&decoded.unwrap()).unwrap(), *value);
     }
     assert!(
-        decode_instruction_archive(&frame).is_err(),
+        decode_instruction_archive(&frame, FIXTURE_NETWORK_PREFIX).is_err(),
         "public frame is not an archive"
     );
     assert!(
-        decode_instruction_frame(&archive).is_err(),
+        decode_instruction_frame(&archive, FIXTURE_NETWORK_PREFIX).is_err(),
         "archive is not a public frame"
     );
-    let encodings: [(Vec<u8>, fn(&[u8]) -> CodecResult<String>); 2] = [
+    let encodings: [(Vec<u8>, fn(&[u8], u16) -> CodecResult<String>); 2] = [
         (archive, decode_instruction_archive),
         (frame, decode_instruction_frame),
     ];
     for (bytes, decode) in encodings {
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert!(decode(&trailing).is_err(), "trailing bytes must fail");
         assert!(
-            decode(&bytes[..bytes.len() - 1]).is_err(),
+            decode(&trailing, FIXTURE_NETWORK_PREFIX).is_err(),
+            "trailing bytes must fail"
+        );
+        assert!(
+            decode(&bytes[..bytes.len() - 1], FIXTURE_NETWORK_PREFIX).is_err(),
             "truncation must fail"
         );
     }
@@ -86,7 +91,8 @@ fn roundtrip(value: &Value) -> InstructionBox {
 
 fn rejects(value: &Value) {
     for encode in [encode_instruction_archive, encode_instruction_frame] {
-        let error = encode(&text(value)).expect_err("strict input must fail");
+        let error =
+            encode(&text(value), FIXTURE_NETWORK_PREFIX).expect_err("strict input must fail");
         assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");
     }
 }
@@ -613,8 +619,8 @@ fn replication_native_frames_and_archives_reject_unsafe_integer_projection() {
         let archive = native.encode();
         let frame = norito::encode_canonical(&native).unwrap();
         for result in [
-            decode_instruction_archive(&archive),
-            decode_instruction_frame(&frame),
+            decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX),
+            decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX),
         ] {
             let error = result.expect_err("unsafe integer must not be projected into SDK JSON");
             assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");

@@ -9,6 +9,8 @@ use iroha_data_model::{
 };
 use norito::codec::Encode;
 
+const FIXTURE_NETWORK_PREFIX: u16 = 753;
+
 use super::*;
 use crate::{
     decode_instruction_archive, decode_instruction_frame, encode_instruction_archive,
@@ -158,11 +160,17 @@ fn assert_roundtrip(name: &str, expected: &InstructionBox, value: &Value) {
     assert_eq!(instruction_to_json_value(expected).unwrap(), *value);
     let frame = norito::encode_canonical(expected).expect("native public frame");
     let archive = expected.encode();
-    assert_eq!(encode_instruction_frame(&source).unwrap(), frame);
-    assert_eq!(encode_instruction_archive(&source).unwrap(), archive);
+    assert_eq!(
+        encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).unwrap(),
+        frame
+    );
+    assert_eq!(
+        encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).unwrap(),
+        archive
+    );
     for decoded in [
-        decode_instruction_frame(&frame),
-        decode_instruction_archive(&archive),
+        decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX),
+        decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX),
     ] {
         let decoded: Value = json::from_json(&decoded.unwrap()).unwrap();
         assert_eq!(decoded, *value);
@@ -172,7 +180,8 @@ fn assert_roundtrip(name: &str, expected: &InstructionBox, value: &Value) {
 
 fn rejects(value: &Value) {
     for encode in [encode_instruction_frame, encode_instruction_archive] {
-        let error = encode(&text(value)).expect_err("closed JSON must reject mutation");
+        let error = encode(&text(value), FIXTURE_NETWORK_PREFIX)
+            .expect_err("closed JSON must reject mutation");
         assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");
     }
 }
@@ -255,7 +264,7 @@ fn every_revision_rejects_numeric_aliases_null_overflow_and_noncanonical_text() 
         map(map(&mut missing).get_mut(name).unwrap()).remove("expected_revision");
         for encode in [encode_instruction_frame, encode_instruction_archive] {
             assert!(
-                encode(&text(&missing))
+                encode(&text(&missing), FIXTURE_NETWORK_PREFIX)
                     .unwrap_err()
                     .reason()
                     .contains("expected_revision")
@@ -434,17 +443,17 @@ fn frame_archive_confusion_truncation_and_trailing_data_fail_for_every_variant()
     for (_, native, _) in cases(4) {
         let frame = norito::encode_canonical(&native).unwrap();
         let archive = native.encode();
-        assert!(decode_instruction_frame(&archive).is_err());
-        assert!(decode_instruction_archive(&frame).is_err());
-        let encodings: [(Vec<u8>, fn(&[u8]) -> CodecResult<String>); 2] = [
+        assert!(decode_instruction_frame(&archive, FIXTURE_NETWORK_PREFIX).is_err());
+        assert!(decode_instruction_archive(&frame, FIXTURE_NETWORK_PREFIX).is_err());
+        let encodings: [(Vec<u8>, fn(&[u8], u16) -> CodecResult<String>); 2] = [
             (frame, decode_instruction_frame),
             (archive, decode_instruction_archive),
         ];
         for (bytes, decode) in encodings {
-            assert!(decode(&bytes[..bytes.len() - 1]).is_err());
+            assert!(decode(&bytes[..bytes.len() - 1], FIXTURE_NETWORK_PREFIX).is_err());
             let mut trailing = bytes;
             trailing.push(0);
-            assert!(decode(&trailing).is_err());
+            assert!(decode(&trailing, FIXTURE_NETWORK_PREFIX).is_err());
         }
     }
 }
@@ -462,7 +471,7 @@ fn duplicate_revision_tokens_fail_before_typed_reconstruction() {
             "the duplicate mutation must change the fixture"
         );
         for encode in [encode_instruction_frame, encode_instruction_archive] {
-            assert!(encode(&mutation).is_err());
+            assert!(encode(&mutation, FIXTURE_NETWORK_PREFIX).is_err());
         }
     }
 }

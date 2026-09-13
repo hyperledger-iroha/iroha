@@ -19,6 +19,10 @@ No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
 after durable publication. Failed captures, outputs and Cargo caches remain intact.
+The explicit --expected-commit selects immutable Git objects on both fresh
+preparation and resume; unrelated HEAD advancement and worktree edits are excluded.
+The active repository must remain on optimizations, and the executing controller
+sources must match the selected signed commit.
 """
 
 from __future__ import annotations
@@ -120,26 +124,6 @@ def git(root: Path, *args: str) -> bytes:
     return result.stdout.strip()
 
 
-def verify_checkout(root: Path, commit: str, expected_signer: str) -> str:
-    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None,
-            "expected commit must be a full lowercase Git object ID")
-    require(re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64}|SHA256:[A-Za-z0-9+/]{43})", expected_signer) is not None,
-            "expected signer must be a full signing-key fingerprint")
-    require(git(root, "rev-parse", "--show-toplevel") == os.fsencode(root),
-            "repository root does not match the checkout")
-    require(git(root, "branch", "--show-current") == b"optimizations",
-            "Taira preparation requires optimizations")
-    require(git(root, "rev-parse", "HEAD").decode() == commit,
-            "HEAD differs from the expected commit")
-    require(not git(root, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"), "Taira preparation requires clean source")
-    git(root, "verify-commit", commit)
-    require(git(root, "show", "--no-patch", "--format=%GF", commit).decode() == expected_signer,
-            "commit signature does not match the expected signer")
-    for path in BUILD_SOURCES:
-        git(root, "ls-files", "--error-unmatch", "--", path)
-    return git(root, "rev-parse", "HEAD^{tree}").decode()
-
-
 def file_identity(info: os.stat_result) -> tuple[int, ...]:
     return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
             info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
@@ -230,14 +214,94 @@ def commit_entries(root: Path, commit: str) -> bytes:
     return b"\0".join(sorted(rows, key=lambda row: row.split(b"\t", 1)[1])) + b"\0"
 
 
+def verify_controller_module_origins(root: Path) -> None:
+    """Keep unrelated checkout modules outside the admitted live controller."""
+    modules = {
+        "release_artifact_contract": "scripts/release_artifact_contract.py",
+        "taira_release_check": "scripts/taira_release_check.py",
+        "taira_cargo_cache": "scripts/taira_cargo_cache.py",
+    }
+    allowed = {root / "scripts/taira_release.py", *(root / path for path in modules.values())}
+    for name, relative in modules.items():
+        module = sys.modules.get(name)
+        origin = getattr(module, "__file__", None)
+        expected = root / relative
+        require(isinstance(origin, str) and Path(origin).resolve() == expected,
+                "build controller module has an unbound origin: " + name)
+        spec_origin = getattr(getattr(module, "__spec__", None), "origin", None)
+        require(isinstance(spec_origin, str) and Path(spec_origin).resolve() == expected,
+                "build controller module has an unbound import origin: " + name)
+    for name, module in tuple(sys.modules.items()):
+        origin = getattr(module, "__file__", None)
+        if isinstance(origin, str):
+            resolved = Path(origin).resolve()
+            require(not resolved.is_relative_to(root) or resolved in allowed,
+                    "loaded checkout module is outside the build controller: " + name)
+
+
+def verify_controller_sources(root: Path, commit: str) -> None:
+    """Compare the live controller with signed blobs, independently of index flags."""
+    selected = []
+    required = {os.fsencode(path) for path in BUILD_SOURCES}
+    for row in commit_entries(root, commit).split(b"\0"):
+        if not row:
+            continue
+        metadata, path = row.split(b"\t", 1)
+        if path in required:
+            require(metadata.split()[0] in (b"100644", b"100755"),
+                    "signed build controller must be a regular file: " + os.fsdecode(path))
+            selected.append(row)
+    require({row.split(b"\t", 1)[1] for row in selected} == required,
+            "signed commit is missing a required build controller source")
+    try:
+        source_snapshot(root, b"\0".join(selected) + b"\0")
+    except (PrepareError, OSError) as error:
+        raise PrepareError("build controller differs from signed commit: " + str(error)) from error
+    verify_controller_module_origins(root)
+
+
+def signed_source_size(root: Path, commit: str, entries: bytes) -> int:
+    """Count captured blob bytes from the selected Git tree, never the worktree."""
+    expected = {}
+    for row in entries.split(b"\0"):
+        if row:
+            metadata, path = row.split(b"\t", 1)
+            mode, oid, stage = metadata.split()
+            require(path not in expected and stage == b"0",
+                    "source size inventory has duplicate paths or merge stages")
+            expected[path] = (mode, oid)
+    total, seen = 0, set()
+    for row in git(root, "ls-tree", "-r", "-l", "-z", "--full-tree", commit).split(b"\0"):
+        if not row:
+            continue
+        metadata, path = row.split(b"\t", 1)
+        mode, kind, oid, size = metadata.split()
+        require(path not in seen and expected.get(path) == (mode, oid),
+                "source size inventory differs from the signed capture")
+        seen.add(path)
+        if mode == b"160000":
+            require(kind == b"commit" and size == b"-", "invalid signed gitlink size")
+        else:
+            require(kind == b"blob" and size.isdigit(), "invalid signed source blob size")
+            total += int(size)
+    require(seen == set(expected), "source size inventory is incomplete")
+    return total
+
+
 def verify_signed_source(root: Path, commit: str, signer: str) -> str:
-    require(git(root, "rev-parse", "--show-toplevel") == os.fsencode(root)
-            and git(root, "branch", "--show-current") == b"optimizations",
-            "Taira preparation requires the selected optimizations repository")
-    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "invalid source commit")
+    """Authenticate the explicitly selected Git source for fresh and resumed builds."""
+    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None,
+            "expected commit must be a full lowercase Git object ID")
+    require(re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64}|SHA256:[A-Za-z0-9+/]{43})", signer) is not None,
+            "expected signer must be a full signing-key fingerprint")
+    require(git(root, "rev-parse", "--show-toplevel") == os.fsencode(root),
+            "repository root does not match the checkout")
+    require(git(root, "branch", "--show-current") == b"optimizations",
+            "Taira preparation requires optimizations")
     git(root, "verify-commit", commit)
     require(git(root, "show", "--no-patch", "--format=%GF", commit).decode() == signer,
             "commit signature does not match the expected signer")
+    verify_controller_sources(root, commit)
     return git(root, "rev-parse", commit + "^{tree}").decode()
 
 
@@ -312,6 +376,25 @@ def retire_source_capture(source: Path, entries: bytes, target_dir: Path) -> Non
         os.close(parent)
 
 
+def unchanged_source_directories(previous_entries: bytes, entries: bytes) -> set[Path]:
+    """Find directories whose complete Git-authenticated subtrees are unchanged."""
+    def subtrees(records: bytes) -> dict[Path, str]:
+        digests = {}
+        for row in records.split(b"\0"):
+            if not row:
+                continue
+            metadata, relative = row.split(b"\t", 1)
+            path = Path(os.fsdecode(relative))
+            directories = list(path.parents)
+            if metadata.startswith(b"160000 "):
+                directories.append(path)
+            for directory in directories:
+                digests.setdefault(directory, hashlib.sha256()).update(row + b"\0")
+        return {directory: digest.hexdigest() for directory, digest in digests.items()}
+    previous, current = subtrees(previous_entries), subtrees(entries)
+    return {directory for directory, digest in current.items() if previous.get(directory) == digest}
+
+
 def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes) -> Path:
     """Publish one fixed Git-object capture; never copy the mutable worktree."""
     parent = source.parent
@@ -340,6 +423,8 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     # The lane lock covers refresh, native checks, Linux compilation and capture.
     # No running Cargo process may observe the source-directory replacement.
     pending = create_fresh_directory(parent / ("source.pending-" + uuid.uuid4().hex), mode=0o700)
+    unchanged_directories = (unchanged_source_directories(previous_entries, entries)
+                             if previous_entries is not None else set())
     # Batch mode reads exact committed blobs without archive export filters.
     with subprocess.Popen(["git", "--no-replace-objects", "cat-file", "--batch"], cwd=root,
                           env=child_environment(dict(os.environ), root / "target"),
@@ -393,7 +478,13 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     # exact output binding; inventories never follow it into generated files.
     (pending / "target").symlink_to(target_dir, target_is_directory=True)
     for path, directories, _ in os.walk(pending, topdown=False):
-        freeze(Path(path), directory=True)
+        directory = Path(path)
+        freeze(directory, directory=True)
+        relative = directory.relative_to(pending)
+        if relative in unchanged_directories:
+            info = (source / relative).stat(follow_symlinks=False)
+            require(stat.S_ISDIR(info.st_mode), "unchanged captured directory changed type")
+            os.utime(directory, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
     frozen_snapshot(pending, entries, target_dir)
     retained = None
     if os.path.lexists(source):
@@ -858,16 +949,13 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         require(output.is_relative_to(root / "target"), "repository outputs must stay under target/")
     require(output != target_dir and not target_dir.is_relative_to(output),
             "output-dir must not contain the Cargo lane")
+    tree = verify_signed_source(root, args.expected_commit, args.expected_signer)
+    entries = commit_entries(root, args.expected_commit)
     if fresh:
-        verify_checkout(root, args.expected_commit, args.expected_signer)
-        # Detect index flags concealing modifications before capturing signed objects.
-        checkout_rows = source_snapshot(root)
-        capacity_preflight([(root / "target", sum(row.get("size", 0) for row in checkout_rows),
+        capacity_preflight([(target_dir, signed_source_size(root, args.expected_commit, entries),
                              "fixed source capture"),
                             (target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
                             (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
-    tree = verify_signed_source(root, args.expected_commit, args.expected_signer)
-    entries = commit_entries(root, args.expected_commit)
     source = capture_source(root, source, target_dir, args.expected_commit, entries)
     before = frozen_snapshot(source, entries, target_dir)
     inherited = dict(os.environ)

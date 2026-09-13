@@ -17224,8 +17224,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &mut self,
         authority: super::v2_lifecycle_coordinator::RecoveredDecisionFetchStoreAdapterAuthorityV1,
     ) -> Result<super::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'_>, AdapterError> {
+        // Queued ingress is inert, as in the ordinary Fetch-to-Store seam.
+        // Requiring it to drain first would park this completion ahead of an
+        // ordinary physical result which itself prevents a runtime step.
         if self.fail_closed
-            || self.ingress.len() != 0
             || self.pending_effect_ownership.is_some()
             || self.last_scheduler_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()
@@ -17533,6 +17535,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             return Err(AdapterError::SuccessorClocksNotArmed);
         }
         self.driver.successor_activation_status()
+    }
+
+    /// Retain the adapter's exact pending Decision for CompleteTip activation.
+    pub(in crate::sumeragi) fn recovered_successor_decision_activation_authority(
+        &mut self,
+    ) -> Result<Option<super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>, AdapterError>
+    {
+        self.driver
+            .recovered_successor_decision_activation_authority()
     }
 
     /// Snapshot an already-decided interrupted tip without arming successor clocks.

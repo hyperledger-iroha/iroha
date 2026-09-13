@@ -508,6 +508,10 @@ fn phase_partition_nonzero_challenge_and_retained_floors_are_mandatory() {
     for (original, substituted) in [
         (Phase::Startup, Phase::BeforeRelease),
         (Phase::BeforeRelease, Phase::Startup),
+        (Phase::BeforeAdmission, Phase::AfterCommit),
+        (Phase::AfterCommit, Phase::BeforeAdmission),
+        (Phase::BeforeAdmission, Phase::BeforeRelease),
+        (Phase::BeforeRelease, Phase::BeforeAdmission),
         (Phase::AfterCommit, Phase::BeforeRelease),
         (Phase::BeforeRelease, Phase::AfterCommit),
     ] {
@@ -516,6 +520,10 @@ fn phase_partition_nonzero_challenge_and_retained_floors_are_mandatory() {
         assert_error(&mut evidence, EvidenceError::SourceMismatch);
     }
     for (original, substituted) in [
+        (Phase::Startup, Phase::BeforeAdmission),
+        (Phase::BeforeAdmission, Phase::Startup),
+        (Phase::BeforeAdmission, Phase::BeforeProvider),
+        (Phase::BeforeProvider, Phase::BeforeAdmission),
         (Phase::BeforeProvider, Phase::AfterProvider),
         (Phase::AfterProvider, Phase::BeforeCommit),
         (Phase::BeforeCommit, Phase::Startup),

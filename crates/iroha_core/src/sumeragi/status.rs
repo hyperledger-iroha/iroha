@@ -10,7 +10,8 @@ use super::{
         ProductionRecoveredSuccessorTraceProjection,
         ProductionSuccessorPredecessorBindingProjection, ProductionSuccessorSnapshotProjection,
         ProductionSuccessorStartupLifecycleProjection, SUCCESSOR_AUTHORITY_APPLIED,
-        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+        SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
         SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED,
         SUCCESSOR_STAGE_COMPLETE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
         check_production_applied_successor_transition,
@@ -792,6 +793,20 @@ fn validate_v2_successor_snapshot(
     expected_successor_context_id: HeightContextId,
     successor: &SumeragiV2Status,
 ) -> Result<(), V2SuccessorActivationError> {
+    validate_v2_successor_snapshot_commit_frontier(
+        finalized_height,
+        finalized_height,
+        expected_successor_context_id,
+        successor,
+    )
+}
+// Only the sealed recovered-Decision publication may separate these frontiers.
+fn validate_v2_successor_snapshot_commit_frontier(
+    finalized_height: u64,
+    expected_commit_height: u64,
+    expected_successor_context_id: HeightContextId,
+    successor: &SumeragiV2Status,
+) -> Result<(), V2SuccessorActivationError> {
     let expected_successor_height = finalized_height.checked_add(1).ok_or(
         V2SuccessorActivationError::SuccessorHeightOverflow(finalized_height),
     )?;
@@ -801,9 +816,9 @@ fn validate_v2_successor_snapshot(
             actual: successor.height,
         });
     }
-    if successor.last_committed_height != finalized_height {
+    if successor.last_committed_height != expected_commit_height {
         return Err(V2SuccessorActivationError::SuccessorParentMismatch {
-            expected: finalized_height,
+            expected: expected_commit_height,
             actual: successor.last_committed_height,
         });
     }
@@ -903,8 +918,25 @@ fn publish_recovered_v2_successor_height_at(
 ) -> Result<(), V2SuccessorActivationError> {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
-    let finalized_height = successor.last_committed_height;
-    validate_v2_successor_snapshot(finalized_height, expected_successor_context_id, &successor)?;
+    let finalized_height = if authority_kind == SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP {
+        snapshot_height
+    } else {
+        predecessor.height
+    };
+    let expected_commit_height =
+        if authority_kind == SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP {
+            finalized_height.checked_add(1).ok_or(
+                V2SuccessorActivationError::SuccessorHeightOverflow(finalized_height),
+            )?
+        } else {
+            finalized_height
+        };
+    validate_v2_successor_snapshot_commit_frontier(
+        finalized_height,
+        expected_commit_height,
+        expected_successor_context_id,
+        &successor,
+    )?;
     let published = SUMERAGI_V2_STATUS.get().and_then(|slot| {
         slot.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -957,18 +989,31 @@ pub(crate) fn activate_v2_successor_height(
 ) -> Result<(), V2SuccessorActivationError> {
     activate_v2_successor_height_at(expected_predecessor, authority, successor, Instant::now())
 }
+#[cfg(test)]
 fn activate_recovered_complete_tip_v2_height_at(
     authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
     successor: SumeragiV2Status,
     now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
-    if !authority.authorizes_successor_status(&successor) {
+    activate_recovered_complete_tip_v2_height_with_decision_at(authority, successor, None, now)
+}
+fn activate_recovered_complete_tip_v2_height_with_decision_at(
+    authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
+    successor: SumeragiV2Status,
+    decision: Option<super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,
+    now: Instant,
+) -> Result<(), V2SuccessorActivationError> {
+    if !authority.authorizes_successor_status_with_decision(&successor, decision.as_ref()) {
         return Err(V2SuccessorActivationError::RecoveredCompleteTipAuthorityMismatch);
     }
     let predecessor = authority.predecessor().refinement_projection();
     let expected_successor_context_id = successor.height_context_id;
     let publication = publish_recovered_v2_successor_height_at(
-        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+        if decision.is_some() {
+            SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP
+        } else {
+            SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP
+        },
         predecessor,
         CanonicalIdentityProjection::zero(),
         0,
@@ -986,11 +1031,25 @@ fn activate_recovered_complete_tip_v2_height_at(
 /// its clocks and authenticated ingress is open. The token reopens and compares
 /// its retained successor ledger before the existing checked recovered-status
 /// transition can publish anything.
+#[cfg(test)]
 pub(in crate::sumeragi) fn activate_recovered_complete_tip_v2_height(
     authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
     successor: SumeragiV2Status,
 ) -> Result<(), V2SuccessorActivationError> {
     activate_recovered_complete_tip_v2_height_at(authority, successor, Instant::now())
+}
+/// Publish a complete canonical tip's successor with its exact unapplied WAL Decision.
+pub(in crate::sumeragi) fn activate_recovered_complete_tip_v2_height_with_decision(
+    authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
+    successor: SumeragiV2Status,
+    decision: Option<super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,
+) -> Result<(), V2SuccessorActivationError> {
+    activate_recovered_complete_tip_v2_height_with_decision_at(
+        authority,
+        successor,
+        decision,
+        Instant::now(),
+    )
 }
 fn activate_snapshot_bootstrap_v2_height_at(
     authority: SnapshotSuccessorActivationAuthority,

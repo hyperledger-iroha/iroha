@@ -358,7 +358,7 @@ async function submitDeploymentStep({
   const payloadBytes = buildBrowserInstructionTransactionPayload({
     networkId,
     authority,
-    chainDiscriminant,
+    networkPrefix: Number(chainDiscriminant),
     instructions: [step.instruction],
     creationTimeMs,
     ttlMs,
@@ -368,8 +368,9 @@ async function submitDeploymentStep({
   });
   const signable = validateBrowserInstructionTransactionSignable({
     networkId,
+    networkPrefix: Number(chainDiscriminant),
     payloadBytes,
-    payloadHashHex: browserTransactionPayloadHashHex(payloadBytes),
+    payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, Number(chainDiscriminant)),
     authority,
     signingPublicKey,
     signatureAlgorithm: "ed25519",

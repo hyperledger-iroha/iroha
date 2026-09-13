@@ -21,6 +21,10 @@ pub(crate) struct LeaderWireRecoveryAuthority {
     installed_timeout_view: Option<wire::View>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_commit_statement: Option<Hash>,
+    retired_local_proposal: Option<Hash>,
+    current_timeout_durable: bool,
+    protected_prepare: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    protected_decision: Option<(wire::ConsensusRound, wire::BlockSubject)>,
 }
 
 /// Exact non-owning coordinates copied only from an authenticated envelope.
@@ -118,6 +122,24 @@ impl LeaderWireRecoveryAuthority {
                 ))
             })
             .transpose()?;
+        let protected_prepare = durable
+            .highest_prepare()
+            .map(|certificate| {
+                Ok::<_, AdapterError>((
+                    adapter.registry.round_to_wire(certificate.proposal_round()),
+                    adapter.registry.subject(certificate.subject())?,
+                ))
+            })
+            .transpose()?;
+        let protected_decision = durable
+            .decision()
+            .map(|certificate| {
+                Ok::<_, AdapterError>((
+                    adapter.registry.round_to_wire(certificate.proposal_round()),
+                    adapter.registry.subject(certificate.subject())?,
+                ))
+            })
+            .transpose()?;
         // An observer may collect current-round shares. Historical shares
         // reconstruct a pool only when replay retains the exact CommitIntent.
         let protected_commit_statement = durable
@@ -136,6 +158,39 @@ impl LeaderWireRecoveryAuthority {
                 ))
             })
             .transpose()?;
+        // The reducer retires its local Proposal when the same-round timeout
+        // intent is durable, before a timeout certificate advances the view.
+        // Preserve only that exact Proposal's comparison digest; this is not
+        // authority to retire ingress, body work, or another Proposal.
+        let current_round = reducer::Round::new(tag.height(), tag.view());
+        let retired_local_proposal = durable
+            .timeout_intent(current_round)
+            .filter(|timeout| Some(timeout.signer()) == adapter.reducer.local_validator())
+            .and_then(|_| durable.proposal_intent(current_round))
+            .map(|proposal| {
+                // WAL replay retains the first complete wire envelope, including
+                // the exact certificate variant covered by its signature.
+                // Reading that authenticated cache avoids rebuilding aggregate
+                // signatures or cloning the height's entire registry here.
+                let cached = adapter
+                    .registry
+                    .proposals
+                    .get(&(proposal.round(), proposal.manifest().subject()))
+                    .ok_or(AdapterError::RecoveredStartupEffectMismatch)?;
+                if Some(proposal.proposer()) != adapter.reducer.local_validator()
+                    || cached.round != adapter.registry.round_to_wire(proposal.round())
+                    || cached.proposer != adapter.registry.validator_index(proposal.proposer())?
+                    || cached.subject != adapter.registry.subject(proposal.manifest().subject())?
+                    || cached.manifest
+                        != adapter
+                            .registry
+                            .manifest_to_wire(proposal.round(), proposal.manifest())?
+                {
+                    return Err(AdapterError::RecoveredStartupEffectMismatch);
+                }
+                Ok::<_, AdapterError>(Hash::new(cached.signature_preimage()))
+            })
+            .transpose()?;
         Ok(Self {
             context_id: adapter.frozen_wire_context_id(),
             height: adapter.wire_context.height,
@@ -147,6 +202,12 @@ impl LeaderWireRecoveryAuthority {
             installed_timeout_view: durable.last_timeout().map(|tc| tc.round().view()),
             protected_lock,
             protected_commit_statement,
+            retired_local_proposal,
+            current_timeout_durable: durable
+                .timeout_intent(current_round)
+                .is_some_and(|timeout| Some(timeout.signer()) == adapter.reducer.local_validator()),
+            protected_prepare,
+            protected_decision,
         })
     }
     pub(crate) fn matches_geometry(
@@ -185,10 +246,135 @@ impl LeaderWireRecoveryAuthority {
         bytes.extend(self.installed_timeout_view.encode());
         bytes.extend(self.protected_lock.encode());
         bytes.extend(self.protected_commit_statement.encode());
+        bytes.extend(self.retired_local_proposal.encode());
+        bytes.extend(self.current_timeout_durable.encode());
+        bytes.extend(self.protected_prepare.encode());
+        bytes.extend(self.protected_decision.encode());
         Hash::new(bytes)
     }
     pub(crate) const fn consumer_tag(self) -> reducer::EventTag {
         self.consumer_tag
+    }
+    /// Prove that an installed timeout superseded this exact body execution.
+    /// Same-view timeout upgrades advance generation; ordinary advances reset
+    /// generation. A bare current tag or uninstalled timeout intent cannot
+    /// authorize cancellation of a retained lifecycle owner.
+    pub(in crate::sumeragi) fn proves_superseded_body_execution(
+        self,
+        context_id: wire::HeightContextId,
+        original: reducer::EventTag,
+    ) -> bool {
+        self.context_id == context_id
+            && self.height == original.height()
+            && self.consumer_tag.height() == self.height
+            && self.wal_id.get() != 0
+            && self
+                .installed_timeout_view
+                .and_then(|view| view.checked_add(1))
+                == Some(self.consumer_tag.view())
+            && self.consumer_tag.strictly_advances(original)
+    }
+    /// Prove that a durable Decision closed this height or an installed timeout
+    /// closed this older Proposal view. A bare tag or TimeoutIntent is insufficient.
+    pub(in crate::sumeragi) fn proves_obsolete_proposal(self, round: wire::ConsensusRound) -> bool {
+        self.context_id == round.context_id
+            && self.height == round.height
+            && self.consumer_tag.height() == self.height
+            && self.wal_id.get() != 0
+            && (self.decision_durable
+                || (self
+                    .installed_timeout_view
+                    .and_then(|view| view.checked_add(1))
+                    == Some(self.consumer_tag.view())
+                    && round.view < self.consumer_tag.view()))
+    }
+    /// Prove the exact local Proposal output retired by a durable same-round
+    /// timeout intent. This follows the reducer's output-liveness predicate;
+    /// it neither installs a timeout certificate nor advances the view.
+    pub(in crate::sumeragi) fn proves_retired_local_proposal(
+        self,
+        proposal: &wire::Proposal,
+    ) -> bool {
+        self.context_id == proposal.round.context_id
+            && self.height == proposal.round.height
+            && self.consumer_tag.height() == self.height
+            && self.consumer_tag.view() == proposal.round.view
+            && self.wal_id.get() != 0
+            && self.retired_local_proposal == Some(Hash::new(proposal.signature_preimage()))
+    }
+    /// Prove that a completed validation belongs only to closed historical
+    /// work. This does not cancel a live owner or recover a validation result.
+    /// A same-round local timeout closes candidate work without advancing the
+    /// view; the durable Prepare, lock, and Decision still protect their bodies.
+    pub(in crate::sumeragi) fn proves_retired_terminal_body(
+        self,
+        original: reducer::EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        self.context_id == round.context_id
+            && self.height == round.height
+            && self.height == original.height()
+            && self.wal_id.get() != 0
+            // Generations are process-local; restart may begin below the
+            // historical owner's generation. Only durable views order this
+            // inert history, while its original tag remains unchanged.
+            && original.view() <= self.consumer_tag.view()
+            && round.view <= self.consumer_tag.view()
+            && self.protected_prepare.is_none_or(|body| body.1 != subject)
+            && self.protected_lock.is_none_or(|body| body.1 != subject)
+            && self.protected_decision.is_none_or(|body| body.1 != subject)
+            && (self.decision_durable
+                || (self.installed_timeout_view.and_then(|view| view.checked_add(1))
+                    == Some(self.consumer_tag.view())
+                    && original.view() < self.consumer_tag.view())
+                || (self.current_timeout_durable && original.view() == self.consumer_tag.view()))
+    }
+    /// Authenticate a Decision for isolated cancellation tests; production uses
+    /// the actual replay-authenticated WAL frontier from `from_adapter`.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn from_verified_decision_for_test(
+        verified: &super::VerifiedHeightContext,
+        certificate: &wire::QuorumCertificate,
+    ) -> Option<Self> {
+        if certificate.phase != wire::GlobalPhase::Commit {
+            return None;
+        }
+        verified.verify_quorum_certificate(certificate).ok()?;
+        Some(Self {
+            wal_id: reducer::PersistenceId::new(1),
+            installed_timeout_view: None,
+            ..Self::from_replayed_adapter(
+                verified.context().id(),
+                verified.context().height,
+                [0; 32],
+                certificate.round.view,
+                true,
+            )
+        })
+    }
+    /// Authenticate a timeout for isolated cancellation tests without exposing production minting.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn from_verified_installed_timeout_for_test(
+        verified: &super::VerifiedHeightContext,
+        certificate: &wire::TimeoutCertificate,
+    ) -> Option<Self> {
+        verified
+            .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate.clone()),
+            ))
+            .ok()?;
+        let view = certificate.round.view.checked_add(1)?;
+        Some(Self {
+            wal_id: reducer::PersistenceId::new(1),
+            ..Self::from_replayed_adapter(
+                verified.context().id(),
+                verified.context().height,
+                [0; 32],
+                view,
+                false,
+            )
+        })
     }
     /// Verify the exact view and body owner already published from the WAL.
     pub(crate) fn matches_entered_view(
@@ -393,6 +579,10 @@ impl LeaderWireRecoveryAuthority {
             installed_timeout_view: durable_view.checked_sub(1),
             protected_lock: None,
             protected_commit_statement: None,
+            retired_local_proposal: None,
+            current_timeout_durable: false,
+            protected_prepare: None,
+            protected_decision: None,
         }
     }
     /// Unqualified unit-fixture projection of the lock and exact Commit statement.

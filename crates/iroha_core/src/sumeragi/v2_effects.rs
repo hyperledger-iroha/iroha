@@ -3274,8 +3274,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         let recovered_bodies = body_store
             .recovery_catalog()
             .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
-        let cold_terminal_results = body_store.take_recovered_terminal_results();
-        let recovered_validations = body_store.validated_recovery_catalog();
+        let mut cold_terminal_results = body_store.take_recovered_terminal_results();
+        let mut recovered_validations = body_store.validated_recovery_catalog();
         let recovered_rejections = body_store.rejected_recovery_catalog();
         let retired_recovered_rejections = body_store.retired_rejected_recovery_catalog();
         for (key, validated_receipt) in &recovered_validations {
@@ -3315,6 +3315,61 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     ));
                 }
                 (true, false) | (false, true) => {}
+            }
+        }
+        if let Some(replay) = pending_kura_apply_replay.as_deref_mut() {
+            let mut selected_terminal = None;
+            for (key, terminal) in &cold_terminal_results {
+                let Some(validated) = terminal.validated_receipt() else {
+                    continue;
+                };
+                let Some((manifest, durable)) = recovered_bodies.get(key) else {
+                    return Err(EffectExecutorError::BodyStore(
+                        "terminal validation marker has no exact durable body".to_owned(),
+                    ));
+                };
+                if replay
+                    .classify_and_defer_validated_marker(*key, manifest, durable, validated)
+                    .map_err(|error| EffectExecutorError::BodyStore(error.to_owned()))?
+                {
+                    if terminal.key() != *key
+                        || terminal.durable() != durable
+                        || recovered_validations.contains_key(key)
+                        || recovered_validate_retry_census
+                            .classify_and_bind_validated_marker(*key, validated)
+                            .map_err(|error| EffectExecutorError::BodyStore(error.to_owned()))?
+                        || selected_terminal.replace(*key).is_some()
+                    {
+                        return Err(EffectExecutorError::BodyStore(
+                            "pending Kura terminal marker retained another cold recovery owner"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+            if let Some(key) = selected_terminal {
+                // The authenticated terminal result leaves ordinary retry custody
+                // before its receipt enters the pending-Kura validation catalog.
+                // The original Validate tombstone remains immutable in LedgerV1.
+                let terminal = cold_terminal_results.remove(&key).ok_or_else(|| {
+                    EffectExecutorError::BodyStore(
+                        "selected pending Kura terminal validation result disappeared".to_owned(),
+                    )
+                })?;
+                let validated = terminal
+                    .validated_receipt()
+                    .ok_or_else(|| {
+                        EffectExecutorError::BodyStore(
+                            "selected pending Kura terminal result is not validated".to_owned(),
+                        )
+                    })?
+                    .clone();
+                drop(terminal);
+                if recovered_validations.insert(key, validated).is_some() {
+                    return Err(EffectExecutorError::BodyStore(
+                        "pending Kura terminal validation replaced another marker".to_owned(),
+                    ));
+                }
             }
         }
         if pending_kura_apply_replay
@@ -4463,6 +4518,15 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
     ) -> Result<wire::SumeragiV2Status, AdapterError> {
         self.runtime.successor_activation_status_snapshot()
+    }
+
+    /// Retain the sealed WAL Decision used only by CompleteTip activation.
+    pub(in crate::sumeragi) fn recovered_successor_decision_activation_authority(
+        &mut self,
+    ) -> Result<Option<super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>, AdapterError>
+    {
+        self.runtime
+            .recovered_successor_decision_activation_authority()
     }
 
     /// Snapshot one completed interrupted tip while pacemaker clocks stay unarmed.
@@ -12360,11 +12424,45 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .to_owned(),
             ));
         }
-        if self
+        if let Some(owner) = self
             .recovered_decision_fetches
             .values()
-            .any(|owner| owner.matches_body_coordinates(round, subject))
+            .find(|owner| owner.matches_body_coordinates(round, subject))
         {
+            // Cold Decision recovery already owns this request until its
+            // response is durably stored. The live reducer can independently
+            // rediscover Missing on a periodic tick, including while that
+            // response is queued. Coalesce only the exact certified Decision;
+            // preserve its dedicated request, response claim and retry path.
+            if manifest.is_none()
+                && proposal_replay.is_none()
+                && certificate.as_ref().is_some_and(|certificate| {
+                    owner.authenticates_fetch_rediscovery(
+                        tag,
+                        round,
+                        subject,
+                        &sources,
+                        certificate,
+                    )
+                })
+                && self.runtime.authoritative_tag() == Some(tag)
+                && self
+                    .runtime
+                    .decided_body()
+                    .map_err(EffectExecutorError::Runtime)?
+                    == certificate.as_ref().map(|certificate| {
+                        (
+                            certificate.round,
+                            certificate.proposal_round,
+                            certificate.subject,
+                            certificate.execution_commitment,
+                        )
+                    })
+            {
+                self.validated_certified_request_presence()
+                    .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
+                return Ok(());
+            }
             return Err(EffectExecutorError::Contract(
                 "body-fetch coordinates already have a recovered Decision Fetch owner".to_owned(),
             ));
@@ -15379,7 +15477,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // The retained relay may terminate the process as soon as the guard
         // closes, so preserve the precise reason before publishing that edge.
         iroha_logger::error!(%reason, "Sumeragi v2 effect transport failed closed");
-        self.output_guard.activate_restart_required();
+        // A caller may still own the launch or runtime operation's permit.
+        // Close admission now; that outer permit's release completes the drain.
+        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| reason.to_string())
@@ -15404,7 +15504,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // concurrently and may exit before `services.fail_closed` can report
         // the originating executor error.
         iroha_logger::error!(%error, "Sumeragi v2 effect executor failed closed");
-        self.output_guard.activate_restart_required();
+        // Service failure may unwind through an outer admitted operation.
+        // Waiting for its permit here would prevent that unwind from returning.
+        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| error.to_string())

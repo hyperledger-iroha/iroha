@@ -20,9 +20,10 @@ pub(super) enum VerifiedEvidence {
     Released(VerifiedStreamTokenSignerReceiptV1),
 }
 
-pub(super) fn phases() -> [Phase; 6] {
+pub(super) fn phases() -> [Phase; 7] {
     [
         Phase::Startup,
+        Phase::BeforeAdmission,
         Phase::BeforeProvider,
         Phase::AfterProvider,
         Phase::BeforeCommit,
@@ -34,7 +35,11 @@ pub(super) fn phases() -> [Phase; 6] {
 pub(super) fn is_current(phase: Phase) -> bool {
     matches!(
         phase,
-        Phase::Startup | Phase::BeforeProvider | Phase::AfterProvider | Phase::BeforeCommit
+        Phase::Startup
+            | Phase::BeforeAdmission
+            | Phase::BeforeProvider
+            | Phase::AfterProvider
+            | Phase::BeforeCommit
     )
 }
 
@@ -212,18 +217,20 @@ impl Evidence {
             .take()
             .expect("one retained verification attempt");
         match self.phase {
-            Phase::Startup | Phase::BeforeProvider | Phase::AfterProvider | Phase::BeforeCommit => {
-                verify_stream_token_signer_current_evidence_v1(
-                    &self.receipt.receipt.custody_record,
-                    bytes,
-                    &self.receipt.binding,
-                    &self.receipt.trust,
-                    &self.trust,
-                    attempt,
-                    self.now,
-                )
-                .map(VerifiedEvidence::Current)
-            }
+            Phase::Startup
+            | Phase::BeforeAdmission
+            | Phase::BeforeProvider
+            | Phase::AfterProvider
+            | Phase::BeforeCommit => verify_stream_token_signer_current_evidence_v1(
+                &self.receipt.receipt.custody_record,
+                bytes,
+                &self.receipt.binding,
+                &self.receipt.trust,
+                &self.trust,
+                attempt,
+                self.now,
+            )
+            .map(VerifiedEvidence::Current),
             Phase::AfterCommit => verify_stream_token_signer_completed_observation_v1(
                 &self.receipt_bytes,
                 bytes,

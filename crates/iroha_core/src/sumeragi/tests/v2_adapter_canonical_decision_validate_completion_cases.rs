@@ -84,7 +84,7 @@ fn continue_canonical_decision_validate_cold_fixture(
         &snapshot,
         LifecycleWorkClass::Validate,
     );
-    executor.assert_cold_decision_protection_for_test(expected_subject, false);
+    executor.assert_decision_protection_for_test(expected_subject, false, false);
     executor
         .arm_live_clocks(
             ProductionLifecycleLiveClockActivationPermitV1::for_test(),
@@ -132,7 +132,7 @@ fn continue_canonical_decision_validate_cold_fixture(
         panic!("actual current Commit must advance Validate to Apply")
     };
     assert_eq!(parent_ordinal, validate);
-    executor.assert_cold_decision_protection_for_test(expected_subject, true);
+    executor.assert_decision_protection_for_test(expected_subject, true, true);
     assert_eq!(owner.apply_ordinals_for_retry_test(), vec![child_ordinal]);
     let apply = owner
         .active_body_owner_before_decision_cold_for_test(child_ordinal, LifecycleWorkClass::Apply);

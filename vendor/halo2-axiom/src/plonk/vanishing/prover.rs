@@ -176,3 +176,34 @@ impl<C: CurveAffine> Evaluated<C> {
             }))
     }
 }
+
+/// Values extracted from the actual ordinary vanishing commitment and following challenge.
+#[cfg(test)]
+pub(crate) struct StoredVanishingOrdinaryOracleV1<C: CurveAffine> {
+    pub(crate) random_coefficient: Vec<C::Scalar>,
+    pub(crate) random_blind: Blind<C::Scalar>,
+    pub(crate) y: C::Scalar,
+}
+/// Invoke the real argument method using the caller's true current RNG and transcript state.
+#[cfg(test)]
+pub(crate) fn stored_vanishing_ordinary_oracle<C, R, T, E>(
+    params: &crate::poly::ipa::commitment::ParamsIPA<C>,
+    domain: &EvaluationDomain<C::Scalar>,
+    rng: &mut R,
+    transcript: &mut T,
+) -> Result<StoredVanishingOrdinaryOracleV1<C>, Error>
+where
+    C: CurveAffine,
+    C::Scalar: ff::WithSmallOrderMulGroup<3>,
+    R: RngCore,
+    T: TranscriptWrite<C, E>,
+    E: EncodedChallenge<C>,
+{
+    let committed = Argument::commit(params, domain, rng, transcript)?;
+    let y: crate::plonk::ChallengeY<C> = transcript.squeeze_challenge_scalar();
+    Ok(StoredVanishingOrdinaryOracleV1 {
+        random_coefficient: committed.random_poly.to_vec(),
+        random_blind: committed.random_blind,
+        y: *y,
+    })
+}

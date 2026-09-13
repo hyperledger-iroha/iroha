@@ -52,6 +52,19 @@ fn measure_fastpq_source_transcript_inputs(
     transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
     limits: FastpqSourceStatementBuildLimits,
 ) -> Result<(usize, usize, usize), String> {
+    measure_fastpq_source_bundle_inputs(
+        transcripts
+            .iter()
+            .map(|(hash, bundle)| (hash, bundle.as_slice())),
+        limits,
+    )
+}
+
+/// Shared borrowed-bundle counting pass for archives and logical-entry reservations.
+fn measure_fastpq_source_bundle_inputs<'a>(
+    transcripts: impl IntoIterator<Item = (&'a Hash, &'a [TransferTranscript])>,
+    limits: FastpqSourceStatementBuildLimits,
+) -> Result<(usize, usize, usize), String> {
     u32::try_from(limits.max_transcripts)
         .map_err(|_| "FASTPQ source transcript limit exceeds u32".to_owned())?;
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -116,6 +129,8 @@ pub(crate) fn preflight_fastpq_source_transcripts(
 }
 
 mod budget;
+#[cfg(test)]
+pub(crate) use budget::measure_fastpq_source_entry_bundle_usage;
 pub(crate) use budget::{FastpqSourceTranscriptUsage, measure_fastpq_source_statement_usage};
 
 fn source_statement_public_limits(

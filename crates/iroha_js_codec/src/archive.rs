@@ -2,6 +2,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use iroha_data_model::account::address::ChainDiscriminantGuard;
 use iroha_data_model::isi::InstructionBox;
 
 use crate::{
@@ -17,8 +18,10 @@ fn encode_archive(instruction: &InstructionBox) -> CodecResult<Vec<u8>> {
 /// Encode strict instruction JSON as the compact archive embedded in a transaction.
 ///
 /// This is a native bare encoding, not a public frame with its header removed.
-/// Ambient layout flags are restored before returning.
-pub fn encode_instruction_archive(json_payload: &str) -> CodecResult<Vec<u8>> {
+/// `network_prefix` selects account admission for this operation only. Ambient
+/// layout flags and the caller's network scope are restored before returning.
+pub fn encode_instruction_archive(json_payload: &str, network_prefix: u16) -> CodecResult<Vec<u8>> {
+    let _network = ChainDiscriminantGuard::enter(network_prefix);
     let instruction = instruction_from_json(json_payload)?;
     encode_archive(&instruction)
 }
@@ -27,7 +30,9 @@ pub fn encode_instruction_archive(json_payload: &str) -> CodecResult<Vec<u8>> {
 ///
 /// Native resource limits, exact consumption and canonical re-encoding apply before
 /// any instruction is returned. Public frames and trailing bytes are rejected.
-pub fn decode_instruction_archive(bytes: &[u8]) -> CodecResult<String> {
+/// Domainless account identities are rendered with the required `network_prefix`.
+pub fn decode_instruction_archive(bytes: &[u8], network_prefix: u16) -> CodecResult<String> {
+    let _network = ChainDiscriminantGuard::enter(network_prefix);
     // `decode_adaptive` resets its decoder state. Preserve the caller's flags at
     // this public operation boundary before entering that decoder.
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());

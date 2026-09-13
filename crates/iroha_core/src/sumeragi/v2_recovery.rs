@@ -1535,6 +1535,19 @@ impl RecoveredCompleteTipActivationAuthority {
     pub(crate) const fn successor_context_id(&self) -> wire::HeightContextId {
         self.activation.successor_context_id()
     }
+    /// Bind an adapter-owned pending successor Decision to this exact Kura tip.
+    pub(in crate::sumeragi) fn authorizes_successor_decision_status(
+        &self,
+        decision: &super::v2::RecoveredSuccessorDecisionActivationAuthorityV1,
+        status: &wire::SumeragiV2Status,
+    ) -> bool {
+        decision.authorizes(
+            &self.artifact.height_context,
+            &self.artifact.commit_qc,
+            self.activation.successor_context_id(),
+            status,
+        )
+    }
     /// Recheck the complete retained predecessor finality evidence against one
     /// exact lifecycle replay authority.
     ///

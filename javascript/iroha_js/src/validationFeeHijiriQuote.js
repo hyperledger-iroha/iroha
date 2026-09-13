@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { requireNetworkPrefix } from "./networkPrefix.js";
 
 import {
   defaultNativeRuntime,
@@ -148,7 +149,9 @@ function verifyValidationFeeHijiriQuoteResponseV1WithRuntime(
   nativeRuntime,
   responseNorito,
   requestNorito,
+  networkPrefix,
 ) {
+  requireNetworkPrefix(networkPrefix);
   requireBoundedBytes(
     responseNorito,
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
@@ -165,6 +168,7 @@ function verifyValidationFeeHijiriQuoteResponseV1WithRuntime(
   const json = native.validationFeeVerifyHijiriQuoteResponseV1(
     response,
     request,
+    networkPrefix,
   );
   if (typeof json !== "string" || json.length === 0) {
     throw new Error("native Hijiri quote verifier returned no projection");
@@ -277,11 +281,13 @@ export function createValidationFeeHijiriQuoteApi(nativeRuntime) {
     verifyValidationFeeHijiriQuoteResponseV1: (
       responseNorito,
       requestNorito,
+      networkPrefix,
     ) =>
       verifyValidationFeeHijiriQuoteResponseV1WithRuntime(
         nativeRuntime,
         responseNorito,
         requestNorito,
+        networkPrefix,
       ),
   });
 }
@@ -308,10 +314,12 @@ export function encodeValidationFeeHijiriQuoteRequestV1(
 export function verifyValidationFeeHijiriQuoteResponseV1(
   responseNorito,
   requestNorito,
+  networkPrefix,
 ) {
   return DEFAULT_VALIDATION_FEE_HIJIRI_QUOTE_API
     .verifyValidationFeeHijiriQuoteResponseV1(
       responseNorito,
       requestNorito,
+      networkPrefix,
     );
 }

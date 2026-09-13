@@ -477,6 +477,122 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
+    /// Transform one borrowed column while its caller retains the zeroizing owner.
+    ///
+    /// `inverse` maps evaluations to coefficients. `extended_omega_factor`, when present,
+    /// selects the same coset as `coeff_to_extended_part`; absence selects the base domain.
+    /// The existing baseline FFT uses only public twiddle allocations, avoiding the parallel
+    /// FFT's witness temporary and recursive FFT's retained witness scratch. Its roots and
+    /// scaling are identical to the existing domain transforms; existing dispatch is unchanged.
+    ///
+    /// Panics on a wrong column length or a zero coset factor, before changing the input.
+    pub(crate) fn stored_column_transform_in_place(
+        &self,
+        a: &mut [F],
+        inverse: bool,
+        extended_omega_factor: Option<F>,
+    ) {
+        assert_eq!(a.len(), 1 << self.k);
+        let coset = extended_omega_factor.map(|factor| self.g_coset * factor);
+        let inverse_coset = coset.map(|factor| {
+            factor
+                .invert()
+                .expect("stored-column coset factor must be nonzero")
+        });
+        let unused_fft_data = FFTData::default();
+        if inverse {
+            crate::fft::baseline::fft(a, self.omega_inv, self.k, &unused_fft_data, true);
+            parallelize(a, |chunk, _| {
+                for value in chunk {
+                    *value *= &self.ifft_divisor;
+                }
+            });
+            if let Some(factor) = inverse_coset {
+                self.distribute_powers(a, factor);
+            }
+        } else {
+            if let Some(factor) = coset {
+                self.distribute_powers(a, factor);
+            }
+            crate::fft::baseline::fft(a, self.omega, self.k, &unused_fft_data, false);
+        }
+    }
+
+    /// Check the original domain shape used by the two stored quotient transforms.
+    fn stored_quotient_geometry(&self) -> (usize, usize, u32) {
+        let extension_log = self
+            .extended_k
+            .checked_sub(self.k)
+            .filter(|log| *log != 0)
+            .expect("stored quotient requires a nontrivial extended domain");
+        assert!(self.extended_k <= F::S);
+        assert_eq!(Some(self.n), 1_u64.checked_shl(self.k));
+        let n = usize::try_from(self.n).expect("stored quotient column fits usize");
+        let parts = 1_usize
+            .checked_shl(extension_log)
+            .expect("stored quotient part count fits usize");
+        assert_eq!(self.t_evaluations.len(), parts);
+        assert!(self.quotient_poly_degree != 0 && self.quotient_poly_degree <= parts as u64);
+        (n, parts, extension_log)
+    }
+
+    /// Divide and inverse-transform one original undivided numerator coset part in place.
+    ///
+    /// Input position `j` is the numerator at `zeta * extended_omega^part * omega^j`.
+    /// The result is an aliased coefficient part; the caller must mix all parts with
+    /// [`Self::stored_quotient_piece_mix_in_place`] before treating them as quotient pieces.
+    /// One original divisor and one normalized base-domain inverse are applied. The caller
+    /// retains its zeroizing buffer owner across the existing baseline FFT and its public
+    /// twiddle allocation. This helper neither admits receipts nor enforces backend budgets.
+    ///
+    /// Panics on invalid geometry, part or length before changing the input.
+    pub(crate) fn stored_quotient_part_inverse_in_place(&self, part: u32, values: &mut [F]) {
+        let (n, parts, _) = self.stored_quotient_geometry();
+        assert_eq!(values.len(), n);
+        let part_index = usize::try_from(part).expect("stored quotient part fits usize");
+        assert!(part_index < parts);
+        let factor = self.extended_omega.pow_vartime([u64::from(part)]);
+        let divisor = self.t_evaluations[part_index];
+        assert!(!bool::from((self.g_coset * factor).is_zero()));
+        assert!(!bool::from(divisor.is_zero()));
+        assert!(!bool::from(self.omega_inv.is_zero()));
+        assert!(!bool::from(self.ifft_divisor.is_zero()));
+        for value in values.iter_mut() {
+            *value *= divisor;
+        }
+        self.stored_column_transform_in_place(values, true, Some(factor));
+    }
+
+    /// Mix one same-coefficient row from every aliased part into ordinary quotient pieces.
+    ///
+    /// Input `values[r]` is coefficient `t` from aliased part `r`. Output `values[s]` is
+    /// the full extended inverse coefficient at `t + s*n`. All parts are computed; callers
+    /// retain the ordinary quotient prefix without adding a discarded-tail acceptance rule.
+    /// This uses the original extended root, normalization by the part count and the original
+    /// coset unscale. The baseline FFT accepts its unused default data even when parts < n;
+    /// calling `get_fft_data(parts)` would incorrectly address the n..N recursive cache.
+    ///
+    /// Panics on invalid geometry or length before changing the input.
+    pub(crate) fn stored_quotient_piece_mix_in_place(&self, values: &mut [F]) {
+        let (_, parts, extension_log) = self.stored_quotient_geometry();
+        assert_eq!(values.len(), parts);
+        let inverse_root = self.extended_omega_inv.pow_vartime([self.n]);
+        let inverse_coset_step = self.g_coset_inv.pow_vartime([self.n]);
+        assert!(!bool::from(inverse_root.is_zero()));
+        assert!(!bool::from(inverse_coset_step.is_zero()));
+        // The original 1/N divisor gives 1/m after multiplying by n. Do not perform
+        // another field inversion for each of the n coefficient rows.
+        let inverse_parts = self.extended_ifft_divisor * F::from(self.n);
+        assert!(!bool::from(inverse_parts.is_zero()));
+        let unused_fft_data = FFTData::default();
+        crate::fft::baseline::fft(values, inverse_root, extension_log, &unused_fft_data, true);
+        let mut scale = inverse_parts;
+        for value in values.iter_mut() {
+            *value *= scale;
+            scale *= inverse_coset_step;
+        }
+    }
+
     /// Rotate the extended domain polynomial over the original domain.
     pub fn rotate_extended(
         &self,
@@ -1164,4 +1280,265 @@ fn bench_lagrange_vecs_to_extended() {
     let got_timer = Instant::now();
     let _ = domain.lagrange_vecs_to_extended(poly_lagrange_vecs);
     println!("got time: {}s", got_timer.elapsed().as_secs_f64());
+}
+
+/// Compare both new helpers with the actual original dense division and inverse.
+#[cfg(test)]
+fn stored_quotient_helpers_match_dense_inverse<F: WithSmallOrderMulGroup<3>>() {
+    for k in [1, 4, 8, 9] {
+        for degree in [3, 4, 5, 6, 8, 9] {
+            let domain = EvaluationDomain::<F>::new(degree, k);
+            let n = domain.get_n() as usize;
+            let m = 1_usize << (domain.extended_k - k);
+            for pattern in 0..3 {
+                let mut numerator = domain.empty_extended();
+                for (index, value) in numerator.iter_mut().enumerate() {
+                    let i = index as u64;
+                    *value = match pattern {
+                        0 => F::ZERO,
+                        1 => F::from(i * i + 19 * i + 7),
+                        _ => {
+                            if index == n * m / 3 {
+                                F::ONE
+                            } else {
+                                F::ZERO
+                            }
+                        }
+                    };
+                }
+                let divided = domain.divide_by_vanishing_poly(numerator.clone());
+                let expected = domain.extended_to_coeff(divided.clone());
+                assert_eq!(expected.len(), n * m);
+                if pattern == 2 && domain.get_quotient_poly_degree() < m {
+                    assert!(
+                        expected[n * domain.get_quotient_poly_degree()..]
+                            .iter()
+                            .any(|value| *value != F::ZERO)
+                    );
+                }
+                let tables = domain
+                    .fft_data
+                    .iter()
+                    .map(|slot| slot.data.get().is_some())
+                    .collect::<Vec<_>>();
+                let mut aliases = Vec::new();
+                for part in 0..m {
+                    let mut values = (0..n)
+                        .map(|row| numerator[row * m + part])
+                        .collect::<Vec<_>>();
+                    let allocation = (values.as_ptr(), values.len(), values.capacity());
+                    domain.stored_quotient_part_inverse_in_place(part as u32, &mut values);
+                    assert_eq!(
+                        allocation,
+                        (values.as_ptr(), values.len(), values.capacity())
+                    );
+                    let ordinary_part = domain
+                        .lagrange_from_vec((0..n).map(|row| divided[row * m + part]).collect());
+                    let ordinary_alias = domain.extended_part_to_coeff(
+                        ordinary_part,
+                        domain.extended_omega.pow_vartime([part as u64]),
+                    );
+                    assert_eq!(values, ordinary_alias.values);
+                    aliases.push(values);
+                }
+                let mut mixed = vec![F::ZERO; n * m];
+                for offset in 0..n {
+                    let mut row = aliases.iter().map(|part| part[offset]).collect::<Vec<_>>();
+                    let allocation = (row.as_ptr(), row.len(), row.capacity());
+                    domain.stored_quotient_piece_mix_in_place(&mut row);
+                    assert_eq!(allocation, (row.as_ptr(), row.len(), row.capacity()));
+                    for piece in 0..m {
+                        mixed[offset + piece * n] = row[piece];
+                    }
+                }
+                assert_eq!(mixed, expected);
+                assert_eq!(
+                    tables,
+                    domain
+                        .fft_data
+                        .iter()
+                        .map(|slot| slot.data.get().is_some())
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn fp_stored_quotient_helpers_match_actual_dense_division_and_inverse() {
+    stored_quotient_helpers_match_dense_inverse::<halo2curves::pasta::Fp>();
+}
+
+#[test]
+fn fq_stored_quotient_helpers_match_actual_dense_division_and_inverse() {
+    stored_quotient_helpers_match_dense_inverse::<halo2curves::pasta::Fq>();
+}
+
+/// Invalid public helper arguments must be rejected before any scalar changes.
+#[cfg(test)]
+fn stored_quotient_helper_preflights<F: WithSmallOrderMulGroup<3>>() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let domain = EvaluationDomain::<F>::new(6, 4);
+    let n = domain.n as usize;
+    let m = 1_usize << (domain.extended_k - domain.k);
+    for len in [0, n - 1, n + 1] {
+        let mut values = vec![F::from(23); len];
+        let original = values.clone();
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || domain.stored_quotient_part_inverse_in_place(0, &mut values)
+            ))
+            .is_err()
+        );
+        assert_eq!(values, original);
+    }
+    for part in [m as u32, u32::MAX] {
+        let mut values = vec![F::from(23); n];
+        let original = values.clone();
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || domain.stored_quotient_part_inverse_in_place(part, &mut values)
+            ))
+            .is_err()
+        );
+        assert_eq!(values, original);
+    }
+    for len in [0, m - 1, m + 1] {
+        let mut values = vec![F::from(23); len];
+        let original = values.clone();
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || domain.stored_quotient_piece_mix_in_place(&mut values)
+            ))
+            .is_err()
+        );
+        assert_eq!(values, original);
+    }
+    // A real original degree-two domain has no extended-part representation.
+    let no_extension = EvaluationDomain::<F>::new(2, 4);
+    let mut values = vec![F::from(23); n];
+    let original = values.clone();
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || no_extension.stored_quotient_part_inverse_in_place(0, &mut values)
+        ))
+        .is_err()
+    );
+    assert_eq!(values, original);
+    assert!(
+        catch_unwind(AssertUnwindSafe(
+            || no_extension.stored_quotient_piece_mix_in_place(&mut values[..1])
+        ))
+        .is_err()
+    );
+    assert_eq!(values, original);
+    // These private-field mutations only test pre-mutation guards, not an admitted proof owner.
+    for mutation in 0..4 {
+        let mut invalid = domain.clone();
+        match mutation {
+            0 => invalid.n += 1,
+            1 => invalid.extended_k = invalid.k - 1,
+            2 => {
+                invalid.t_evaluations.pop();
+            }
+            _ => invalid.quotient_poly_degree = (m + 1) as u64,
+        }
+        let mut values = vec![F::from(23); n];
+        let original = values.clone();
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || invalid.stored_quotient_part_inverse_in_place(0, &mut values)
+            ))
+            .is_err()
+        );
+        assert_eq!(values, original);
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || invalid.stored_quotient_piece_mix_in_place(&mut values[..m])
+            ))
+            .is_err()
+        );
+        assert_eq!(values, original);
+    }
+}
+
+#[test]
+fn fp_stored_quotient_helpers_reject_invalid_geometry_before_mutation() {
+    stored_quotient_helper_preflights::<halo2curves::pasta::Fp>();
+}
+
+#[test]
+fn fq_stored_quotient_helpers_reject_invalid_geometry_before_mutation() {
+    stored_quotient_helper_preflights::<halo2curves::pasta::Fq>();
+}
+
+/// Demonstrate that the dense oracle distinguishes the intended transpose, roots and scales.
+#[cfg(test)]
+fn stored_quotient_inverse_mutation_controls<F: WithSmallOrderMulGroup<3>>() {
+    let domain = EvaluationDomain::<F>::new(6, 4);
+    let n = domain.n as usize;
+    let m = 1_usize << (domain.extended_k - domain.k);
+    let mut numerator = domain.empty_extended();
+    for (i, value) in numerator.iter_mut().enumerate() {
+        *value = F::from((i as u64).pow(3) + 7 * i as u64 + 11);
+    }
+    let divided = domain.divide_by_vanishing_poly(numerator.clone());
+    let expected = domain.extended_to_coeff(divided.clone());
+    assert_ne!(expected, domain.extended_to_coeff(numerator.clone()));
+    assert_ne!(
+        expected,
+        domain.extended_to_coeff(domain.divide_by_vanishing_poly(divided))
+    );
+    for mutation in 0..6 {
+        let mut wrong = domain.clone();
+        match mutation {
+            0 => wrong.omega_inv = wrong.omega,
+            1 => wrong.extended_omega_inv = wrong.extended_omega,
+            2 => wrong.ifft_divisor = F::ONE,
+            3 => wrong.extended_ifft_divisor *= F::from(m as u64),
+            4 => wrong.g_coset_inv = F::ONE,
+            _ => {} // The final control uses the wrong row/part transpose below.
+        }
+        let mut aliases = (0..m)
+            .map(|part| {
+                let mut values = (0..n)
+                    .map(|row| {
+                        if mutation == 5 {
+                            numerator[part * n + row]
+                        } else {
+                            numerator[row * m + part]
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                wrong.stored_quotient_part_inverse_in_place(part as u32, &mut values);
+                values
+            })
+            .collect::<Vec<_>>();
+        let mut actual = vec![F::ZERO; n * m];
+        for offset in 0..n {
+            let mut row = aliases
+                .iter_mut()
+                .map(|part| part[offset])
+                .collect::<Vec<_>>();
+            wrong.stored_quotient_piece_mix_in_place(&mut row);
+            for piece in 0..m {
+                actual[offset + piece * n] = row[piece];
+            }
+        }
+        assert_ne!(
+            actual, expected,
+            "mutation {mutation} must change the dense result"
+        );
+    }
+}
+
+#[test]
+fn fp_stored_quotient_inverse_oracle_distinguishes_order_root_and_scale_errors() {
+    stored_quotient_inverse_mutation_controls::<halo2curves::pasta::Fp>();
+}
+
+#[test]
+fn fq_stored_quotient_inverse_oracle_distinguishes_order_root_and_scale_errors() {
+    stored_quotient_inverse_mutation_controls::<halo2curves::pasta::Fq>();
 }

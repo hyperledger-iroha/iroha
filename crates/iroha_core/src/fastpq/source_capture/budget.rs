@@ -6,6 +6,8 @@
 //! Execution-entry scope is supplied separately because non-transfer entries count.
 //! This seam does not reserve runtime quotas or authenticate that entry scope.
 
+#[cfg(test)]
+use super::measure_fastpq_source_bundle_inputs;
 use super::{
     BTreeMap, FastpqSourceStatementBuildLimits, Hash, TransferTranscript,
     measure_fastpq_source_transcript_inputs, source_statement_public_limits,
@@ -148,3 +150,42 @@ pub(crate) fn measure_fastpq_source_statement_usage(
 
 #[cfg(test)]
 mod tests;
+
+/// Measure one complete logical entry's ordered finalized occurrence bundle.
+///
+/// Empty entries reserve E separately and contribute no statement frame. Nonempty
+/// bundles use the same canonical input counting and public preparation as the
+/// complete archive producer, without copying original private witness paths or
+/// constructing a private tree. The caller must retain or remeasure this exact
+/// immutable bundle before publishing it; the hash is a shape check, not authority.
+///
+/// # Errors
+/// Rejects wrong entry hashes, non-finalized/malformed facts, arithmetic overflow
+/// and explicit construction bounds. It does not classify reservation capacity.
+#[cfg(test)]
+pub(crate) fn measure_fastpq_source_entry_bundle_usage(
+    entry_hash: &Hash,
+    bundle: &[TransferTranscript],
+    limits: FastpqSourceStatementBuildLimits,
+) -> Result<FastpqSourceTranscriptUsage, String> {
+    FastpqSourceTranscriptUsage::default().check_limits(1, limits)?;
+    if bundle.is_empty() {
+        return Ok(FastpqSourceTranscriptUsage::default());
+    }
+    let (transcripts, deltas, input_transcript_bytes) =
+        measure_fastpq_source_bundle_inputs(std::iter::once((entry_hash, bundle)), limits)?;
+    let statement_bytes = quantity_statement_frame_len_from_finalized_transcripts(
+        bundle,
+        source_statement_public_limits(limits)?,
+    )
+    .map_err(|error| format!("FASTPQ source bundle {entry_hash} is not finalized: {error}"))?;
+    let usage = FastpqSourceTranscriptUsage {
+        transcripts,
+        deltas,
+        input_transcript_bytes,
+        max_statement_bytes: statement_bytes,
+        total_statement_bytes: statement_bytes,
+    };
+    usage.check_limits(1, limits)?;
+    Ok(usage)
+}

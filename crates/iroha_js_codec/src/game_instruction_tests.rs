@@ -1,5 +1,7 @@
 //! Native game instruction closure and adversarial JSON/binary admission tests.
 
+const FIXTURE_NETWORK_PREFIX: u16 = 753;
+
 use super::*;
 use crate::{
     decode_instruction_archive, decode_instruction_frame, encode_instruction_archive,
@@ -139,11 +141,13 @@ fn examples() -> Vec<(&'static str, Value)> {
 
 fn assert_roundtrip(value: &Value) {
     let source = text(value);
-    let frame = encode_instruction_frame(&source).expect("native instruction frame");
-    let archive = encode_instruction_archive(&source).expect("native instruction archive");
+    let frame = encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX)
+        .expect("native instruction frame");
+    let archive = encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX)
+        .expect("native instruction archive");
     for decoded in [
-        decode_instruction_frame(&frame),
-        decode_instruction_archive(&archive),
+        decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX),
+        decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX),
     ] {
         let decoded = decoded.expect("native instruction decode");
         assert_eq!(
@@ -151,11 +155,12 @@ fn assert_roundtrip(value: &Value) {
             *value
         );
         assert_eq!(
-            encode_instruction_frame(&decoded).expect("canonical frame"),
+            encode_instruction_frame(&decoded, FIXTURE_NETWORK_PREFIX).expect("canonical frame"),
             frame
         );
         assert_eq!(
-            encode_instruction_archive(&decoded).expect("canonical archive"),
+            encode_instruction_archive(&decoded, FIXTURE_NETWORK_PREFIX)
+                .expect("canonical archive"),
             archive
         );
     }
@@ -167,7 +172,7 @@ fn assert_roundtrip(value: &Value) {
     assert_eq!(archive, native.encode());
     let mut trailing = archive;
     trailing.push(0);
-    assert!(decode_instruction_archive(&trailing).is_err());
+    assert!(decode_instruction_archive(&trailing, FIXTURE_NETWORK_PREFIX).is_err());
 }
 
 fn rejects(name: &str, payload: Value) {
@@ -176,7 +181,8 @@ fn rejects(name: &str, payload: Value) {
 
 fn rejects_envelope(input: &Value) {
     for encode in [encode_instruction_frame, encode_instruction_archive] {
-        let error = encode(&text(input)).expect_err("closed native admission must reject");
+        let error = encode(&text(input), FIXTURE_NETWORK_PREFIX)
+            .expect_err("closed native admission must reject");
         assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");
     }
 }
@@ -200,8 +206,11 @@ fn game_instruction_archives_retain_independent_native_inner_fixture_bytes() {
         "StakeGameItemV1",
     ] {
         let row = game_row(name);
-        let archive = encode_instruction_archive(&text(&object([(name, field(&row, "value"))])))
-            .expect("fixture instruction archive");
+        let archive = encode_instruction_archive(
+            &text(&object([(name, field(&row, "value"))])),
+            FIXTURE_NETWORK_PREFIX,
+        )
+        .expect("fixture instruction archive");
         let frame = hex::decode(
             row.get("framed_hex")
                 .and_then(Value::as_str)
@@ -323,11 +332,13 @@ fn game_binary_decode_rechecks_public_invariants_and_rejects_alternate_json_enve
     let native: InstructionBox = open.into();
     let frame = norito::encode_canonical(&native).unwrap();
     assert_eq!(
-        decode_instruction_frame(&frame).unwrap_err().kind(),
+        decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX)
+            .unwrap_err()
+            .kind(),
         CodecErrorKind::InvalidArgument
     );
     assert_eq!(
-        decode_instruction_archive(&native.encode())
+        decode_instruction_archive(&native.encode(), FIXTURE_NETWORK_PREFIX)
             .unwrap_err()
             .kind(),
         CodecErrorKind::InvalidArgument
@@ -408,11 +419,11 @@ fn game_u64_projections_preserve_typed_wire_at_every_sdk_boundary() {
             let expected = object([(name, expected_payload)]);
             let source = text(&expected);
             assert_eq!(
-                encode_instruction_frame(&source).unwrap(),
+                encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).unwrap(),
                 norito::encode_canonical(&native).unwrap()
             );
             assert_eq!(
-                encode_instruction_archive(&source).unwrap(),
+                encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX).unwrap(),
                 native.encode()
             );
             assert_roundtrip(&expected);
@@ -457,8 +468,11 @@ fn empty_execution_proof_is_rejected_before_encode_and_after_native_decode() {
         let error = to_json(&instruction).expect("game variant").unwrap_err();
         assert!(error.to_string().contains("proof_bytes must not be empty"));
         for decoded in [
-            decode_instruction_frame(&norito::encode_canonical(&instruction).unwrap()),
-            decode_instruction_archive(&instruction.encode()),
+            decode_instruction_frame(
+                &norito::encode_canonical(&instruction).unwrap(),
+                FIXTURE_NETWORK_PREFIX,
+            ),
+            decode_instruction_archive(&instruction.encode(), FIXTURE_NETWORK_PREFIX),
         ] {
             assert!(
                 decoded

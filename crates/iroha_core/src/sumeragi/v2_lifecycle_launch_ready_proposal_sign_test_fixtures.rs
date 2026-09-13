@@ -442,27 +442,77 @@ impl LaunchedProductionLifecycleV1 {
         )
     }
 
-    /// Consume the genuine guarded worker completion through production settlement.
+    /// Consume the genuine guarded worker completion through the outer
+    /// Completion classifier and production settlement, retaining no fixture-only
+    /// shortcut between the physical callback and its executor publication.
     pub(in crate::sumeragi) fn settle_decision_fetch_worker_for_test(&mut self) {
-        assert!(self.pending_lifecycle_completion.is_none());
-        let crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::DecisionFetch(completion) = self
-            .services
-            .take_next_lifecycle_completion()
-            .expect("one real recovered Fetch worker completion")
-        else {
-            panic!("the exact physical completion must be recovered Decision Fetch")
-        };
-        self.pending_lifecycle_completion = Some(
-            PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),
-        );
         assert_eq!(
-            self.settle_recovered_decision_fetch_store(),
+            self.drive_decision_fetch_worker_completion_for_test(),
             ProductionRecoveredDecisionFetchStoreSettlementV1::Applied,
-            "the actual response must publish its typed durable Store successor",
+            "the physical response must publish its typed durable Store successor",
         );
+        assert!(self.pending_lifecycle_completion.is_none());
     }
 
-    /// Return the already-settled owner trio after its exact ingress has drained.
+    /// Fail the real recovered Fetch ledger write after all publication
+    /// preflights, proving the claimed ingress and physical callback stay owned.
+    pub(in crate::sumeragi) fn fail_decision_fetch_store_publication_for_test(
+        &mut self,
+        root: &std::path::Path,
+    ) {
+        let lease = self.owner.coordinator.active_lease.clone();
+        let registry = self
+            .owner
+            .registry
+            .registry_for_test()
+            .finalization_entry_kind_census();
+        self.owner
+            .coordinator
+            .redirect_test_ledger_to_missing_parent(root);
+        assert_eq!(
+            self.drive_decision_fetch_worker_completion_for_test(),
+            ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired,
+        );
+        assert!(matches!(
+            self.pending_lifecycle_completion,
+            Some(PendingLifecycleCompletionV1::RecoveredDecisionFetch(_))
+        ));
+        assert_eq!(self.owner.coordinator.active_lease, lease);
+        assert_eq!(
+            self.owner
+                .registry
+                .registry_for_test()
+                .finalization_entry_kind_census(),
+            registry
+        );
+        assert!(self.services.lifecycle_output_guard().restart_required());
+        assert_eq!(self.leader_wire_ingress_binding.ingress.len(), 1);
+    }
+
+    fn drive_decision_fetch_worker_completion_for_test(
+        &mut self,
+    ) -> ProductionRecoveredDecisionFetchStoreSettlementV1 {
+        assert!(self.pending_lifecycle_completion.is_none());
+        let context = self.executor.context().clone();
+        let (mut lane_work, _) =
+            crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+        crate::sumeragi::v2_runner::with_lifecycle_current_runner_turn_for_test(
+            &context,
+            crate::sumeragi::v2_runner::LifecycleRunnerRankTarget::Completion,
+            |runner| match self.drive_completion_pre_gate(runner, &mut lane_work) {
+                ProductionLifecycleCompletionPreGateV1::Selected(
+                    ProductionLifecycleCompletionSelectionV1::RecoveredDecisionFetchCompletion(
+                        settlement,
+                    ),
+                ) => settlement,
+                _ => panic!("the outer Completion turn must select the physical recovered Fetch"),
+            },
+        )
+        .0
+    }
+
+    /// Retire launch ingress and return the settled synchronous body fixture.
+    /// Finish all ordinary runtime/timer turns before this cold-boundary extraction.
     pub(in crate::sumeragi) fn into_settled_body_fixture_for_test(
         self,
     ) -> (

@@ -104,23 +104,12 @@ impl KagemushaGuardBundleVerifierV1 for SimulatedHardware {
     }
     fn verify_durability_anchor(
         &self,
-        statement: &DurabilityAnchorStatementV1,
-        bytes: &[u8],
+        _: &DurabilityAnchorStatementV1,
+        _: &[u8],
     ) -> Result<(), String> {
-        let register = self.register.borrow();
-        let (cas, original, _) = register
-            .terminals
-            .values()
-            .find(|(cas, _, _)| &cas.successor == statement)
-            .ok_or("unissued checkpoint")?;
-        if original != bytes {
-            return Err("changed original certificate".into());
-        }
-        let signature: KagemushaDeviceSignatureV1 =
-            norito::decode_from_bytes(bytes).map_err(|e| e.to_string())?;
-        signature
-            .verify(&snapshot_device_public_key(&self.key), &signing_bytes(cas))
-            .map_err(|e| e.to_string())
+        // This register issues checkpoint CAS certificates only. Production also treats
+        // a historical-anchor seal as a different signed transaction, never an alias.
+        Err("checkpoint certificate is not a historical-anchor seal".into())
     }
     fn verify_recovery_checkpoint_cas(
         &self,
@@ -275,6 +264,60 @@ fn restore(
         AcceptSnapshotRecursiveVerifierV1,
         machine.guard_verifier.clone(),
     )
+}
+
+#[test]
+fn restore_accepts_original_checkpoint_certificate_without_historical_seal() {
+    let (machine, hardware) = fixture();
+    let snapshot = machine.snapshot().unwrap();
+    let anchor = machine.recovery_checkpoint().clone();
+    assert!(
+        hardware
+            .verify_durability_anchor(&anchor.statement, &anchor.guard_bundle)
+            .is_err()
+    );
+    let before = hardware.challenge_counter.get();
+    let restored = restore(&machine, snapshot.clone(), &anchor)
+        .expect("original checkpoint certificate and fresh selection restore the wallet");
+    assert_eq!(hardware.challenge_counter.get(), before + 1);
+    assert_eq!(restored.snapshot().unwrap(), snapshot);
+    assert_eq!(restored.recovery_checkpoint(), &anchor);
+    assert_eq!(restored.enrollment_binding(), machine.enrollment_binding());
+    assert_eq!(
+        restored.accepted_credential_floor(),
+        machine.accepted_credential_floor()
+    );
+}
+
+#[test]
+fn restore_rejects_another_checkpoint_or_corrupted_certificate_before_current_read() {
+    let (mut machine, hardware) = fixture();
+    let old_certificate = machine.recovery_checkpoint().guard_bundle.clone();
+    let candidate = candidate(&machine, 103);
+    let certificate = hardware.commit(&candidate).unwrap();
+    let anchor = machine
+        .install_recovery_checkpoint(&candidate, certificate)
+        .unwrap();
+    let snapshot = machine.snapshot().unwrap();
+    let mut corrupted_certificate = anchor.guard_bundle.clone();
+    *corrupted_certificate.last_mut().unwrap() ^= 1;
+    for wrong_certificate in [old_certificate, corrupted_certificate] {
+        let mut wrong_anchor = anchor.clone();
+        wrong_anchor.guard_bundle = wrong_certificate;
+        let before = hardware.challenge_counter.get();
+        assert!(matches!(
+            restore(&machine, snapshot.clone(), &wrong_anchor),
+            Err(KagemushaStateErrorV1::GuardRejected(_))
+        ));
+        assert_eq!(hardware.challenge_counter.get(), before);
+    }
+    assert_eq!(
+        restore(&machine, snapshot.clone(), &anchor)
+            .unwrap()
+            .snapshot()
+            .unwrap(),
+        snapshot
+    );
 }
 
 #[test]

@@ -108,6 +108,7 @@ export interface NexusTransferInput {
 }
 
 export interface NexusSignableTransaction {
+  networkPrefix: number;
   /** Application-pinned exact NetworkId expected in payloadBytes. */
   networkId: NetworkId;
   payloadBytes: Buffer;
@@ -237,7 +238,7 @@ export interface NexusTransactionCodec {
   /** Returned hash aliases, when present, must exactly match the canonical payload prehash. */
   buildTransferPayload(input: Record<string, unknown>): NexusBytes | NexusTransactionPayloadResult;
   /** Must return exactly 64 lowercase hex characters matching the supplied payload bytes. */
-  payloadHashHex?(payloadBytes: Buffer): string;
+  payloadHashHex?(payloadBytes: Buffer, networkPrefix: number): string;
   /** Must return canonical version-1 single-signature Transfer::Asset bytes and their exact hash. */
   finalizeSignedTransaction(
     signable: NexusSignableTransaction,

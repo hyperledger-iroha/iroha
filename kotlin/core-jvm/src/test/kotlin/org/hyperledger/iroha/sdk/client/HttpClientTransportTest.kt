@@ -1017,6 +1017,7 @@ class HttpClientTransportTest {
                 authority = authority,
                 creationTimeMs = creationTimeMs,
                 executable = Executable.contractCall(invocation),
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 feePayment = quotedFeePayment,
                 metadata = metadata,
             ),
@@ -1158,6 +1159,7 @@ class HttpClientTransportTest {
             authority = authority,
             creationTimeMs = 123_456L,
             executable = Executable.contractCall(invocation),
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             feePayment = feePayment,
             metadata = metadata,
         )
@@ -1206,6 +1208,15 @@ class HttpClientTransportTest {
                 ).join()
             }
             assertNotNull(error.cause)
+            if (substituted.admissionIntent == TransactionAdmissionIntent.ORDINARY) {
+                assertTrue(
+                    generateSequence(error.cause) { it.cause }.any {
+                        it.message?.contains(
+                            "transaction payload admission intent must be QUEUE_PLAN_SYNCED",
+                        ) == true
+                    },
+                )
+            }
         }
     }
 
@@ -1227,6 +1238,7 @@ class HttpClientTransportTest {
             authority = authority,
             creationTimeMs = 654_321L,
             executable = Executable.contractCall(invocation),
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             feePayment = testFeePayment(5_000L),
         )
         val encodedPayload = NoritoJavaCodecAdapter(

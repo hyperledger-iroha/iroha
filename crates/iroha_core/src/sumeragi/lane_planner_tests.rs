@@ -34,6 +34,71 @@ mod tests {
             })
             .collect()
     }
+    #[test]
+    fn canonical_frontier_reads_scale_with_distinct_routes_including_absence() {
+        let distinct = routing_for_lane_dataspaces(&[(2, 10), (1, 20), (2, 20)]);
+        let routes = distinct
+            .iter()
+            .copied()
+            .cycle()
+            .take(768)
+            .collect::<Vec<_>>();
+        let mut reads = Vec::new();
+        let tips = read_canonical_lane_tips_once(&routes, |route| {
+            reads.push(*route);
+            if *route == distinct[1] {
+                return Ok(None);
+            }
+            Ok(Some(LaneBlockTip {
+                lane_id: route.lane_id,
+                dataspace_id: route.dataspace_id,
+                lane_incarnation: Hash::new(b"frontier-read-test-incarnation"),
+                latest_lane_block_height: 7,
+                latest_lane_block_descriptor_hash: Some(Hash::new(b"frontier-read-test-tip")),
+            }))
+        })
+        .expect("read each distinct frontier");
+        assert_eq!(reads, distinct, "one read per full route in input order");
+        assert_eq!(tips.len(), 2);
+        for route in [distinct[0], distinct[2]] {
+            let tip = tips
+                .get(&(route.lane_id, route.dataspace_id))
+                .expect("same lane in another dataspace remains a distinct frontier");
+            assert_eq!(tip.latest_lane_block_height, 7);
+            assert_eq!(tip.lane_id, route.lane_id);
+            assert_eq!(tip.dataspace_id, route.dataspace_id);
+        }
+        assert!(!tips.contains_key(&(distinct[1].lane_id, distinct[1].dataspace_id)));
+        let next = read_canonical_lane_tips_once(&routes, |route| {
+            reads.push(*route);
+            Ok(None)
+        })
+        .expect("the next operation must read current frontiers again");
+        assert!(next.is_empty());
+        assert_eq!(reads.len(), 6, "frontiers are not cached across operations");
+        assert_eq!(&reads[3..], distinct.as_slice());
+    }
+    #[test]
+    fn canonical_frontier_reads_preserve_first_storage_failure_and_stop() {
+        let routes = routing_for_lane_dataspaces(&[(2, 20), (2, 20), (1, 10), (3, 10)]);
+        let expected = V2LanePayloadPlanError::storage("occupied frontier is corrupt");
+        let mut reads = Vec::new();
+        let result = read_canonical_lane_tips_once(&routes, |route| {
+            reads.push(*route);
+            if *route == routes[0] {
+                Ok(None)
+            } else {
+                Err(expected.clone())
+            }
+        });
+        assert_eq!(reads, vec![routes[0], routes[2]]);
+        assert_eq!(result, Err(expected));
+        assert!(
+            result
+                .expect_err("storage corruption must propagate")
+                .is_storage_error()
+        );
+    }
     fn lane_catalog_from_configs(lanes: Vec<LaneConfig>) -> LaneCatalog {
         let max_lane = lanes.iter().map(|lane| lane.id.as_u32()).max().unwrap_or(0);
         let lane_count = NonZeroU32::new(max_lane.saturating_add(1))

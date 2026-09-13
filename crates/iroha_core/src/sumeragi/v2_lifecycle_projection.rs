@@ -2848,7 +2848,7 @@ pub(super) fn recovered_validate_no_successor_validated_receipt_is_authenticated
         .execution_commitment()
         .is_none_or(|commitment| commitment == execution_commitment(receipt.execution_commitment()))
 }
-fn recovered_validate_no_successor_durable_identity_is_authenticated(
+pub(super) fn recovered_validate_no_successor_durable_identity_is_authenticated(
     context: LifecycleContext,
     key: LifecycleKey,
     causal_root: CausalRoot,

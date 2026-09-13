@@ -71,9 +71,12 @@ expected_symbols=(
   connect_norito_kagemusha_device_capabilities_v1
   connect_norito_kagemusha_device_execute_v1
   connect_norito_kagemusha_device_command_response_v1_verify
+  connect_norito_kagemusha_reserve_finality_hint_v1
+  connect_norito_kagemusha_reserve_finality_verify_v1
+  connect_norito_kagemusha_top_up_signed_request_validate_v1
 )
-[[ "${#expected_symbols[@]}" == "25" ]] \
-  || fail "artifact checker test must pin exactly 25 KAGEMUSHA exports"
+[[ "${#expected_symbols[@]}" == "28" ]] \
+  || fail "artifact checker test must pin exactly 28 KAGEMUSHA exports"
 
 for symbol in "${expected_symbols[@]}"; do
   [[ "$(grep -Fc -- "$symbol" "$CHECK_SCRIPT")" == "1" ]] \
@@ -117,6 +120,7 @@ if MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=invalid "$CHECK_SCRIPT" --android-only >/d
   fail "artifact checker accepted an invalid Android-output policy"
 fi
 
+"$TEST_PYTHON_BINARY" -I -S -B "$ROOT_DIR/scripts/tests/check_mobile_reserve_finality_symbols_test.py"
 "$HEADER_GATE" --self-test
 "$CHECK_SCRIPT" --root "$ROOT_DIR" --android-only
 printf '[mobile-sdk-artifacts-test] first-release mobile SDK contract passed\n'

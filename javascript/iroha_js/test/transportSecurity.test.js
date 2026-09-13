@@ -7,7 +7,7 @@ import { NoritoRpcClient } from "../src/noritoRpcClient.js";
 const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
   NetworkId.parse(
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
-  ),
+  ), 753,
 );
 
 test("ToriiClient rejects cross-host absolute URLs when credentials are attached", async () => {

@@ -91,7 +91,7 @@ class StartupPreflightTests(unittest.TestCase):
     def test_startup_groups_run_before_long_tests_exactly_once_and_preserve_full_checkpoint(self):
         error, executed, updates, network = self.run_fixture()
         self.assertIsNone(error)
-        self.assertEqual(executed, ["config", "cli", "core_startup", "daemon_startup", "proof", "core_long", "daemon_long"])
+        self.assertEqual(executed, ["config", "core_startup", "daemon_startup", "cli", "proof", "core_long", "daemon_long"])
         self.assertEqual(network, 1)
         self.assertEqual(updates[0], None)
         selected = [name for group in updates[1]["selected_tests"] for stage in group["stages"] for name in stage["tests"]]
@@ -102,7 +102,7 @@ class StartupPreflightTests(unittest.TestCase):
         error, executed, updates, network = self.run_fixture(failed=("core_startup", "daemon_startup"))
         self.assertIsInstance(error, gate.SelectedRegressionFailures)
         self.assertEqual(len(error.failures), 2)
-        self.assertEqual(executed, ["config", "cli", "core_startup", "daemon_startup"])
+        self.assertEqual(executed, ["config", "core_startup", "daemon_startup"])
         self.assertEqual(updates, [None])
         self.assertEqual(network, 0)
 
@@ -110,7 +110,7 @@ class StartupPreflightTests(unittest.TestCase):
         error, executed, updates, network = self.run_fixture(ignored=("core_startup",))
         self.assertIsInstance(error, gate.SelectedRegressionFailures)
         self.assertIn("core_startup", str(error))
-        self.assertEqual(executed, ["config", "cli", "core_startup", "daemon_startup"])
+        self.assertEqual(executed, ["config", "core_startup", "daemon_startup"])
         self.assertEqual(updates, [None])
         self.assertEqual(network, 0)
 
@@ -124,7 +124,7 @@ class StartupPreflightTests(unittest.TestCase):
                     self.assertEqual(executed, ["config"])
                     self.assertEqual(updates, [])
                 else:
-                    self.assertEqual(executed, ["config", "cli", "core_startup", "daemon_startup", "proof", "core_long", "daemon_long"])
+                    self.assertEqual(executed, ["config", "core_startup", "daemon_startup", "cli", "proof", "core_long", "daemon_long"])
                     self.assertEqual(updates[0], None)
                     self.assertTrue(updates[1]["passed"])
 

@@ -1014,6 +1014,13 @@ where
     ) else {
         return Ok(None);
     };
+    let origin = AuthenticatedBodyPipelineColdReplayOriginV1 {
+        source: evidence.family.source.clone(),
+    };
+    let Some(origin_replay) = CertifiedBodyPipelineColdReplayStepV1::body_origin(ordinal, origin)
+    else {
+        return Ok(None);
+    };
     let Ok(completion) = CertifiedFetchCompletion::from_recovered_durable_fetch(
         owner,
         ordinal,
@@ -1028,6 +1035,7 @@ where
     let recovered = AuthenticatedRecoveredDurableCertifiedFetchV1 {
         completion,
         candidate,
+        origin_replay,
     };
     Ok(recovered.is_exact().then_some(recovered))
 }
@@ -1122,6 +1130,13 @@ where
         AdapterEffect::ValidateBody { tag, .. } => *tag,
         _ => unreachable!("standalone recovery reconstructed ValidateBody"),
     };
+    let origin = AuthenticatedBodyPipelineColdReplayOriginV1 {
+        source: replay_evidence.source.clone(),
+    };
+    let Some(origin_replay) = CertifiedBodyPipelineColdReplayStepV1::body_origin(ordinal, origin)
+    else {
+        return Ok(None);
+    };
     let (carrier, candidate) = match DurableValidateBody::from_recovered_standalone_validate(
         owner,
         ordinal,
@@ -1143,7 +1158,8 @@ where
     {
         return Ok(None);
     }
-    let mut replay_steps = Vec::with_capacity(2);
+    let mut replay_steps = Vec::with_capacity(3);
+    replay_steps.push(origin_replay);
     if matches!(
         &authority.source,
         LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {

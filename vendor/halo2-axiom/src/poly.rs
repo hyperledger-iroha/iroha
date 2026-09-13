@@ -20,6 +20,8 @@ use group::ff::{BatchInvert, Field};
 
 /// Generic commitment scheme structures
 pub mod commitment;
+/// Backend-neutral confidential advice-polynomial storage foundation.
+pub mod stored_advice;
 mod domain;
 mod query;
 mod strategy;

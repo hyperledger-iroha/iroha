@@ -25,7 +25,7 @@ const TEST_CANONICAL_AUTH = Object.freeze({
   privateKey: Buffer.alloc(32, 0x0b),
 });
 const TEST_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
-  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)), 753,
 );
 const SUBJECT_ROOT = mkdtempSync(join(tmpdir(), "iroha-exact12-native-authority-"));
 writeFileSync(join(SUBJECT_ROOT, "package.json"), '{"type":"module"}\n');
@@ -731,7 +731,7 @@ test("forged symbol transports, other-network archives and insecure response ori
     for (const [baseUrl, context, metadata, error] of [
       ["http://privacy.example.test", TEST_LOCAL_SIGNING_CONTEXT, {}, /HTTPS/u],
       ["https://privacy.example.test", undefined, {}, /NetworkId|networkId/u],
-      ["https://privacy.example.test", new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xd1))), {}, /different network/u],
+      ["https://privacy.example.test", new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xd1)), 753), {}, /different network/u],
       ["https://privacy.example.test", TEST_LOCAL_SIGNING_CONTEXT, {url: "https://other.example.test/v1/privacy/capabilities"}, /exact authenticated URL/u],
       ["https://privacy.example.test", TEST_LOCAL_SIGNING_CONTEXT, {redirected: true}, /exact authenticated URL/u],
     ]) {

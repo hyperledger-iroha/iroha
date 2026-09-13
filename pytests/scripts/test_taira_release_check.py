@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 557
+EXPECTED_REGRESSION_COUNT = 614
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 374)
+        self.assertEqual(gate.selected_regression_count(), 433)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -70,6 +70,30 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(len(names), len(set(names)))
         self.assertEqual(basic["core"], gate.CORE_ADMISSION_STARTUP_STAGES)
         for test in (
+            "sumeragi::v2_effects::tests::certified_body_fence_supersession::live_idle_decision_cleanup_reconciles_runner_frontier",
+            "sumeragi::v2_effects::tests::recovered_decision_fetch_fences_later_ordinary_body_coordinates",
+            "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
+            "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
+            "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_commits_catalogs_and_marker_together",
+            "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_partial_or_conflicting_catalogs",
+            "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_overlapping_body_stage",
+            "sumeragi::v2_effects::tests::certified_body_fence_supersession::cold_decision_fetch_publishes_first_network_body_through_completion_and_apply",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::owner_open_publication_chain_requires_every_exact_cas_and_is_consumed_once",
+            "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_restores_work_without_voting_authority",
+            "sumeragi::v2_core::reducer::source_link_tests::retained_local_body_custody_coalesces_without_downgrading_or_revalidating",
+            "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_rejects_foreign_identity_and_safety_debt_atomically",
+            "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_respects_the_exact_durable_decision",
+            "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_preserves_normal_proposal_validation_vote_authority",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_restores_proposal_validate_without_wal_authority",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_coalesces_proposal_validate_with_retained_prepare_qc",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_cancels_timeout_superseded_body_before_replay",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_preserves_current_body_after_timeout_recovery",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_rejects_future_body_generation_without_retirement",
+            "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers",
+            "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
+            "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
             "block::valid::tests::autonomous_anchor_gas_budget_enforces_complete_source_before_anchoring",
             "sumeragi::v2_lane_work::tests::autonomous_full_block_gas_call_reserves_with_idle_catalog_route",
             "state::tests::autonomous_full_gas_sources_share_one_merge_budget_before_execution",
@@ -81,6 +105,19 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
             "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
             "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
+            "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
+            "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",
+            "sumeragi::v2_runtime::tests::authenticated_proposal_store_retains_root_after_fetch_or_queued_completion_upgrade",
+            "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_cancels_same_view_proposal_after_authenticated_decision_without_timeout",
+            "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_decision_proposal_cancellation_preserves_authentication_boundaries",
+            "sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+            "sumeragi::v2::tests::production_complete_tip_activates_recovered_unapplied_decision",
+            "sumeragi::v2::tests::complete_tip_decision_activation_requires_exact_replayed_wal",
+            "sumeragi::v2::tests::complete_tip_decision_activation_rejects_incomplete_pending_and_applied_state",
+            "sumeragi::v2::tests::complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cache",
+            "sumeragi::v2_core::refinement::tests::recovered_decided_successor_kernel_keeps_canonical_parent_and_commit_frontier_distinct",
+            "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_waits_for_older_ready_output",
+            "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_failure_retains_ready_owner_without_output",
             "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
             "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
             "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",
@@ -113,6 +150,18 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             self.assertIn(stage, basic["torii-unit"])
         for stage in gate.CORE_ADMISSION_STARTUP_STAGES:
             self.assertIn(stage, full["core"])
+
+    def test_both_scopes_require_exact_terminal_history_and_shared_outcome_recovery(self):
+        required = (
+            "sumeragi::v2::tests::same_round_timeout_cold_owner_preserves_retired_terminal_validation_history",
+            "sumeragi::v2_body_store::tests::terminal_validate_shared_outcomes_keep_one_latest_retry_origin",
+            "sumeragi::v2_body_store::tests::retired_terminal_claim_comparison_never_promotes_marker_authority",
+        )
+        for scope in ("basic", "full"):
+            selected = [name for _, names in gate.qualification_stages(scope)["core"] for name in names]
+            for name in required:
+                with self.subTest(scope=scope, regression=name):
+                    self.assertEqual(selected.count(name), 1)
 
     def test_both_scopes_require_unsigned_bootstrap_and_fail_closed_capability_validation(self):
         required = {
@@ -185,6 +234,14 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             expected = [(name, test) for name, stages in selected.items()
                         for _, tests in stages for test in tests]
             self.assertCountEqual(executed, expected)
+            cli_start = next(index for index, row in enumerate(executed) if row[0] == "cli")
+            startup = {"core": gate.CORE_STARTUP_STAGES, "torii-unit": gate.TORII_STARTUP_STAGES,
+                       "daemon": gate.DAEMON_STARTUP_STAGES}
+            for name, stages in startup.items():
+                for _, tests in stages:
+                    for test in tests:
+                        if (name, test) in expected:
+                            self.assertLess(executed.index((name, test)), cli_start)
             self.assertEqual(len(executed), gate.selected_regression_count(scope))
             self.assertEqual(checkpoint.call_args_list[0].args, (None,))
             evidence = checkpoint.call_args_list[1].args[0]
@@ -206,24 +263,58 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertNotEqual(basic, full)
         self.assertEqual(basic | {"qualification_scope": "full"}, full)
 
-    def test_basic_startup_failure_prevents_network_and_success_checkpoint(self):
+    def test_startup_failures_are_collected_before_cli_other_groups_or_network(self):
+        executed = []
         def fail_startup(harness, root, env, stages, locks):
-            if stages == gate.CORE_ADMISSION_STARTUP_STAGES:
-                raise gate.SelectedRegressionFailures(["empty Queue startup admission failed"])
-        checkpoint, output = MagicMock(), io.StringIO()
-        with patch.object(gate, "shipping_harnesses", return_value=("kagami",)), \
-             patch.object(gate, "require_network_fixture_capacity"), \
-             patch.object(gate, "run_pure_fsm_checks"), \
-             patch.object(gate, "run_lifecycle_source_checks"), \
-             patch.object(gate, "compile_test_harnesses", return_value=self.copies()), \
-             patch.object(gate, "run_stages", side_effect=fail_startup), \
-             patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(output):
-            with self.assertRaisesRegex(gate.SelectedRegressionFailures, "empty Queue startup admission failed"):
-                gate.run_checks(Path("/frozen"), environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
-                                source_commit="a" * 40, update_independent_checks=checkpoint)
-        checkpoint.assert_called_once_with(None)
-        network.assert_not_called()
-        self.assertNotIn("[taira-check] PASS:", output.getvalue())
+            executed.append(harness)
+            if harness in {"core", "daemon"}:
+                raise gate.SelectedRegressionFailures([harness + " startup failed"])
+        for scope in gate.QUALIFICATION_SCOPES:
+            executed.clear()
+            checkpoint, output = MagicMock(), io.StringIO()
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "shipping_harnesses", return_value=("kagami",)), \
+                 patch.object(gate, "require_network_fixture_capacity"), \
+                 patch.object(gate, "run_pure_fsm_checks"), \
+                 patch.object(gate, "run_lifecycle_source_checks"), \
+                 patch.object(gate, "compile_test_harnesses", return_value=self.copies()), \
+                 patch.object(gate, "run_stages", side_effect=fail_startup), \
+                 patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(output):
+                with self.assertRaises(gate.SelectedRegressionFailures) as failure:
+                    gate.run_checks(Path("/frozen"), qualification_scope=scope,
+                                    environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
+                                    source_commit="a" * 40, update_independent_checks=checkpoint)
+            self.assertEqual(failure.exception.failures, ("core startup failed", "daemon startup failed"))
+            self.assertEqual(executed, ["config", "core", "torii-unit", "daemon"])
+            checkpoint.assert_called_once_with(None)
+            network.assert_not_called()
+            self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_exact_independent_checkpoint_reuses_startup_and_cli_passes_in_both_scopes(self):
+        for scope in gate.QUALIFICATION_SCOPES:
+            copies, checkpoint = self.copies(), MagicMock()
+            selected = gate.qualification_stages(scope)
+            independent = (("cli", selected["cli"]),) + tuple(
+                (name, stages) for name, stages in selected.items()
+                if name not in {"cli", "config", "network", "kagami"} and stages)
+            evidence = gate.independent_check_evidence(copies, independent, qualification_scope=scope)
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "shipping_harnesses", return_value=()), \
+                 patch.object(gate, "require_network_fixture_capacity"), \
+                 patch.object(gate, "run_pure_fsm_checks"), \
+                 patch.object(gate, "run_lifecycle_source_checks"), \
+                 patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
+                 patch.object(gate, "run_stages") as run, \
+                 patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(io.StringIO()):
+                gate.run_checks(Path("/frozen"), qualification_scope=scope,
+                                environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
+                                source_commit="a" * 40, completed_independent_checks=evidence,
+                                update_independent_checks=checkpoint)
+            compile.assert_called_once()
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[3], gate.CONFIG_STAGES)
+            network.assert_called_once()
+            checkpoint.assert_not_called()
 
     def test_standalone_cli_selects_basic_by_default_and_forwards_explicit_full(self):
         import taira_release as release
@@ -497,22 +588,27 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                             for call in run.call_args_list))
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
-    def test_cli_contract_infrastructure_failure_stops_before_core_or_release_success(self):
+    def test_cli_contract_infrastructure_failure_stops_after_startup_before_other_groups(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         output = io.StringIO()
+        def fail_cli(harness, root, env, stages, locks):
+            if stages == gate.STAGES:
+                raise gate.CheckError("public transaction stalled")
         with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
-                "cli": "/warm/cli", "core": "/warm/core", "test-network": "/warm/fixture"})) as compile, \
+                name: "/warm/" + name for name in gate.HARNESS_TARGETS})) as compile, \
              patch.object(gate, "run_network_checks") as network, \
              patch.object(gate, "CONFIG_UNIT_STAGES", ()), \
              patch.object(gate, "CRYPTO_STAGES", ()), \
              patch.object(gate, "P2P_STAGES", ()), \
-             patch.object(gate, "run_stages", side_effect=gate.CheckError("public transaction stalled")) as run, \
+             patch.object(gate, "run_stages", side_effect=fail_cli) as run, \
              contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(gate.CheckError, "public transaction stalled"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)
         network.assert_not_called()
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "proof", "proof-flows", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")})
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+                         ["/warm/core", "/warm/torii-unit", "/warm/daemon", "/warm/cli"])
         self.assertEqual(run.call_args.args[3], gate.STAGES)
         self.assertEqual(run.call_args.args[4], (77,))
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
@@ -533,16 +629,16 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
-        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("cli", "core", "torii-unit", "daemon") + names[1:-2]])
+        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("core", "torii-unit", "daemon", "cli") + names[1:-2]])
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.STAGES, gate.CORE_STARTUP_STAGES, gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, gate.CONFIG_UNIT_STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, tuple(stage for stage in gate.CORE_STAGES if stage not in gate.CORE_STARTUP_STAGES), gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, tuple(stage for stage in gate.TORII_UNIT_STAGES if stage not in gate.TORII_STARTUP_STAGES), gate.TORII_STAGES, tuple(stage for stage in gate.DAEMON_STAGES if stage not in gate.DAEMON_STARTUP_STAGES)])
+                         [gate.CORE_STARTUP_STAGES, gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, gate.STAGES, gate.CONFIG_UNIT_STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, tuple(stage for stage in gate.CORE_STAGES if stage not in gate.CORE_STARTUP_STAGES), gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, tuple(stage for stage in gate.TORII_UNIT_STAGES if stage not in gate.TORII_STARTUP_STAGES), gate.TORII_STAGES, tuple(stage for stage in gate.DAEMON_STAGES if stage not in gate.DAEMON_STARTUP_STAGES)])
 
     def test_transport_or_fixture_failure_stops_before_network_and_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         names = ("config", "config-unit", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
-        for failed, expected in (("crypto", ["cli", "core", "torii-unit", "daemon", "config-unit", "proof", "proof-flows", "crypto"]),
-                                 ("p2p", ["cli", "core", "torii-unit", "daemon", "config-unit", "proof", "proof-flows", "crypto", "p2p"]),
-                                 ("fixture", ["cli", "core", "torii-unit", "daemon", "config-unit", "proof", "proof-flows", "crypto", "p2p", "core", "test-network"])):
+        for failed, expected in (("crypto", ["core", "torii-unit", "daemon", "cli", "config-unit", "proof", "proof-flows", "crypto"]),
+                                 ("p2p", ["core", "torii-unit", "daemon", "cli", "config-unit", "proof", "proof-flows", "crypto", "p2p"]),
+                                 ("fixture", ["core", "torii-unit", "daemon", "cli", "config-unit", "proof", "proof-flows", "crypto", "p2p", "core", "test-network"])):
             outcomes = [None] * (len(expected) - 1) + [gate.CheckError(failed + " failed")]
             output = io.StringIO()
             with self.subTest(failed=failed), \
@@ -710,7 +806,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
         separate.assert_not_called()
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(events, ["fsm", "source", "library-build", "config-pass",
-                                  *["/warm/" + name for name in ("cli", "core", "torii-unit", "daemon") + libraries[1:-2]]])
+                                  *["/warm/" + name for name in ("core", "torii-unit", "daemon", "cli") + libraries[1:-2]]])
 
     def test_batch_or_configuration_failure_stops_all_later_execution_and_passes(self):
         for phase in ("build", "schema"):
@@ -1631,7 +1727,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                     raise gate.CheckError("early CLI fixture failed")
                 errors = io.StringIO()
                 with contextlib.ExitStack() as stack:
-                    for name in ("CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "NETWORK_STAGES"):
+                    for name in ("CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "DAEMON_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "NETWORK_STAGES"):
                         stack.enter_context(patch.object(gate, name, ()))
                     for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks"):
                         stack.enter_context(patch.object(gate, name))

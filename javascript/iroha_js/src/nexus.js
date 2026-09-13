@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { getNativeBinding } from "./native.js";
+import { requireNetworkPrefix } from "./networkPrefix.js";
 
 function ensureNative(methodName) {
   const native = getNativeBinding();
@@ -136,24 +137,26 @@ export function verifyLaneRelayEnvelope(envelope) {
 /**
  * Verify a relay envelope provided as JSON.
  */
-export function verifyLaneRelayEnvelopeJson(envelope) {
+export function verifyLaneRelayEnvelopeJson(envelope, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
   const native = ensureNative("verifyLaneRelayEnvelopeJson");
   const payload =
     typeof envelope === "string" ? envelope : JSON.stringify(envelope ?? {});
-  native.verifyLaneRelayEnvelopeJson(payload);
+  native.verifyLaneRelayEnvelopeJson(payload, networkPrefix);
 }
 
 /**
  * Verify a batch of relay envelopes and reject duplicate lane/dataspace/height tuples.
  */
-export function verifyLaneRelayEnvelopes(envelopes) {
+export function verifyLaneRelayEnvelopes(envelopes, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
   if (!Array.isArray(envelopes)) {
     throw new TypeError("envelopes must be an array");
   }
   const seen = new Set();
   for (let i = 0; i < envelopes.length; i += 1) {
     const envelope = envelopes[i];
-    verifyLaneRelayEnvelopeJson(envelope);
+    verifyLaneRelayEnvelopeJson(envelope, networkPrefix);
     let record = envelope;
     if (typeof envelope === "string") {
       try {
@@ -184,18 +187,20 @@ export function verifyLaneRelayEnvelopes(envelopes) {
 /**
  * Decode a relay envelope into a JSON object for inspection.
  */
-export function decodeLaneRelayEnvelope(envelope) {
+export function decodeLaneRelayEnvelope(envelope, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
   const native = ensureNative("decodeLaneRelayEnvelope");
-  const jsonString = native.decodeLaneRelayEnvelope(normalizeBytes(envelope, "envelope"));
+  const jsonString = native.decodeLaneRelayEnvelope(normalizeBytes(envelope, "envelope"), networkPrefix);
   return JSON.parse(jsonString);
 }
 
 /**
  * Compute the settlement hash for a JSON `LaneBlockCommitment`.
  */
-export function laneSettlementHash(settlement) {
+export function laneSettlementHash(settlement, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
   const native = ensureNative("laneSettlementHash");
   const payload =
     typeof settlement === "string" ? settlement : JSON.stringify(settlement ?? {});
-  return native.laneSettlementHash(payload);
+  return native.laneSettlementHash(payload, networkPrefix);
 }

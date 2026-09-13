@@ -12,7 +12,7 @@ import {
 
 const BASE_URL = "https://localhost:8080";
 const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
-const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID, 753);
 
 class ToriiClient extends BaseToriiClient {
   constructor(baseUrl, options = {}) {

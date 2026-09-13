@@ -1,3 +1,4 @@
+import { requireNetworkPrefix } from "./networkPrefix.js";
 /** Browser-safe native NFT ownership reads and owner-authorized transfers. */
 import { ensureCanonicalAccountId } from "./normalizers.js";
 import { buildTransferNftInstruction } from "./instructionBuilders.js";
@@ -87,13 +88,14 @@ function cloneMetadata(value) {
 
 /** Native codec round-trip rejects malformed identifiers; source is always the owner. */
 export function buildOwnedNftTransferInstructionV1(input) {
-  exactKeys(input, ["ownerAccountId", "nftId", "destinationAccountId"], "NFT transfer");
+  exactKeys(input, ["ownerAccountId", "nftId", "destinationAccountId", "networkPrefix"], "NFT transfer");
+  const networkPrefix = requireNetworkPrefix(input.networkPrefix);
   const owner = exactAccount(input.ownerAccountId, "ownerAccountId");
   const destination = exactAccount(input.destinationAccountId, "destinationAccountId");
   const encoded = noritoEncodeInstructionBoxArchive(buildTransferNftInstruction({
     sourceAccountId: owner, nftId: input.nftId, destinationAccountId: destination,
-  }));
-  const instruction = noritoDecodeInstructionBoxArchive(encoded);
+  }), networkPrefix);
+  const instruction = noritoDecodeInstructionBoxArchive(encoded, networkPrefix);
   if (instruction.Transfer.Nft.object !== input.nftId) {
     throw new TypeError("nftId must use its exact canonical name$domain.dataspace form");
   }
@@ -102,10 +104,10 @@ export function buildOwnedNftTransferInstructionV1(input) {
 
 /** Construct one native NFT transfer for an external wallet; never accepts custody keys. */
 export function buildBrowserOwnedNftTransferPayloadV1(input) {
-  exactKeys(input, ["networkId", "authority", "nftId", "destinationAccountId", "feePayment", "metadata", "creationTimeMs", "ttlMs", "nonce", "networkPrefix", "chainDiscriminant"], "NFT transfer transaction");
+  exactKeys(input, ["networkId", "authority", "nftId", "destinationAccountId", "feePayment", "metadata", "creationTimeMs", "ttlMs", "nonce", "networkPrefix"], "NFT transfer transaction");
   const { nftId, destinationAccountId, ...transaction } = input;
   const instruction = buildOwnedNftTransferInstructionV1({
-    ownerAccountId: transaction.authority, nftId, destinationAccountId,
+    ownerAccountId: transaction.authority, nftId, destinationAccountId, networkPrefix: transaction.networkPrefix,
   });
   return buildBrowserExecutableBatchPayload({
     ...transaction, entries: [{ kind: "instruction", instruction }],
@@ -113,10 +115,10 @@ export function buildBrowserOwnedNftTransferPayloadV1(input) {
 }
 
 /** Normalize endpoint-reported ownership. Metadata does not prove item authenticity. */
-export function normalizeNftInventoryItemV1(value) {
+export function normalizeNftInventoryItemV1(value, networkPrefix) {
   exactKeys(value, ["id", "owned_by", "metadata"], "NFT record");
   const owner = exactAccount(value.owned_by, "NFT owner");
-  buildOwnedNftTransferInstructionV1({ ownerAccountId: owner, nftId: value.id, destinationAccountId: owner });
+  buildOwnedNftTransferInstructionV1({ ownerAccountId: owner, nftId: value.id, destinationAccountId: owner, networkPrefix });
   return { id: value.id, ownedBy: owner, metadata: cloneMetadata(value.metadata) };
 }
 
@@ -126,7 +128,8 @@ export function normalizeNftInventoryItemV1(value) {
  * A concurrent transfer may change the inventory between pages; callers refresh before signing.
  */
 export async function readOwnedNftInventoryV1(client, options) {
-  exactKeys(options, ["ownerAccountId", "domain", "limit", "maxItems", "signal"], "NFT inventory options");
+  exactKeys(options, ["ownerAccountId", "domain", "limit", "maxItems", "signal", "networkPrefix"], "NFT inventory options");
+  const networkPrefix = requireNetworkPrefix(options.networkPrefix);
   const owner = exactAccount(options.ownerAccountId, "ownerAccountId");
   const limit = options.limit ?? 100;
   const maxItems = options.maxItems ?? NFT_INVENTORY_MAX_ITEMS_V1;
@@ -135,7 +138,7 @@ export async function readOwnedNftInventoryV1(client, options) {
     throw new TypeError("NFT inventory pagination exceeds bounds");
   }
   if (options.domain !== undefined) {
-    buildOwnedNftTransferInstructionV1({ ownerAccountId: owner, nftId: `inventory$${options.domain}`, destinationAccountId: owner });
+    buildOwnedNftTransferInstructionV1({ ownerAccountId: owner, nftId: `inventory$${options.domain}`, destinationAccountId: owner, networkPrefix });
   }
   let cursor;
   const cursors = new Set(), ids = new Set(), items = [];
@@ -147,7 +150,7 @@ export async function readOwnedNftInventoryV1(client, options) {
     if (!Array.isArray(page.items) || page.items.length > limit || page.pagination.limit !== limit
         || typeof page.pagination.has_more !== "boolean") throw new TypeError("Invalid NFT page geometry");
     for (const value of page.items) {
-      const item = normalizeNftInventoryItemV1(value);
+      const item = normalizeNftInventoryItemV1(value, networkPrefix);
       if (item.ownedBy !== owner) throw new TypeError("NFT query returned another owner's item");
       if (options.domain !== undefined && item.id.slice(item.id.indexOf("$") + 1) !== options.domain) throw new TypeError("NFT query returned another domain's item");
       if (ids.has(item.id)) throw new TypeError("NFT inventory repeated an item across pages");

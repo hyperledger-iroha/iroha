@@ -103,6 +103,8 @@ mod tests {
         kaigi::{KAIGI_MAX_PARTICIPANTS_V1, KaigiId, KaigiRelayHealthStatus, KaigiRelayHop},
     };
 
+    const FIXTURE_NETWORK_PREFIX: u16 = 753;
+
     use super::*;
     use crate::{CodecErrorKind, json_u64::MAX_SAFE_INTEGER};
     use crate::{
@@ -259,7 +261,7 @@ mod tests {
                 let source = json::to_json(&expected).expect("SDK JSON");
                 let frame = norito::encode_canonical(&instruction).expect("native typed frame");
                 assert_eq!(
-                    encode_instruction_frame(&source).expect("SDK frame"),
+                    encode_instruction_frame(&source, FIXTURE_NETWORK_PREFIX).expect("SDK frame"),
                     frame,
                     "{variant}"
                 );
@@ -267,13 +269,14 @@ mod tests {
                 norito::codec::encode_adaptive_into(&instruction, &mut archive)
                     .expect("native typed archive");
                 assert_eq!(
-                    encode_instruction_archive(&source).expect("SDK archive"),
+                    encode_instruction_archive(&source, FIXTURE_NETWORK_PREFIX)
+                        .expect("SDK archive"),
                     archive,
                     "{variant}"
                 );
                 for decoded in [
-                    decode_instruction_frame(&frame),
-                    decode_instruction_archive(&archive),
+                    decode_instruction_frame(&frame, FIXTURE_NETWORK_PREFIX),
+                    decode_instruction_archive(&archive, FIXTURE_NETWORK_PREFIX),
                 ] {
                     let decoded: Value = json::from_json(&decoded.expect("native decode"))
                         .expect("SDK decoded JSON");
@@ -319,7 +322,8 @@ mod tests {
                     *field(&mut mutated, variant, &path) = rejected.clone();
                     let text = json::to_json(&mutated).expect("mutation JSON");
                     for encode in [encode_instruction_frame, encode_instruction_archive] {
-                        let error = encode(&text).expect_err("noncanonical u64 projection");
+                        let error = encode(&text, FIXTURE_NETWORK_PREFIX)
+                            .expect_err("noncanonical u64 projection");
                         assert_eq!(
                             error.kind(),
                             CodecErrorKind::InvalidArgument,

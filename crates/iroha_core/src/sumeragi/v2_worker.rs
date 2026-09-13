@@ -437,6 +437,25 @@ impl RecoveredDecisionFetchRequestOwnerV1 {
         self.authenticated.request().round == round
             && self.authenticated.request().subject == subject
     }
+    /// Recognize a reducer retry of this exact recovered Decision request.
+    /// The dedicated owner remains responsible for network retries and the
+    /// claimed response; a periodic reducer effect must not create a second one.
+    pub(in crate::sumeragi) fn authenticates_fetch_rediscovery(
+        &self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        sources: &[PeerId],
+        certificate: &wire::QuorumCertificate,
+    ) -> bool {
+        let request = self.authenticated.request();
+        self.tag == tag
+            && request.round == round
+            && request.subject == subject
+            && self.sources.as_slice() == sources
+            && request.certificate == *certificate
+            && certificate.phase == wire::GlobalPhase::Commit
+    }
     /// Recheck the exact dedicated executor height and requester.
     pub(in crate::sumeragi) fn validates_exact_executor_context(
         &self,

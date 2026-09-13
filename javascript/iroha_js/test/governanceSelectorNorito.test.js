@@ -122,12 +122,12 @@ test("governance selector grammar accepts 1 and 128 ASCII bytes", () => {
 });
 
 test("raw governance instructions reject noncanonical selectors before dispatch", () => {
-  for (const nativeMode of ["native", "unavailable"]) {
+  for (const nativeMode of ["accepting owner", "rejecting owner"]) {
     let nativeCalls = 0;
     const binding = {
       noritoEncodeInstruction() {
         nativeCalls += 1;
-        if (nativeMode === "unavailable") {
+        if (nativeMode === "rejecting owner") {
           throw new Error("unsupported instruction");
         }
         return Buffer.from([0]);
@@ -140,7 +140,7 @@ test("raw governance instructions reject noncanonical selectors before dispatch"
           const payload = instruction(selector);
           const input = representation === "object" ? payload : JSON.stringify(payload);
           assert.throws(
-            () => noritoEncodeInstruction(input),
+            () => noritoEncodeInstruction(input, 753),
             /must be 1-128 RFC 3986 unreserved ASCII characters/u,
             `${nativeMode} ${instructionName} ${selectorLabel} ${representation}`,
           );
@@ -155,19 +155,20 @@ test("raw governance instructions reject noncanonical selectors before dispatch"
   }
 });
 
-test("native raw instruction encoding preserves selector boundary lengths", () => {
+test("valid selector boundary lengths reach the selected native owner", () => {
   let nativeCalls = 0;
   const noritoEncodeInstruction = instructionEncoder(
     {
-      noritoEncodeInstruction(json) {
+      noritoEncodeInstruction(json, prefix) {
         nativeCalls += 1;
-        return nativeBinding.noritoEncodeInstruction(json);
+        assert.equal(prefix, 753);
+        return Buffer.from(json);
       },
     },
   );
   for (const selector of VALID_SELECTORS) {
     for (const [instructionName, instruction] of SELECTOR_INSTRUCTIONS) {
-      const encoded = noritoEncodeInstruction(instruction(selector));
+      const encoded = noritoEncodeInstruction(instruction(selector), 753);
       assert.ok(encoded.length > 0, `${instructionName} ${selector.length}`);
     }
   }
@@ -184,7 +185,7 @@ test("raw election proofs require every nullable attachment field", () => {
       const payload = instruction("a");
       delete payload.zk[name][proofField][field];
       assert.throws(
-        () => nativeBinding.noritoEncodeInstruction(JSON.stringify(payload)),
+        () => nativeBinding.noritoEncodeInstruction(JSON.stringify(payload), 753),
         { name: "Error", message: `JSON error: missing field \`${field}\`` },
         `${name}.${proofField}.${field}`,
       );

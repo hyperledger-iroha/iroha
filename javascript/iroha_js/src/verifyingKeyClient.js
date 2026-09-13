@@ -509,7 +509,7 @@ export function createVerifyingKeyClient(
   function normalizeVerifyingKeyTransactionDraft(
     input,
     context,
-    { networkId, operation, request },
+    { networkId, networkPrefix, operation, request },
   ) {
     const record = ensureRecord(input, context);
     assertSupportedOptionKeys(
@@ -558,6 +558,7 @@ export function createVerifyingKeyClient(
         {
           expectedNetworkId: networkId,
           expectedAuthority: request.authority,
+          networkPrefix,
           operation,
         },
       );

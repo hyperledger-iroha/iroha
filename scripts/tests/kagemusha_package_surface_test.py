@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -15,8 +16,105 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def coordinator_method_inventory(source: str, language: str) -> list[tuple[str, int]]:
+    """Read the complete enum, rejecting entries outside its declared syntax."""
+    bodies = re.findall(
+        r"\benum(?: class)? (?:ConnectNorito)?KagemushaCoreCoordinatorMethodV1"
+        r"\b[^{}]*\{([^{}]*)\}", source,
+    )
+    if len(bodies) != 1:
+        raise AssertionError("expected exactly one coordinator method enum")
+    body = re.sub(r"//[^\n]*", "", bodies[0])
+    if language == "swift":
+        body = re.sub(r"\bcase\s+", ",", body)
+    patterns = {
+        "c": r"CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_([A-Z_]+)_V1\s*=\s*(\d+)",
+        "rust": r"([A-Za-z]+)\s*=\s*(\d+)",
+        "swift": r"([A-Za-z]+)(?:\s*=\s*(\d+))?",
+        "kotlin": r"([A-Z_]+)\((\d+)\)",
+    }
+    result = []
+    code = -1  # Swift's first implicit raw value is zero.
+    for entry in body.split(","):
+        if not entry.strip():
+            continue
+        match = re.fullmatch(patterns[language], entry.strip())
+        if match is None:
+            raise AssertionError(f"unrecognized {language} coordinator enum entry: {entry!r}")
+        name, explicit_code = match.groups()
+        code = int(explicit_code) if explicit_code is not None else code + 1
+        result.append((name, code))
+    return result
+
+
 class KagemushaPackageSurfaceTests(unittest.TestCase):
     """Pin the unversioned product facade without removing V1 wire types."""
+
+    def test_coordinator_methods_match_exact_c_rust_swift_kotlin_and_fixture_inventory(self) -> None:
+        # The probe's ten output words are independent of the eleven method codes.
+        # Preserve each language's exact public spelling, including Swift's ID.
+        names = (
+            ("RESERVE_OPERATION_ID", "ReserveOperationId", "reserveOperationID"),
+            ("ACCEPT_QUALIFICATION", "AcceptQualification", "acceptQualification"),
+            ("ACCEPT_AUTHENTICATED_REPLY", "AcceptAuthenticatedReply", "acceptAuthenticatedReply"),
+            ("BEGIN_SENDER_TRANSITION", "BeginSenderTransition", "beginSenderTransition"),
+            ("PROVE_PREPARED_SENDER_TRANSITION", "ProvePreparedSenderTransition", "provePreparedSenderTransition"),
+            ("BUILD_TERMINAL_ENVELOPE", "BuildTerminalEnvelope", "buildTerminalEnvelope"),
+            ("ACCEPT_INSTALLED_TERMINAL", "AcceptInstalledTerminal", "acceptInstalledTerminal"),
+            ("RECOVER_SENDER", "RecoverSender", "recoverSender"),
+            ("RECOVER_TERMINAL_ENVELOPE", "RecoverTerminalEnvelope", "recoverTerminalEnvelope"),
+            ("RELEASE_OUTBOX", "ReleaseOutbox", "releaseOutbox"),
+            ("BEGIN_OBSERVATION", "BeginObservation", "beginObservation"),
+        )
+        contracts = {
+            "c": "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+            "rust": "crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1.rs",
+            "swift": "IrohaSwift/Sources/IrohaSwift/KagemushaCoreCoordinatorFrameV1.swift",
+            "kotlin": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCoreCoordinatorFrameV1.kt",
+        }
+        name_columns = {"c": 0, "rust": 1, "swift": 2, "kotlin": 0}
+        for language, path in contracts.items():
+            with self.subTest(language=language):
+                expected = [
+                    (row[name_columns[language]], code)
+                    for code, row in enumerate(names, start=1)
+                ]
+                self.assertEqual(
+                    coordinator_method_inventory((ROOT / path).read_text(), language), expected,
+                )
+        fixture = ROOT / "fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"
+        methods = {
+            int(line.split("\t")[1]) for line in fixture.read_text().splitlines()
+            if line and not line.startswith("#")
+        }
+        self.assertEqual(methods, set(range(1, 12)))
+
+    def test_coordinator_frame_schema_matches_c_rust_swift_and_shared_fixtures(self) -> None:
+        contracts = (
+            ("crates/connect_norito_bridge/include/connect_norito_bridge.h",
+             r"#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C\((\d+)\)"),
+            ("crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1.rs",
+             r"pub const KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1: u16 = (\d+);"),
+            ("IrohaSwift/Sources/IrohaSwift/KagemushaCoreCoordinatorFrameV1.swift",
+             r"public static let schemaVersion: UInt16 = (\d+)"),
+        )
+        for path, pattern in contracts:
+            with self.subTest(path=path):
+                self.assertEqual(re.findall(pattern, (ROOT / path).read_text()), ["2"])
+        fixture = ROOT / "fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv"
+        rows = 0
+        for line in fixture.read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            name, method, request, response = line.split("\t")
+            self.assertIn(int(method), range(1, 12))
+            for direction, encoded in (("request", request), ("response", response)):
+                with self.subTest(name=name, direction=direction):
+                    frame = bytes.fromhex(encoded)
+                    self.assertEqual(frame[:8], b"IKGMCOR1")
+                    self.assertEqual(int.from_bytes(frame[8:10], "little"), 2)
+            rows += 1
+        self.assertGreaterEqual(rows, 11)
 
     def test_superseded_facade_files_are_absent(self) -> None:
         pairs = (
@@ -48,8 +146,8 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
         self.assertEqual(
             package["exports"]["./kagemusha"],
             {
-                "browser": "./dist/kagemusha.js",
-                "import": "./dist/kagemusha.js",
+                "browser": "./dist/public/kagemusha.js",
+                "import": "./dist/public/kagemusha.js",
                 "types": "./kagemusha.d.ts",
             },
         )

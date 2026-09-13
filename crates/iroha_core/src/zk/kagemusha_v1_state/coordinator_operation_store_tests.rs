@@ -1087,3 +1087,6 @@ fn operation_store_checkpoint_prefix_tracks_exact_durable_frames_and_rejects_rep
     fs::write(path.join(FILE), bytes).unwrap();
     assert_eq!(store.recovery_prefix(), Err(StoreError::JournalCorrupt));
 }
+
+#[path = "recovery_journal_bundle_tests.rs"]
+mod recovery_bundle;
