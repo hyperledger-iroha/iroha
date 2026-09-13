@@ -1513,7 +1513,10 @@ pub mod settlement {
             SettlementInstructionBox::FundFxCorridorEscrow(_)
             | SettlementInstructionBox::RefundFxCorridorEscrow(_)
             | SettlementInstructionBox::SettleFxCorridor(_) => execute!(executor, isi),
-            SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {
+            // Core verifies the complete atomic intent and each exact debit-owner consent.
+            SettlementInstructionBox::Atomic(_)
+            | SettlementInstructionBox::Dvp(_)
+            | SettlementInstructionBox::Pvp(_) => {
                 execute!(executor, isi);
             }
         }
@@ -1616,6 +1619,45 @@ mod core_authorization_dispatch_tests {
             name.parse().expect("valid FX asset name"),
         )
     }
+    #[test]
+    fn atomic_settlement_reaches_core_for_exact_intent_authorization() {
+        use iroha_data_model::{
+            NetworkId,
+            asset::AssetId,
+            isi::{AtomicSettlementMovement, AtomicSettlementMovements, SettleAtomic},
+        };
+        use iroha_model_base::metadata::Metadata;
+        let payer = account(0x71);
+        let recipient = account(0x72);
+        let mut movements = ["cash_a", "cash_b"]
+            .into_iter()
+            .map(|name| AtomicSettlementMovement {
+                source: AssetId::new(asset("atomic_fixture", name), payer.clone()),
+                recipient: recipient.clone(),
+                quantity: Quantity::from(42_u32),
+            })
+            .collect::<Vec<_>>();
+        movements.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
+        let atomic = SettleAtomic::new(
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"atomic-executor-fixture",
+            ))),
+            "atomic_dispatch".parse().expect("business id"),
+            AtomicSettlementMovements::try_from(movements).expect("canonical"),
+            NonZeroU64::new(500).expect("expiry"),
+            Metadata::default(),
+        );
+        let mut executor = TestExecutor::new(account(0x73));
+        settlement::visit_settlement_instruction(
+            &mut executor,
+            &SettlementInstructionBox::Atomic(atomic),
+        );
+        assert!(
+            executor.verdict().is_ok(),
+            "Core owns every exact debit-owner consent; no blanket executor permission grants consent"
+        );
+    }
+
     #[test]
     fn fx_settlement_reaches_core_without_executor_permission() {
         let authority = account(0x41);

@@ -8,12 +8,7 @@ use fastpq_isi::poseidon_digest384::{
 use fastpq_isi::{GoldilocksDigest384FrameV1, GoldilocksDigest384V1};
 use zeroize::Zeroizing;
 
-/// Maximum number of independent frames in one hardware dispatch.
-pub const MAX_DIGEST384_GPU_FRAMES_V1: usize = 65_536;
-/// Maximum cumulative canonical words (32 MiB) in one hardware dispatch.
-///
-/// These resource limits do not change the protocol's canonical framing limits.
-pub const MAX_DIGEST384_GPU_WORDS_V1: usize = 4_194_304;
+use crate::digest_executor::{MAX_DIGEST384_BATCH_FRAMES_V1, MAX_DIGEST384_BATCH_WORDS_V1};
 
 /// Explicit hardware selection for six-lane frame hashing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,16 +65,12 @@ pub fn try_hash_digest384_frames_v1(
     frames: &[GoldilocksDigest384FrameV1<'_>],
 ) -> Result<Vec<GoldilocksDigest384V1>, Digest384GpuErrorV1> {
     validate_frame_batch_geometry(frames)?;
-    static METAL: Mutex<Digest384ReadinessV1> = Mutex::new(Digest384ReadinessV1::Unchecked);
-    static CUDA: Mutex<Digest384ReadinessV1> = Mutex::new(Digest384ReadinessV1::Unchecked);
-    let state = match backend {
-        Digest384GpuBackendV1::Metal => &METAL,
-        Digest384GpuBackendV1::Cuda => &CUDA,
-    };
+    let state = backend_readiness_v1(backend);
     let mut readiness = state
         .lock()
         .map_err(|_| Digest384GpuErrorV1::Quarantined { backend })?;
-    readiness.execute(
+    readiness.ensure_available_v1(backend)?;
+    readiness.frames.execute(
         backend,
         || StagedDigest384V1::new(frames),
         &mut |staged, output| {
@@ -106,10 +97,42 @@ pub fn try_hash_digest384_frames_v1(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Digest384ReadinessV1 {
+pub(crate) enum Digest384ReadinessV1 {
     Unchecked,
     Ready,
     Quarantined,
+}
+
+pub(crate) struct Digest384BackendReadinessV1 {
+    pub(crate) frames: Digest384ReadinessV1,
+    pub(crate) indexed: Digest384ReadinessV1,
+}
+impl Digest384BackendReadinessV1 {
+    pub(crate) fn ensure_available_v1(
+        &self,
+        backend: Digest384GpuBackendV1,
+    ) -> Result<(), Digest384GpuErrorV1> {
+        if self.frames == Digest384ReadinessV1::Quarantined
+            || self.indexed == Digest384ReadinessV1::Quarantined
+        {
+            return Err(Digest384GpuErrorV1::Quarantined { backend });
+        }
+        Ok(())
+    }
+}
+pub(crate) fn backend_readiness_v1(
+    backend: Digest384GpuBackendV1,
+) -> &'static Mutex<Digest384BackendReadinessV1> {
+    const UNCHECKED: Digest384BackendReadinessV1 = Digest384BackendReadinessV1 {
+        frames: Digest384ReadinessV1::Unchecked,
+        indexed: Digest384ReadinessV1::Unchecked,
+    };
+    static METAL: Mutex<Digest384BackendReadinessV1> = Mutex::new(UNCHECKED);
+    static CUDA: Mutex<Digest384BackendReadinessV1> = Mutex::new(UNCHECKED);
+    match backend {
+        Digest384GpuBackendV1::Metal => &METAL,
+        Digest384GpuBackendV1::Cuda => &CUDA,
+    }
 }
 
 impl Digest384ReadinessV1 {
@@ -178,7 +201,7 @@ fn decode_digest384_output_v1(
 fn validate_frame_batch_geometry(
     frames: &[GoldilocksDigest384FrameV1<'_>],
 ) -> Result<usize, Digest384GpuErrorV1> {
-    if frames.is_empty() || frames.len() > MAX_DIGEST384_GPU_FRAMES_V1 {
+    if frames.is_empty() || frames.len() > MAX_DIGEST384_BATCH_FRAMES_V1 {
         return Err(Digest384GpuErrorV1::InvalidInput(
             "frame count outside 1..=65,536",
         ));
@@ -186,7 +209,7 @@ fn validate_frame_batch_geometry(
     frames.iter().try_fold(0usize, |count, frame| {
         count
             .checked_add(frame.word_count())
-            .filter(|n| *n <= MAX_DIGEST384_GPU_WORDS_V1)
+            .filter(|n| *n <= MAX_DIGEST384_BATCH_WORDS_V1)
             .ok_or(Digest384GpuErrorV1::InvalidInput(
                 "canonical word count exceeds 4,194,304",
             ))
@@ -318,8 +341,8 @@ mod tests {
         let fields: &[&[u8]] = &[&payload];
         let large_frame = GoldilocksDigest384FrameV1::new(domain(), fields).unwrap();
         let word_limited =
-            vec![large_frame; MAX_DIGEST384_GPU_WORDS_V1 / large_frame.word_count() + 1];
-        assert!(word_limited.len() <= MAX_DIGEST384_GPU_FRAMES_V1);
+            vec![large_frame; MAX_DIGEST384_BATCH_WORDS_V1 / large_frame.word_count() + 1];
+        assert!(word_limited.len() <= MAX_DIGEST384_BATCH_FRAMES_V1);
         assert!(matches!(
             StagedDigest384V1::new(&word_limited),
             Err(Digest384GpuErrorV1::InvalidInput(
@@ -328,7 +351,7 @@ mod tests {
         ));
         for frames in [
             vec![],
-            vec![frame; MAX_DIGEST384_GPU_FRAMES_V1 + 1],
+            vec![frame; MAX_DIGEST384_BATCH_FRAMES_V1 + 1],
             word_limited,
         ] {
             for backend in [Digest384GpuBackendV1::Metal, Digest384GpuBackendV1::Cuda] {

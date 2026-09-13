@@ -15218,7 +15218,10 @@ pub const DEFAULT_TRANSACTION_WAIT_POLL_INTERVAL: Duration = Duration::from_mill
 /// Timing options for the fixed global transaction-finality wait.
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionWaitOptions {
-    /// Maximum time to spend polling before the wait fails.
+    /// Maximum monotonic time for status requests, polling sleeps and finality admission.
+    ///
+    /// Zero fails unresolved with zero attempts and no HTTP read. An earlier context
+    /// request deadline shortens this budget; a late response cannot confirm finality.
     pub timeout: Duration,
     /// Nonzero interval between `/v1/pipeline/transactions/status` polls.
     pub poll_interval: Duration,
@@ -17297,6 +17300,11 @@ impl Client {
     /// first-release finality rule. HTTP 429 backpressure repeats only the status read within
     /// the original deadline, respecting Torii's delta-seconds `Retry-After` when present.
     /// It never resubmits the transaction. Other HTTP and malformed-response errors fail.
+    /// One absolute monotonic deadline bounds every status dispatch, polling sleep and
+    /// outcome admission, shortened by any earlier context request deadline. Explicit
+    /// zero timeout fails unresolved without a read; use the one-shot status API for
+    /// one observation. A late response cannot confirm finality or undo a committed
+    /// transaction. Custom blocking transports must honor the supplied request timeout.
     ///
     /// # Errors
     /// Returns an error if polling fails, the response is not bound to the requested canonical
@@ -17308,11 +17316,13 @@ impl Client {
         options: TransactionWaitOptions,
     ) -> Result<TransactionWaitOutcome> {
         crate::blocking::reject_inside_async_runtime()?;
-        let mut wait = transaction_wait::PollState::new(hash, options)?;
+        let mut wait =
+            transaction_wait::PollState::new(hash, options, self.http_transport.deadline())?;
+        let polling_client = self.with_request_deadline(wait.deadline());
         loop {
             wait.begin_poll()?;
             if let Some(outcome) =
-                wait.observe(self.get_transaction_status_response_global(hash))?
+                wait.observe(polling_client.get_transaction_status_response_global(hash))?
             {
                 return Ok(outcome);
             }
@@ -17324,12 +17334,16 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
     ) -> Result<TransactionWaitOutcome> {
-        let mut wait = transaction_wait::PollState::new(hash, options)?;
+        let mut wait =
+            transaction_wait::PollState::new(hash, options, self.http_transport.deadline())?;
+        let polling_client = self.with_request_deadline(wait.deadline());
         loop {
             wait.begin_poll()?;
-            if let Some(outcome) =
-                wait.observe(self.get_global_transaction_status_response(hash).await)?
-            {
+            if let Some(outcome) = wait.observe(
+                polling_client
+                    .get_global_transaction_status_response(hash)
+                    .await,
+            )? {
                 return Ok(outcome);
             }
             tokio::time::sleep(wait.next_delay()?).await;

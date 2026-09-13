@@ -21,7 +21,7 @@ The reserved effect-proof field remains absent; its production rejection policy
 is unchanged.
 
 Fixture SHA-256:
-`fa5a827bcb9d587cd1c4bbb9e40be04338d1bc5c77e5d8c45d416b727694c3b8`.
+`f4a6f13e09de60f60f1947658a37cdf1de613829fb078d2056c025e0d7d214d5`.
 Before registering the owner-scoped test module, `src/isi/nexus.rs` had SHA-256
 `a04c38689d905903656ae92fad27f32df20e041bf38b8ba3aa71cf9b020690d3`.
 Its production code and existing fixture constructors remained unchanged during
@@ -35,3 +35,8 @@ both hashes and every complete frame/JSON carrier against this immutable capture
 The separate `isi!` caller in the same source is not included in this batch.
 Complete generated/generic coverage, active codec cutover, other feature
 selections and source-bound release qualification remain open.
+
+On 2026-09-12, the native fixture producer refreshed contexts containing the
+current default confidential-policy hash. The root payload changes were checked
+to consist solely of that hash; outer frame checksums follow from the changed
+payload. These synthetic frames do not qualify a network run.

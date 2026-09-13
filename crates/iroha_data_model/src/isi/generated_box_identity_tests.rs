@@ -247,7 +247,8 @@ check_box!(
         SetFxCorridorPolicy,
         FundFxCorridorEscrow,
         RefundFxCorridorEscrow,
-        SettleFxCorridor
+        SettleFxCorridor,
+        Atomic
     ]
 );
 check_box!(

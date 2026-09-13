@@ -349,8 +349,22 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
             ".reconcile_decided_lane_certified_serve(&mut active_runner, permit)",
             "activated.with_runner_runtime(",
             "producer_claim.permits_decided_lane_recovery_ingress()",
+        ],
+    );
+    // Validate-sidecar recovery has a distinct earlier, typed drain. Check the
+    // Apply-owned path inside its own permit branch rather than matching that
+    // other drain's first occurrence in the whole Completion barrier.
+    let apply_recovery = source_region(
+        barrier,
+        "if producer_claim.permits_decided_lane_recovery_ingress() {",
+        "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
+    );
+    assert_source_tokens_in_order(
+        apply_recovery,
+        &[
             "settle_apply_barrier_runner_decision_handoff(",
             "reconcile_terminal_lane_output_handoffs(",
+            "producer_claim.permits_open_decided_lane_recovery_ingress()",
             "drain_decided_lane_recovery_ingress(",
         ],
     );

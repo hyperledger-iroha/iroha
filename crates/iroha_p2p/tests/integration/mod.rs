@@ -153,7 +153,7 @@ fn test_network_config(
         allow_cidrs: Vec::new(),
         deny_cidrs: Vec::new(),
         disconnect_on_post_overflow: true,
-        max_frame_bytes: 1_048_576,
+        max_frame_bytes: 1_048_576 + network_defaults::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
         tcp_nodelay: true,
         tcp_keepalive: None,
         max_frame_bytes_consensus: 262_144,

@@ -724,10 +724,16 @@ fn autonomous_execution_defers_expired_axt_replay_pruning_on_consensus_stack() {
     let (state, entry, carrier, expired_key) =
         autonomous_merge_commit_authorization_fixture(true, false);
     let expired_key = expired_key.expect("fixture expired replay key");
-    commit_staged_autonomous_for_test(staged_autonomous_merge_commit_block(
-        &state, &entry, &carrier,
-    ))
-    .expect("authorized execution carrier must not gain AXT pruning effects");
+    let block = staged_autonomous_merge_commit_block(&state, &entry, &carrier);
+    assert!(
+        block.json_serialize_committed_axt_replay_ledger().is_none(),
+        "autonomous execution must not project ordinary expiry removals"
+    );
+    let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
+    let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&block);
+    assert_eq!(staged_hash, Hash::new(&staged_bytes));
+    commit_staged_autonomous_for_test(block)
+        .expect("authorized execution carrier must not gain AXT pruning effects");
     assert!(
         state
             .world
@@ -736,6 +742,14 @@ fn autonomous_execution_defers_expired_axt_replay_pruning_on_consensus_stack() {
             .get(&expired_key)
             .is_some(),
         "expired replay guards must remain for a later non-execution carrier"
+    );
+    let committed_bytes = crate::snapshot::canonical_state_snapshot_bytes(&state);
+    let committed_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+    assert_eq!(committed_hash, Hash::new(&committed_bytes));
+    assert!(
+        staged_bytes == committed_bytes && staged_hash == committed_hash,
+        "autonomous checkpoint must retain expiry rows in both surfaces: \
+         staged_hash={staged_hash}, committed_hash={committed_hash}"
     );
 }
 state_test!(consensus_stack autonomous_execution_rejects_post_stage_axt_replay_drift
@@ -3199,7 +3213,10 @@ fn pending_queue_plan_admission_accepts_unchanged_source_after_height_only_advan
     );
     drop(staged);
     let persisted = state
-        .persist_classified_queue_plan_admission(&certificate)
+        .persist_classified_queue_plan_admission(
+            &certificate,
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        )
         .expect("safe historical certificate persists at the exact durable frontier");
     let PendingQueuePlanAdmissionPersistenceOutcome::Durable {
         certificate_hash: persisted_hash,
@@ -3378,7 +3395,10 @@ fn assert_stale_historical_queue_plan_admission_is_not_retained_or_carried(
         "{label} must be stale"
     );
     let outcome = state
-        .persist_classified_queue_plan_admission(certificate)
+        .persist_classified_queue_plan_admission(
+            certificate,
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        )
         .unwrap_or_else(|error| panic!("{label} persistence must fail closed: {error}"));
     assert!(
         matches!(
@@ -3421,7 +3441,10 @@ fn assert_invalid_historical_queue_plan_admission_is_not_retained_or_carried(
     );
     assert!(
         state
-            .persist_classified_queue_plan_admission(certificate)
+            .persist_classified_queue_plan_admission(
+                certificate,
+                crate::state::QueuePlanAdmissionPersistenceScope::Admission
+            )
             .is_err(),
         "{label} must fail before durable admission persistence"
     );
@@ -3728,7 +3751,10 @@ fn pending_queue_plan_authentication_does_not_hold_the_publication_fence() {
                 "classification authenticates immutable bytes once"
             );
             let first = state
-                .persist_classified_queue_plan_admission(&certificate)
+                .persist_classified_queue_plan_admission(
+                    &certificate,
+                    crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+                )
                 .expect("retain the authenticated certificate at the exact durable frontier");
             assert!(matches!(
                 first,
@@ -3740,7 +3766,10 @@ fn pending_queue_plan_authentication_does_not_hold_the_publication_fence() {
                 "persistence must reuse authenticated bytes under its fence"
             );
             let repeated = state
-                .persist_classified_queue_plan_admission(&certificate)
+                .persist_classified_queue_plan_admission(
+                    &certificate,
+                    crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+                )
                 .expect("idempotent admission retains the same durable certificate");
             assert!(matches!(
                 repeated,
@@ -3756,7 +3785,10 @@ fn pending_queue_plan_authentication_does_not_hold_the_publication_fence() {
             );
             assert!(
                 state
-                    .persist_classified_queue_plan_admission(b"malformed")
+                    .persist_classified_queue_plan_admission(
+                        b"malformed",
+                        crate::state::QueuePlanAdmissionPersistenceScope::Admission
+                    )
                     .is_err()
             );
             assert_eq!(
@@ -3807,7 +3839,10 @@ fn pending_queue_plan_persistence_serializes_alternate_quorum_subsets() {
     let first_state = Arc::clone(&state);
     let first = std::thread::spawn(move || {
         first_started_tx.send(()).expect("announce first writer");
-        first_state.persist_classified_queue_plan_admission(&first_certificate)
+        first_state.persist_classified_queue_plan_admission(
+            &first_certificate,
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        )
     });
     first_started_rx
         .recv_timeout(Duration::from_secs(1))
@@ -3830,7 +3865,10 @@ fn pending_queue_plan_persistence_serializes_alternate_quorum_subsets() {
     let second_state = Arc::clone(&state);
     let second = std::thread::spawn(move || {
         second_started_tx.send(()).expect("announce second writer");
-        second_state.persist_classified_queue_plan_admission(&second_certificate)
+        second_state.persist_classified_queue_plan_admission(
+            &second_certificate,
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        )
     });
     second_started_rx
         .recv_timeout(Duration::from_secs(1))
@@ -3907,7 +3945,10 @@ fn pending_queue_plan_persistence_yields_to_one_ahead_state_publication() {
         .load(std::sync::atomic::Ordering::Relaxed);
     let admission_state = Arc::clone(&state);
     let admission = std::thread::spawn(move || {
-        admission_state.persist_classified_queue_plan_admission(&certificate)
+        admission_state.persist_classified_queue_plan_admission(
+            &certificate,
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        )
     });
     let scan_deadline = Instant::now() + Duration::from_secs(5);
     while state
@@ -3978,7 +4019,10 @@ fn pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew(
         );
     };
     let timeout_error = state
-        .persist_classified_queue_plan_admission(&certificate)
+        .persist_classified_queue_plan_admission(
+            &certificate,
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        )
         .expect_err("one-ahead Kura must time out when State never publishes");
     assert_height_mismatch(timeout_error, successor.header().height().get());
     assert!(
@@ -3996,7 +4040,10 @@ fn pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew(
         .store_block(Arc::new(second_successor.clone()))
         .expect("store the second canonical successor");
     let hard_mismatch = state
-        .persist_classified_queue_plan_admission(&certificate)
+        .persist_classified_queue_plan_admission(
+            &certificate,
+            crate::state::QueuePlanAdmissionPersistenceScope::Admission,
+        )
         .expect_err("Kura more than one ahead must fail closed");
     assert_height_mismatch(hard_mismatch, second_successor.header().height().get());
     assert!(
@@ -4008,6 +4055,7 @@ fn pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew(
         "a hard frontier mismatch must not persist the certificate"
     );
 }
+include!("queue_plan_publication_scope_tests.rs");
 include!("autonomous_merge_and_queue_plan_native_diagnostic_tests.rs");
 state_test!(consensus_stack merge_execution_prefix_budget_includes_historical_authority_catalog
     merge_execution_prefix_budget_includes_historical_authority_catalog_on_consensus_stack();

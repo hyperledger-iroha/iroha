@@ -678,6 +678,7 @@ mod tests {
             .await
             .expect("write hello bytes");
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
@@ -925,6 +926,7 @@ mod tests {
             trust_gossip: true,
         });
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split(2, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
@@ -1068,6 +1070,7 @@ mod tests {
             trust_gossip: true,
         });
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split(22, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
@@ -1453,6 +1456,7 @@ mod tests {
             trust_gossip: true,
         });
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split(2, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
@@ -1535,6 +1539,7 @@ mod tests {
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
         write_framed_handshake(&mut sender_write, &encoded).await;
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
@@ -1615,6 +1620,7 @@ mod tests {
             trust_gossip: true,
         });
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split_with_binding(
                 12,
                 receiver_read,
@@ -1675,6 +1681,7 @@ mod tests {
             trust_gossip: true,
         });
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split_with_binding(
                 14,
                 receiver_read,
@@ -1736,6 +1743,7 @@ mod tests {
             trust_gossip: true,
         });
         let get_key = GetKey::<ChaCha20Poly1305> {
+            local_peer_id: super::PeerId::from(random_node_key_pair().public_key().clone()),
             connection: Connection::from_split(4, receiver_read, receiver_write),
             expected_peer_id: Some(expected_peer_id.clone()),
             cryptographer,

@@ -27,6 +27,8 @@ mod digest;
 mod digest384_batch;
 #[cfg(feature = "fastpq-gpu")]
 mod digest384_gpu;
+#[cfg(feature = "fastpq-gpu")]
+mod digest384_indexed_gpu;
 mod digest_executor;
 mod error;
 #[cfg(any(test, feature = "dev-tools", feature = "fastpq-gpu"))]
@@ -86,11 +88,13 @@ pub use bn254_poseidon::{
     try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,
 };
 pub use digest::trace_commitment;
-#[cfg(feature = "fastpq-gpu")]
-pub use digest384_gpu::{
-    Digest384GpuBackendV1, Digest384GpuErrorV1, MAX_DIGEST384_GPU_FRAMES_V1,
-    MAX_DIGEST384_GPU_WORDS_V1, try_hash_digest384_frames_v1,
+pub use digest_executor::{
+    DigestExecutionV1, MAX_DIGEST384_BATCH_FRAMES_V1, MAX_DIGEST384_BATCH_WORDS_V1,
+    MAX_DIGEST384_INDEXED_BATCH_V1, execute_digest384_frames_v1,
+    execute_digest384_indexed_coordinates_v1, hash_digest384_pairs_v1,
 };
+#[cfg(feature = "fastpq-gpu")]
+pub use digest384_gpu::{Digest384GpuBackendV1, Digest384GpuErrorV1, try_hash_digest384_frames_v1};
 pub use error::{Error, Result};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]

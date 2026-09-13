@@ -909,6 +909,14 @@ record!(
     crate::isi::settlement::SetFxCorridorPolicy,
     "iroha_data_model::isi::settlement::SetFxCorridorPolicy"
 );
+// TODO: Capture this new record's actual compiled canonical frame and refresh the
+// complete first-release inventory fixture before integrating the model proposal.
+// The missing capture remains a hard test failure; no guessed hash or bypass.
+record!(
+    settlement_settle_atomic,
+    crate::isi::settlement::SettleAtomic,
+    "iroha_data_model::isi::settlement::SettleAtomic"
+);
 record!(
     settlement_settle_fx_corridor,
     crate::isi::settlement::SettleFxCorridor,

@@ -1428,7 +1428,8 @@ fn map_copy_schedule_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspAirE
         | ProofManagedNoteStarkErrorV1::Fri
         | ProofManagedNoteStarkErrorV1::Transcript
         | ProofManagedNoteStarkErrorV1::Randomness
-        | ProofManagedNoteStarkErrorV1::Internal => PqMaspAirErrorV1::Topology,
+        | ProofManagedNoteStarkErrorV1::Internal
+        | ProofManagedNoteStarkErrorV1::DigestExecution => PqMaspAirErrorV1::Topology,
     }
 }
 fn validate_copy_schedule_v1(schedule: &NoteCopyScheduleV1) -> Result<(), PqMaspAirErrorV1> {

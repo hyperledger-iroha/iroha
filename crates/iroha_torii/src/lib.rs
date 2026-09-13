@@ -16990,18 +16990,7 @@ async fn handler_status_root(
         route_catalog::diagnostic::STATUS.stable_route_id(),
     )
     .await?;
-    let nexus = app.state.nexus_snapshot();
-    let nexus_routing_policy = nexus.routing_policy.clone();
-    let authoritative_block_height = u64::try_from(app.state.committed_height())
-        .expect("committed height must fit the canonical u64 wire field");
-    routing::handle_status(
-        &app.build_status,
-        &app.telemetry,
-        accept.map(|e| e.0),
-        nexus_routing_policy,
-        authoritative_block_height,
-    )
-    .await
+    routing::handle_status(&app.build_status, &app.telemetry, accept.map(|e| e.0)).await
 }
 #[cfg(feature = "telemetry")]
 async fn handler_metrics(
@@ -23759,10 +23748,15 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
     request: ToriiProxyRequestKindV1,
     pre_admitted_proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
+    let request_started = Instant::now();
     let request = match new_torii_proxy_request(app.as_ref(), request) {
         Ok(request) => request,
         Err(response) => return response,
     };
+    let persistence_deadline = queue_plan_publication_wait::PersistenceDeadline::new(
+        request_started,
+        request.deadline_unix_ms,
+    );
     let local_peer_id = app
         .local_peer_id
         .as_ref()
@@ -23841,6 +23835,14 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         mark_torii_proxy_request_completed(app, request_id).await;
         return hold_torii_proxy_memory_in_response_body(response, proxy_memory);
     }
+    let admission_binding = match &request.request {
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+            admission_binding,
+            ..
+        } => admission_binding.clone(),
+        _ => None,
+    };
     let candidate_proxy_memory = proxy_memory.clone();
     let response = execute_torii_proxy_request_across_candidates(
         candidate_peers,
@@ -23880,7 +23882,24 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         },
     )
     .await;
-    hold_torii_proxy_memory_in_response_body(response, proxy_memory)
+    // The complete W owner spans aggregation, body extraction, authentication,
+    // durable persistence and dissemination. Only the final public response owns
+    // it through a Body; consuming the intermediate certificate cannot release W.
+    proxy_response_finalization::complete(response, proxy_memory, |response| async move {
+        match admission_binding {
+            Some(binding) => {
+                persist_queue_plan_admission_certificate(
+                    app,
+                    response,
+                    &binding,
+                    persistence_deadline,
+                )
+                .await
+            }
+            None => response,
+        }
+    })
+    .await
 }
 #[cfg(all(feature = "app_api", not(feature = "connect")))]
 async fn execute_torii_proxy_request_with_fallback(
@@ -24577,40 +24596,6 @@ fn disseminate_queue_plan_admission_publication(
     Ok(targets.len())
 }
 #[cfg(feature = "connect")]
-fn validate_queue_plan_admission_publication(
-    app: &SharedAppState,
-    publication: &QueuePlanAdmissionPublicationV1,
-) -> Result<QueuePlanAdmissionBindingV1, String> {
-    if publication.schema_version != QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1 {
-        return Err(format!(
-            "unsupported QueuePlan admission publication schema_version `{}`",
-            publication.schema_version
-        ));
-    }
-    let certificate = decode_queue_plan_synced_certificate(&publication.certificate)?;
-    let validated = validate_queue_plan_admission_certificate_for_network_digest_v1(
-        queue_plan_admission_network_id_digest(app.state.network_id_ref()),
-        certificate,
-        QueuePlanAdmissionCertificateStrengthV1::Quorum,
-    )?;
-    let binding = validated.certificate.binding;
-    let coordinator = binding
-        .admission_context
-        .route_incarnations
-        .first()
-        .ok_or_else(|| "QueuePlan admission publication has no coordinator route".to_owned())?;
-    let local_peer_id = app.local_peer_id.as_ref().ok_or_else(|| {
-        "QueuePlan admission publication receiver has no configured peer identity".to_owned()
-    })?;
-    if !coordinator.validator_set.contains(local_peer_id) {
-        return Err(
-            "QueuePlan admission publication receiver is not in the certified coordinator roster"
-                .to_owned(),
-        );
-    }
-    Ok(binding)
-}
-#[cfg(feature = "connect")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueuePlanAdmissionPublicationIngestOutcome {
     AlreadyCommitted,
@@ -24624,25 +24609,31 @@ fn ingest_queue_plan_admission_publication(
     app: &SharedAppState,
     publication: &QueuePlanAdmissionPublicationV1,
 ) -> Result<QueuePlanAdmissionPublicationIngestOutcome, String> {
-    let binding = validate_queue_plan_admission_publication(app, publication)?;
+    if publication.schema_version != QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1 {
+        return Err(format!(
+            "unsupported QueuePlan admission publication schema_version `{}`",
+            publication.schema_version
+        ));
+    }
+    let local_peer = app.local_peer_id.as_ref().ok_or_else(|| {
+        "QueuePlan admission publication receiver has no configured peer identity".to_owned()
+    })?;
+    // Authentication, receiver authorization and durable classification share one State-owned
+    // graph. No independently decoded binding survives while another certificate is decoded.
     let outcome = app
         .state
-        .persist_classified_queue_plan_admission(&publication.certificate)
+        .persist_classified_queue_plan_admission(
+            &publication.certificate,
+            iroha_core::state::QueuePlanAdmissionPersistenceScope::CoordinatorPublication(
+                local_peer,
+            ),
+        )
         .map_err(|error| format!("QueuePlan publication persistence failed: {error}"))?;
     let certificate_hash = match outcome {
-        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => {
-            if admission.certificate.binding != binding {
-                return Err("QueuePlan admission changed during publication ingestion".to_owned());
-            }
+        PendingQueuePlanAdmissionPersistenceOutcome::Applied { .. } => {
             return Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted);
         }
-        PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
-            admission,
-            disposition,
-        } => {
-            if admission.certificate.binding != binding {
-                return Err("QueuePlan admission changed during publication ingestion".to_owned());
-            }
+        PendingQueuePlanAdmissionPersistenceOutcome::Rejected { disposition, .. } => {
             return Err(match disposition {
                 PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
                     "canonical WSV raced this publication with another QueuePlan admission"
@@ -24657,15 +24648,8 @@ fn ingest_queue_plan_admission_publication(
             });
         }
         PendingQueuePlanAdmissionPersistenceOutcome::Durable {
-            admission,
-            certificate_hash,
-            ..
-        } => {
-            if admission.certificate.binding != binding {
-                return Err("QueuePlan admission changed during publication ingestion".to_owned());
-            }
-            certificate_hash
-        }
+            certificate_hash, ..
+        } => certificate_hash,
     };
     let sumeragi_notified = app
         .sumeragi
@@ -24681,6 +24665,7 @@ async fn persist_queue_plan_admission_certificate(
     app: &SharedAppState,
     response: Response,
     expected_binding: &QueuePlanAdmissionBindingV1,
+    deadline: queue_plan_publication_wait::PersistenceDeadline,
 ) -> Response {
     if response.status() != StatusCode::ACCEPTED {
         return response;
@@ -24716,10 +24701,7 @@ async fn persist_queue_plan_admission_certificate(
             format!("aggregated QueuePlan certificate is not an exact quorum: {error}"),
         );
     }
-    let outcome = match app
-        .state
-        .persist_classified_queue_plan_admission(&snapshot.body)
-    {
+    let outcome = match deadline.persist(&app.state, &snapshot.body).await {
         Ok(outcome) => outcome,
         Err(error) => {
             return queue_plan_outcome_unknown_response(
@@ -24740,7 +24722,7 @@ async fn persist_queue_plan_admission_certificate(
                     "canonical QueuePlan application differs from the exact ingress binding",
                 );
             }
-            return torii_proxy_snapshot_to_response(snapshot);
+            return queue_plan_completed_admission_response(snapshot, expected_binding, &deadline);
         }
         PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
             admission,
@@ -24821,6 +24803,23 @@ async fn persist_queue_plan_admission_certificate(
                 "Sumeragi QueuePlan wake could not be delivered because no owner is attached; preserving the known durable acceptance"
             );
         }
+    }
+    queue_plan_completed_admission_response(snapshot, expected_binding, &deadline)
+}
+#[cfg(feature = "connect")]
+fn queue_plan_completed_admission_response(
+    snapshot: ToriiProxyHttpResponseV1,
+    expected_binding: &QueuePlanAdmissionBindingV1,
+    deadline: &queue_plan_publication_wait::PersistenceDeadline,
+) -> Response {
+    if let Err(error) = deadline.remaining() {
+        return queue_plan_outcome_unknown_response(
+            expected_binding.entrypoint_hash.clone(),
+            expected_binding.signed_transaction_hash.clone(),
+            format!(
+                "{error}; completed durable QueuePlan admission is preserved; reconcile the exact transaction status"
+            ),
+        );
     }
     torii_proxy_snapshot_to_response(snapshot)
 }
@@ -25037,8 +25036,7 @@ async fn execute_torii_transaction_via_proxy(
     ) {
         return error.into_response();
     }
-    let expected_admission_binding = binding.clone();
-    let mut response = execute_torii_proxy_request_with_fallback(
+    let response = execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
         ToriiProxyRequestKindV1::SubmitTransaction {
@@ -25049,8 +25047,6 @@ async fn execute_torii_transaction_via_proxy(
         },
     )
     .await;
-    response =
-        persist_queue_plan_admission_certificate(app, response, &expected_admission_binding).await;
     normalize_proxied_transaction_submission_response(
         app.as_ref(),
         response,
@@ -28041,194 +28037,19 @@ fn process_incoming_queue_plan_admission_publication(
     }
 }
 #[cfg(feature = "connect")]
-async fn handle_torii_proxy_network_message(
-    app: SharedAppState,
-    network: iroha_core::IrohaNetwork,
-    peer: Peer,
-    payload: iroha_core::NetworkMessage,
-    _p2p_memory: iroha_p2p::peer::message::PeerMessageRetentionGuard,
-) {
-    debug_assert!(
-        payload.is_torii_proxy_control_message(),
-        "Torii proxy dispatcher should only receive Torii/Soracloud proxy control messages"
-    );
-    match payload {
-        iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
-            let request_id = request.request_id.clone();
-            let deadline_unix_ms = request.deadline_unix_ms;
-            match try_acquire_torii_proxy_memory(&app) {
-                Ok(proxy_memory) => {
-                    process_incoming_torii_proxy_request(app, network, peer, request, proxy_memory)
-                        .await;
-                }
-                Err(_) => {
-                    reject_incoming_torii_proxy_request_capacity(
-                        &network,
-                        &peer,
-                        request_id,
-                        deadline_unix_ms,
-                    );
-                }
-            }
-        }
-        iroha_core::NetworkMessage::ToriiProxyResponse(response) => {
-            process_incoming_torii_proxy_response(&app, peer.id().clone(), *response).await;
-        }
-        iroha_core::NetworkMessage::QueuePlanAdmissionPublication(publication) => {
-            process_incoming_queue_plan_admission_publication(
-                &app,
-                peer.id(),
-                publication.as_ref(),
-            );
-        }
-        _ => {}
-    }
-}
+mod proxy_network_workers;
+#[cfg(feature = "connect")]
+mod proxy_response_finalization;
+#[cfg(feature = "connect")]
+mod queue_plan_publication_wait;
+
 #[cfg(feature = "connect")]
 fn attach_torii_proxy_network(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
     shutdown_signal: ShutdownSignal,
-) -> tokio::task::JoinHandle<ToriiCriticalWorkerExit> {
-    tokio::spawn(async move {
-        use iroha_p2p::network::{
-            SubscriberFilter,
-            message::{SubscriberRoute, Topic},
-        };
-        let (tx, mut rx) = tokio::sync::mpsc::channel(network.subscriber_queue_cap().get());
-        let filter =
-            SubscriberFilter::topics_for_route([Topic::Control], SubscriberRoute::ToriiProxy);
-        let mut tx = tx;
-        loop {
-            if shutdown_signal.is_sent() {
-                return ToriiCriticalWorkerExit::StoppedByShutdown;
-            }
-            match network.subscribe_to_peers_messages_with_filter(tx, filter.clone()) {
-                Ok(()) => break,
-                Err(returned) => {
-                    iroha_logger::warn!(
-                        "retrying Torii control-plane proxy subscription to the P2P bus"
-                    );
-                    tx = returned;
-                    tokio::select! {
-                        () = shutdown_signal.receive() => {
-                            return ToriiCriticalWorkerExit::StoppedByShutdown;
-                        },
-                        () = tokio::time::sleep(Duration::from_millis(50)) => {}
-                    }
-                }
-            }
-        }
-        // Responses must keep flowing while one request waits on downstream
-        // proxy I/O. A single worker matches the one complete proxy
-        // working-set slot; the one-item queue is deliberately nonblocking so
-        // a flood cannot turn response-pump liveness into unbounded tasks.
-        let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
-        let request_app = app.clone();
-        let request_network = network.clone();
-        let request_shutdown = shutdown_signal.clone();
-        let request_worker = async move {
-            loop {
-                let next = tokio::select! {
-                    () = request_shutdown.receive() => break,
-                    next = request_rx.recv() => next,
-                };
-                let Some((peer, request, proxy_memory, _p2p_memory)) = next else {
-                    break;
-                };
-                tokio::select! {
-                    () = request_shutdown.receive() => break,
-                    () = process_incoming_torii_proxy_request(
-                        request_app.clone(),
-                        request_network.clone(),
-                        peer,
-                        request,
-                        proxy_memory,
-                    ) => {}
-                }
-            }
-        };
-        tokio::pin!(request_worker);
-        let exit = loop {
-            let msg = tokio::select! {
-                biased;
-                () = shutdown_signal.receive() => {
-                    break ToriiCriticalWorkerExit::StoppedByShutdown;
-                },
-                worker_result = &mut request_worker => {
-                    let () = worker_result;
-                    if shutdown_signal.is_sent() {
-                        break ToriiCriticalWorkerExit::StoppedByShutdown;
-                    } else {
-                        iroha_logger::warn!(
-                            "Torii proxy request worker exited before network subscription"
-                        );
-                        break ToriiCriticalWorkerExit::UnexpectedExit;
-                    }
-                }
-                msg = rx.recv() => msg,
-            };
-            let Some(msg) = msg else {
-                break if shutdown_signal.is_sent() {
-                    ToriiCriticalWorkerExit::StoppedByShutdown
-                } else {
-                    ToriiCriticalWorkerExit::UnexpectedExit
-                };
-            };
-            if msg.payload.is_torii_proxy_control_message() {
-                let (peer, _authenticated_via, payload, _payload_bytes, p2p_memory) =
-                    msg.into_parts();
-                match payload {
-                    iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
-                        let request_id = request.request_id.clone();
-                        let deadline_unix_ms = request.deadline_unix_ms;
-                        let proxy_memory = match try_acquire_torii_proxy_memory(&app) {
-                            Ok(proxy_memory) => proxy_memory,
-                            Err(_) => {
-                                reject_incoming_torii_proxy_request_capacity(
-                                    &network,
-                                    &peer,
-                                    request_id,
-                                    deadline_unix_ms,
-                                );
-                                continue;
-                            }
-                        };
-                        if let Err(error) =
-                            request_tx.try_send((peer, request, proxy_memory, p2p_memory))
-                        {
-                            let (peer, request, _proxy_memory, _p2p_memory) = error.into_inner();
-                            reject_incoming_torii_proxy_request_capacity(
-                                &network,
-                                &peer,
-                                request.request_id.clone(),
-                                request.deadline_unix_ms,
-                            );
-                        }
-                    }
-                    payload => {
-                        handle_torii_proxy_network_message(
-                            app.clone(),
-                            network.clone(),
-                            peer,
-                            payload,
-                            p2p_memory,
-                        )
-                        .await;
-                    }
-                }
-            }
-        };
-        if exit == ToriiCriticalWorkerExit::UnexpectedExit {
-            // Fail closed before joining the request worker. It may currently
-            // be waiting on downstream proxy I/O and otherwise delay the
-            // supervisor from learning that the control subscription died.
-            shutdown_signal.send();
-        }
-        drop(request_tx);
-        request_worker.await;
-        exit
-    })
+) -> Result<[ToriiCriticalWorker; 3], &'static str> {
+    proxy_network_workers::start(app, network, shutdown_signal)
 }
 #[cfg(feature = "app_api")]
 fn soracloud_local_read_response(
@@ -48679,14 +48500,17 @@ impl Torii {
         }
         #[cfg(feature = "connect")]
         if !emergency_fast && let Some(network) = self.p2p.clone() {
-            critical_workers.push(ToriiCriticalWorker {
-                name: "torii_proxy_network",
-                task: attach_torii_proxy_network(
-                    app_state.clone(),
-                    network,
-                    shutdown_signal.clone(),
-                ),
-            });
+            match attach_torii_proxy_network(app_state.clone(), network, shutdown_signal.clone()) {
+                Ok(workers) => critical_workers.extend(workers),
+                Err(error) => {
+                    return Err(rollback_torii_startup_workers(
+                        &shutdown_signal,
+                        critical_workers,
+                        Report::new(Error::StartServer).attach(error),
+                    )
+                    .await);
+                }
+            }
         }
         #[cfg(feature = "push")]
         if let Some(task) = self.push.as_ref().and_then(|bridge| {

@@ -892,6 +892,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
     );
     let service = ProductionV2Services {
         context,
+        timeout_certificate_targets: frozen_semantic_targets.clone(),
         validator_set_pops,
         state,
         local_peer,
@@ -939,6 +940,282 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         clean_teardown: true,
     };
     (service, keys)
+}
+
+#[test]
+fn timeout_certificate_target_freeze_requires_exact_preceding_state() {
+    let (service, _) = fixture();
+    let expected = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<BTreeSet<_>>();
+    let targets = ProductionV2Services::freeze_timeout_certificate_targets(
+        service.state.as_ref(),
+        &service.context,
+        None,
+    )
+    .expect("fresh global-only State has exact preceding height");
+    assert_eq!(targets.into_iter().collect::<BTreeSet<_>>(), expected);
+    let mut wrong_context = service.context.clone();
+    wrong_context.height += 1;
+    assert!(
+        ProductionV2Services::freeze_timeout_certificate_targets(
+            service.state.as_ref(),
+            &wrong_context,
+            None,
+        )
+        .is_err(),
+        "an undecided context cannot use an older authority prefix"
+    );
+}
+
+#[test]
+fn timeout_certificate_target_freeze_does_not_reinterpret_post_apply_state() {
+    let (service, _) = fixture();
+    let mut hashes = service.state.block_hashes.block();
+    hashes.push_for_tests(HashOf::from_untyped_unchecked(Hash::new(
+        b"test applied prefix",
+    )));
+    hashes.commit_for_tests();
+    assert!(
+        ProductionV2Services::freeze_timeout_certificate_targets(
+            service.state.as_ref(),
+            &service.context,
+            None,
+        )
+        .is_err(),
+        "an undecided owner cannot derive an old audience after State advanced"
+    );
+    let targets = ProductionV2Services::freeze_timeout_certificate_targets(
+        service.state.as_ref(),
+        &service.context,
+        Some(locked_candidate_subject(
+            b"terminal timeout recipient fixture",
+        )),
+    )
+    .expect("durable Decision recovery needs no mutable lane audience");
+    assert_eq!(targets, service.timeout_certificate_targets);
+}
+
+fn timeout_delivery_state_fixture(participants_per_lane: u8) -> (State, Vec<PeerId>) {
+    use iroha_data_model::{
+        account::AccountId,
+        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+        nexus::{
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+            PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        },
+    };
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut lanes = vec![LaneConfig::default()];
+    let mut dataspaces = vec![DataSpaceMetadata::default()];
+    for ordinal in 1..=3_u32 {
+        lanes.push(LaneConfig {
+            id: LaneId::new(ordinal),
+            dataspace_id: DataSpaceId::new(u64::from(ordinal)),
+            alias: format!("timeout-participant-{ordinal}"),
+            ..LaneConfig::default()
+        });
+        dataspaces.push(DataSpaceMetadata {
+            id: DataSpaceId::new(u64::from(ordinal)),
+            alias: format!("timeout-space-{ordinal}"),
+            description: None,
+            fault_tolerance: 1,
+        });
+    }
+    nexus.lane_catalog = LaneCatalog::new(std::num::NonZeroU32::new(4).unwrap(), lanes)
+        .expect("four disjoint timeout delivery lanes");
+    nexus.dataspace_catalog = DataSpaceCatalog::new(dataspaces).expect("four dataspaces");
+    let stake = nexus.staking.min_validator_stake.clone();
+    let state =
+        State::new_with_nexus_for_testing(World::default(), nexus, LiveQueryStore::start_test());
+    let mut peers = Vec::new();
+    assert!(matches!(participants_per_lane, 0 | 4 | 5));
+    if participants_per_lane != 0 {
+        let mut world = state.world.block();
+        for ordinal in 0..3 * participants_per_lane {
+            let key = KeyPair::try_from_seed(vec![0xC0 + ordinal; 32], Algorithm::BlsNormal)
+                .expect("fresh deterministic participant key");
+            let peer = PeerId::new(key.public_key().clone());
+            let validator = AccountId::new(key.public_key().clone());
+            let lane = LaneId::new(1 + u32::from(ordinal / participants_per_lane));
+            let id = crate::state::derive_committee_key_id(key.public_key());
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("real participant PoP"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            let _ = world.peers.push(peer.clone());
+            world.consensus_keys.insert(id.clone(), record);
+            world
+                .consensus_keys_by_pk
+                .insert(key.public_key().to_string(), vec![id]);
+            world.public_lane_validators.insert(
+                (lane, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: lane,
+                    validator: validator.clone(),
+                    peer_id: peer.clone(),
+                    stake_account: validator,
+                    total_stake: stake.clone(),
+                    self_stake: stake.clone(),
+                    metadata: Default::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_height: 1,
+                    deactivation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            peers.push(peer);
+        }
+        world.commit();
+    }
+    (state, peers)
+}
+
+#[test]
+fn timeout_certificate_target_freeze_keeps_global_progress_for_unused_lanes() {
+    use crate::state::StateReadOnly as _;
+    let (service, _) = fixture();
+    let (state, _) = timeout_delivery_state_fixture(0);
+    let view = state.view();
+    for ordinal in 1..=3_u32 {
+        assert!(matches!(
+            view.resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(
+                    LaneId::new(ordinal),
+                    DataSpaceId::new(u64::from(ordinal))
+                ),
+                service.context.height,
+            ),
+            Err(crate::state::LaneAuthorityError::UndersizedPool { actual: 0, .. })
+        ));
+    }
+    drop(view);
+    assert_eq!(
+        ProductionV2Services::freeze_timeout_certificate_targets(&state, &service.context, None,)
+            .expect("unused optional lanes do not block global TC delivery"),
+        service.timeout_certificate_targets
+    );
+}
+
+#[test]
+fn timeout_certificate_target_freeze_keeps_global_progress_before_selection_entropy() {
+    use crate::state::{StateReadOnly as _, WorldReadOnly as _};
+    let (service, _) = fixture();
+    let (state, participants) = timeout_delivery_state_fixture(5);
+    assert_eq!(participants.len(), 15);
+    let view = state.view();
+    assert!(
+        view.world()
+            .global_beacon_latest_pulse()
+            .iter()
+            .next()
+            .is_none()
+    );
+    assert!(view.world().global_beacon_pulses().iter().next().is_none());
+    for ordinal in 1..=3_u32 {
+        let lane_id = LaneId::new(ordinal);
+        let dataspace_id = DataSpaceId::new(u64::from(ordinal));
+        assert_eq!(
+            view.resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+                service.context.height,
+            ),
+            Err(
+                crate::state::LaneAuthorityError::SelectionEntropyUnavailable {
+                    lane_id,
+                    dataspace_id,
+                    authority_height: service.context.height,
+                }
+            )
+        );
+    }
+    drop(view);
+    assert_eq!(
+        ProductionV2Services::freeze_timeout_certificate_targets(&state, &service.context, None,)
+            .expect("pending optional selection must allow global beacon initialization"),
+        service.timeout_certificate_targets
+    );
+
+    // A noncanonical cursor key is malformed authority, not empty initialization.
+    let mut world = state.world.block();
+    world.global_beacon_latest_pulse.insert(
+        crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY + 1,
+        crate::beacon::GlobalThresholdBeaconPulseLinkV1 {
+            pulse_id: [0xA1; 32],
+            seed: [0xB2; 32],
+            height: 0,
+            round: 0,
+        },
+    );
+    world.commit();
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(LaneId::new(1), DataSpaceId::new(1)),
+            service.context.height,
+        ),
+        Err(crate::state::LaneAuthorityError::InvalidAuthoritySource { .. })
+    ));
+    assert!(
+        ProductionV2Services::freeze_timeout_certificate_targets(&state, &service.context, None,)
+            .is_err(),
+        "nonempty malformed beacon state must not be skipped"
+    );
+}
+
+#[test]
+fn timeout_certificate_target_freeze_resolves_three_disjoint_state_committees() {
+    use crate::state::StateReadOnly as _;
+    let (service, _) = fixture();
+    let (state, participants) = timeout_delivery_state_fixture(4);
+    let expected = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .chain(participants.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(expected.len(), 16);
+    let view = state.view();
+    for ordinal in 1..=3_u32 {
+        let committee = view
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(
+                    LaneId::new(ordinal),
+                    DataSpaceId::new(u64::from(ordinal)),
+                ),
+                service.context.height,
+            )
+            .expect("exact current-height participant authority");
+        let offset = (ordinal as usize - 1) * 4;
+        assert_eq!(
+            committee
+                .validators()
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            participants[offset..offset + 4]
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        );
+    }
+    drop(view);
+    let targets =
+        ProductionV2Services::freeze_timeout_certificate_targets(&state, &service.context, None)
+            .expect("freeze all three exact disjoint State committees");
+    assert!(targets.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(targets.into_iter().collect::<BTreeSet<_>>(), expected);
 }
 
 fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
@@ -1266,4 +1543,191 @@ fn certified_sidecar_close(
     };
     close.close_id = close.canonical_close_id();
     CertifiedMergeSidecarMessage::Close(close)
+}
+
+fn start_timeout_delivery_constructor_for_test(
+    template: &ProductionV2Services,
+    state: Arc<State>,
+    body_directory: &std::path::Path,
+    decided: Option<wire::BlockSubject>,
+) -> Result<ProductionV2Services, String> {
+    let mut context = template.context.clone();
+    context.network_id = state.network_id;
+    context.kagemusha_mint_finality_epoch_roster = fixture_kagemusha_mint_finality_roster(
+        context.network_id,
+        context.epoch,
+        &context.roster,
+        0xA0,
+    );
+    context.kagemusha_mint_finality_epoch_id = context
+        .kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .expect("constructor fixture finality epoch");
+    context.validate().expect("constructor fixture context");
+    let tag = EventTag::new(context.height, 0, Generation::new(context.height));
+    let body_store =
+        V2BodyStore::open(body_directory, context.clone()).expect("constructor fixture body store");
+    let kura = state.kura_handle();
+    assert!(state.matches_kura_instance(&kura));
+    let advert = Arc::new(
+        KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
+            .expect("constructor fixture exact Kura advert"),
+    );
+    let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+    let queue = Arc::new(crate::queue::Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events_sender.clone(),
+    ));
+    let recovery =
+        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            context.id(),
+            context.height,
+            [0xF4; 32],
+            tag.view(),
+            decided.is_some(),
+        );
+    let (handoff, _) = durable_exact_output_handoff_owner_pair();
+    ProductionV2Services::start(
+        context,
+        tag,
+        decided,
+        template.validator_set_pops.clone(),
+        template.local_peer.clone(),
+        template.local_validator,
+        template.key_pair.clone(),
+        crate::IrohaNetwork::closed_for_tests(),
+        body_store,
+        state,
+        queue,
+        kura,
+        None,
+        None,
+        Duration::from_secs(1),
+        iroha_data_model::account::AccountId::new(template.key_pair.public_key().clone()),
+        events_sender,
+        128,
+        128,
+        1,
+        ConsensusOutputGuard::isolated(),
+        Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0)),
+        advert,
+        recovery,
+        handoff,
+    )
+}
+
+#[test]
+fn timeout_certificate_constructor_freezes_preceding_state_committees() {
+    let (template, _) = fixture();
+    let (state, participants) = timeout_delivery_state_fixture(4);
+    let expected = template
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .chain(participants)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(expected.len(), 16);
+    let directory = TempDir::new().expect("constructor body directory");
+    let mut service = start_timeout_delivery_constructor_for_test(
+        &template,
+        Arc::new(state),
+        directory.path(),
+        None,
+    )
+    .expect("actual constructor accepts exact preceding State");
+    let actual = service
+        .timeout_certificate_targets
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let has_io = service.io.is_some();
+    let max_peers = service
+        .pending_exact_output
+        .lock()
+        .expect("output corridor lock")
+        .max_peers_per_fanout;
+    service
+        .io
+        .take()
+        .expect("constructor must start its I/O owner")
+        .shutdown()
+        .expect("physically join constructor I/O worker");
+    service.clean_teardown = true;
+    assert!(has_io);
+    assert_eq!(actual, expected);
+    assert!(max_peers >= expected.len());
+}
+
+#[test]
+fn timeout_certificate_constructor_rejects_wrong_prefix_and_recovers_decided() {
+    let (template, _) = fixture();
+    let (state, _) = timeout_delivery_state_fixture(4);
+    let mut hashes = state.block_hashes.block();
+    hashes.push_for_tests(HashOf::from_untyped_unchecked(Hash::new(
+        b"constructor applied prefix",
+    )));
+    hashes.commit_for_tests();
+    let state = Arc::new(state);
+    let rejected_directory = TempDir::new().expect("rejected constructor body directory");
+    let error = match start_timeout_delivery_constructor_for_test(
+        &template,
+        Arc::clone(&state),
+        rejected_directory.path(),
+        None,
+    ) {
+        Err(error) => error,
+        Ok(mut service) => {
+            service
+                .io
+                .take()
+                .expect("unexpected constructor I/O owner")
+                .shutdown()
+                .expect("join unexpected constructor I/O worker");
+            service.clean_teardown = true;
+            panic!("undecided constructor accepted post-Apply State");
+        }
+    };
+    assert_eq!(
+        error,
+        "Sumeragi v2 timeout delivery requires the exact preceding State height"
+    );
+    // Reopening checks retained store validity after rejection. It is not a
+    // worker-spawn probe; source ordering puts this error before I/O spawn.
+    let mut context = template.context.clone();
+    context.network_id = state.network_id;
+    context.kagemusha_mint_finality_epoch_roster = fixture_kagemusha_mint_finality_roster(
+        context.network_id,
+        context.epoch,
+        &context.roster,
+        0xA0,
+    );
+    context.kagemusha_mint_finality_epoch_id = context
+        .kagemusha_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .expect("reopened constructor fixture finality epoch");
+    drop(
+        V2BodyStore::open(rejected_directory.path(), context)
+            .expect("rejected body store remains valid"),
+    );
+
+    let recovered_directory = TempDir::new().expect("decided constructor body directory");
+    let mut recovered = start_timeout_delivery_constructor_for_test(
+        &template,
+        state,
+        recovered_directory.path(),
+        Some(locked_candidate_subject(
+            b"constructor durable Decision fixture",
+        )),
+    )
+    .expect("durable Decision constructor does not reinterpret post-Apply lanes");
+    let actual = recovered.timeout_certificate_targets.clone();
+    recovered
+        .io
+        .take()
+        .expect("recovered constructor I/O owner")
+        .shutdown()
+        .expect("physically join recovered constructor I/O worker");
+    recovered.clean_teardown = true;
+    assert_eq!(actual, template.timeout_certificate_targets);
 }

@@ -241,16 +241,19 @@ fn cancel_lock_strict_fields_and_quantities_survive_extraction() {
 }
 
 #[test]
-fn register_account_defaults_remain_valid_but_unknown_envelopes_do_not() {
+fn register_account_requires_complete_fields_and_rejects_unknown_envelopes() {
     let account_json = json::to_value(&NewAccount::new(account())).expect("new account JSON");
-    let defaults = object([(
-        "Register",
-        object([(
-            "Account",
-            object([("id", account_json.get("id").expect("account id").clone())]),
-        )]),
-    )]);
-    encode_instruction_frame(&text(&defaults)).expect("optional account defaults");
+    let canonical = object([("Register", object([("Account", account_json.clone())]))]);
+    encode_instruction_frame(&text(&canonical)).expect("complete canonical account");
+    for field in ["id", "metadata", "label", "uaid", "opaque_ids"] {
+        let mut incomplete = account_json.clone();
+        incomplete
+            .as_object_mut()
+            .expect("account object")
+            .remove(field)
+            .expect("required canonical field");
+        assert_strict_rejection(&object([("Register", object([("Account", incomplete)]))]));
+    }
     let mut unknown = account_json.clone();
     unknown
         .as_object_mut()

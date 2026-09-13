@@ -1,8 +1,9 @@
 # Generated instruction-box frame capture
 
-Captured on 2026-09-07 with the pinned workspace compiler, before adding any
-`isi_box!` schema declaration or generator identity derive. The fixture is
-immutable preparation evidence; active codecs have not been cut over.
+The current first-release capture contains all generated instruction-box variants.
+The atomic settlement variant was captured on 2026-09-12 with the compiled native
+codec and all five framing contexts plus the canonical instruction JSON carrier.
+The six other settlement variants reproduced their prior bytes exactly.
 
 The one-time unit capture first obtained actual compiler names and both codec
 hashes. Existing instruction roundtrip values supplied populated variant
@@ -28,9 +29,9 @@ writer, inferred-name fallback or alternative accepted codec identity remains.
 ## Fixture
 
 - File: `instruction_box_generated_identity_frames.json`
-- SHA-256: `3932d6207469add1b3cdf1d8282fe860d488cb5d7c843b36a6bf0e3928b10418`
-- Size: 156,306 bytes.
-- Coverage: 12 types, 68 distinct variants, 340 complete frames, 68 JSON carriers.
+- SHA-256: `a7df2e9bb1eb2726cb40e991c206c6fe43faffe0c756160ed964335d2d6c21df`
+- Size: 165,840 bytes.
+- Coverage: 12 types, 69 distinct variants, 345 complete frames, 69 JSON carriers.
 
 | Type | Variants |
 | --- | ---: |
@@ -44,7 +45,7 @@ writer, inferred-name fallback or alternative accepted codec identity remains.
 | `iroha_data_model::isi::register::RegisterBox` | 7 |
 | `iroha_data_model::isi::register::UnregisterBox` | 7 |
 | `iroha_data_model::isi::rwa::RwaInstructionBox` | 12 |
-| `iroha_data_model::isi::settlement::SettlementInstructionBox` | 6 |
+| `iroha_data_model::isi::settlement::SettlementInstructionBox` | 7 |
 | `iroha_data_model::isi::transfer::TransferBox` | 4 |
 
 ## Before-declaration sources

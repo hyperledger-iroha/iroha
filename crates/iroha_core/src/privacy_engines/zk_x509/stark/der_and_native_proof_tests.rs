@@ -44,6 +44,7 @@ fn canonical_multiproof_matches_small_trees_and_rejects_every_frontier_mutation(
         })
         .collect::<Vec<_>>();
     let tree = GoldilocksMerkleTreeV1::from_leaves(
+        fastpq_prover::DigestExecutionV1::Cpu,
         leaves.clone(),
         ZK_X509_DIGEST_CONTEXT_V1,
         b"iroha:privacy:zk-x509:test:multiproof-node:v1",

@@ -16,7 +16,7 @@ use crate::privacy_engines::{
         PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1, PROOF_MANAGED_NOTE_COMPOSITION_DEGREE_CHUNKS_V1,
         PROOF_MANAGED_NOTE_QUERY_COUNT_V1, PROOF_MANAGED_NOTE_SECURITY_LANES_V1,
         PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1, PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1,
-        ProofManagedNoteStarkAdapterV1, ProofManagedNoteStarkErrorV1,
+        ProofManagedNoteCandidateV1, ProofManagedNoteStarkAdapterV1, ProofManagedNoteStarkErrorV1,
         ProofManagedNoteStarkProtocolV1, prove_proof_managed_note_stark_v1_with_rng,
         verify_proof_managed_note_stark_v1,
     },
@@ -243,16 +243,19 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
 }
 
 pub(crate) fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRngCore>(
+    options: super::facade::AtomicPrivateSettlementProverOptionsV1,
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
     current_height: u64,
     compiled: &CompiledAtomicPrivateSettlementRelationV1,
     rng: &mut R,
-) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
+) -> Result<ProofManagedNoteCandidateV1, ProofManagedNoteStarkErrorV1> {
     let relation = PrivateNoteStarkRelationV1::new(&compiled.internal_statement, compiled.profile);
     let base_columns = relation.compile_prover_columns_v1(&compiled.witness)?;
     prove_proof_managed_note_stark_v1_with_rng(
+        options.commitment_digest_execution,
+        options.nonce_digest_execution,
         &AtomicPrivateSettlementStarkAdapterV1::new(
             manifest,
             statement,
@@ -288,6 +291,28 @@ pub(crate) fn verify_atomic_private_settlement_stark_v1(
         ),
         proof,
     )
+}
+
+/// Independently reconstruct the public adapter and consume one unverified candidate.
+pub(crate) fn verify_constructed_atomic_private_settlement_stark_v1(
+    manifest: &AtomicPrivateSettlementV1,
+    statement: &PrivateSettlementProofStatementV1,
+    canonical_genesis_hash: [u8; 32],
+    current_height: u64,
+    candidate: ProofManagedNoteCandidateV1,
+) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
+    let internal_statement = internal_statement_v1(manifest, statement)
+        .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+    let profile = relation_profile_v1(manifest, statement)
+        .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+    candidate.verify_into_bytes_v1(&AtomicPrivateSettlementStarkAdapterV1::new(
+        manifest,
+        statement,
+        &internal_statement,
+        canonical_genesis_hash,
+        current_height,
+        profile,
+    ))
 }
 
 #[cfg(test)]

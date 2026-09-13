@@ -1062,19 +1062,26 @@ fn queue_plan_admission_publication_targets_every_live_successor_except_self() {
 #[test]
 fn queue_plan_admission_publication_validates_and_persists_idempotently() {
     let signers = (0_u8..4)
-        .map(|offset| checked_torii_test_keypair_from_seed_byte(
-            0xb0_u8.wrapping_add(offset), Algorithm::BlsNormal,
-            "derive publication durability-quorum validator key",
-        ))
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xb0_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive publication durability-quorum validator key",
+            )
+        })
         .collect::<Vec<_>>();
     let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
-        0xb0, ToriiProxyTransactionAdmissionV1::QueuePlanSynced, &signers,
+        0xb0,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
     );
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
         .expect("publication fixture expectation must validate")
         .expect("publication fixture must use strict admission");
     assert_eq!(expected.durability_threshold, 2);
-    let receipts = signers.iter().take(expected.durability_threshold)
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
         .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_001))
         .collect();
     let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
@@ -1082,11 +1089,6 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
         schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
         certificate: snapshot.body,
     };
-    assert_eq!(
-        super::validate_queue_plan_admission_publication(&app, &publication)
-            .expect("certified publication must validate against local state"),
-        expected.admission_binding
-    );
     let first = super::ingest_queue_plan_admission_publication(&app, &publication)
         .expect("first certified publication must persist");
     let second = super::ingest_queue_plan_admission_publication(&app, &publication)
@@ -1105,71 +1107,266 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
         panic!("an absent registry must retain the exact durable certificate");
     };
     assert_eq!(first_hash, second_hash);
+    let retained = app
+        .kura
+        .pending_queue_plan_admission_certificate(first_hash)
+        .expect("read the exact durable publication")
+        .expect("durable publication exists");
+    assert_eq!(retained, publication.certificate);
+    assert_eq!(
+        iroha_core::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+            app.state.network_id_ref(),
+            &retained,
+        )
+        .expect("validate the certificate actually retained by State")
+        .certificate
+        .binding,
+        expected.admission_binding,
+        "the retained certificate has the exact ingress binding",
+    );
     let mut unsupported = publication;
     unsupported.schema_version = unsupported.schema_version.saturating_add(1);
     assert!(
-        super::validate_queue_plan_admission_publication(&app, &unsupported)
+        super::ingest_queue_plan_admission_publication(&app, &unsupported)
             .expect_err("unsupported publication schema must fail")
             .contains("schema_version")
     );
 }
 #[cfg(feature = "connect")]
-#[test]
-fn queue_plan_admission_publication_retains_future_until_catch_up() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn strict_proxy_finalization_keeps_w_through_actual_durable_admission() {
     let signers = (0_u8..4)
-        .map(|offset| checked_torii_test_keypair_from_seed_byte(
-            0xb1_u8.wrapping_add(offset), Algorithm::BlsNormal,
-            "derive future-publication durability-quorum validator key",
-        ))
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xc8_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive owned-finalization fixture key",
+            )
+        })
         .collect::<Vec<_>>();
-    let (app, mut request) = incoming_proxy_submit_fixture_with_validator_signers(
-        0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced, &signers,
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xc8,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
     );
-    let state_height = u64::try_from(app.state.committed_height()).unwrap();
-    let future_height = state_height.checked_add(1).unwrap();
-    let future_header = BlockHeader::new(
-        NonZeroU64::new(future_height).unwrap(), None, None, None, 0, 0,
-    );
-    move_queue_plan_synced_test_binding_to_future(&mut request, future_height, future_header.hash());
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
-        .expect("future publication fixture expectation must validate")
-        .expect("future publication requires strict admission");
-    assert_eq!(expected.durability_threshold, 2);
-    let receipts = signers.iter().take(expected.durability_threshold)
-        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_002))
+        .expect("exact request")
+        .expect("strict admission");
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_004))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
+    let hash = Hash::new(&snapshot.body);
+    let reservation = super::try_acquire_torii_proxy_memory(&app).expect("reserve the only W slot");
+    let intermediate = super::hold_torii_proxy_memory_in_response_body(
+        super::torii_proxy_snapshot_to_response(snapshot),
+        reservation.clone(),
+    );
+    let response =
+        super::proxy_response_finalization::complete(intermediate, reservation, |response| async {
+            let response = super::persist_queue_plan_admission_certificate(
+                &app,
+                response,
+                &expected.admission_binding,
+                super::queue_plan_publication_wait::PersistenceDeadline::new(
+                    Instant::now(),
+                    request.deadline_unix_ms,
+                ),
+            )
+            .await;
+            assert_eq!(
+                app.torii_proxy_memory_inflight.available_permits(),
+                0,
+                "W remains owned after body extraction, durable persistence and publication"
+            );
+            assert!(
+                app.kura
+                    .pending_queue_plan_admission_certificate(hash)
+                    .expect("read durable certificate before returning a receipt")
+                    .is_some()
+            );
+            response
+        })
+        .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+    drop(response);
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
+}
+
+#[cfg(feature = "connect")]
+#[test]
+fn queue_plan_publication_ingest_requires_configured_certified_receiver() {
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xc0_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive certified receiver fixture key",
+            )
+        })
         .collect::<Vec<_>>();
-    let incomplete = QueuePlanAdmissionPublicationV1 {
-        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
-        certificate: queue_plan_synced_test_certificate_snapshot(&request, receipts[..1].to_vec()).body,
-    };
-    assert!(super::ingest_queue_plan_admission_publication(&app, &incomplete)
-        .expect_err("one attestation must not authorize a four-validator publication")
-        .contains("exact durability quorum"));
-    assert_eq!(app.kura.pending_queue_plan_admission_certificate(Hash::new(&incomplete.certificate))
-        .expect("inspect rejected incomplete publication"), None);
+    let (mut app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xc0,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .expect("exact request")
+        .expect("strict admission");
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_003))
+        .collect();
     let publication = QueuePlanAdmissionPublicationV1 {
         schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
         certificate: queue_plan_synced_test_certificate_snapshot(&request, receipts).body,
     };
-    assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, future_height)
-        .expect("classifiable future certificate").1,
+    let original_receiver = app
+        .local_peer_id
+        .clone()
+        .expect("configured certified receiver");
+    let outsider = PeerId::new(
+        checked_torii_test_ed25519_keypair(0xef, "derive outsider publication receiver")
+            .public_key()
+            .clone(),
+    );
+    for receiver in [None, Some(outsider)] {
+        Arc::get_mut(&mut app)
+            .expect("unique fixture app")
+            .local_peer_id = receiver.clone();
+        let error = super::ingest_queue_plan_admission_publication(&app, &publication)
+            .expect_err("missing or uncertified publication receiver");
+        assert!(error.contains(if receiver.is_none() {
+            "no configured peer identity"
+        } else {
+            "not in the certified coordinator roster"
+        }));
+        assert!(
+            app.kura
+                .pending_queue_plan_admission_certificate(Hash::new(&publication.certificate))
+                .expect("inspect rejected publication")
+                .is_none()
+        );
+    }
+    Arc::get_mut(&mut app)
+        .expect("unique fixture app")
+        .local_peer_id = Some(original_receiver);
+    assert!(matches!(
+        super::ingest_queue_plan_admission_publication(&app, &publication)
+            .expect("certified receiver can persist the exact same publication"),
+        QueuePlanAdmissionPublicationIngestOutcome::Durable { .. }
+    ));
+}
+
+#[cfg(feature = "connect")]
+#[test]
+fn queue_plan_admission_publication_retains_future_until_catch_up() {
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xb1_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive future-publication durability-quorum validator key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, mut request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xb1,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    let state_height = u64::try_from(app.state.committed_height()).unwrap();
+    let future_height = state_height.checked_add(1).unwrap();
+    let future_header = BlockHeader::new(
+        NonZeroU64::new(future_height).unwrap(),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    move_queue_plan_synced_test_binding_to_future(
+        &mut request,
+        future_height,
+        future_header.hash(),
+    );
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .expect("future publication fixture expectation must validate")
+        .expect("future publication requires strict admission");
+    assert_eq!(expected.durability_threshold, 2);
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_002))
+        .collect::<Vec<_>>();
+    let incomplete = QueuePlanAdmissionPublicationV1 {
+        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+        certificate: queue_plan_synced_test_certificate_snapshot(&request, receipts[..1].to_vec())
+            .body,
+    };
+    assert!(
+        super::ingest_queue_plan_admission_publication(&app, &incomplete)
+            .expect_err("one attestation must not authorize a four-validator publication")
+            .contains("exact durability quorum")
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(Hash::new(&incomplete.certificate))
+            .expect("inspect rejected incomplete publication"),
+        None
+    );
+    let publication = QueuePlanAdmissionPublicationV1 {
+        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+        certificate: queue_plan_synced_test_certificate_snapshot(&request, receipts).body,
+    };
+    assert_eq!(
+        app.state
+            .classify_pending_queue_plan_admission(&publication.certificate, future_height)
+            .expect("classifiable future certificate")
+            .1,
         PendingQueuePlanAdmissionDisposition::Future {
-            authority_height: future_height, proposal_height: future_height + 1,
-            state_height, carrier_height: future_height,
-        });
+            authority_height: future_height,
+            proposal_height: future_height + 1,
+            state_height,
+            carrier_height: future_height,
+        }
+    );
     let hash = Hash::new(&publication.certificate);
-    assert!(matches!(super::ingest_queue_plan_admission_publication(&app, &publication)
+    assert!(
+        matches!(super::ingest_queue_plan_admission_publication(&app, &publication)
         .expect("authenticated future publication must be durable"),
-        QueuePlanAdmissionPublicationIngestOutcome::Durable { certificate_hash, .. } if certificate_hash == hash));
-    assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect Kura"),
-        Some(publication.certificate.clone()));
-    assert_eq!(app.queue.active_len(), 0, "future publication must not acquire transaction ownership");
-    app.state.append_committed_block_header_for_tests(future_header);
-    assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, future_height + 1)
-        .expect("publication is reclassifiable after the canonical frontier arrives").1,
-        PendingQueuePlanAdmissionDisposition::EligibleAbsent);
-    assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect retained publication"),
-        Some(publication.certificate));
+        QueuePlanAdmissionPublicationIngestOutcome::Durable { certificate_hash, .. } if certificate_hash == hash)
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(hash)
+            .expect("inspect Kura"),
+        Some(publication.certificate.clone())
+    );
+    assert_eq!(
+        app.queue.active_len(),
+        0,
+        "future publication must not acquire transaction ownership"
+    );
+    app.state
+        .append_committed_block_header_for_tests(future_header);
+    assert_eq!(
+        app.state
+            .classify_pending_queue_plan_admission(&publication.certificate, future_height + 1)
+            .expect("publication is reclassifiable after the canonical frontier arrives")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(hash)
+            .expect("inspect retained publication"),
+        Some(publication.certificate)
+    );
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
@@ -2657,10 +2854,22 @@ fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
     );
 }
 #[cfg(feature = "connect")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_plan_quorum_is_accepted_before_registry_application() {
-    let (app, request) =
-        incoming_proxy_submit_fixture(0xde, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xde_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive unapplied durable-admission fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xde,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
         .expect("durable-acceptance fixture must be valid")
         .expect("durable-acceptance fixture must require QueuePlan admission");
@@ -2671,14 +2880,25 @@ async fn queue_plan_quorum_is_accepted_before_registry_application() {
         QueuePlanAdmissionRegistryMatch::Absent,
         "the fixture must prove acceptance before block application"
     );
-    let receipt =
-        exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_003);
-    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]);
+    assert_eq!(
+        expected.durability_threshold, 2,
+        "four validators require f+1 durability votes"
+    );
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_003))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
     let certificate_hash = Hash::new(&snapshot.body);
     let response = super::persist_queue_plan_admission_certificate(
         &app,
         super::torii_proxy_snapshot_to_response(snapshot.clone()),
         &expected.admission_binding,
+        super::queue_plan_publication_wait::PersistenceDeadline::new(
+            Instant::now(),
+            request.deadline_unix_ms,
+        ),
     );
     let response = response.await;
     assert_eq!(
@@ -3787,4 +4007,226 @@ async fn queue_plan_synced_attempt_window_is_parallel_bounded_and_released_at_qu
         norito::decode_from_bytes(&torii_body_bytes(response, "bounded-window quorum").await)
             .unwrap();
     assert_eq!(certificate.attestations.len(), 3);
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn strict_proxy_admission_retains_w_across_delayed_state_publication() {
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xe4_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive delayed-publication fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xe4,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    assert_eq!(app.state.committed_height(), 0);
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .unwrap()
+        .unwrap();
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_005))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
+    let exact_bytes = snapshot.body.clone();
+    let hash = Hash::new(&exact_bytes);
+    let successor = make_empty_signed_block(1, None, 1_700_000_000_000);
+    let successor_header = successor.header().clone();
+    app.kura.store_block(Arc::new(successor)).unwrap();
+    let memory = super::try_acquire_torii_proxy_memory(&app).unwrap();
+    let deadline = super::queue_plan_publication_wait::PersistenceDeadline::new(
+        Instant::now(),
+        request.deadline_unix_ms,
+    );
+    let observed_wait_height = deadline.observed_wait_height.clone();
+    let work_app = app.clone();
+    let work = tokio::spawn(async move {
+        super::proxy_response_finalization::complete(
+            super::torii_proxy_snapshot_to_response(snapshot),
+            memory,
+            |response| async move {
+                super::persist_queue_plan_admission_certificate(
+                    &work_app,
+                    response,
+                    &expected.admission_binding,
+                    deadline,
+                )
+                .await
+            },
+        )
+        .await
+    });
+    // Acknowledge the real typed overlap before delaying publication. Merely
+    // spawning a task and sleeping would not prove it reached persistence.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while observed_wait_height.load(std::sync::atomic::Ordering::Acquire) == 0 {
+            assert!(
+                !work.is_finished(),
+                "admission returned before waiting for State"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        observed_wait_height.load(std::sync::atomic::Ordering::Acquire),
+        1
+    );
+    // Deliberately exceed the synchronous frontier reconciliation interval.
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    assert!(
+        !work.is_finished(),
+        "the original request must survive a publication gap over 250 ms"
+    );
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(hash)
+            .unwrap(),
+        None
+    );
+    app.state
+        .append_committed_block_header_for_tests(successor_header);
+    let response = tokio::time::timeout(Duration::from_secs(10), work)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(hash)
+            .unwrap(),
+        Some(exact_bytes)
+    );
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+    drop(response);
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn late_physical_admission_preserves_durability_and_reports_reconciliation() {
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xec_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive late-physical-admission fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xec,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .unwrap()
+        .unwrap();
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_006))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
+    let hash = Hash::new(&snapshot.body);
+    let exact = snapshot.body.clone();
+    let expected_entrypoint = expected.admission_binding.entrypoint_hash.to_string();
+    let expected_transaction = expected
+        .admission_binding
+        .signed_transaction_hash
+        .as_ref()
+        .map(ToString::to_string);
+    let deadline = super::queue_plan_publication_wait::PersistenceDeadline::new(
+        Instant::now() - (super::TORII_PROXY_EXECUTION_BUDGET - Duration::from_millis(500)),
+        request.deadline_unix_ms,
+    );
+    assert!(deadline.remaining().is_ok());
+    let memory = super::try_acquire_torii_proxy_memory(&app).unwrap();
+    let work_app = app.clone();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let work = tokio::spawn(async move {
+        super::proxy_response_finalization::complete(
+            Response::new(Body::empty()),
+            memory,
+            |_| async move {
+                tokio::task::block_in_place(|| {
+                    work_app
+                        .state
+                        .persist_classified_queue_plan_admission(
+                            &snapshot.body,
+                            iroha_core::state::QueuePlanAdmissionPersistenceScope::Admission,
+                        )
+                        .expect("real physical admission must become durable");
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                });
+                // This is the production post-persistence response boundary, after
+                // the required durable work; elapsed time must not become a fresh 202.
+                super::queue_plan_completed_admission_response(
+                    snapshot,
+                    &expected.admission_binding,
+                    &deadline,
+                )
+            },
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(hash)
+            .unwrap(),
+        Some(exact.clone())
+    );
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+    release_tx.send(()).unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(5), work)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+    assert_eq!(
+        envelope.code(),
+        super::QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE
+    );
+    assert!(envelope.message().contains("reconcile"));
+    let details = envelope
+        .details
+        .expect("reconciliation retains exact transaction identities");
+    assert_eq!(details.entrypoint_hash, Some(expected_entrypoint));
+    assert_eq!(details.tx_hash, expected_transaction);
+    assert_eq!(
+        details.reject_code.as_deref(),
+        Some(super::QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
+    );
+    assert!(
+        details.queue.is_none(),
+        "distributed ambiguity cannot fabricate local queue telemetry"
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(hash)
+            .unwrap(),
+        Some(exact)
+    );
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
 }

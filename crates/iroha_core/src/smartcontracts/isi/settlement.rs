@@ -1,5 +1,6 @@
-//! Host execution for bilateral settlements and owner-funded native FX corridors.
+//! Host execution for exact-consent atomic payments, bilateral settlements and native FX corridors.
 use super::*;
+mod atomic;
 use crate::smartcontracts::isi::asset::isi::{
     assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
     validate_authorized_numeric_asset_pair, validate_native_fx_numeric_asset_pair,
@@ -8,8 +9,11 @@ use crate::smartcontracts::isi::asset::isi::{
 use crate::smartcontracts::isi::error::MathError;
 #[cfg(feature = "telemetry")]
 use crate::sumeragi::status::SettlementOutcomeKind;
+pub(in crate::smartcontracts::isi) use atomic::VerifiedSettlementNumericBatch;
+pub(crate) use atomic::admission_validate_atomic;
 #[cfg(any(feature = "telemetry", test))]
 use iroha_data_model::isi::error::{AssetTransferAdmissionError, InstructionEvaluationError};
+use iroha_data_model::isi::{ResolvedSettlementMovement, SettlementDetails};
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
     events::data::prelude::{ConfigurationEvent, ParameterChanged},
@@ -79,6 +83,7 @@ impl Execute for SettlementInstructionBox {
         match self {
             SettlementInstructionBox::Dvp(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::Pvp(isi) => isi.execute(authority, stx),
+            SettlementInstructionBox::Atomic(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::SetFxCorridorPolicy(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::FundFxCorridorEscrow(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::RefundFxCorridorEscrow(isi) => isi.execute(authority, stx),
@@ -112,91 +117,32 @@ fn settlement_failure_reason(err: &Error) -> &'static str {
         _ => "other",
     }
 }
-#[allow(clippy::too_many_arguments)]
-fn record_settlement_receipt(
-    stx: &mut StateTransaction<'_, '_>,
+fn settlement_receipt(
+    stx: &StateTransaction<'_, '_>,
     authority: &AccountId,
-    settlement_id: &SettlementId,
-    plan: SettlementPlan,
     metadata: Metadata,
-    kind: SettlementKind,
-    legs: [SettlementLegSnapshot; 2],
-    fx_corridor: Option<FxCorridorSettlementDetails>,
-) -> Result<(), Error> {
-    if stx.world.settlement_receipts.get(settlement_id).is_some() {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!("settlement id `{settlement_id}` has already been committed").into(),
-        ));
-    }
-    let block_height = stx._curr_block.height().get();
-    let block_hash = stx._curr_block.hash();
-    let executed_at_ms = u64::try_from(
-        stx._curr_block
-            .creation_time()
-            .as_millis()
-            .min(u128::from(u64::MAX)),
-    )
-    .unwrap_or(u64::MAX);
-    let receipt = SettlementReceipt {
-        kind,
+    details: SettlementDetails,
+) -> SettlementReceipt {
+    SettlementReceipt {
         authority: authority.clone(),
-        plan,
         metadata,
-        block_height,
-        block_hash,
-        executed_at_ms,
-        legs,
-        fx_corridor,
-    };
-    stx.world
-        .settlement_receipts
-        .insert(settlement_id.clone(), receipt);
-    Ok(())
+        details,
+        block_height: stx._curr_block.height().get(),
+        block_hash: stx._curr_block.hash(),
+        executed_at_ms: u64::try_from(stx._curr_block.creation_time().as_millis())
+            .unwrap_or(u64::MAX),
+    }
 }
-fn dvp_leg_snapshots(
-    delivery_leg: &SettlementLeg,
-    payment_leg: &SettlementLeg,
-) -> [SettlementLegSnapshot; 2] {
-    [
-        SettlementLegSnapshot {
-            role: SettlementLegRole::Delivery,
-            leg: delivery_leg.clone(),
-        },
-        SettlementLegSnapshot {
-            role: SettlementLegRole::Payment,
-            leg: payment_leg.clone(),
-        },
-    ]
-}
-fn pvp_leg_snapshots(
-    primary_leg: &SettlementLeg,
-    counter_leg: &SettlementLeg,
-) -> [SettlementLegSnapshot; 2] {
-    [
-        SettlementLegSnapshot {
-            role: SettlementLegRole::Primary,
-            leg: primary_leg.clone(),
-        },
-        SettlementLegSnapshot {
-            role: SettlementLegRole::Counter,
-            leg: counter_leg.clone(),
-        },
-    ]
-}
-fn fx_corridor_leg_snapshots(
-    source_leg: &SettlementLeg,
-    destination_leg: &SettlementLeg,
-) -> [SettlementLegSnapshot; 2] {
-    [
-        SettlementLegSnapshot {
-            role: SettlementLegRole::FxSource,
-            leg: source_leg.clone(),
-        },
-        SettlementLegSnapshot {
-            role: SettlementLegRole::FxDestination,
-            leg: destination_leg.clone(),
-        },
-    ]
+fn resolved_settlement_movement(
+    assets: &(AssetId, AssetId),
+    leg: &SettlementLeg,
+) -> ResolvedSettlementMovement {
+    ResolvedSettlementMovement {
+        source: assets.0.clone(),
+        destination: assets.1.clone(),
+        quantity: leg.quantity().clone(),
+        metadata: leg.metadata().clone(),
+    }
 }
 fn has_exact_permission(
     stx: &StateTransaction<'_, '_>,
@@ -581,7 +527,7 @@ fn next_fx_corridor_usage(
     }
     Ok(usage)
 }
-fn ensure_bilateral_settlement_id_unused(
+fn ensure_settlement_id_unused(
     stx: &StateTransaction<'_, '_>,
     settlement_id: &SettlementId,
 ) -> Result<(), Error> {
@@ -614,19 +560,12 @@ fn ensure_bilateral_settlement_shape(
     }
     Ok(())
 }
-/// Resolve one exact balance authorized by an owner-issued bilateral consent.
-///
-/// Grant/revoke validation permits only `debited_asset.account()` to issue the
-/// capability. Callers additionally bind the capability to their own
-/// domain-separated complete-intent hash and a one-shot settlement identifier.
-pub(super) fn ensure_bilateral_counterparty_consent(
+fn settlement_consent_sources(
     stx: &StateTransaction<'_, '_>,
     authority: &AccountId,
-    debited_account: &AccountId,
-    asset_definition_id: &AssetDefinitionId,
     settlement_id: &SettlementId,
     intent_hash: Hash,
-) -> Result<AssetId, Error> {
+) -> BTreeSet<AssetId> {
     let direct_permissions = stx
         .world
         .account_permissions
@@ -643,16 +582,33 @@ pub(super) fn ensure_bilateral_counterparty_consent(
                 .flatten()
         })
         .flat_map(|role| role.permissions());
-    let authorized_sources = direct_permissions
+    direct_permissions
         .chain(role_permissions)
         .filter_map(|permission| CanExecuteSettlement::try_from(permission).ok())
         .filter(|consent| {
-            consent.debited_asset.account() == debited_account
-                && consent.debited_asset.definition() == asset_definition_id
-                && consent.settlement_id == *settlement_id
-                && consent.intent_hash == intent_hash
+            consent.settlement_id == *settlement_id && consent.intent_hash == intent_hash
         })
         .map(|consent| consent.debited_asset)
+        .collect::<BTreeSet<_>>()
+}
+/// Resolve one exact balance authorized by an owner-issued bilateral consent.
+///
+/// Grant/revoke validation permits only `debited_asset.account()` to issue the
+/// capability. Callers additionally bind the capability to their own
+/// domain-separated complete-intent hash and a one-shot settlement identifier.
+pub(super) fn ensure_bilateral_counterparty_consent(
+    stx: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    debited_account: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+    settlement_id: &SettlementId,
+    intent_hash: Hash,
+) -> Result<AssetId, Error> {
+    let authorized_sources = settlement_consent_sources(stx, authority, settlement_id, intent_hash)
+        .into_iter()
+        .filter(|source| {
+            source.account() == debited_account && source.definition() == asset_definition_id
+        })
         .collect::<BTreeSet<_>>();
     let mut sources = authorized_sources.into_iter();
     let Some(source) = sources.next() else {
@@ -679,7 +635,7 @@ fn validate_dvp_preconditions(
     payment_leg: &SettlementLeg,
     plan: SettlementPlan,
 ) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
-    ensure_bilateral_settlement_id_unused(stx, settlement_id)?;
+    ensure_settlement_id_unused(stx, settlement_id)?;
     if delivery_leg.from() != authority {
         return Err(InstructionExecutionError::InvariantViolation(
             "DvP delivery leg must be authorised by the delivering account".into(),
@@ -727,7 +683,7 @@ fn validate_pvp_preconditions(
     counter_leg: &SettlementLeg,
     plan: SettlementPlan,
 ) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
-    ensure_bilateral_settlement_id_unused(stx, settlement_id)?;
+    ensure_settlement_id_unused(stx, settlement_id)?;
     if primary_leg.from() != authority {
         return Err(InstructionExecutionError::InvariantViolation(
             "PvP primary leg must be authorised by the initiating account".into(),
@@ -1105,24 +1061,7 @@ impl Execute for SettleFxCorridor {
             scoped_fx_leg_asset_ids(&source_leg, policy.source_dataspace);
         let (destination_source_id, destination_id) =
             scoped_fx_leg_asset_ids(&destination_leg, policy.destination_dataspace);
-        execute_native_fx_numeric_asset_pair(
-            stx,
-            authority,
-            source_id,
-            source_destination_id,
-            source_leg.quantity().clone(),
-            destination_source_id,
-            destination_id,
-            destination_leg.quantity().clone(),
-            &policy,
-        )?;
         let mut registry = fx_policy_registry(stx)?;
-        registry.usage.insert(policy.policy_id.clone(), next_usage);
-        persist_fx_policy_registry(stx, registry);
-        let plan = SettlementPlan::new(
-            SettlementExecutionOrder::DeliveryThenPayment,
-            SettlementAtomicity::AllOrNothing,
-        );
         let mut metadata = Metadata::default();
         metadata.insert(
             "fx_corridor_policy_id"
@@ -1142,34 +1081,44 @@ impl Execute for SettleFxCorridor {
                 .expect("valid FX destination-dataspace metadata key"),
             Json::new(policy.destination_dataspace.as_u64()),
         );
-        let legs = fx_corridor_leg_snapshots(&source_leg, &destination_leg);
-        let fx_corridor = FxCorridorSettlementDetails {
-            policy_id: policy.policy_id.clone(),
-            policy_revision: policy.revision,
-            source_dataspace: policy.source_dataspace,
-            destination_dataspace: policy.destination_dataspace,
-            owner: policy.owner.clone(),
-            oracle_evidence: self.oracle_evidence.clone(),
-            oracle_recorded_at_ms,
-            oracle_rate,
-            source_account: source_leg.from().clone(),
-            destination_escrow: destination_leg.from().clone(),
-            recipient: self.recipient.clone(),
-            source_asset_definition_id: policy.source_asset_definition_id.clone(),
-            destination_asset_definition_id: policy.destination_asset_definition_id.clone(),
-            source_amount: source_leg.quantity().clone(),
-            destination_amount: destination_leg.quantity().clone(),
-        };
-        record_settlement_receipt(
+        let receipt = settlement_receipt(
             stx,
             authority,
-            &self.settlement_id,
-            plan,
             metadata,
-            SettlementKind::FxCorridor,
-            legs,
-            Some(fx_corridor),
+            SettlementDetails::FxCorridor(iroha_data_model::isi::FxCorridorSettlementDetails {
+                source: resolved_settlement_movement(
+                    &(source_id.clone(), source_destination_id.clone()),
+                    &source_leg,
+                ),
+                destination: resolved_settlement_movement(
+                    &(destination_source_id.clone(), destination_id.clone()),
+                    &destination_leg,
+                ),
+                context: FxCorridorPricingContext {
+                    policy_id: policy.policy_id.clone(),
+                    policy_revision: policy.revision,
+                    oracle_evidence: self.oracle_evidence.clone(),
+                    oracle_recorded_at_ms,
+                    oracle_rate,
+                },
+            }),
+        );
+        execute_native_fx_numeric_asset_pair(
+            stx,
+            authority,
+            source_id,
+            source_destination_id,
+            source_leg.quantity().clone(),
+            destination_source_id,
+            destination_id,
+            destination_leg.quantity().clone(),
+            &policy,
         )?;
+        registry.usage.insert(policy.policy_id.clone(), next_usage);
+        persist_fx_policy_registry(stx, registry);
+        stx.world
+            .settlement_receipts
+            .insert(self.settlement_id.clone(), receipt);
         iroha_logger::info!(
             settlement_id = %self.settlement_id,
             policy_id = %policy.policy_id,
@@ -1258,6 +1207,16 @@ impl Execute for DvpIsi {
                 return Err(err);
             }
         };
+        let receipt = settlement_receipt(
+            stx,
+            authority,
+            metadata,
+            SettlementDetails::Dvp(iroha_data_model::isi::DvpSettlementDetails {
+                delivery: resolved_settlement_movement(&delivery_assets, &delivery_leg),
+                payment: resolved_settlement_movement(&payment_assets, &payment_leg),
+                order: plan.order(),
+            }),
+        );
         let first = match plan.order() {
             SettlementExecutionOrder::DeliveryThenPayment => (
                 delivery_assets.0.clone(),
@@ -1291,17 +1250,9 @@ impl Execute for DvpIsi {
             stx, movement,
         ) {
             Ok(()) => {
-                let legs = dvp_leg_snapshots(&delivery_leg, &payment_leg);
-                record_settlement_receipt(
-                    stx,
-                    authority,
-                    &settlement_id,
-                    plan,
-                    metadata,
-                    SettlementKind::Dvp,
-                    legs,
-                    None,
-                )?;
+                stx.world
+                    .settlement_receipts
+                    .insert(settlement_id.clone(), receipt);
                 #[cfg(feature = "telemetry")]
                 {
                     stx.telemetry.record_dvp_finality(
@@ -1387,6 +1338,16 @@ impl Execute for PvpIsi {
                 return Err(err);
             }
         };
+        let receipt = settlement_receipt(
+            stx,
+            authority,
+            metadata,
+            SettlementDetails::Pvp(iroha_data_model::isi::PvpSettlementDetails {
+                primary: resolved_settlement_movement(&primary_assets, &primary_leg),
+                counter: resolved_settlement_movement(&counter_assets, &counter_leg),
+                order: plan.order(),
+            }),
+        );
         let first = match plan.order() {
             SettlementExecutionOrder::DeliveryThenPayment => (
                 primary_assets.0.clone(),
@@ -1420,17 +1381,9 @@ impl Execute for PvpIsi {
             stx, movement,
         ) {
             Ok(()) => {
-                let legs = pvp_leg_snapshots(&primary_leg, &counter_leg);
-                record_settlement_receipt(
-                    stx,
-                    authority,
-                    &settlement_id,
-                    plan,
-                    metadata,
-                    SettlementKind::Pvp,
-                    legs,
-                    None,
-                )?;
+                stx.world
+                    .settlement_receipts
+                    .insert(settlement_id.clone(), receipt);
                 #[cfg(feature = "telemetry")]
                 {
                     stx.telemetry.record_pvp_finality(
@@ -1476,6 +1429,8 @@ impl Execute for PvpIsi {
 }
 #[cfg(test)]
 mod tests {
+    #[path = "atomic_tests.rs"]
+    mod atomic;
     use super::*;
     use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
     use iroha_data_model::{
@@ -1981,25 +1936,35 @@ mod tests {
             .settlement_receipts
             .get(&instruction.settlement_id)
             .expect("FX outcome recorded");
-        assert_eq!(receipt.kind, SettlementKind::FxCorridor);
+        let SettlementDetails::FxCorridor(iroha_data_model::isi::FxCorridorSettlementDetails {
+            source,
+            destination,
+            context,
+        }) = &receipt.details
+        else {
+            panic!("native FX typed receipt");
+        };
+        assert_eq!(context.policy_id, policy.policy_id);
+        assert_eq!(context.policy_revision, policy.revision);
         assert_eq!(
-            receipt.legs.iter().map(|leg| leg.role).collect::<Vec<_>>(),
-            vec![
-                SettlementLegRole::FxSource,
-                SettlementLegRole::FxDestination
-            ]
+            source.source.scope(),
+            &AssetBalanceScope::Dataspace(policy.source_dataspace)
         );
-        let details = receipt
-            .fx_corridor
-            .as_ref()
-            .expect("native FX receipt must retain exact policy and amount evidence");
-        assert_eq!(details.policy_id, policy.policy_id);
-        assert_eq!(details.policy_revision, policy.revision);
-        assert_eq!(details.source_dataspace, policy.source_dataspace);
-        assert_eq!(details.destination_dataspace, policy.destination_dataspace);
-        assert_eq!(details.source_amount, Quantity::from(10_u32));
-        assert_eq!(details.destination_amount, Quantity::from(760_u32));
-        assert_eq!(details.recipient, BOB_ID.clone());
+        assert_eq!(
+            destination.source.scope(),
+            &AssetBalanceScope::Dataspace(policy.destination_dataspace)
+        );
+        assert_eq!(source.quantity, Quantity::from(10_u32));
+        assert_eq!(destination.quantity, Quantity::from(760_u32));
+        assert_eq!(destination.destination.account(), &*BOB_ID);
+        assert_eq!(
+            source.source.definition(),
+            &policy.source_asset_definition_id
+        );
+        assert_eq!(
+            destination.source.definition(),
+            &policy.destination_asset_definition_id
+        );
         let replay = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("settlement id replay must fail");
@@ -2044,14 +2009,14 @@ mod tests {
             .get(&instruction.settlement_id)
             .expect("settlement receipt");
         assert_eq!(receipt.authority, BOB_ID.clone());
-        assert_eq!(
-            receipt
-                .fx_corridor
-                .as_ref()
-                .expect("FX details")
-                .source_account,
-            BOB_ID.clone(),
-        );
+        let SettlementDetails::FxCorridor(iroha_data_model::isi::FxCorridorSettlementDetails {
+            source,
+            ..
+        }) = &receipt.details
+        else {
+            panic!("FX details");
+        };
+        assert_eq!(source.source.account(), &*BOB_ID);
     }
     #[test]
     fn fx_corridor_recipient_alias_domain_is_required_and_unambiguous() {
@@ -2995,15 +2960,28 @@ mod tests {
             .get(&settlement_id)
             .cloned()
             .expect("settlement receipt recorded");
-        assert_eq!(receipt.kind, SettlementKind::Dvp);
+        let SettlementDetails::Dvp(iroha_data_model::isi::DvpSettlementDetails {
+            delivery,
+            payment,
+            order,
+        }) = &receipt.details
+        else {
+            panic!("Dvp typed receipt");
+        };
         assert_eq!(receipt.authority, ALICE_ID.clone());
-        assert_eq!(receipt.plan, plan);
+        assert_eq!(*order, plan.order());
         assert_eq!(receipt.metadata, Metadata::default());
         assert_eq!(receipt.block_height, stx._curr_block.height().get());
         assert_eq!(receipt.block_hash, stx._curr_block.hash());
-        assert_eq!(
-            receipt.legs.iter().map(|leg| leg.role).collect::<Vec<_>>(),
-            vec![SettlementLegRole::Delivery, SettlementLegRole::Payment]
+        assert_eq!(delivery.source.account(), &*ALICE_ID);
+        assert_eq!(delivery.destination.account(), &*BOB_ID);
+        assert_eq!(payment.source.account(), &*BOB_ID);
+        assert_eq!(payment.destination.account(), &*ALICE_ID);
+        assert!(
+            receipt
+                .details
+                .movements()
+                .all(|movement| movement.source.scope() == movement.destination.scope())
         );
     }
     #[test]
@@ -3776,14 +3754,27 @@ mod tests {
             .get(&settlement_id)
             .cloned()
             .expect("settlement receipt recorded");
-        assert_eq!(receipt.kind, SettlementKind::Pvp);
+        let SettlementDetails::Pvp(iroha_data_model::isi::PvpSettlementDetails {
+            primary,
+            counter,
+            order,
+        }) = &receipt.details
+        else {
+            panic!("Pvp typed receipt");
+        };
         assert_eq!(receipt.authority, ALICE_ID.clone());
-        assert_eq!(receipt.plan, SettlementPlan::default());
+        assert_eq!(*order, SettlementPlan::default().order());
         assert_eq!(receipt.block_height, stx._curr_block.height().get());
         assert_eq!(receipt.block_hash, stx._curr_block.hash());
-        assert_eq!(
-            receipt.legs.iter().map(|leg| leg.role).collect::<Vec<_>>(),
-            vec![SettlementLegRole::Primary, SettlementLegRole::Counter]
+        assert_eq!(primary.source.account(), &*ALICE_ID);
+        assert_eq!(primary.destination.account(), &*BOB_ID);
+        assert_eq!(counter.source.account(), &*BOB_ID);
+        assert_eq!(counter.destination.account(), &*ALICE_ID);
+        assert!(
+            receipt
+                .details
+                .movements()
+                .all(|movement| movement.source.scope() == movement.destination.scope())
         );
         assert_eq!(
             **stx

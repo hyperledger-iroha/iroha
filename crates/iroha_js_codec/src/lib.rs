@@ -1670,8 +1670,12 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                     return Ok(InstructionBox::from(register_box));
                 }
                 if let Some(account_value) = register_map.remove("Account") {
-                    let new_account: NewAccount =
-                        json::from_value(account_value).map_err(codec_error)?;
+                    let new_account: NewAccount = json::from_value(account_value).map_err(|error| {
+                        CodecError::new(
+                            CodecErrorKind::InvalidArgument,
+                            format!("Register Account requires the complete canonical account object: {error}"),
+                        )
+                    })?;
                     let register_box =
                         RegisterBox::Account(Register::<Account>::account(new_account));
                     return Ok(InstructionBox::from(register_box));
@@ -3172,6 +3176,25 @@ fn settlement_instruction_from_json(value: json::Value) -> CodecResult<Instructi
         .pop_first()
         .expect("length checked settlement variant");
     let instruction = match variant.as_str() {
+        "Atomic" => {
+            exact_json_object_fields(
+                &payload,
+                &[
+                    "network_id",
+                    "settlement_id",
+                    "movements",
+                    "expires_at_height",
+                    "metadata",
+                ],
+                "Atomic",
+            )?;
+            let atomic = json::from_value::<iroha_data_model::isi::SettleAtomic>(payload)
+                .map_err(codec_error)?;
+            atomic
+                .validate()
+                .map_err(|reason| CodecError::new(CodecErrorKind::InvalidArgument, reason))?;
+            SettlementInstructionBox::Atomic(atomic)
+        }
         "Dvp" => {
             SettlementInstructionBox::Dvp(json::from_value::<DvpIsi>(payload).map_err(codec_error)?)
         }
@@ -3471,6 +3494,9 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         .downcast_ref::<SettlementInstructionBox>()
     {
         let (variant, payload) = match settlement {
+            SettlementInstructionBox::Atomic(value) => {
+                ("Atomic", json::to_value(value).map_err(codec_error)?)
+            }
             SettlementInstructionBox::Dvp(value) => {
                 ("Dvp", json::to_value(value).map_err(codec_error)?)
             }
@@ -4591,3 +4617,6 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     outer.insert("zk".to_owned(), json::Value::Object(variant));
     json::Value::Object(outer)
 }
+
+#[cfg(test)]
+mod atomic_settlement_json_tests;

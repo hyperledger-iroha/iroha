@@ -4977,6 +4977,138 @@ pub mod isi {
             )
         }
     }
+    /// Prepare one complete exact-consent batch without using incoming payments
+    /// to fund its outgoing obligations. No receiver is implicitly registered.
+    fn prepare_verified_settlement_numeric_batch(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::settlement::VerifiedSettlementNumericBatch,
+    ) -> Result<PreparedNumericAssetMovementBatch, Error> {
+        let (authority, movements) = authorization.into_parts();
+        movements
+            .validate()
+            .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        let mut outbound = BTreeMap::<AssetId, Quantity>::new();
+        for movement in movements.as_slice() {
+            let total = outbound
+                .entry(movement.source.clone())
+                .or_insert_with(Quantity::zero);
+            *total = total
+                .checked_add(&movement.quantity)
+                .map_err(|_| MathError::Overflow)?;
+        }
+        // This independent pre-debit budget is necessary: the general batch
+        // aggregator uses ordered virtual balances and can otherwise count an
+        // earlier incoming movement toward a later outgoing movement.
+        for (source, amount) in outbound {
+            let before = state_transaction
+                .world
+                .assets
+                .get(&source)
+                .map(|value| value.as_ref().clone())
+                .ok_or_else(|| FindError::Asset(source.clone().into()))?;
+            let after = before
+                .checked_sub(&amount)
+                .map_err(|_| MathError::NotEnoughQuantity)?;
+            crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+                state_transaction.world(), &source, &after,
+            )?;
+        }
+        let mut plans = Vec::with_capacity(movements.as_slice().len());
+        for movement in movements.as_slice() {
+            let plan = PreparedNumericTransferPlan::prepare_explicit_bilateral(
+                state_transaction,
+                &authority,
+                movement.source.clone(),
+                movement.destination.clone(),
+                movement.quantity.clone(),
+            )?;
+            if plan.source_id != movement.source || plan.destination_id != movement.destination {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "atomic settlement must preserve both exact signed balance buckets".into(),
+                ));
+            }
+            plans.push(plan);
+        }
+        let batch = PreparedNumericAssetMovementBatch::aggregate(
+            state_transaction,
+            plans,
+            NumericAssetMovementAuthorization {
+                debit: NumericMovementDebitAuthorization::Protocol,
+                transcript_authority: authority,
+                transcript: NumericMovementTranscriptRequirement::TransactionRequired(
+                    "atomic settlement",
+                ),
+                source_policy: NumericAssetTransferSourcePolicy::User,
+                control_policy: NumericAssetTransferControlPolicy::Enforce,
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            },
+        )?;
+        // Prove every composite control-store update is canonical before any
+        // balance is touched. Apply revalidates the same retained records under
+        // the exclusive transaction borrow; no late account creation is allowed.
+        let mut stores = BTreeMap::<AccountId, AssetTransferControlStoreV1>::new();
+        for (account, _, _, after) in &batch.control_updates {
+            if let Some(record) = after {
+                let store = match stores.entry(account.clone()) {
+                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::btree_map::Entry::Vacant(entry) => entry.insert(
+                        load_asset_transfer_control_store(state_transaction, account)?,
+                    ),
+                };
+                if record.is_empty() {
+                    store.remove(&record.asset_definition_id);
+                } else {
+                    store.upsert(record.clone());
+                }
+                if !store.controls.is_empty() {
+                    store.validate_canonical().map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("atomic settlement control update is not canonical: {error}")
+                                .into(),
+                        )
+                    })?;
+                    // The shared persistence owner uses Json::new. Prove its
+                    // bounded encoding is accepted before any earlier payment
+                    // can mutate state, including the combined record store.
+                    Json::try_new(store.clone()).map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("atomic settlement control encoding failed: {error}").into(),
+                        )
+                    })?;
+                }
+            }
+        }
+        Ok(batch)
+    }
+
+    /// Consume complete current consent and validate all batch policies without mutation.
+    pub(in crate::smartcontracts::isi) fn validate_verified_settlement_numeric_batch(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::settlement::VerifiedSettlementNumericBatch,
+    ) -> Result<(), Error> {
+        let _prepared =
+            prepare_verified_settlement_numeric_batch(state_transaction, authorization)?;
+        Ok(())
+    }
+
+    /// Apply one complete prefunded atomic settlement with one authenticated transcript.
+    pub(in crate::smartcontracts::isi) fn execute_verified_settlement_numeric_batch(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::settlement::VerifiedSettlementNumericBatch,
+    ) -> Result<(), Error> {
+        let prepared = prepare_verified_settlement_numeric_batch(state_transaction, authorization)?;
+        let applied = prepared.apply(state_transaction)?;
+        for movement in applied {
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
+            );
+        }
+        Ok(())
+    }
+
     struct PreparedNumericTransferPair {
         source: PreparedNumericTransferPlan,
         destination: PreparedNumericTransferPlan,

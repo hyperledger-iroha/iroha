@@ -215,6 +215,24 @@ impl ProductionV2Services {
         ))
     }
 
+    fn remote_timeout_certificate_targets(&self) -> Vec<PeerId> {
+        // Only global-roster origins may emit productive global envelopes.
+        // Observers keep existing global-only retries, not observer-to-observer fanout.
+        if !self
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == self.local_peer)
+        {
+            return self.remote_voters();
+        }
+        self.timeout_certificate_targets
+            .iter()
+            .filter(|peer| *peer != &self.local_peer)
+            .cloned()
+            .collect()
+    }
+
     fn remote_voters(&self) -> Vec<PeerId> {
         self.context
             .roster

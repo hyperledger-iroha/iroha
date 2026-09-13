@@ -1495,7 +1495,7 @@ mod tests {
         backend
             .prepare_authorization(
                 &statement_context_v1(),
-                strong_32_v1(b"canonical-genesis"),
+                *public_config_v1().network_id.as_bytes(),
                 backend.policy(),
                 backend.principal_digest(),
                 10,
@@ -1867,7 +1867,7 @@ mod tests {
     fn crypto_boundary_rejects_network_genesis_policy_principal_lifetime_and_wire_substitution() {
         let backend = backend_v1();
         let context = statement_context_v1();
-        let genesis = strong_32_v1(b"canonical-genesis");
+        let genesis = *public_config_v1().network_id.as_bytes();
         let authorization = authorization_v1(&backend);
         let mut wrong_context = context;
         wrong_context.network_id = network_id_v1(b"substituted-genesis");
@@ -2002,7 +2002,7 @@ mod tests {
         assert_eq!(
             secondary.validate_request(
                 &statement_context_v1(),
-                strong_32_v1(b"canonical-genesis"),
+                *public_config_v1().network_id.as_bytes(),
                 primary.policy(),
                 &authorization,
                 &[],
@@ -2015,7 +2015,7 @@ mod tests {
     fn native_backend_completes_ila1_ilq1_ilr1_and_holder_finalization() {
         let backend = backend_v1();
         let context = statement_context_v1();
-        let genesis = strong_32_v1(b"canonical-genesis");
+        let genesis = *public_config_v1().network_id.as_bytes();
         let authorization = authorization_v1(&backend);
         let (request, state) = holder_prepare_blind_issuance_v1(
             &context,
@@ -2121,9 +2121,14 @@ mod tests {
         for bad_revision in ["0", "01", "+1", "-1"] {
             assert!(parse_canonical_nonzero_u64_v1(bad_revision).is_err());
         }
+        let valid_digest = "0c63367874569862486026c04717783e35546cb6f41a95b34d09d64153f5c5ed";
+        assert_eq!(
+            parse_nonzero_digest_hex_v1(valid_digest).expect("strong lowercase digest"),
+            hex::decode(valid_digest).expect("valid hex").as_slice(),
+        );
         for bad_digest in [
             "00",
-            "0c63367874569862486026c04717783e35546cb6f41a95b34d09d64153f5c5ed",
+            "0000000000000000000000000000000000000000000000000000000000000000",
             "0C63367874569862486026C04717783E35546CB6F41A95B34D09D64153F5C5ED",
             "0707070707070707070707070707070707070707070707070707070707070707",
         ] {

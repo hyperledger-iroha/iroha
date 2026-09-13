@@ -121,11 +121,13 @@ impl V2EffectServices for ProductionV2Services {
             .validate_version()
             .map_err(|error| error.to_string())?;
         let control_targets = match &message.payload {
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => {
+                self.remote_timeout_certificate_targets()
+            }
             wire::ConsensusMessageV2Payload::Proposal(_)
             | wire::ConsensusMessageV2Payload::Vote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
-            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)

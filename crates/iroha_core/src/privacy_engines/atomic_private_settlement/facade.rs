@@ -8,6 +8,7 @@ use super::{
     stark::{
         prove_atomic_private_settlement_stark_v1_with_rng,
         verify_atomic_private_settlement_stark_v1,
+        verify_constructed_atomic_private_settlement_stark_v1,
     },
 };
 use crate::privacy_engines::{
@@ -17,6 +18,24 @@ use crate::privacy_engines::{
 use iroha_data_model::nexus::{AtomicPrivateSettlementV1, PrivateSettlementProofStatementV1};
 use rand::{TryCryptoRng, rngs::OsRng};
 use thiserror::Error;
+
+/// Local execution policy for trace, composition, FRI-mask and FRI commitments.
+/// Field arithmetic, transcript and independent verification remain CPU operations.
+/// This value is never encoded in a statement, manifest or consensus profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AtomicPrivateSettlementProverOptionsV1 {
+    /// Explicit canonical digest executor for all materialized prover commitments and Merkle levels.
+    pub commitment_digest_execution: fastpq_prover::DigestExecutionV1,
+    /// Explicit executor for the exact nonce predicate; requested-device errors close the proof.
+    pub nonce_digest_execution: fastpq_prover::DigestExecutionV1,
+}
+impl AtomicPrivateSettlementProverOptionsV1 {
+    /// Explicit CPU computation policy for all proof phases.
+    pub const CPU: Self = Self {
+        commitment_digest_execution: fastpq_prover::DigestExecutionV1::Cpu,
+        nonce_digest_execution: fastpq_prover::DigestExecutionV1::Cpu,
+    };
+}
 
 /// Failure constructing or verifying one settlement-only private-note proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -42,6 +61,9 @@ pub enum AtomicPrivateSettlementProofErrorV1 {
     /// The independent final verifier rejected bytes emitted by the prover.
     #[error("atomic private settlement prover self-verification failed")]
     SelfVerification,
+    /// The requested commitment executor failed without CPU substitution.
+    #[error("atomic private settlement digest execution failed")]
+    DigestExecution,
 }
 
 fn map_entropy_error_v1(
@@ -59,6 +81,9 @@ fn map_entropy_error_v1(
 
 fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> AtomicPrivateSettlementProofErrorV1 {
     match error {
+        ProofManagedNoteStarkErrorV1::DigestExecution => {
+            AtomicPrivateSettlementProofErrorV1::DigestExecution
+        }
         ProofManagedNoteStarkErrorV1::Randomness => {
             AtomicPrivateSettlementProofErrorV1::RandomnessUnavailable
         }
@@ -84,6 +109,9 @@ fn map_verifier_error_v1(
     error: ProofManagedNoteStarkErrorV1,
 ) -> AtomicPrivateSettlementProofErrorV1 {
     match error {
+        ProofManagedNoteStarkErrorV1::DigestExecution => {
+            AtomicPrivateSettlementProofErrorV1::DigestExecution
+        }
         ProofManagedNoteStarkErrorV1::Resource => {
             AtomicPrivateSettlementProofErrorV1::ResourceLimit
         }
@@ -114,6 +142,7 @@ fn map_verifier_error_v1(
 ///
 /// Returns a redacted relation, entropy, resource, or prover failure.
 pub fn prove_atomic_private_settlement_v1_with_rng<R: TryCryptoRng + ?Sized>(
+    options: AtomicPrivateSettlementProverOptionsV1,
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -126,6 +155,7 @@ pub fn prove_atomic_private_settlement_v1_with_rng<R: TryCryptoRng + ?Sized>(
     let mut checked_randomness =
         HealthCheckedTryCryptoRngV1::new(randomness).map_err(map_entropy_error_v1)?;
     let proof = prove_atomic_private_settlement_stark_v1_with_rng(
+        options,
         manifest,
         statement,
         canonical_genesis_hash,
@@ -134,15 +164,15 @@ pub fn prove_atomic_private_settlement_v1_with_rng<R: TryCryptoRng + ?Sized>(
         &mut checked_randomness,
     )
     .map_err(map_prover_error_v1)?;
-    verify_atomic_private_settlement_stark_v1(
+    // The candidate exposes no owned bytes until this independent public-adapter check.
+    verify_constructed_atomic_private_settlement_stark_v1(
         manifest,
         statement,
         canonical_genesis_hash,
         current_height,
-        &proof,
+        proof,
     )
-    .map_err(|_| AtomicPrivateSettlementProofErrorV1::SelfVerification)?;
-    Ok(proof)
+    .map_err(|_| AtomicPrivateSettlementProofErrorV1::SelfVerification)
 }
 
 /// Construct one canonical settlement proof with operating-system entropy.
@@ -152,6 +182,7 @@ pub fn prove_atomic_private_settlement_v1_with_rng<R: TryCryptoRng + ?Sized>(
 /// Returns the same closed failures as
 /// [`prove_atomic_private_settlement_v1_with_rng`].
 pub fn prove_atomic_private_settlement_v1(
+    options: AtomicPrivateSettlementProverOptionsV1,
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -159,6 +190,7 @@ pub fn prove_atomic_private_settlement_v1(
     witness: &AtomicPrivateSettlementProverWitnessV1,
 ) -> Result<Vec<u8>, AtomicPrivateSettlementProofErrorV1> {
     prove_atomic_private_settlement_v1_with_rng(
+        options,
         manifest,
         statement,
         canonical_genesis_hash,

@@ -16,10 +16,6 @@ mod panic_recovery;
 /// Synchronizes peer-gossip voter authority with the committed validator roster.
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
-/// Root-custodied immutable no-replace artifact publication.
-#[cfg(all(test, unix))]
-#[path = "main/root_owned_artifact_publication.rs"]
-mod root_owned_artifact_publication;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
@@ -130,8 +126,6 @@ use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
-#[cfg(all(test, target_os = "macos"))]
-use root_owned_artifact_publication::require_no_macos_extended_acl;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
@@ -3735,10 +3729,16 @@ fn spawn_network_relay_worker(
             };
             let shared = Arc::clone(&shared_for_workers);
             tokio::spawn(async move {
-                let (peer, authenticated_via, payload, payload_bytes, _retention_guard) =
+                let (peer, authenticated_via, payload, payload_bytes, retention_guard) =
                     msg.into_parts();
                 shared
-                    .handle_message(peer, authenticated_via, payload, payload_bytes)
+                    .handle_message(
+                        peer,
+                        authenticated_via,
+                        payload,
+                        payload_bytes,
+                        retention_guard,
+                    )
                     .await;
                 drop(permit);
             });
@@ -3746,6 +3746,7 @@ fn spawn_network_relay_worker(
     });
     (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx)
 }
+#[cfg(test)]
 async fn forward_relay_lane(
     mut receiver: mpsc::Receiver<RelayWorkItem>,
     tx: &mpsc::Sender<RelayWorkItem>,
@@ -3817,6 +3818,7 @@ async fn drive_network_relay_ingress(
     .await
 }
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 async fn drive_network_relay_ingress_inner(
     high_receiver: mpsc::Receiver<RelayWorkItem>,
     payload_receiver: mpsc::Receiver<RelayWorkItem>,
@@ -3862,6 +3864,121 @@ async fn drive_network_relay_ingress_inner(
         ) => exit,
     }
 }
+/// Partition the previous eight subscriber base units without saturation or
+/// changing the independently bounded physical worker and Sumeragi owners.
+fn semantic_relay_subscriber_capacities(
+    base: usize,
+) -> Option<[usize; iroha_p2p::TransportAdmissionClass::COUNT]> {
+    if base < 2 {
+        return None;
+    }
+    base.checked_mul(8)?;
+    Some([
+        base,
+        base,
+        base,
+        base,
+        base,
+        base,
+        base,
+        base / 2 + base % 2,
+        base / 2,
+    ])
+}
+async fn forward_semantic_relay_lane(
+    mut receiver: mpsc::Receiver<RelayWorkItem>,
+    tx: &mpsc::Sender<RelayWorkItem>,
+    sumeragi: &SumeragiRelayIngress,
+    expected: iroha_p2p::TransportAdmissionClass,
+    kind: RelayReceiverKind,
+) -> RelayIngressLoopExit {
+    use iroha_p2p::network::message::ClassifyTopic;
+    while let Some(msg) = receiver.recv().await {
+        if msg.payload.admission_class() != expected {
+            let _retained_exact_item = msg;
+            iroha_logger::error!(
+                ?expected,
+                "semantic relay subscriber received a foreign class"
+            );
+            std::process::exit(1);
+        }
+        // Every Sumeragi occurrence bypasses ordinary worker contention through
+        // the existing exact 2K-per-source V2/Lane owner. All new high class
+        // shares together remain K, plus Safety K: no new upstream capacity.
+        if let Some(class) = sumeragi_relay_class(&msg.payload) {
+            if let Err(work) = sumeragi.send(class, SumeragiRelayWorkItem::live(msg)).await {
+                sumeragi_relay_closed_fatal(class, work);
+            }
+            continue;
+        }
+        if let Err(error) = tx.send(msg).await {
+            let _retained_exact_item = error.0;
+            iroha_logger::error!(
+                ?expected,
+                "semantic relay worker closed with exact ownership"
+            );
+            std::process::exit(1);
+        }
+    }
+    iroha_logger::error!(
+        ?expected,
+        "semantic relay subscriber closed before sibling owners could be cancelled"
+    );
+    let _ = kind;
+    std::process::exit(1);
+}
+async fn drive_semantic_network_relay_ingress(
+    receivers: [mpsc::Receiver<RelayWorkItem>; iroha_p2p::TransportAdmissionClass::COUNT],
+    workers: [&mpsc::Sender<RelayWorkItem>; iroha_p2p::TransportAdmissionClass::COUNT],
+    sumeragi: &SumeragiRelayIngress,
+) -> RelayIngressLoopExit {
+    use iroha_p2p::TransportAdmissionClass as A;
+    let [
+        safety,
+        lane,
+        payload,
+        availability,
+        recovery_control,
+        recovery_data,
+        control,
+        block_sync,
+        low,
+    ] = receivers;
+    tokio::select! {
+        exit = forward_semantic_relay_lane(safety, workers[0], sumeragi, A::Safety, RelayReceiverKind::High) => exit,
+        exit = forward_semantic_relay_lane(lane, workers[1], sumeragi, A::Lane, RelayReceiverKind::High) => exit,
+        exit = forward_semantic_relay_lane(payload, workers[2], sumeragi, A::Payload, RelayReceiverKind::Payload) => exit,
+        exit = forward_semantic_relay_lane(availability, workers[3], sumeragi, A::Availability, RelayReceiverKind::Chunk) => exit,
+        exit = forward_semantic_relay_lane(recovery_control, workers[4], sumeragi, A::RecoveryControl, RelayReceiverKind::High) => exit,
+        exit = forward_semantic_relay_lane(recovery_data, workers[5], sumeragi, A::RecoveryData, RelayReceiverKind::Chunk) => exit,
+        exit = forward_semantic_relay_lane(control, workers[6], sumeragi, A::Control, RelayReceiverKind::High) => exit,
+        exit = forward_semantic_relay_lane(block_sync, workers[7], sumeragi, A::BlockSync, RelayReceiverKind::Low) => exit,
+        exit = forward_semantic_relay_lane(low, workers[8], sumeragi, A::Low, RelayReceiverKind::Low) => exit,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn semantic_relay_geometry_preserves_the_complete_prior_count_envelope() {
+    for base in [2_usize, 3, 8192] {
+        let caps = semantic_relay_subscriber_capacities(base).unwrap();
+        assert!(caps.iter().all(|n| *n > 0));
+        assert_eq!(caps.into_iter().sum::<usize>(), 8 * base);
+        assert_eq!(
+            caps[iroha_p2p::TransportAdmissionClass::Availability.index()],
+            base
+        );
+        assert_eq!(
+            caps[iroha_p2p::TransportAdmissionClass::BlockSync.index()]
+                + caps[iroha_p2p::TransportAdmissionClass::Low.index()],
+            base
+        );
+    }
+    assert!(semantic_relay_subscriber_capacities(0).is_none());
+    assert!(semantic_relay_subscriber_capacities(1).is_none());
+    assert!(semantic_relay_subscriber_capacities(usize::MAX).is_none());
+}
+#[cfg(test)]
 fn high_priority_relay_filter() -> iroha_p2p::network::SubscriberFilter {
     use iroha_p2p::network::{SubscriberFilter, message::Topic};
     SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control])
@@ -3886,10 +4003,16 @@ async fn run_emergency_fast_network_relay(shared: Arc<NetworkRelayShared>) {
         }
         iroha_logger::info!("registered emergency Fast peer/trust relay subscriber");
         while let Some(msg) = receiver.recv().await {
-            let (peer, authenticated_via, payload, payload_bytes, _retention_guard) =
+            let (peer, authenticated_via, payload, payload_bytes, retention_guard) =
                 msg.into_parts();
             shared
-                .handle_message(peer, authenticated_via, payload, payload_bytes)
+                .handle_message(
+                    peer,
+                    authenticated_via,
+                    payload,
+                    payload_bytes,
+                    retention_guard,
+                )
                 .await;
         }
         iroha_logger::warn!("emergency Fast peer/trust subscriber closed; restarting subscription");
@@ -3913,7 +4036,7 @@ impl NetworkRelay {
     }
     #[allow(clippy::too_many_lines)]
     async fn run(self, shutdown_signal: ShutdownSignal) {
-        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+        use iroha_p2p::network::SubscriberFilter;
         let shared = Arc::new(self.into_shared());
         if shared.emergency_fast {
             run_emergency_fast_network_relay(shared).await;
@@ -4076,135 +4199,61 @@ impl NetworkRelay {
                 }
             });
         }
-        let high_cap = base_cap.saturating_mul(4).max(base_cap);
-        let payload_cap = base_cap.saturating_mul(2).max(base_cap);
-        let chunk_cap = base_cap;
-        let low_cap = base_cap;
-        let work_high_cap = high_cap.saturating_mul(2);
-        let work_payload_cap = payload_cap.saturating_mul(2);
-        let work_chunk_cap = chunk_cap;
-        let work_low_cap = low_cap;
-        let high_filter = high_priority_relay_filter();
-        let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
-        let chunk_filter = SubscriberFilter::topics([Topic::ConsensusChunk]);
-        let low_filter = SubscriberFilter::topics([
-            Topic::TxGossip,
-            Topic::TxGossipRestricted,
-            Topic::PeerGossip,
-            Topic::TrustGossip,
-            Topic::Health,
-            Topic::Other,
-        ]);
+        let capacities = semantic_relay_subscriber_capacities(base_cap).expect(
+            "declared semantic subscriber FIFOs must fit their existing exact count envelope",
+        );
+        let work_high_cap = base_cap.checked_mul(8).expect("existing high worker count");
+        let work_payload_cap = base_cap
+            .checked_mul(4)
+            .expect("existing payload worker count");
+        let work_chunk_cap = base_cap;
+        let work_low_cap = base_cap;
         loop {
-            let (high_sender, high_receiver) = mpsc::channel(high_cap);
-            let (payload_sender, payload_receiver) = mpsc::channel(payload_cap);
-            let (chunk_sender, chunk_receiver) = mpsc::channel(chunk_cap);
-            let (low_sender, low_receiver) = mpsc::channel(low_cap);
-            let (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx) =
-                spawn_network_relay_worker(
-                    &shared,
-                    &sumeragi_ingress,
-                    worker_limit,
-                    work_high_cap,
-                    work_payload_cap,
-                    work_chunk_cap,
-                    work_low_cap,
+            let pairs = capacities.map(mpsc::channel::<RelayWorkItem>);
+            let mut receiver_slots: [Option<mpsc::Receiver<RelayWorkItem>>;
+                iroha_p2p::TransportAdmissionClass::COUNT] = std::array::from_fn(|_| None);
+            let mut admitted = true;
+            for (index, (sender, receiver)) in pairs.into_iter().enumerate() {
+                receiver_slots[index] = Some(receiver);
+                let filter = SubscriberFilter::semantic_class(
+                    iroha_p2p::TransportAdmissionClass::ALL[index],
                 );
-            let mut high_sender = Some(high_sender);
-            let mut payload_sender = Some(payload_sender);
-            let mut chunk_sender = Some(chunk_sender);
-            let mut low_sender = Some(low_sender);
-            if let Some(sender) = high_sender.take() {
-                match shared
+                if shared
                     .network
-                    .subscribe_to_peers_messages_with_filter(sender, high_filter.clone())
+                    .subscribe_to_peers_messages_with_filter(sender, filter)
+                    .is_err()
                 {
-                    Ok(()) => {
-                        iroha_logger::info!("registered high-priority relay subscriber");
-                    }
-                    Err(returned) => {
-                        iroha_logger::warn!("retrying high-priority P2P subscriber registration");
-                        high_sender = Some(returned);
-                    }
+                    admitted = false;
+                    break;
                 }
             }
-            if let Some(sender) = payload_sender.take() {
-                match shared
-                    .network
-                    .subscribe_to_peers_messages_with_filter(sender, payload_filter.clone())
-                {
-                    Ok(()) => {
-                        iroha_logger::info!("registered payload relay subscriber");
-                    }
-                    Err(returned) => {
-                        iroha_logger::warn!("retrying payload P2P subscriber registration");
-                        payload_sender = Some(returned);
-                    }
-                }
-            }
-            if let Some(sender) = chunk_sender.take() {
-                match shared
-                    .network
-                    .subscribe_to_peers_messages_with_filter(sender, chunk_filter.clone())
-                {
-                    Ok(()) => {
-                        iroha_logger::info!("registered chunk relay subscriber");
-                    }
-                    Err(returned) => {
-                        iroha_logger::warn!("retrying chunk P2P subscriber registration");
-                        chunk_sender = Some(returned);
-                    }
-                }
-            }
-            if let Some(sender) = low_sender.take() {
-                match shared
-                    .network
-                    .subscribe_to_peers_messages_with_filter(sender, low_filter.clone())
-                {
-                    Ok(()) => {
-                        iroha_logger::info!("registered low-priority relay subscriber");
-                    }
-                    Err(returned) => {
-                        iroha_logger::warn!("retrying low-priority P2P subscriber registration");
-                        low_sender = Some(returned);
-                    }
-                }
-            }
-            if high_sender.is_none()
-                && payload_sender.is_none()
-                && chunk_sender.is_none()
-                && low_sender.is_none()
-            {
-                let exit = drive_network_relay_ingress_inner(
-                    high_receiver,
-                    payload_receiver,
-                    chunk_receiver,
-                    low_receiver,
-                    &work_high_tx,
-                    &work_payload_tx,
-                    &work_chunk_tx,
-                    &work_low_tx,
-                    Some(&sumeragi_ingress),
-                    true,
-                )
-                .await;
-                match exit {
-                    RelayIngressLoopExit::ReceiverClosed(kind) => {
-                        iroha_logger::warn!(
-                            receiver = kind.label(),
-                            "relay subscriber channel closed; restarting subscriptions"
-                        );
-                    }
-                    RelayIngressLoopExit::WorkerClosed(kind) => {
-                        iroha_logger::warn!(
-                            queue = kind.label(),
-                            "relay worker queue closed; restarting dispatcher"
-                        );
-                    }
-                }
+            if !admitted {
+                // Dropped partial subscribers are recovered by the actor's exact
+                // reliable pending owner before replacement, as on prior startup.
+                drop(receiver_slots);
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
             }
+            let receivers =
+                receiver_slots.map(|receiver| receiver.expect("all classes registered"));
+            let (high, payload, chunk, low) = spawn_network_relay_worker(
+                &shared,
+                &sumeragi_ingress,
+                worker_limit,
+                work_high_cap,
+                work_payload_cap,
+                work_chunk_cap,
+                work_low_cap,
+            );
+            let exit = drive_semantic_network_relay_ingress(
+                receivers,
+                [
+                    &high, &high, &payload, &chunk, &high, &chunk, &high, &low, &low,
+                ],
+                &sumeragi_ingress,
+            )
+            .await;
+            iroha_logger::warn!(?exit, "semantic relay subscriber or worker closed");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -4290,6 +4339,7 @@ impl NetworkRelayShared {
         authenticated_via: PeerId,
         msg: iroha_core::NetworkMessage,
         size_bytes: usize,
+        retention_guard: iroha_p2p::peer::message::PeerMessageRetentionGuard,
     ) {
         #[cfg(feature = "test-network-message-control")]
         let (peer, msg, size_bytes) = if let Some(controller) = &self.test_message_control {
@@ -4318,7 +4368,13 @@ impl NetworkRelayShared {
             (peer, msg, size_bytes)
         };
         let _ = self
-            .handle_message_after_test_control(peer, authenticated_via, msg, size_bytes)
+            .handle_message_after_test_control(
+                peer,
+                authenticated_via,
+                msg,
+                size_bytes,
+                retention_guard,
+            )
             .await;
     }
     #[allow(clippy::too_many_lines)]
@@ -4328,6 +4384,7 @@ impl NetworkRelayShared {
         authenticated_via: PeerId,
         msg: iroha_core::NetworkMessage,
         size_bytes: usize,
+        retention_guard: iroha_p2p::peer::message::PeerMessageRetentionGuard,
     ) -> bool {
         use iroha_core::NetworkMessage::*;
         if !self.consensus_ingress_allows(&authenticated_via, &msg, size_bytes) {
@@ -4391,10 +4448,26 @@ impl NetworkRelayShared {
                     txs = data.txs.len(),
                     "relay received transaction gossip"
                 );
-                self.tx_gossiper.gossip(data);
+                self.tx_gossiper
+                    .gossip(iroha_core::retained_gossip::RetainedGossip::new(
+                        data,
+                        retention_guard,
+                    ));
             }
-            PeersGossiper(data) => self.peers_gossiper.gossip(*data, peer),
-            PeerTrustGossip(data) => self.peers_gossiper.gossip_trust(*data, peer),
+            PeersGossiper(data) => {
+                self.peers_gossiper
+                    .gossip(iroha_core::retained_gossip::RetainedGossip::new(
+                        (*data, peer),
+                        retention_guard,
+                    ))
+            }
+            PeerTrustGossip(data) => {
+                self.peers_gossiper
+                    .gossip_trust(iroha_core::retained_gossip::RetainedGossip::new(
+                        (*data, peer),
+                        retention_guard,
+                    ))
+            }
             msg @ (ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
             | QueuePlanAdmissionPublication(_)
@@ -4650,6 +4723,7 @@ impl NetworkRelayShared {
 }
 #[cfg(test)]
 mod network_relay_tests {
+    mod semantic_ingress;
     use super::{
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, InboundBlockMessage,
         IngressRateClass, LaneRelayMessage, LowPriorityIngressDropReason,
@@ -6614,7 +6688,8 @@ fn freeze_lane_compliance_for_startup_replay(
     })?;
     let engine = LaneComplianceEngine::from_directory(dir, nexus.compliance.audit_only)
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
-    engine.validate_active_catalog(&nexus.lane_catalog)
+    engine
+        .validate_active_catalog(&nexus.lane_catalog)
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
     Ok(Some(Arc::new(engine)))
 }
@@ -8176,7 +8251,8 @@ impl Iroha {
         let registry_cfg = runtime_nexus.registry.clone();
         let lane_compliance = frozen_startup_lane_compliance;
         if let Some(engine) = lane_compliance.as_ref() {
-            engine.validate_active_catalog(lane_catalog.as_ref())
+            engine
+                .validate_active_catalog(lane_catalog.as_ref())
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
         }
         let mut queue_config = config.queue;
@@ -8487,8 +8563,6 @@ impl Iroha {
                 return Err(Report::new(StartError::InitKura).attach(format!(
                     "Genesis manifest crypto settings do not match node configuration: {err}"
                 )));
-            } else if genesis.is_none() {
-                config.crypto = manifest.crypto().clone().into();
             }
             let expected = match signed_consensus_mode {
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
@@ -9385,7 +9459,11 @@ impl Iroha {
                 Arc::clone(&queue),
                 Arc::clone(&state),
             )
-            .start(supervisor.shutdown_signal());
+            .start(supervisor.shutdown_signal())
+            .map_err(|error| {
+                Report::new(StartError::StartP2p)
+                    .attach(format!("failed to start transaction gossip: {error}"))
+            })?;
             supervisor.monitor(child);
             tx_gossiper
         };
@@ -11497,6 +11575,15 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
 pub fn read_config_and_genesis(
     args: &Args,
 ) -> ReportResult<(Config, Option<GenesisBlock>), ConfigError> {
+    read_config_and_genesis_with_filesystem_space(args, filesystem_space)
+}
+
+// The public startup owner always uses the real filesystem-space observation.
+// Tests inject only capacity; path, identity, managed-byte and budget checks stay real.
+fn read_config_and_genesis_with_filesystem_space(
+    args: &Args,
+    space: fn(&Path) -> Option<(u64, u64)>,
+) -> ReportResult<(Config, Option<GenesisBlock>), ConfigError> {
     let mut config = if args.config.is_some() {
         ConfigReader::new().without_env()
     } else {
@@ -11607,7 +11694,7 @@ pub fn read_config_and_genesis(
         );
         Vec::new()
     } else {
-        reconcile_nexus_storage_budget(&mut config)?
+        reconcile_nexus_storage_budget(&mut config, space)?
     };
     warn_if_nexus_storage_budget_exceeds_available(&config, &storage_budget_filesystems);
     if let Some(mode) = args.fastpq_execution_mode {
@@ -11794,11 +11881,12 @@ struct StorageBudgetFilesystemProbe {
 }
 fn reconcile_nexus_storage_budget(
     config: &mut Config,
+    space: fn(&Path) -> Option<(u64, u64)>,
 ) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
     if config.nexus.storage.local_budget_bytes.is_some() {
-        return probe_nexus_storage_filesystems(config);
+        return probe_nexus_storage_filesystems(config, space);
     }
-    let mut filesystems = probe_nexus_storage_filesystems(config)?;
+    let mut filesystems = probe_nexus_storage_filesystems(config, space)?;
     let filesystem_budgets = derive_runtime_nexus_storage_budget(&filesystems)?;
     let aggregate_budget_bytes = config
         .apply_derived_storage_budget(&filesystem_budgets)
@@ -11829,6 +11917,7 @@ fn reconcile_nexus_storage_budget(
 }
 fn probe_nexus_storage_filesystems(
     config: &Config,
+    space: fn(&Path) -> Option<(u64, u64)>,
 ) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
     let mut groups = BTreeMap::<String, StorageBudgetFilesystemProbe>::new();
     for (component, root) in effective_nexus_storage_component_roots(config) {
@@ -11847,7 +11936,7 @@ fn probe_nexus_storage_filesystems(
                 component.as_str()
             ))
         })?;
-        let (available_bytes, total_bytes) = filesystem_space(&probe_path).ok_or_else(|| {
+        let (available_bytes, total_bytes) = space(&probe_path).ok_or_else(|| {
             filesystem_probe_config_error(format!(
                 "failed to determine filesystem capacity for `{}` (component `{}`)",
                 probe_path.display(),
@@ -12667,14 +12756,21 @@ metadata = {}
             for key in ["identity_public_key", "identity_private_key"] {
                 streaming.insert(key.to_owned(), fixture["streaming"][key].clone());
             }
-            let genesis = table
-                .get_mut("genesis")
-                .and_then(toml::Value::as_table_mut)
-                .expect("signing profile genesis table");
-            assert!(genesis.remove("expected_hash_file").is_some());
-            let hash = fixture["genesis"]["expected_hash"].clone();
-            genesis.insert("expected_hash".to_owned(), hash);
         }
+        let genesis = table
+            .get_mut("genesis")
+            .and_then(toml::Value::as_table_mut)
+            .expect("signing profile genesis table");
+        if genesis.remove("expected_hash_file").is_some() {
+            assert!(!genesis.contains_key("expected_hash"));
+            // Profile inspection cannot read a genesis identity emitted only by
+            // provisioning. This fixture identity never authorizes node startup.
+            genesis.insert(
+                "expected_hash".to_owned(),
+                minimal_config_table()["genesis"]["expected_hash"].clone(),
+            );
+        }
+
         Config::from_toml_source(TomlSource::inline(table))
             .expect("resolve signing profile for non-runtime inspection")
     }
@@ -12906,12 +13002,47 @@ metadata = {}
             "--sora must not override an explicit operator storage opt-out"
         );
     }
+    fn install_storage_signer_fixture_bindings(table: &mut Table) {
+        for (role, seed) in [
+            ("proof_outcome", 0x84),
+            ("repair", 0x85),
+            ("reserve", 0x86),
+            ("orderbook", 0x87),
+        ] {
+            let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture role key");
+            let authority = AccountId::new(key.public_key().clone())
+                .to_i105_for_discriminant(
+                    iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT,
+                )
+                .expect("fixture role authority");
+            let prefix = ["sorafs", "storage", "native_transaction_signers", role];
+            for (field, value) in [
+                (
+                    "handle",
+                    format!("software://sorafs/{role}/compliance-fixture"),
+                ),
+                ("authority", authority),
+                ("algorithm", "ed25519".to_owned()),
+                ("public_key_hex", hex::encode(key.public_key().to_bytes().1)),
+                ("policy_digest_hex", hex::encode([seed; 32])),
+            ] {
+                iroha_config::base::toml::Writer::new(table)
+                    .write([prefix[0], prefix[1], prefix[2], prefix[3], field], value);
+            }
+            iroha_config::base::toml::Writer::new(table).write(
+                [prefix[0], prefix[1], prefix[2], prefix[3], "revision"],
+                1_i64,
+            );
+        }
+    }
     #[test]
     fn sora_flag_preserves_explicit_storage_and_rejects_missing_compliance() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
         let mut table = minimal_config_table();
         iroha_config::base::toml::Writer::new(&mut table)
             .write(["sorafs", "storage", "enabled"], true);
+        install_storage_signer_fixture_bindings(&mut table);
         config_file
             .write_all(
                 toml::to_string(&toml::Value::Table(table))
@@ -15223,37 +15354,6 @@ mod tests {
         storage.governance_dag_service.publisher_public_key_hex = Some(hex::encode(public_key));
         storage
     }
-    #[cfg(target_os = "macos")]
-    struct MacosAclGuard {
-        path: PathBuf,
-    }
-    #[cfg(target_os = "macos")]
-    impl Drop for MacosAclGuard {
-        fn drop(&mut self) {
-            let _ = std::process::Command::new("/bin/chmod")
-                .arg("-N")
-                .arg(&self.path)
-                .status();
-        }
-    }
-    #[cfg(target_os = "macos")]
-    fn add_macos_acl(path: &Path, entry: &str) -> MacosAclGuard {
-        let output = std::process::Command::new("/bin/chmod")
-            .arg("+a")
-            .arg(entry)
-            .arg(path)
-            .output()
-            .expect("run macOS chmod");
-        assert!(
-            output.status.success(),
-            "chmod +a failed for {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        MacosAclGuard {
-            path: path.to_path_buf(),
-        }
-    }
     #[test]
     fn high_priority_relay_subscribes_to_consensus_safety() {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
@@ -15671,7 +15771,7 @@ mod tests {
             .expect("runtime-dependency startup entry")
             .1;
         let confidential_setup = startup
-            .split_once(") = if emergency_fast {")
+            .split_once("confidential_features,\n        ) = if emergency_fast {")
             .expect("emergency Fast confidential-feature branch")
             .1
             .split_once("} else {")
@@ -15811,7 +15911,7 @@ mod tests {
             "ifletSome(config_update_receivers)=config_update_receivers{letnet_for_relay=network.clone();"
         ));
         assert!(compact_source.contains(
-            "if!emergency_fast{letfastpq_device_labels=FastpqDeviceLabels::from_config(&config.zk.fastpq);install_fastpq_execution_mode_probe(&fastpq_device_labels);"
+            "if!emergency_fast&&config.telemetry_profile.expensive_metrics_enabled(){letfastpq_device_labels=FastpqDeviceLabels::from_config(&config.zk.fastpq);install_fastpq_execution_mode_probe(&fastpq_device_labels);"
         ));
         assert!(compact_source.contains(
             "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}"
@@ -15938,14 +16038,17 @@ mod tests {
     }
     #[test]
     fn enabled_reputation_runtime_has_no_validator_key_submitter_fallback() {
-        let reputation_startup = include_str!("main.rs")
+        let source: String = include_str!("main.rs")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let reputation_startup = source
             .split_once(
-                "let sorafs_reputation_runtime = if let Some(reputation_config) = \
-                 sorafs_reputation_config",
+                "letsorafs_reputation_runtime=ifletSome(reputation_config)=sorafs_reputation_config.as_ref(){",
             )
             .expect("reputation startup branch")
             .1
-            .split_once("let sorafs_hedging_billing_runtime")
+            .split_once("letsorafs_hedging_billing_runtime")
             .expect("reputation startup branch boundary")
             .0;
         assert!(
@@ -15964,20 +16067,22 @@ mod tests {
     }
     #[test]
     fn reputation_runtime_defers_assembly_until_archive_activation() {
-        let source = include_str!("main.rs");
+        let source: String = include_str!("main.rs")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         let reputation_startup = source
             .split_once(
-                "let sorafs_reputation_runtime = if let Some(reputation_config) = \
-                 sorafs_reputation_config",
+                "letsorafs_reputation_runtime=ifletSome(reputation_config)=sorafs_reputation_config.as_ref(){",
             )
             .expect("reputation startup branch")
             .1
-            .split_once("let sorafs_hedging_billing_runtime")
+            .split_once("letsorafs_hedging_billing_runtime")
             .expect("reputation startup branch boundary")
             .0;
         assert!(
             reputation_startup
-                .contains("let reputation_archive_active = reputation_archive_activation")
+                .contains("letreputation_archive_active=reputation_archive_activation")
                 && reputation_startup.contains(".activation_ready()"),
             "reputation startup must evaluate the prepared archive activation gate"
         );
@@ -16118,13 +16223,13 @@ mod tests {
         );
         assert!(
             run_main_source.contains(
-                "rt.block_on(run_node(config,genesis,runtime_deps,musubi_publication_factory))"
+                "rt.block_on(run_node(config,genesis,runtime_deps,musubi_publication_factory,))"
             ),
             "standard CLI startup must forward the resolved dependency set and private publication factory"
         );
         assert!(
             run_node_source.contains(
-                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_factory)"
+                "Iroha::start_with_runtime_deps(config,genesis,logger,shutdown_on_panic,runtime_deps,musubi_publication_factory,)"
             ),
             "daemon startup must consume the resolved dependency set and private publication factory"
         );
@@ -16134,7 +16239,7 @@ mod tests {
             "standard CLI startup must not replace registry output with Default"
         );
         let validation = run_main_source
-            .find("validate_config_offline(&config).change_context(MainError::Config)?")
+            .find("validate_startup_config_offline(&config).change_context(MainError::Config)?")
             .expect("offline validation in run_main");
         let binding_projection = run_main_source
             .find("IrohaRuntimeProviderBindingsV1::try_from_config(&config)")
@@ -16192,7 +16297,7 @@ mod tests {
             .expect("SoraFS node construction");
         let publication_context = startup_source
             .find(
-                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(NetworkId::from_genesis_hash(config.genesis.expected_hash),Arc::clone(&state),Arc::clone(&queue),sorafs_node::NodeHandle::clone(sorafs_node))",
+                "musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(NetworkId::from_genesis_hash(config.genesis.expected_hash),Arc::clone(&state),Arc::clone(&queue),sorafs_node::NodeHandle::clone(sorafs_node),)",
             )
             .expect("private publication context construction");
         let torii_runtime_deps = startup_source
@@ -16334,10 +16439,10 @@ mod tests {
             "the fused privacy role pair, signed Governance publisher, and sealed producer store must enter NodeRuntimeDeps before node construction"
         );
         let torii_deps = compact_source
-            .find("let runtime_deps=iroha_torii::ToriiRuntimeDeps::new(")
+            .find("letruntime_deps=iroha_torii::ToriiRuntimeDeps::new(")
             .expect("launcher assembles Torii dependencies");
         let torii_start = compact_source[torii_deps..]
-            .find("let torii=Torii::new_with_handle(")
+            .find("lettorii=Torii::new_with_handle(")
             .map(|offset| torii_deps + offset)
             .expect("launcher constructs Torii");
         assert!(
@@ -16376,7 +16481,9 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         let corridor = compact_source
-            .split_once("letsorafs_pop_credentials=sorafs_pop_runtime::build(")
+            .split_once(
+                "letsorafs_pop_credentials=ifemergency_fast{None}else{sorafs_pop_runtime::build(",
+            )
             .map(|(_, suffix)| suffix)
             .expect("standard launcher must build the PoP runtime");
         let corridor = corridor
@@ -16422,23 +16529,13 @@ mod tests {
         use super::*;
         #[test]
         fn installs_actual_zk_and_settlement_config_before_kura_replay() {
-            let config_table = toml::toml! {
-                chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-                [network]
-                address = "addr:127.0.0.1:1337#8F78"
-                public_address = "addr:127.0.0.1:1337#8F78"
-                [genesis]
-                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-                file = "./genesis.signed.nrt"
-                expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                [streaming]
-                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-                [torii]
-                address = "addr:127.0.0.1:8080#8942"
-            };
+            let mut config_table = crate::config_tests::minimal_config_table();
+            iroha_config::base::toml::Writer::new(&mut config_table)
+                .write(
+                    ["genesis", "public_key"],
+                    "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+                )
+                .write(["genesis", "file"], "./genesis.signed.nrt");
             let mut config = ConfigReader::new()
                 .with_toml_source(TomlSource::inline(config_table))
                 .read_and_complete::<UserConfig>()
@@ -16633,25 +16730,7 @@ mod tests {
     mod norito_archive_len {
         use super::*;
         fn base_config() -> Config {
-            let table = toml::toml! {
-                chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-                trusted_peers_pop = [
-                  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
-                ]
-                [network]
-                address = "addr:127.0.0.1:1337#8F78"
-                public_address = "addr:127.0.0.1:1337#8F78"
-                [torii]
-                address = "addr:127.0.0.1:8080#8942"
-                [genesis]
-                public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                [streaming]
-                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-            };
+            let table = crate::config_tests::minimal_config_table();
             Config::from_toml_source(TomlSource::inline(table)).expect("base config")
         }
         #[test]
@@ -18563,7 +18642,9 @@ mod tests {
                 .with_consensus_meta()
                 .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
                     genesis_authority,
-                    Some(iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)),
+                    Some(iroha_core::da::proof_policy_bundle(
+                        &config.nexus.lane_config,
+                    )),
                     Some(iroha_core::state::compute_genesis_confidential_policy_hash(
                         &config.zk,
                     )),
@@ -19466,7 +19547,7 @@ mod tests {
         }
         #[cfg(feature = "sm")]
         #[test]
-        fn manifest_crypto_applies_without_genesis_block() -> eyre::Result<()> {
+        fn manifest_crypto_cannot_override_config_without_signed_genesis() -> eyre::Result<()> {
             let genesis_keys = KeyPair::random();
             let mut config_table = sample_config_table();
             iroha_config::base::toml::Writer::new(&mut config_table)
@@ -19486,7 +19567,12 @@ mod tests {
             let mut manifest_crypto = ManifestCrypto::default();
             manifest_crypto.default_hash = "sm3-256".to_owned();
             manifest_crypto.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
+            manifest_crypto.allowed_curve_ids =
+                iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
+                    &manifest_crypto.allowed_signing,
+                );
             manifest_crypto.sm2_distid_default = "CN1234567812345678".to_owned();
+            manifest_crypto.validate()?;
             let manifest = complete_test_genesis_builder(
                 GenesisBuilder::new_without_executor(
                     ChainId::from("test-chain"),
@@ -19524,9 +19610,35 @@ mod tests {
             })
             .map_err(|report| eyre::eyre!("{report:?}"))?;
             assert!(genesis.is_none());
-            assert!(config.crypto.default_hash.eq_ignore_ascii_case("sm3-256"));
-            assert!(config.crypto.allowed_signing.contains(&Algorithm::Sm2));
-            assert_eq!(config.crypto.sm2_distid_default, "CN1234567812345678");
+            // An unsigned manifest is a consistency input, not an alternate
+            // authority for node crypto parameters before signed genesis.
+            assert!(
+                config
+                    .crypto
+                    .default_hash
+                    .eq_ignore_ascii_case("blake2b-256")
+            );
+            assert!(!config.crypto.allowed_signing.contains(&Algorithm::Sm2));
+            assert_ne!(config.crypto.sm2_distid_default, "CN1234567812345678");
+            let selected_manifest = config
+                .genesis
+                .manifest_json
+                .as_ref()
+                .expect("CLI manifest remains selected")
+                .resolve_relative_path();
+            let retained_manifest = read_genesis_manifest(&selected_manifest)
+                .map_err(|error| eyre::eyre!("{error:?}"))?;
+            assert!(
+                retained_manifest
+                    .crypto()
+                    .default_hash
+                    .eq_ignore_ascii_case("sm3-256")
+            );
+            assert!(
+                ensure_manifest_crypto_matches(&retained_manifest, &config)
+                    .expect_err("unsigned crypto substitution must fail startup consistency")
+                    .contains("crypto mismatch")
+            );
             Ok(())
         }
     }
@@ -19561,6 +19673,15 @@ mod tests {
                 fastpq_chip_family: None,
                 fastpq_gpu_kind: None,
             }
+        }
+
+        fn read_config_with_fixture_space(
+            args: &Args,
+        ) -> ReportResult<(Config, Option<GenesisBlock>), ConfigError> {
+            // Explicit capacity-only fixture observation, not host disk qualification.
+            read_config_and_genesis_with_filesystem_space(args, |_| {
+                Some((32 * 1024 * 1024 * 1024, 64 * 1024 * 1024 * 1024))
+            })
         }
 
         fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
@@ -19605,7 +19726,11 @@ mod tests {
                 )
                 .write(["confidential", "enabled"], true)
                 .write(["confidential", "assume_valid"], false)
-                .write(["genesis", "public_key"], genesis_public_key.to_string());
+                .write(["genesis", "public_key"], genesis_public_key.to_string())
+                .write(
+                    ["genesis", "expected_hash"],
+                    "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E",
+                );
             let mut pop_entry = toml::Table::new();
             pop_entry.insert(
                 "public_key".to_string(),
@@ -19639,6 +19764,10 @@ mod tests {
             let mut config = config_factory(genesis_key_pair.public_key());
             iroha_config::base::toml::Writer::new(&mut config)
                 .write(["genesis", "file"], "./genesis/genesis.proposal.nrt")
+                .write(
+                    ["genesis", "expected_hash"],
+                    NetworkId::from_genesis_hash(proposal.0.hash()).to_string(),
+                )
                 .write(["kura", "store_dir"], "../storage")
                 .write(["snapshot", "store_dir"], "../snapshots")
                 .write(["dev_telemetry", "out_file"], "../logs/telemetry");
@@ -19654,7 +19783,7 @@ mod tests {
             std::fs::write(&genesis_path, proposal.0.encode_wire()?)?;
             std::fs::write(&executor_path, "")?;
             let (config, _genesis) =
-                read_config_and_genesis(&config_test_args(config_path.clone(), None))
+                read_config_with_fixture_space(&config_test_args(config_path.clone(), None))
                     .map_err(|report| eyre::eyre!("{report:?}"))?;
             Ok((config, dir, config_path))
         }
@@ -19666,7 +19795,7 @@ mod tests {
             })?;
             let manifest_path = dir.path().join("bound-genesis.json");
             std::fs::write(&manifest_path, b"{}")?;
-            let (config, _genesis) = read_config_and_genesis(&config_test_args(
+            let (config, _genesis) = read_config_with_fixture_space(&config_test_args(
                 config_path,
                 Some(manifest_path.clone()),
             ))

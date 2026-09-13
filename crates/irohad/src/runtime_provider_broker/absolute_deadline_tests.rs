@@ -102,3 +102,37 @@ fn blocked_socket_read_and_write_share_the_original_expiration() {
         io::ErrorKind::TimedOut
     );
 }
+
+#[test]
+fn response_deadline_drains_a_closed_peers_complete_frame_and_eof() {
+    let (mut local, mut peer) = UnixStream::pair().unwrap();
+    peer.write_all(b"\x04\x00\x00\x00done").unwrap();
+    peer.shutdown(std::net::Shutdown::Write).unwrap();
+    drop(peer);
+    let deadline = BrokerDeadlineV1::new(Duration::from_secs(1)).unwrap();
+    let mut reader = DeadlineUnixStreamV1::new(&mut local, deadline);
+    let mut prefix = [0; 4];
+    reader.read_exact(&mut prefix).unwrap();
+    assert_eq!(u32::from_le_bytes(prefix), 4);
+    let mut body = [0; 4];
+    reader.read_exact(&mut body).unwrap();
+    assert_eq!(&body, b"done");
+    assert_eq!(reader.read(&mut [0; 1]).unwrap(), 0);
+}
+
+#[test]
+fn expired_response_deadline_rejects_closed_peers_buffered_bytes() {
+    let (mut local, mut peer) = UnixStream::pair().unwrap();
+    peer.write_all(b"late").unwrap();
+    drop(peer);
+    assert_eq!(
+        DeadlineUnixStreamV1::new(&mut local, expired())
+            .read(&mut [0; 4])
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    let mut retained = [0; 4];
+    local.read_exact(&mut retained).unwrap();
+    assert_eq!(&retained, b"late");
+}

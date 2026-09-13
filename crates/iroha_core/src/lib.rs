@@ -147,6 +147,8 @@ pub mod queue;
 pub(crate) mod receiver_snapshot;
 /// Shared compiled validator identity and signed genesis input validation.
 pub mod release_identity;
+/// Retained P2P ownership through final gossip processing.
+pub mod retained_gossip;
 mod secure_file_metadata;
 /// Unified XOR settlement engine.
 pub mod settlement;
@@ -173,6 +175,8 @@ pub mod tle_release;
 pub mod torii;
 /// Peer-to-peer Torii ingress proxy envelopes.
 pub mod torii_proxy;
+/// Canonical semantic frame-size admission for receiver-issued P2P credits.
+pub mod transport_admission;
 pub mod tx;
 /// Validation-fee admission enforcement.
 pub mod validation_fee;
@@ -918,6 +922,13 @@ impl NetworkMessage {
 // Classify core network messages into P2P topics for scheduling.
 impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     const HAS_INBOUND_DECODE_LIMITS: bool = true;
+    fn availability_frame_maximum(local_peer: &PeerId) -> Result<usize, norito::core::Error> {
+        transport_admission::availability_frame_maximum(local_peer)
+    }
+    fn recovery_frame_maxima(local_peer: &PeerId) -> Result<[usize; 2], norito::core::Error> {
+        let maxima = transport_admission::recovery_frame_maxima(local_peer)?;
+        Ok([maxima.control, maxima.data])
+    }
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         use iroha_p2p::network::message::Topic as T;
         match self {
@@ -988,6 +999,60 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             }
             NetworkMessage::Connect(_) => T::Connect,
         }
+    }
+    fn admission_class(&self) -> iroha_p2p::network::message::TransportAdmissionClass {
+        use iroha_p2p::network::message::TransportAdmissionClass as A;
+        match self {
+            Self::CertifiedMergeSidecar(message) => match message.as_ref() {
+                CertifiedMergeSidecarMessage::Request(_)
+                | CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_) => A::RecoveryControl,
+                CertifiedMergeSidecarMessage::Chunk(_) => A::RecoveryData,
+            },
+            // Keep this exhaustive so a new outer variant requires a decision.
+            // The existing exhaustive topic owner supplies ordinary semantics;
+            // it cannot promote a V2 RS16 chunk to sidecar recovery.
+            Self::SumeragiBlock(_)
+            | Self::LaneRelay(_)
+            | Self::MergeCommitteeSignature(_)
+            | Self::LaneDrainVote(_)
+            | Self::NativeAmx(_)
+            | Self::TransactionGossiper(_)
+            | Self::PeersGossiper(_)
+            | Self::PeerTrustGossip(_)
+            | Self::Health
+            | Self::TimePing(_)
+            | Self::TimePong(_)
+            | Self::Connect(_)
+            | Self::ToriiProxyRequest(_)
+            | Self::ToriiProxyResponse(_)
+            | Self::StreamingControl(_)
+            | Self::QueuePlanAdmissionPublication(_)
+            | Self::QueuePlanAdmissionCertificate(_) => A::ordinary_for_topic(self.topic()),
+        }
+    }
+    fn inbound_admission_class(
+        payload: &[u8],
+        flags: u8,
+    ) -> Result<iroha_p2p::network::message::TransportAdmissionClass, norito::core::Error> {
+        use iroha_p2p::network::message::{Topic, TransportAdmissionClass as A};
+        // Reuse the exact envelope/layout/discriminant validation of the raw
+        // topic owner. The outer sidecar tag is required in addition to Topic.
+        let topic = Self::inbound_topic(payload, flags)?.ok_or_else(|| {
+            norito::core::Error::Message("core network payload has no raw topic".to_owned())
+        })?;
+        let (tag, _) = inbound_enum_parts(payload)?;
+        if tag == 4 {
+            return match topic {
+                Topic::Consensus => Ok(A::RecoveryControl),
+                Topic::ConsensusChunk => Ok(A::RecoveryData),
+                _ => Err(norito::core::Error::Message(
+                    "invalid certified sidecar admission topic".to_owned(),
+                )),
+            };
+        }
+        Ok(A::ordinary_for_topic(topic))
     }
     fn subscriber_route(&self) -> iroha_p2p::network::message::SubscriberRoute {
         use iroha_p2p::network::message::SubscriberRoute;
@@ -1415,7 +1480,44 @@ mod tests {
     fn checked_topic_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked network topic keypair")
     }
+    fn assert_network_admission(
+        message: &NetworkMessage,
+        expected: iroha_p2p::TransportAdmissionClass,
+    ) {
+        assert_eq!(message.admission_class(), expected);
+        for requested in [
+            0,
+            ncore::header_flags::COMPACT_LEN,
+            ncore::header_flags::PACKED_STRUCT
+                | ncore::header_flags::COMPACT_LEN
+                | ncore::header_flags::FIELD_BITSET,
+        ] {
+            let (bare, flags) = {
+                let _encode_guard = ncore::DecodeFlagsGuard::enter(requested);
+                norito::codec::encode_with_header_flags(message)
+            };
+            let _decode_guard = ncore::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                NetworkMessage::inbound_admission_class(&bare, flags).unwrap(),
+                expected
+            );
+            let (decoded, consumed) = ncore::decode_field_canonical::<NetworkMessage>(&bare)
+                .expect("canonical message still decodes under advertised flags");
+            assert_eq!(
+                consumed,
+                bare.len(),
+                "canonical decode consumes the exact payload"
+            );
+            assert_eq!(decoded.admission_class(), expected);
+            assert_eq!(
+                decoded.topic(),
+                message.topic(),
+                "classification does not change topic caps"
+            );
+        }
+    }
     fn raw_network_topic(message: &NetworkMessage) -> NetworkTopic {
+        assert_network_admission(message, message.admission_class());
         let encoded = ncore::to_bytes(message).expect("encode raw-topic fixture");
         let view = ncore::from_bytes_view(&encoded).expect("inspect raw-topic fixture");
         <NetworkMessage as ClassifyTopic>::inbound_topic(view.as_bytes(), view.flags())
@@ -2050,6 +2152,54 @@ mod tests {
                     && limit == MAX_LANE_DRAIN_VOTE_WIRE_BYTES as u64
         ));
     }
+    fn assert_sidecar_admission_rejects_substituted_tags(message: &NetworkMessage) {
+        for requested in [
+            0,
+            ncore::header_flags::COMPACT_LEN,
+            ncore::header_flags::PACKED_STRUCT
+                | ncore::header_flags::COMPACT_LEN
+                | ncore::header_flags::FIELD_BITSET,
+        ] {
+            let (bare, flags) = {
+                let _encode_guard = ncore::DecodeFlagsGuard::enter(requested);
+                norito::codec::encode_with_header_flags(message)
+            };
+            let _decode_guard = ncore::DecodeFlagsGuard::enter(flags);
+            for outer_tag in [0_u32, 18, 99] {
+                let mut substituted = bare.clone();
+                substituted[..4].copy_from_slice(&outer_tag.to_le_bytes());
+                assert!(NetworkMessage::inbound_admission_class(&substituted, flags).is_err());
+            }
+            let (_, remaining) = super::inbound_enum_parts(&bare).unwrap();
+            let field = super::inbound_owned_enum_field(remaining, flags).unwrap();
+            let offset = bare.len() - field.len();
+            let mut unknown = bare.clone();
+            unknown[offset..offset + 4].copy_from_slice(&5_u32.to_le_bytes());
+            assert!(NetworkMessage::inbound_admission_class(&unknown, flags).is_err());
+            assert!(
+                NetworkMessage::inbound_admission_class(&bare[..bare.len() - 1], flags).is_err()
+            );
+            let mut trailing = bare.clone();
+            trailing.push(0);
+            assert!(NetworkMessage::inbound_admission_class(&trailing, flags).is_err());
+            // A known inner tag can produce a different prefix classification,
+            // but cannot preserve the original declared grant class or bypass
+            // full typed decoding of this differently shaped canonical payload.
+            let replacement =
+                if message.admission_class() == iroha_p2p::TransportAdmissionClass::RecoveryData {
+                    0_u32
+                } else {
+                    4_u32
+                };
+            let mut changed_class = bare.clone();
+            changed_class[offset..offset + 4].copy_from_slice(&replacement.to_le_bytes());
+            assert_ne!(
+                NetworkMessage::inbound_admission_class(&changed_class, flags).unwrap(),
+                message.admission_class()
+            );
+            assert!(ncore::decode_field_canonical::<NetworkMessage>(&changed_class).is_err());
+        }
+    }
     #[test]
     fn certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics() {
         use crate::merge_sidecar::{
@@ -2119,6 +2269,11 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(request_payload.as_ref());
         assert_eq!(request_message.topic(), NetworkTopic::Consensus);
+        assert_network_admission(
+            &request_message,
+            iroha_p2p::TransportAdmissionClass::RecoveryControl,
+        );
+        assert_sidecar_admission_rejects_substituted_tags(&request_message);
         assert_eq!(raw_network_tag(&request_message), 4);
         assert_eq!(raw_network_topic(&request_message), NetworkTopic::Consensus);
         let request_hash = HashOf::new(&request_message);
@@ -2149,6 +2304,11 @@ mod tests {
             CertifiedMergeSidecarMessage::Close(close.clone()),
         ));
         assert_eq!(close_message.topic(), NetworkTopic::Consensus);
+        assert_network_admission(
+            &close_message,
+            iroha_p2p::TransportAdmissionClass::RecoveryControl,
+        );
+        assert_sidecar_admission_rejects_substituted_tags(&close_message);
         assert_eq!(raw_network_topic(&close_message), NetworkTopic::Consensus);
         let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
         let decoded =
@@ -2175,6 +2335,11 @@ mod tests {
             CertifiedMergeSidecarMessage::CloseAck(close_ack.clone()),
         ));
         assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
+        assert_network_admission(
+            &close_ack_message,
+            iroha_p2p::TransportAdmissionClass::RecoveryControl,
+        );
+        assert_sidecar_admission_rejects_substituted_tags(&close_ack_message);
         assert_eq!(
             raw_network_topic(&close_ack_message),
             NetworkTopic::Consensus
@@ -2214,6 +2379,11 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(generation_hint_payload.as_ref());
         assert_eq!(generation_hint_message.topic(), NetworkTopic::Consensus);
+        assert_network_admission(
+            &generation_hint_message,
+            iroha_p2p::TransportAdmissionClass::RecoveryControl,
+        );
+        assert_sidecar_admission_rejects_substituted_tags(&generation_hint_message);
         assert_eq!(
             raw_network_topic(&generation_hint_message),
             NetworkTopic::Consensus
@@ -2265,6 +2435,11 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(chunk_payload.as_ref());
         assert_eq!(chunk_message.topic(), NetworkTopic::ConsensusChunk);
+        assert_network_admission(
+            &chunk_message,
+            iroha_p2p::TransportAdmissionClass::RecoveryData,
+        );
+        assert_sidecar_admission_rejects_substituted_tags(&chunk_message);
         assert_eq!(
             raw_network_topic(&chunk_message),
             NetworkTopic::ConsensusChunk
@@ -2574,6 +2749,108 @@ mod tests {
         assert_eq!(log.msg.len(), TRANSACTION_BODY_BYTES);
         assert!(log.msg.as_bytes().iter().all(|byte| *byte == b'P'));
     }
+    #[tokio::test]
+    async fn certified_body_and_request_admission_stay_ordinary() {
+        use iroha_data_model::block::consensus_v2 as wire;
+        use iroha_p2p::TransportAdmissionClass as A;
+        // Canonical codec fixtures, not a consensus-valid certificate or a
+        // network execution: admission classification must not claim either.
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"admission fixture context",
+            ))),
+            height: 7,
+            view: 0,
+        };
+        let body = vec![1, 2, 3, 4];
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"admission fixture block")),
+            payload_hash: Hash::new(&body),
+        };
+        let layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1024,
+            max_chunk_count: 2,
+        };
+        let chunks = wire::encode_payload_chunks(layout, &body).expect("canonical RS16 chunks");
+        let chunk_hashes = chunks.iter().map(Hash::new).collect::<Vec<_>>();
+        let manifest = wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: body.len() as u64,
+            layout,
+            chunk_root: Hash::new(b"codec-only manifest root"),
+            chunk_hashes,
+        };
+        let node_key =
+            iroha_crypto::KeyPair::try_from_seed(vec![83; 32], iroha_crypto::Algorithm::BlsNormal)
+                .expect("BLS-normal relay identity");
+        let peer = PeerId::new(node_key.public_key().clone());
+        let response = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
+                    wire::CertifiedBodyResponse {
+                        request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                            b"admission request",
+                        )),
+                        manifest,
+                        body,
+                        responder: peer.clone(),
+                        signature: vec![1],
+                    },
+                ),
+            )),
+        )));
+        assert_eq!(response.topic(), NetworkTopic::ConsensusPayload);
+        assert_network_admission(&response, A::Payload);
+        let request = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                    wire::CommitCertificateRequest {
+                        protocol_version: wire::PROTOCOL_VERSION,
+                        network_id: test_network_id(b"admission request network"),
+                        context_id: round.context_id,
+                        height: round.height,
+                        requester: peer,
+                        signature: vec![2],
+                    },
+                ),
+            )),
+        )));
+        assert_eq!(request.topic(), NetworkTopic::Consensus);
+        assert_network_admission(&request, A::Lane);
+        for message in [&response, &request] {
+            let (mut substituted, flags) = norito::codec::encode_with_header_flags(message);
+            substituted[..4].copy_from_slice(&4_u32.to_le_bytes());
+            assert!(NetworkMessage::inbound_admission_class(&substituted, flags).is_err());
+        }
+        assert_network_admission(&NetworkMessage::Health, A::Low);
+        let availability = NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                    manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"native grant availability fixture",
+                    )),
+                    index: 0,
+                    bytes: chunks[0].clone(),
+                    sender: 0,
+                    signature: vec![3],
+                }),
+            )),
+        )));
+        // These are actual canonical native messages and signed outer relays;
+        // this proves transport ownership, not valid consensus authority.
+        iroha_p2p::network::assert_payload_availability_progress_for_test(
+            &node_key,
+            response,
+            availability,
+        )
+        .await;
+    }
     #[test]
     fn authoritative_v2_safety_uses_dedicated_topic() {
         use iroha_data_model::block::consensus_v2 as wire;
@@ -2626,6 +2903,7 @@ mod tests {
             "the nested raw classifier must receive the full BlockMessage frame"
         );
         assert_eq!(raw_network_topic(&message), NetworkTopic::ConsensusSafety);
+        assert_network_admission(&message, iroha_p2p::TransportAdmissionClass::Safety);
     }
     fn signed_kura_replica_advert_message() -> NetworkMessage {
         let key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
@@ -2654,6 +2932,7 @@ mod tests {
         let message = signed_kura_replica_advert_message();
         assert_eq!(message.topic(), NetworkTopic::Consensus);
         assert_eq!(raw_network_topic(&message), NetworkTopic::Consensus);
+        assert_network_admission(&message, iroha_p2p::TransportAdmissionClass::Lane);
         assert!(message.is_outbound_allowed());
         let encoded = ncore::to_bytes(&message).expect("encode Kura replica advert network frame");
         let view = ncore::from_bytes_view(&encoded).expect("inspect Kura replica advert frame");
@@ -2696,6 +2975,13 @@ mod tests {
         )));
         assert_eq!(v2_chunk.topic(), NetworkTopic::ConsensusChunk);
         assert_eq!(raw_network_topic(&v2_chunk), NetworkTopic::ConsensusChunk);
+        assert_network_admission(&v2_chunk, iroha_p2p::TransportAdmissionClass::Availability);
+        let (mut substituted, flags) = norito::codec::encode_with_header_flags(&v2_chunk);
+        substituted[..4].copy_from_slice(&4_u32.to_le_bytes());
+        assert!(
+            NetworkMessage::inbound_admission_class(&substituted, flags).is_err(),
+            "a V2 RS16 frame cannot masquerade as a certified sidecar envelope"
+        );
         assert!(v2_chunk.is_outbound_allowed());
         assert!(
             ncore::to_bytes(&v2_chunk).is_ok(),

@@ -310,7 +310,7 @@ fn evict_oldest_accept_bucket(
     let ip_oldest = oldest_bucket(ip_buckets);
     match (prefix_oldest, ip_oldest) {
         (Some(prefix), Some(ip)) if prefix <= ip => prefix_buckets.remove(&prefix.1).is_some(),
-        (Some(_), Some(ip)) | (None, Some(ip)) => ip_buckets.remove(&ip.1).is_some(),
+        (Some(_) | None, Some(ip)) => ip_buckets.remove(&ip.1).is_some(),
         (Some(prefix), None) => prefix_buckets.remove(&prefix.1).is_some(),
         (None, None) => false,
     }

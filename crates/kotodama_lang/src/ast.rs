@@ -163,151 +163,12 @@ impl std::fmt::Debug for TypeExpr {
 }
 impl PartialEq for TypeExpr {
     fn eq(&self, other: &Self) -> bool {
-        let mut pending = vec![(self, other)];
-        while let Some((left, right)) = pending.pop() {
-            match (left, right) {
-                (
-                    Self::Source {
-                        node: left_node,
-                        source: left_source,
-                        ty: left_ty,
-                    },
-                    Self::Source {
-                        node: right_node,
-                        source: right_source,
-                        ty: right_ty,
-                    },
-                ) => {
-                    if left_node != right_node || left_source != right_source {
-                        return false;
-                    }
-                    pending.push((left_ty, right_ty));
-                }
-                (
-                    Self::Resolved {
-                        id: left_id,
-                        source: left_source,
-                        ty: left_ty,
-                    },
-                    Self::Resolved {
-                        id: right_id,
-                        source: right_source,
-                        ty: right_ty,
-                    },
-                ) => {
-                    if left_id != right_id || left_source != right_source {
-                        return false;
-                    }
-                    pending.push((left_ty, right_ty));
-                }
-                (Self::Path(left), Self::Path(right)) => {
-                    if left != right {
-                        return false;
-                    }
-                }
-                (
-                    Self::Generic {
-                        base: left_base,
-                        args: left_args,
-                    },
-                    Self::Generic {
-                        base: right_base,
-                        args: right_args,
-                    },
-                ) => {
-                    if left_base != right_base || left_args.len() != right_args.len() {
-                        return false;
-                    }
-                    pending.extend(left_args.iter().zip(right_args).rev());
-                }
-                (Self::Tuple(left), Self::Tuple(right)) => {
-                    if left.len() != right.len() {
-                        return false;
-                    }
-                    pending.extend(left.iter().zip(right).rev());
-                }
-                (Self::Const(left), Self::Const(right)) => {
-                    if left != right {
-                        return false;
-                    }
-                }
-                (Self::ConstExpression(left), Self::ConstExpression(right)) => {
-                    if left != right {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-        }
-        true
+        ast_nodes_equal(CompareNode::Type(self, other))
     }
 }
 impl Clone for TypeExpr {
     fn clone(&self) -> Self {
-        enum Pending<'a> {
-            Type(&'a TypeExpr),
-            Source(NodeId, SourceRange),
-            Resolved(HirId, Option<SourceRange>),
-            Generic(String, usize),
-            Tuple(usize),
-        }
-
-        let mut pending = vec![Pending::Type(self)];
-        let mut values = Vec::new();
-        while let Some(operation) = pending.pop() {
-            match operation {
-                Pending::Type(ty) => match ty {
-                    Self::Source { node, source, ty } => {
-                        pending.push(Pending::Source(*node, *source));
-                        pending.push(Pending::Type(ty));
-                    }
-                    Self::Resolved { id, source, ty } => {
-                        pending.push(Pending::Resolved(*id, *source));
-                        pending.push(Pending::Type(ty));
-                    }
-                    Self::Path(path) => values.push(Self::Path(path.clone())),
-                    Self::Generic { base, args } => {
-                        pending.push(Pending::Generic(base.clone(), args.len()));
-                        pending.extend(args.iter().rev().map(Pending::Type));
-                    }
-                    Self::Tuple(items) => {
-                        pending.push(Pending::Tuple(items.len()));
-                        pending.extend(items.iter().rev().map(Pending::Type));
-                    }
-                    Self::Const(value) => values.push(Self::Const(*value)),
-                    Self::ConstExpression(value) => {
-                        values.push(Self::ConstExpression(value.clone()))
-                    }
-                },
-                Pending::Source(node, source) => {
-                    let ty = values.pop().expect("visited source type child");
-                    values.push(Self::Source {
-                        node,
-                        source,
-                        ty: Box::new(ty),
-                    });
-                }
-                Pending::Resolved(id, source) => {
-                    let ty = values.pop().expect("visited resolved type child");
-                    values.push(Self::Resolved {
-                        id,
-                        source,
-                        ty: Box::new(ty),
-                    });
-                }
-                Pending::Generic(base, len) => {
-                    let start = values.len().saturating_sub(len);
-                    let args = values.split_off(start);
-                    values.push(Self::Generic { base, args });
-                }
-                Pending::Tuple(len) => {
-                    let start = values.len().saturating_sub(len);
-                    let items = values.split_off(start);
-                    values.push(Self::Tuple(items));
-                }
-            }
-        }
-        values.pop().expect("type traversal produces one root")
+        clone_ast_node(CloneNode::Type(self)).into_type()
     }
 }
 /// Explicit source-call spelling of a parameter.
@@ -874,6 +735,7 @@ pub struct StructLiteralField {
 }
 
 enum CloneNode<'a> {
+    Type(&'a TypeExpr),
     Expr(&'a Expr),
     Statement(&'a Statement),
     Block(&'a Block),
@@ -881,6 +743,7 @@ enum CloneNode<'a> {
 
 enum CloneTask<'a> {
     Visit(CloneNode<'a>),
+    BuildType(CloneType<'a>),
     BuildExpr(CloneExpr<'a>),
     BuildStatement(CloneStatement<'a>),
     BuildBlock {
@@ -902,6 +765,14 @@ enum SequenceExpr {
     Tuple,
     List,
     JsonArray,
+}
+
+enum CloneType<'a> {
+    Source(NodeId, SourceRange),
+    Resolved(HirId, Option<SourceRange>),
+    Generic(&'a str, usize),
+    Tuple(usize),
+    ConstExpression,
 }
 
 enum CloneExpr<'a> {
@@ -945,7 +816,7 @@ enum CloneStatement<'a> {
     Let {
         mutable: bool,
         pat: &'a Pattern,
-        ty: &'a Option<TypeExpr>,
+        has_type: bool,
     },
     Assign(&'a str),
     AssignExpr(AssignOp),
@@ -971,12 +842,20 @@ enum CloneStatement<'a> {
 }
 
 enum CloneValue {
+    Type(TypeExpr),
     Expr(Expr),
     Statement(Statement),
     Block(Block),
 }
 
 impl CloneValue {
+    fn into_type(self) -> TypeExpr {
+        let Self::Type(ty) = self else {
+            panic!("AST clone traversal produced a non-type child")
+        };
+        ty
+    }
+
     fn into_expr(self) -> Expr {
         let Self::Expr(expression) = self else {
             panic!("AST clone traversal produced a non-expression child")
@@ -1007,11 +886,87 @@ fn take_clone_children(values: &mut Vec<CloneValue>, count: usize) -> Vec<CloneV
     values.split_off(start)
 }
 
+// Type capacities contain expressions and typed lets contain annotations. Both
+// directions must remain on this same work list, including provenance wrappers.
+fn visit_type_clone<'a>(
+    ty: &'a TypeExpr,
+    tasks: &mut Vec<CloneTask<'a>>,
+    values: &mut Vec<CloneValue>,
+) {
+    match ty {
+        TypeExpr::Source { node, source, ty } => {
+            tasks.push(CloneTask::BuildType(CloneType::Source(*node, *source)));
+            tasks.push(CloneTask::Visit(CloneNode::Type(ty)));
+        }
+        TypeExpr::Resolved { id, source, ty } => {
+            tasks.push(CloneTask::BuildType(CloneType::Resolved(*id, *source)));
+            tasks.push(CloneTask::Visit(CloneNode::Type(ty)));
+        }
+        TypeExpr::Path(path) => values.push(CloneValue::Type(TypeExpr::Path(path.clone()))),
+        TypeExpr::Generic { base, args } => {
+            tasks.push(CloneTask::BuildType(CloneType::Generic(base, args.len())));
+            tasks.extend(
+                args.iter()
+                    .rev()
+                    .map(|ty| CloneTask::Visit(CloneNode::Type(ty))),
+            );
+        }
+        TypeExpr::Tuple(items) => {
+            tasks.push(CloneTask::BuildType(CloneType::Tuple(items.len())));
+            tasks.extend(
+                items
+                    .iter()
+                    .rev()
+                    .map(|ty| CloneTask::Visit(CloneNode::Type(ty))),
+            );
+        }
+        TypeExpr::Const(value) => values.push(CloneValue::Type(TypeExpr::Const(*value))),
+        TypeExpr::ConstExpression(expression) => {
+            tasks.push(CloneTask::BuildType(CloneType::ConstExpression));
+            tasks.push(CloneTask::Visit(CloneNode::Expr(expression)));
+        }
+    }
+}
+
+fn build_type_clone(builder: CloneType<'_>, values: &mut Vec<CloneValue>) {
+    let count = match builder {
+        CloneType::Generic(_, count) | CloneType::Tuple(count) => count,
+        CloneType::Source(..) | CloneType::Resolved(..) | CloneType::ConstExpression => 1,
+    };
+    let mut children = take_clone_children(values, count).into_iter();
+    let ty = match builder {
+        CloneType::Source(node, source) => TypeExpr::Source {
+            node,
+            source,
+            ty: Box::new(children.next().unwrap().into_type()),
+        },
+        CloneType::Resolved(id, source) => TypeExpr::Resolved {
+            id,
+            source,
+            ty: Box::new(children.next().unwrap().into_type()),
+        },
+        CloneType::Generic(base, _) => TypeExpr::Generic {
+            base: base.to_owned(),
+            args: children.by_ref().map(CloneValue::into_type).collect(),
+        },
+        CloneType::Tuple(_) => {
+            TypeExpr::Tuple(children.by_ref().map(CloneValue::into_type).collect())
+        }
+        CloneType::ConstExpression => {
+            TypeExpr::ConstExpression(Box::new(children.next().unwrap().into_expr()))
+        }
+    };
+    debug_assert!(children.next().is_none());
+    values.push(CloneValue::Type(ty));
+}
+
 fn clone_ast_node(root: CloneNode<'_>) -> CloneValue {
     let mut tasks = vec![CloneTask::Visit(root)];
     let mut values = Vec::new();
     while let Some(task) = tasks.pop() {
         match task {
+            CloneTask::Visit(CloneNode::Type(ty)) => visit_type_clone(ty, &mut tasks, &mut values),
+            CloneTask::BuildType(builder) => build_type_clone(builder, &mut values),
             CloneTask::Visit(CloneNode::Expr(expression)) => match expression {
                 Expr::Source {
                     node,
@@ -1236,9 +1191,12 @@ fn clone_ast_node(root: CloneNode<'_>) -> CloneValue {
                     tasks.push(CloneTask::BuildStatement(CloneStatement::Let {
                         mutable: *mutable,
                         pat,
-                        ty,
+                        has_type: ty.is_some(),
                     }));
                     tasks.push(CloneTask::Visit(CloneNode::Expr(value)));
+                    if let Some(ty) = ty {
+                        tasks.push(CloneTask::Visit(CloneNode::Type(ty)));
+                    }
                 }
                 Statement::Assign { name, value } => {
                     tasks.push(CloneTask::BuildStatement(CloneStatement::Assign(name)));
@@ -1489,10 +1447,10 @@ fn clone_ast_node(root: CloneNode<'_>) -> CloneValue {
                 let child_count = match &builder {
                     CloneStatement::Source(..)
                     | CloneStatement::Resolved(..)
-                    | CloneStatement::Let { .. }
                     | CloneStatement::Assign(..)
                     | CloneStatement::Expr
                     | CloneStatement::Return => 1,
+                    CloneStatement::Let { has_type, .. } => 1 + usize::from(*has_type),
                     CloneStatement::AssignExpr(..) | CloneStatement::While => 2,
                     CloneStatement::If { has_else } | CloneStatement::IfLet { has_else, .. } => {
                         2 + usize::from(*has_else)
@@ -1519,10 +1477,14 @@ fn clone_ast_node(root: CloneNode<'_>) -> CloneValue {
                         source,
                         statement: Box::new(children.next().unwrap().into_statement()),
                     },
-                    CloneStatement::Let { mutable, pat, ty } => Statement::Let {
+                    CloneStatement::Let {
+                        mutable,
+                        pat,
+                        has_type,
+                    } => Statement::Let {
                         mutable,
                         pat: pat.clone(),
-                        ty: ty.clone(),
+                        ty: has_type.then(|| children.next().unwrap().into_type()),
                         value: children.next().unwrap().into_expr(),
                     },
                     CloneStatement::Assign(name) => Statement::Assign {
@@ -1605,15 +1567,111 @@ fn clone_statement_iterative(statement: &Statement) -> Statement {
 }
 
 enum CompareNode<'a> {
+    Type(&'a TypeExpr, &'a TypeExpr),
     Expr(&'a Expr, &'a Expr),
     Statement(&'a Statement, &'a Statement),
     Block(&'a Block, &'a Block),
+}
+
+fn compare_type_nodes<'a>(
+    left: &'a TypeExpr,
+    right: &'a TypeExpr,
+    pending: &mut Vec<CompareNode<'a>>,
+) -> bool {
+    match (left, right) {
+        (
+            TypeExpr::Source {
+                node: left_node,
+                source: left_source,
+                ty: left_ty,
+            },
+            TypeExpr::Source {
+                node: right_node,
+                source: right_source,
+                ty: right_ty,
+            },
+        ) => {
+            if left_node != right_node || left_source != right_source {
+                return false;
+            }
+            pending.push(CompareNode::Type(left_ty, right_ty));
+        }
+        (
+            TypeExpr::Resolved {
+                id: left_id,
+                source: left_source,
+                ty: left_ty,
+            },
+            TypeExpr::Resolved {
+                id: right_id,
+                source: right_source,
+                ty: right_ty,
+            },
+        ) => {
+            if left_id != right_id || left_source != right_source {
+                return false;
+            }
+            pending.push(CompareNode::Type(left_ty, right_ty));
+        }
+        (TypeExpr::Path(left), TypeExpr::Path(right)) => {
+            if left != right {
+                return false;
+            }
+        }
+        (
+            TypeExpr::Generic {
+                base: left_base,
+                args: left_args,
+            },
+            TypeExpr::Generic {
+                base: right_base,
+                args: right_args,
+            },
+        ) => {
+            if left_base != right_base || left_args.len() != right_args.len() {
+                return false;
+            }
+            pending.extend(
+                left_args
+                    .iter()
+                    .zip(right_args)
+                    .rev()
+                    .map(|(left, right)| CompareNode::Type(left, right)),
+            );
+        }
+        (TypeExpr::Tuple(left), TypeExpr::Tuple(right)) => {
+            if left.len() != right.len() {
+                return false;
+            }
+            pending.extend(
+                left.iter()
+                    .zip(right)
+                    .rev()
+                    .map(|(left, right)| CompareNode::Type(left, right)),
+            );
+        }
+        (TypeExpr::Const(left), TypeExpr::Const(right)) => {
+            if left != right {
+                return false;
+            }
+        }
+        (TypeExpr::ConstExpression(left), TypeExpr::ConstExpression(right)) => {
+            pending.push(CompareNode::Expr(left, right));
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn ast_nodes_equal(root: CompareNode<'_>) -> bool {
     let mut pending = vec![root];
     while let Some(node) = pending.pop() {
         match node {
+            CompareNode::Type(left, right) => {
+                if !compare_type_nodes(left, right, &mut pending) {
+                    return false;
+                }
+            }
             CompareNode::Block(left, right) => {
                 if left.statements.len() != right.statements.len()
                     || left.tail.is_some() != right.tail.is_some()
@@ -1682,11 +1740,14 @@ fn ast_nodes_equal(root: CompareNode<'_>) -> bool {
                 ) => {
                     if left_mutable != right_mutable
                         || left_pattern != right_pattern
-                        || left_ty != right_ty
+                        || left_ty.is_some() != right_ty.is_some()
                     {
                         return false;
                     }
                     pending.push(CompareNode::Expr(left_value, right_value));
+                    if let (Some(left), Some(right)) = (left_ty, right_ty) {
+                        pending.push(CompareNode::Type(left, right));
+                    }
                 }
                 (
                     Statement::Assign {
@@ -2199,49 +2260,64 @@ impl TypeExpr {
     /// Return this type's exact source range when it came from source text.
     #[must_use]
     pub const fn source(&self) -> Option<SourceRange> {
-        match self {
-            Self::Source { source, .. } => Some(*source),
-            Self::Resolved { source, ty, .. } => match source {
-                Some(source) => Some(*source),
-                None => ty.source(),
-            },
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { source, .. }
+                | Self::Resolved {
+                    source: Some(source),
+                    ..
+                } => return Some(*source),
+                Self::Resolved {
+                    ty, source: None, ..
+                } => current = ty,
+                _ => return None,
+            }
         }
     }
     /// Return the stable resolved-HIR identity, when name resolution has run.
     #[must_use]
     pub const fn hir_id(&self) -> Option<HirId> {
-        match self {
-            Self::Resolved { id, .. } => Some(*id),
-            Self::Source { ty, .. } => ty.hir_id(),
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Resolved { id, .. } => return Some(*id),
+                Self::Source { ty, .. } => current = ty,
+                _ => return None,
+            }
         }
     }
     /// Return the parser-owned source identity before resolved-HIR lowering.
     #[must_use]
     pub const fn source_node(&self) -> Option<NodeId> {
-        match self {
-            Self::Source { node, .. } => Some(*node),
-            Self::Resolved { ty, .. } => ty.source_node(),
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { node, .. } => return Some(*node),
+                Self::Resolved { ty, .. } => current = ty,
+                _ => return None,
+            }
         }
     }
     /// View the semantic type form without its source wrapper.
     #[must_use]
     pub fn kind(&self) -> &Self {
-        match self {
-            Self::Source { ty, .. } => ty.kind(),
-            Self::Resolved { ty, .. } => ty.kind(),
-            _ => self,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { ty, .. } | Self::Resolved { ty, .. } => current = ty,
+                _ => return current,
+            }
         }
     }
     /// Consume the source wrapper and return the semantic type form.
     #[must_use]
-    pub fn into_kind(self) -> Self {
-        match self {
-            Self::Source { ty, .. } => ty.into_kind(),
-            Self::Resolved { ty, .. } => ty.into_kind(),
-            _ => self,
+    pub fn into_kind(mut self) -> Self {
+        loop {
+            self = match self {
+                Self::Source { ty, .. } | Self::Resolved { ty, .. } => *ty,
+                leaf => return leaf,
+            };
         }
     }
 }
@@ -2249,51 +2325,68 @@ impl Statement {
     /// Return this statement's exact source range when it came from source text.
     #[must_use]
     pub const fn source(&self) -> Option<SourceRange> {
-        match self {
-            Self::Source { source, .. } => Some(*source),
-            Self::Resolved {
-                source, statement, ..
-            } => match source {
-                Some(source) => Some(*source),
-                None => statement.source(),
-            },
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { source, .. }
+                | Self::Resolved {
+                    source: Some(source),
+                    ..
+                } => return Some(*source),
+                Self::Resolved {
+                    statement,
+                    source: None,
+                    ..
+                } => current = statement,
+                _ => return None,
+            }
         }
     }
     /// Return the stable resolved-HIR identity, when name resolution has run.
     #[must_use]
     pub const fn hir_id(&self) -> Option<HirId> {
-        match self {
-            Self::Resolved { id, .. } => Some(*id),
-            Self::Source { statement, .. } => statement.hir_id(),
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Resolved { id, .. } => return Some(*id),
+                Self::Source { statement, .. } => current = statement,
+                _ => return None,
+            }
         }
     }
     /// Return the parser-owned source identity before resolved-HIR lowering.
     #[must_use]
     pub const fn source_node(&self) -> Option<NodeId> {
-        match self {
-            Self::Source { node, .. } => Some(*node),
-            Self::Resolved { statement, .. } => statement.source_node(),
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { node, .. } => return Some(*node),
+                Self::Resolved { statement, .. } => current = statement,
+                _ => return None,
+            }
         }
     }
     /// View the semantic statement form without its source wrapper.
     #[must_use]
     pub fn kind(&self) -> &Self {
-        match self {
-            Self::Source { statement, .. } => statement.kind(),
-            Self::Resolved { statement, .. } => statement.kind(),
-            _ => self,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { statement, .. } | Self::Resolved { statement, .. } => {
+                    current = statement
+                }
+                _ => return current,
+            }
         }
     }
     /// Consume the source wrapper and return the semantic statement form.
     #[must_use]
-    pub fn into_kind(self) -> Self {
-        match self {
-            Self::Source { statement, .. } => statement.into_kind(),
-            Self::Resolved { statement, .. } => statement.into_kind(),
-            _ => self,
+    pub fn into_kind(mut self) -> Self {
+        loop {
+            self = match self {
+                Self::Source { statement, .. } | Self::Resolved { statement, .. } => *statement,
+                leaf => return leaf,
+            };
         }
     }
 }
@@ -2301,51 +2394,68 @@ impl Expr {
     /// Return this expression's exact source range when it came from source text.
     #[must_use]
     pub const fn source(&self) -> Option<SourceRange> {
-        match self {
-            Self::Source { source, .. } => Some(*source),
-            Self::Resolved {
-                source, expression, ..
-            } => match source {
-                Some(source) => Some(*source),
-                None => expression.source(),
-            },
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { source, .. }
+                | Self::Resolved {
+                    source: Some(source),
+                    ..
+                } => return Some(*source),
+                Self::Resolved {
+                    expression,
+                    source: None,
+                    ..
+                } => current = expression,
+                _ => return None,
+            }
         }
     }
     /// Return the stable resolved-HIR identity, when name resolution has run.
     #[must_use]
     pub const fn hir_id(&self) -> Option<HirId> {
-        match self {
-            Self::Resolved { id, .. } => Some(*id),
-            Self::Source { expression, .. } => expression.hir_id(),
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Resolved { id, .. } => return Some(*id),
+                Self::Source { expression, .. } => current = expression,
+                _ => return None,
+            }
         }
     }
     /// Return the parser-owned source identity before resolved-HIR lowering.
     #[must_use]
     pub const fn source_node(&self) -> Option<NodeId> {
-        match self {
-            Self::Source { node, .. } => Some(*node),
-            Self::Resolved { expression, .. } => expression.source_node(),
-            _ => None,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { node, .. } => return Some(*node),
+                Self::Resolved { expression, .. } => current = expression,
+                _ => return None,
+            }
         }
     }
     /// View the semantic expression form without its source wrapper.
     #[must_use]
     pub fn kind(&self) -> &Self {
-        match self {
-            Self::Source { expression, .. } => expression.kind(),
-            Self::Resolved { expression, .. } => expression.kind(),
-            _ => self,
+        let mut current = self;
+        loop {
+            match current {
+                Self::Source { expression, .. } | Self::Resolved { expression, .. } => {
+                    current = expression
+                }
+                _ => return current,
+            }
         }
     }
     /// Consume the source wrapper and return the semantic expression form.
     #[must_use]
-    pub fn into_kind(self) -> Self {
-        match self {
-            Self::Source { expression, .. } => expression.into_kind(),
-            Self::Resolved { expression, .. } => expression.into_kind(),
-            _ => self,
+    pub fn into_kind(mut self) -> Self {
+        loop {
+            self = match self {
+                Self::Source { expression, .. } | Self::Resolved { expression, .. } => *expression,
+                leaf => return leaf,
+            };
         }
     }
 }
@@ -3659,3 +3769,11 @@ mod provenance_tests {
         drop_program_iterative(program);
     }
 }
+
+#[cfg(test)]
+#[path = "ast/provenance_tests.rs"]
+mod provenance_iteration_tests;
+
+#[cfg(test)]
+#[path = "ast/mixed_ownership_tests.rs"]
+mod mixed_ownership_tests;

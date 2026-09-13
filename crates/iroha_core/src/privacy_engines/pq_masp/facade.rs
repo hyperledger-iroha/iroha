@@ -92,15 +92,16 @@ fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErrorV
         | ProofManagedNoteStarkErrorV1::Composition
         | ProofManagedNoteStarkErrorV1::Fri
         | ProofManagedNoteStarkErrorV1::Transcript
-        | ProofManagedNoteStarkErrorV1::Internal => PqMaspProofErrorV1::ProverInvariant,
+        | ProofManagedNoteStarkErrorV1::Internal
+        | ProofManagedNoteStarkErrorV1::DigestExecution => PqMaspProofErrorV1::ProverInvariant,
     }
 }
 fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Resource => PqMaspProofErrorV1::ResourceLimit,
-        ProofManagedNoteStarkErrorV1::InvalidProfile | ProofManagedNoteStarkErrorV1::Internal => {
-            PqMaspProofErrorV1::ProverInvariant
-        }
+        ProofManagedNoteStarkErrorV1::InvalidProfile
+        | ProofManagedNoteStarkErrorV1::Internal
+        | ProofManagedNoteStarkErrorV1::DigestExecution => PqMaspProofErrorV1::ProverInvariant,
         ProofManagedNoteStarkErrorV1::InvalidTrace
         | ProofManagedNoteStarkErrorV1::Copy
         | ProofManagedNoteStarkErrorV1::Constraint

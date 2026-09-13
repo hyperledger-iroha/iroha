@@ -79,6 +79,12 @@ privacy-release-evidence = ["iroha_core/privacy-release-evidence"]
 # The feature owns no fixture/proof bypass; it only keeps the multi-hour native
 # proof and sixteen-node topology out of ordinary integration-test binaries.
 atomic-private-settlement-release = ["iroha/test-network-private-settlement-evidence"]
+# Explicit Metal capability for the ignored N=3 smoke. CPU release workloads
+# retain their own feature and do not require a compiled device backend.
+atomic-private-settlement-metal-smoke = [
+    "atomic-private-settlement-release",
+    "iroha_core/fastpq-gpu",
+]
 # Non-shipping exact-seat threshold-share providers for the dedicated modern
 # Parliament four-validator corridor. The test target is absent unless this
 # feature is explicitly requested, and Core rejects optimized compilation.
@@ -133,3 +139,6 @@ executor_custom_data_model = { path = "../data_model/samples/executor_custom_dat
 assert_matches = "1.5.0"
 tempfile = { workspace = true }
 ascii_table = "=5.0.0" # pinned for edition/format stability
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }

@@ -479,6 +479,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::staking::ClaimPublicLaneRewards>,
     dispatch_instruction::<iroha_data_model::isi::settlement::SettlementInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::settlement::DvpIsi>,
+    dispatch_instruction::<iroha_data_model::isi::settlement::SettleAtomic> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::settlement::PvpIsi>,
     dispatch_instruction::<SetKeyValue<Trigger>>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode>,
@@ -858,6 +859,7 @@ mod registry_dispatch_tests {
             std::any::type_name::<iroha_data_model::isi::rwa::UnfreezeRwa>(),
             std::any::type_name::<iroha_data_model::isi::rwa::HoldRwa>(),
             std::any::type_name::<iroha_data_model::isi::settlement::DvpIsi>(),
+            std::any::type_name::<iroha_data_model::isi::settlement::SettleAtomic>(),
             std::any::type_name::<iroha_data_model::isi::settlement::PvpIsi>(),
         ];
         for name in direct_variants {
@@ -879,6 +881,7 @@ mod registry_dispatch_tests {
             iroha_data_model::isi::repo::ReverseRepoIsi::WIRE_ID,
             iroha_data_model::isi::repo::RepoMarginCallIsi::WIRE_ID,
             iroha_data_model::isi::settlement::DvpIsi::WIRE_ID,
+            iroha_data_model::isi::settlement::SettleAtomic::WIRE_ID,
             iroha_data_model::isi::settlement::PvpIsi::WIRE_ID,
         ];
         for wire_id in removed_wire_ids {

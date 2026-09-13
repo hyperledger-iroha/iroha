@@ -103,7 +103,7 @@ where
         "truncated frame rejected"
     );
 }
-pub(crate) fn shapes<T>(owner: &str, variant: &str, value: &T)
+pub fn shapes<T>(owner: &str, variant: &str, value: &T)
 where
     T: Clone + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
@@ -118,7 +118,7 @@ where
         &vec![value.clone(), value.clone()],
     );
 }
-pub(crate) fn preimage(owner: &str, variant: &str, signed: &[u8]) {
+pub fn preimage(owner: &str, variant: &str, signed: &[u8]) {
     let mut matches = preimages()
         .iter()
         .filter(|row| field(row, "owner") == owner && field(row, "variant") == variant);
@@ -128,7 +128,7 @@ pub(crate) fn preimage(owner: &str, variant: &str, signed: &[u8]) {
 }
 
 /// Check both typed codec contracts against an independently hashed identity vector.
-pub(crate) fn test_payload_identity<T>(expected_nominal: &str)
+pub fn test_payload_identity<T>(expected_nominal: &str)
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
@@ -154,7 +154,7 @@ where
 }
 
 /// Check faulty test codecs without invoking their deliberately rejected serializers.
-pub(crate) fn manual_test_payload_identity<T: NoritoSchema>(expected_nominal: &str) {
+pub fn manual_test_payload_identity<T: NoritoSchema>(expected_nominal: &str) {
     static RECORDS: OnceLock<Vec<Value>> = OnceLock::new();
     let records = RECORDS.get_or_init(|| {
         norito::json::from_slice(include_bytes!(concat!(

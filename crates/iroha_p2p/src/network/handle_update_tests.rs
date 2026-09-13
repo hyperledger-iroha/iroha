@@ -223,14 +223,18 @@ mod handle_update_tests {
                 safety: 1,
                 lane: 2,
                 bulk: 4,
+                availability: 8,
+                recovery_control: 16,
+                recovery_data: 32,
             },
             2,
-            6,
+            390,
         )
         .expect("small classed geometry must fit");
-        assert_eq!(classed.max_sources, 6);
+        assert_eq!(classed.max_sources, 12);
         assert_eq!(classed.max_sources_per_class, 2);
-        assert_eq!(classed.max_total_bytes, 14);
+        assert_eq!(classed.max_total_bytes, 126);
+        assert_eq!(classed.max_waiters_per_source, [26, 65, 26, 26, 26, 26]);
         let budget = NetworkActorProgressBudget::new(10, 1, 1).expect("small progress budget");
         let shape = ProgressTicketShape {
             topic: message::Topic::BlockSync,
@@ -343,9 +347,15 @@ mod handle_update_tests {
             "the complete production geometry must cover the adversarial waiter set"
         );
         let target_sources = 2_usize;
-        let max_waiters = target_sources
-            .checked_mul(ActorProgressClass::COUNT)
-            .and_then(|sources| sources.checked_mul(waiters_per_source))
+        let per_target = actor_waiter_limits().expect("production class waiter geometry");
+        assert_eq!(
+            per_target[ActorProgressClass::Lane.index()],
+            waiters_per_source
+        );
+        let max_waiters = per_target
+            .into_iter()
+            .try_fold(0usize, usize::checked_add)
+            .and_then(|count| count.checked_mul(target_sources))
             .expect("small test producer/source geometry");
         let budget = NetworkActorProgressBudget::new_classed(
             ActorProgressByteLimits::uniform(1),
@@ -429,16 +439,9 @@ mod handle_update_tests {
     }
     #[test]
     fn targetized_broadcast_coalesces_only_the_same_digest_and_membership() {
-        let budget = NetworkActorProgressBudget::new_classed(
-            ActorProgressByteLimits {
-                safety: 1,
-                lane: 1,
-                bulk: 1,
-            },
-            1,
-            3,
-        )
-        .expect("one target per class must fit");
+        let budget =
+            NetworkActorProgressBudget::new_classed(ActorProgressByteLimits::uniform(1), 1, 195)
+                .expect("one target per class must fit");
         let target = random_node_peer_id();
         let source = ActorProgressSource {
             target: Some(target.clone()),
@@ -544,8 +547,8 @@ mod handle_update_tests {
             authority: None,
         };
         let budget =
-            NetworkActorProgressBudget::new_classed(ActorProgressByteLimits::uniform(1), 1, 3)
-                .expect("one target and one waiter per class must fit");
+            NetworkActorProgressBudget::new_classed(ActorProgressByteLimits::uniform(1), 1, 195)
+                .expect("one target with production class waiter ranks must fit");
         let ProgressLeaseAttempt::Ready {
             lease: direct_lease,
             ticket: mut direct_ticket,
@@ -672,16 +675,9 @@ mod handle_update_tests {
     }
     #[test]
     fn progress_class_geometry_reserves_safety_from_arbitrary_lane_sources() {
-        let budget = NetworkActorProgressBudget::new_classed(
-            ActorProgressByteLimits {
-                safety: 1,
-                lane: 1,
-                bulk: 1,
-            },
-            1,
-            3,
-        )
-        .expect("single-target class geometry must fit");
+        let budget =
+            NetworkActorProgressBudget::new_classed(ActorProgressByteLimits::uniform(1), 1, 195)
+                .expect("single-target class geometry must fit");
         let first_target = random_node_peer_id();
         let second_target = random_node_peer_id();
         let lane_shape = ProgressTicketShape {

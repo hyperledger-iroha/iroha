@@ -938,7 +938,9 @@ fn map_aggregate_error_v1(error: AggregateStarkErrorV1) -> ZkX509StarkErrorV1 {
         AggregateStarkErrorV1::TranscriptMismatch => ZkX509StarkErrorV1::TranscriptMismatch,
         AggregateStarkErrorV1::AllocationFailure => ZkX509StarkErrorV1::AllocationFailure,
         AggregateStarkErrorV1::RandomnessUnavailable => ZkX509StarkErrorV1::RandomnessUnavailable,
-        AggregateStarkErrorV1::InternalInvariant => ZkX509StarkErrorV1::InternalInvariant,
+        AggregateStarkErrorV1::InternalInvariant | AggregateStarkErrorV1::DigestExecution => {
+            ZkX509StarkErrorV1::InternalInvariant
+        }
     }
 }
 fn map_fixed_algebraic_error_v1(error: ZkX509FixedAlgebraicErrorV1) -> ZkX509StarkErrorV1 {
@@ -4857,6 +4859,7 @@ fn row_tree_v1(
     rows: usize,
 ) -> Result<GoldilocksMerkleTreeV1, ZkX509StarkErrorV1> {
     aggregate::row_tree_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         domain,
         node_domain,
@@ -4871,8 +4874,13 @@ fn composition_tree_v1(
     lane: usize,
     chunks: &[Vec<E>],
 ) -> Result<GoldilocksMerkleTreeV1, ZkX509StarkErrorV1> {
-    aggregate::composition_tree_v1(AGGREGATE_DOMAINS_V1, lane, chunks)
-        .map_err(map_aggregate_error_v1)
+    aggregate::composition_tree_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
+        AGGREGATE_DOMAINS_V1,
+        lane,
+        chunks,
+    )
+    .map_err(map_aggregate_error_v1)
 }
 #[cfg(test)]
 fn fri_tree_v1(
@@ -4880,8 +4888,14 @@ fn fri_tree_v1(
     round: usize,
     values: &[E],
 ) -> Result<GoldilocksMerkleTreeV1, ZkX509StarkErrorV1> {
-    aggregate::fri_tree_v1(AGGREGATE_DOMAINS_V1, lane, round, values)
-        .map_err(map_aggregate_error_v1)
+    aggregate::fri_tree_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
+        AGGREGATE_DOMAINS_V1,
+        lane,
+        round,
+        values,
+    )
+    .map_err(map_aggregate_error_v1)
 }
 #[cfg(test)]
 fn new_transcript_v1(
@@ -5967,6 +5981,7 @@ fn build_fri_lane_v1(
     let aggregate_layout = AggregateProofLayoutV1::for_segments(&[layout])?;
     let parameters = aggregate_layout.parameters_v1();
     aggregate::build_fri_lane_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         parameters,
         AGGREGATE_DOMAINS_V1,
         &aggregate_layout.as_shared()?,
@@ -6164,6 +6179,7 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     )
     .map_err(map_aggregate_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         AGGREGATE_PARAMETERS_V1,
         AGGREGATE_DOMAINS_V1,
         &shared_layout,
@@ -6226,6 +6242,7 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
@@ -6376,6 +6393,7 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     )
     .map_err(map_aggregate_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         AGGREGATE_PARAMETERS_V1,
         AGGREGATE_DOMAINS_V1,
         &shared_layout,
@@ -6438,6 +6456,7 @@ pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
@@ -6623,6 +6642,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     )
     .map_err(map_aggregate_error_v1)?;
     let fri_masks = aggregate::build_fri_mask_oracles_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         AGGREGATE_PARAMETERS_V1,
         AGGREGATE_DOMAINS_V1,
         &shared_layout,
@@ -6729,6 +6749,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     }
     let grinding_state = transcript.state();
     let grinding_nonce = grind_nonce_v1(
+        fastpq_prover::DigestExecutionV1::Cpu,
         ZK_X509_DIGEST_CONTEXT_V1,
         &grinding_state,
         ZK_X509_GRINDING_BITS_V1,
