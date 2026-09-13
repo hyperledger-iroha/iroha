@@ -6,6 +6,9 @@
 
 use super::*;
 
+mod conversion;
+mod evaluation;
+
 fn reset_blind_drops() {
     BLIND_DROPS.with(|counts| counts.set((0, 0)));
 }
@@ -95,7 +98,7 @@ where
                 .session
                 .columns
                 .iter()
-                .map(|column| column.layout.column())
+                .map(|column| column.layout.advice_coordinates().unwrap().0)
                 .collect::<Vec<_>>(),
             vec![0, 2, 1, 4, 3]
         );
@@ -115,7 +118,7 @@ where
                 )
             })
             .collect();
-        expected.sort_unstable_by_key(|column| column.0.column());
+        expected.sort_unstable_by_key(|column| column.0.advice_coordinates().unwrap().0);
         let expected_challenges: Vec<_> = (0..4)
             .map(|index| committed.challenge(index).unwrap())
             .collect();
@@ -291,8 +294,8 @@ fn completion_rejects_inconsistent_terminal_receipts_and_destroys_all_secrets() 
             7 => session.greatest_ordinal = Some(99),
             8 => session.columns[0].snapshot.layout.ordinal += 1,
             9 => session.columns[0].layout.proof_context = [0; 32],
-            10 => session.columns[0].layout.column = 1,
-            11 => session.columns[0].layout.phase = 1,
+            10 => set_column(&mut session.columns[0].layout, 1),
+            11 => set_phase(&mut session.columns[0].layout, 1),
             12 => session.columns[0].layout.k = 5,
             13 => {
                 // Substituting both cached and live identities still cannot repeat an ordinal.
@@ -302,7 +305,7 @@ fn completion_rejects_inconsistent_terminal_receipts_and_destroys_all_secrets() 
             14 => {
                 // Keep phase-major identities self-consistent but duplicate a global column.
                 session.plan.phases[0].columns[1] = 0;
-                session.columns[1].layout.column = 0;
+                set_column(&mut session.columns[1].layout, 0);
                 session.columns[1].snapshot.layout = session.columns[1].layout;
             }
             _ => unreachable!(),
@@ -317,10 +320,13 @@ fn completion_rejects_inconsistent_terminal_receipts_and_destroys_all_secrets() 
     }
 }
 
-fn assert_poisoned(
-    complete: &mut CompleteStoredAdviceV1<'_, EqAffine, Snapshot>,
-    layout: StoredAdviceLayoutV1,
-) {
+fn assert_poisoned<C>(
+    complete: &mut CompleteStoredAdviceV1<'_, C, Snapshot>,
+    layout: StoredPolynomialLayoutV1,
+) where
+    C: CurveAffine,
+    C::Scalar: StoredAssignmentFieldV1,
+{
     assert!(matches!(
         complete.params(),
         Err(StoredPhaseErrorV1::Poisoned)
@@ -362,38 +368,38 @@ fn completed_invalid_requests_destroy_all_receipts_before_backend_or_consumer_ac
         let error = match fault {
             0 => {
                 expected.proof_context = [8; 32];
-                StoredAdviceErrorV1::Context
+                StoredPolynomialErrorV1::Context
             }
             1 => {
                 expected.ordinal += 1;
-                StoredAdviceErrorV1::Context
+                StoredPolynomialErrorV1::Context
             }
             2 => {
-                expected.phase = 1;
-                StoredAdviceErrorV1::Context
+                set_phase(&mut expected, 1);
+                StoredPolynomialErrorV1::Context
             }
             3 => {
                 expected.k += 1;
-                StoredAdviceErrorV1::Context
+                StoredPolynomialErrorV1::Context
             }
             4 => {
-                expected.column = 4;
-                StoredAdviceErrorV1::Context
+                set_column(&mut expected, 4);
+                StoredPolynomialErrorV1::Context
             }
             5 => {
                 chunk = u64::MAX;
-                StoredAdviceErrorV1::ChunkIndex
+                StoredPolynomialErrorV1::ChunkIndex
             }
             6 => {
                 complete.session.as_mut().unwrap().columns[0]
                     .snapshot
                     .layout
                     .ordinal += 1;
-                StoredAdviceErrorV1::Context
+                StoredPolynomialErrorV1::Context
             }
             7 => {
-                expected.column = u32::MAX;
-                StoredAdviceErrorV1::Context
+                set_column(&mut expected, u32::MAX);
+                StoredPolynomialErrorV1::Context
             }
             _ => unreachable!(),
         };
@@ -425,25 +431,25 @@ fn completed_storage_encoding_and_identity_failures_poison_the_entire_owner() {
         let (committed, _rng, _transcript) = absorbed_through(&params, &backend, 2);
         let mut complete = committed.into_complete().unwrap();
         let layout = complete.layouts().unwrap().nth(3).unwrap();
-        let location = Some((layout.column(), 0));
+        let location = Some((layout.advice_coordinates().unwrap().0, 0));
         let expected = {
             let mut record = backend.record.borrow_mut();
             match fault {
                 0 => {
                     record.fail_read = location;
-                    StoredAdviceErrorV1::Authentication
+                    StoredPolynomialErrorV1::Authentication
                 }
                 1 => {
                     record.corrupt_read = location;
-                    StoredAdviceErrorV1::Encoding
+                    StoredPolynomialErrorV1::Encoding
                 }
                 2 => {
                     record.short_read = location;
-                    StoredAdviceErrorV1::Encoding
+                    StoredPolynomialErrorV1::Encoding
                 }
                 3 => {
                     record.change_after_read = location;
-                    StoredAdviceErrorV1::Context
+                    StoredPolynomialErrorV1::Context
                 }
                 _ => unreachable!(),
             }
@@ -474,23 +480,103 @@ fn completed_consumer_error_and_backend_or_consumer_unwind_drop_every_receipt() 
         let mut complete = committed.into_complete().unwrap();
         let layout = complete.layouts().unwrap().nth(1).unwrap();
         if fault == 1 {
-            backend.record.borrow_mut().panic_read = Some((layout.column(), 0));
+            backend.record.borrow_mut().panic_read =
+                Some((layout.advice_coordinates().unwrap().0, 0));
         }
         let mut called = false;
         let result = catch_unwind(AssertUnwindSafe(|| {
             complete.with_chunk(layout, 0, |_, _| {
                 called = true;
                 assert_ne!(fault, 2, "injected completed consumer unwind");
-                Err::<(), _>(StoredAdviceErrorV1::Consumer)
+                Err::<(), _>(StoredPolynomialErrorV1::Consumer)
             })
         }));
         if fault == 0 {
-            assert_eq!(result.unwrap(), Err(StoredAdviceErrorV1::Consumer.into()));
+            assert_eq!(
+                result.unwrap(),
+                Err(StoredPolynomialErrorV1::Consumer.into())
+            );
         } else {
             assert!(result.is_err());
         }
         assert_eq!(called, fault != 1);
         assert_dropped(&backend, 5);
         assert_poisoned(&mut complete, layout);
+    }
+}
+
+#[test]
+fn self_consistent_lookup_receipts_cannot_complete_or_read_as_advice() {
+    let params = ParamsIPA::<EqAffine>::new(4);
+    for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+        reset_blind_drops();
+        let backend = Rc::new(Backend::default());
+        let (mut committed, _, _) = absorbed_through(&params, &backend, 2);
+        committed.session.columns[0].layout.role =
+            StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side };
+        committed.session.columns[0].snapshot.layout = committed.session.columns[0].layout;
+        let reads = backend.record.borrow().read_count;
+        assert!(matches!(
+            committed.into_complete(),
+            Err(StoredPhaseErrorV1::Admission)
+        ));
+        assert_eq!(backend.record.borrow().read_count, reads);
+        assert_dropped(&backend, 5);
+
+        reset_blind_drops();
+        let backend = Rc::new(Backend::default());
+        let (committed, _, _) = absorbed_through(&params, &backend, 2);
+        let mut complete = committed.into_complete().unwrap();
+        let session = complete.session.as_mut().unwrap();
+        session.columns[0].layout.role =
+            StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side };
+        session.columns[0].snapshot.layout = session.columns[0].layout;
+        let expected = session.columns[0].layout;
+        let reads = backend.record.borrow().read_count;
+        assert_eq!(
+            complete.with_chunk(expected, 0, |_, _| panic!(
+                "lookup receipt reached advice consumer"
+            )),
+            Err::<(), _>(StoredPhaseErrorV1::Store(StoredPolynomialErrorV1::Context))
+        );
+        assert_eq!(backend.record.borrow().read_count, reads);
+        assert_dropped(&backend, 5);
+        assert_poisoned(&mut complete, expected);
+    }
+}
+
+#[test]
+fn raw_advice_reader_refuses_lookup_roles_before_backend_access() {
+    use crate::poly::stored_advice::reader::{
+        StoredAdviceChunkSourceV1, StoredAdviceInputV1, StoredAdviceSliceReaderV1,
+    };
+    let params = ParamsIPA::<EqAffine>::new(4);
+    for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+        reset_blind_drops();
+        let backend = Rc::new(Backend::default());
+        let (mut committed, _, _) = absorbed_through(&params, &backend, 2);
+        let column = &mut committed.session.columns[0];
+        column.layout.role = StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side };
+        column.snapshot.layout = column.layout;
+        let expected = column.layout;
+        let mut inputs = [StoredAdviceInputV1 {
+            expected,
+            snapshot: &mut column.snapshot,
+        }];
+        let mut reader = StoredAdviceSliceReaderV1::new(&mut inputs);
+        let reads = backend.record.borrow().read_count;
+        assert_eq!(
+            reader.validate_layout(expected),
+            Err(StoredPolynomialErrorV1::Context)
+        );
+        assert_eq!(
+            reader.with_chunk(expected, 0, |_| panic!(
+                "lookup receipt reached advice reader"
+            )),
+            Err::<(), _>(StoredPolynomialErrorV1::Context)
+        );
+        assert_eq!(backend.record.borrow().read_count, reads);
+        drop(committed);
+        assert_dropped(&backend, 5);
     }
 }

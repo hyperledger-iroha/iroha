@@ -2207,6 +2207,57 @@ impl<F: Field> ConstraintSystem<F> {
             },
         );
 
+        (
+            self.apply_selector_assignments(new_columns, selector_assignment),
+            polys,
+        )
+    }
+
+    /// Reconstruct the original selector CS without producing unused field polynomials.
+    ///
+    /// The checked VK reader already owns the original activation rows. Borrowing them here
+    /// avoids both their deep clone and the dense combination assignments that VK reading
+    /// discards. Planner, fixed-query, root and selector replacement order remain shared with
+    /// [`Self::compress_selectors`]. This still allocates selector-plan and CS metadata.
+    pub(crate) fn compress_selectors_without_polynomials(
+        mut self,
+        selectors: &[Vec<bool>],
+    ) -> Self {
+        assert_eq!(selectors.len(), self.num_selectors);
+        let degrees = self.selector_degrees();
+        let max_degree = self.degree();
+        let descriptions = selectors
+            .iter()
+            .zip(degrees)
+            .enumerate()
+            .map(|(selector, (activations, max_degree))| {
+                compress_selectors::SelectorDescriptionRef {
+                    selector,
+                    activations,
+                    max_degree,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut new_columns = vec![];
+        let selector_assignment =
+            compress_selectors::process_without_polynomials(&descriptions, max_degree, || {
+                let column = self.fixed_column();
+                new_columns.push(column);
+                Expression::Fixed(FixedQuery {
+                    index: Some(self.query_fixed_index(column, Rotation::cur())),
+                    column_index: column.index,
+                    rotation: Rotation::cur(),
+                })
+            });
+        self.apply_selector_assignments(new_columns, selector_assignment)
+    }
+
+    /// Apply an already ordered selector assignment with the original map/replacement traversal.
+    fn apply_selector_assignments(
+        mut self,
+        new_columns: Vec<Column<Fixed>>,
+        selector_assignment: Vec<compress_selectors::SelectorAssignment<F>>,
+    ) -> Self {
         let mut selector_map = vec![None; selector_assignment.len()];
         let mut selector_replacements = vec![None; selector_assignment.len()];
         for assignment in selector_assignment {
@@ -2224,7 +2275,7 @@ impl<F: Field> ConstraintSystem<F> {
             .collect::<Vec<_>>();
         self.replace_selectors_with_fixed(&selector_replacements);
 
-        (self, polys)
+        self
     }
 
     /// Does not combine selectors and directly replaces them everywhere with fixed columns.
@@ -2959,3 +3010,7 @@ mod fixed_column_mode_tests {
         strategy_cases::<Fq>();
     }
 }
+
+#[cfg(test)]
+#[path = "selector_metadata_tests.rs"]
+mod selector_metadata_tests;

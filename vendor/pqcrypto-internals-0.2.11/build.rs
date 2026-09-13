@@ -34,7 +34,8 @@ fn main() {
         .include(&includepath)
         .files(common_files)
         .compile("pqclean_common");
-    println!("cargo:rustc-link-lib=pqclean_common");
+    // cc emits static= links. Repeating an unqualified link makes Cargo replace
+    // that directive, so Rust no longer bundles these objects into its rlib.
 
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
@@ -59,13 +60,11 @@ fn main() {
                     .join("KeccakP-1600-times4-SIMD256.c"),
             )
             .compile("keccak4x");
-        println!("cargo:rustc-link-lib=keccak4x")
     } else if target_arch == "aarch64" && target_env != "msvc" {
         builder
             .flag("-march=armv8.2-a+sha3")
             .file(cfiledir.join("keccak2x").join("fips202x2.c"))
             .file(cfiledir.join("keccak2x").join("feat.S"))
             .compile("keccak2x");
-        println!("cargo:rustc-link-lib=keccak2x")
     }
 }

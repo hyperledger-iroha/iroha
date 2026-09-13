@@ -40,9 +40,13 @@ pub use circuit::*;
 pub use error::*;
 pub use keygen::*;
 pub use prover::*;
+pub use structured_key::IndexedStructuredProvingKeyV1;
 pub use verifier::*;
 
 use evaluation::Evaluator;
+
+/// Internal bounded evaluator plans shared with the complete stored-advice owner.
+pub(crate) use evaluation::stored;
 
 use std::{fmt, io};
 
@@ -275,7 +279,7 @@ where
                 }
                 selectors.push(selector);
             }
-            let (cs, _) = cs.compress_selectors(selectors.clone());
+            let cs = cs.compress_selectors_without_polynomials(&selectors);
             (cs, selectors)
         } else {
             let fake_selectors = vec![vec![false]; cs.num_selectors];

@@ -170,6 +170,112 @@ def test_parser_rejects_ceiling_above_fixed_fail_safe() -> None:
         MODULE._parser(["--memory-limit-gib", "33"])
 
 
+@pytest.mark.parametrize("option", ["--timeout-seconds", "--progress-interval-seconds"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "0", "-1"])
+def test_parser_rejects_nonfinite_or_nonpositive_intervals(
+    option: str, value: str
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        MODULE._parser([f"{option}={value}"])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("option", ["--timeout-seconds", "--progress-interval-seconds"])
+@pytest.mark.parametrize("value", ["0.01", "1", "3600"])
+def test_parser_accepts_positive_finite_intervals(option: str, value: str) -> None:
+    args = MODULE._parser([f"{option}={value}"])
+    attribute = option.removeprefix("--").replace("-", "_")
+    assert getattr(args, attribute) == float(value)
+
+
+@pytest.mark.parametrize(
+    ("observed_at", "returncode", "remaining", "expected_exit", "expected_reason"),
+    [
+        (0.999, 0, 0, 0, "completed"),
+        (1.0, 0, 0, MODULE.TIMEOUT_EXIT_CODE, "timeout"),
+        (2.0, 0, 0, MODULE.TIMEOUT_EXIT_CODE, "timeout"),
+        (0.999, 17, 0, 17, "child_exit"),
+        (2.0, 17, 0, MODULE.TIMEOUT_EXIT_CODE, "timeout"),
+        (1.0, None, 1, MODULE.TIMEOUT_EXIT_CODE, "timeout"),
+        (1.0, 0, 1, MODULE.TIMEOUT_EXIT_CODE, "timeout"),
+    ],
+)
+def test_runner_admits_completion_only_before_observed_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    observed_at: float,
+    returncode: int | None,
+    remaining: int,
+    expected_exit: int,
+    expected_reason: str,
+) -> None:
+    args = MODULE._parser(["--timeout-seconds=1"])
+    clock = [0.0]
+    summaries: list[dict[str, object]] = []
+    terminations: list[bool] = []
+
+    class FakeProcess:
+        pid = 500
+        returncode: int | None = None
+
+        def __init__(self) -> None:
+            self.polls = 0
+
+        def poll(self) -> int | None:
+            self.polls += 1
+            self.returncode = None if self.polls == 1 else returncode
+            return self.returncode
+
+    process = FakeProcess()
+
+    class FakeAccounting:
+        def sample(self, process_group_id: int) -> object:
+            assert process_group_id == process.pid
+            if process.polls == 1:
+                return MODULE.MemorySample(1, 1, 1)
+            # Accounting may itself cross the deadline. Admission must use a
+            # fresh monotonic observation after the process-group sample.
+            clock[0] = observed_at
+            return MODULE.MemorySample(remaining, remaining, remaining)
+
+    def terminate(child: object, accounting: object, *, graceful: bool = True) -> None:
+        assert child is process
+        assert isinstance(accounting, FakeAccounting)
+        assert remaining > 0, "an already completed empty group must never be signaled"
+        terminations.append(graceful)
+        if process.returncode is None:
+            process.returncode = -MODULE.signal.SIGTERM
+
+    def forbid_signal(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the mocked deadline tests must never send a real signal")
+
+    monkeypatch.setattr(
+        MODULE, "_validate_inputs", lambda _args: (tmp_path, tmp_path, tmp_path / "unused", 1024)
+    )
+    monkeypatch.setattr(MODULE, "_running_duplicate_commands", lambda: [])
+    monkeypatch.setattr(MODULE, "_proof_environment", lambda _target: {})
+    monkeypatch.setattr(MODULE, "DarwinProcessAccounting", FakeAccounting)
+    monkeypatch.setattr(MODULE.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(MODULE, "_terminate_process_group", terminate)
+    monkeypatch.setattr(MODULE.os, "kill", forbid_signal)
+    monkeypatch.setattr(MODULE.os, "killpg", forbid_signal)
+    monkeypatch.setattr(MODULE, "_write_summary", lambda _path, payload: summaries.append(payload))
+
+    assert MODULE._run(args) == expected_exit
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary["exit_reason"] == expected_reason
+    assert summary["exit_code"] == expected_exit
+    assert summary["duration_seconds"] == observed_at
+    assert summary["sample_count"] == 2
+    assert summary["child_exit_code"] == (
+        -MODULE.signal.SIGTERM if returncode is None else returncode
+    )
+    assert terminations == ([True] if remaining else [])
+
+
 def test_runner_lock_is_nonblocking_and_owner_private(tmp_path: Path) -> None:
     path = tmp_path / "guard.lock"
     with MODULE._exclusive_lock(path, "test guard"):

@@ -4,8 +4,7 @@
 //! field operations. Each advice leaf occurrence reads at most two authenticated chunks per
 //! tile, without nested callbacks or a decoded advice bank. The plan's live-slot count times
 //! 256 canonical fields bounds initialized witness scratch; storage's plaintext window, public
-//! plan metadata, borrowed fixed/instance banks, consumer copies and arithmetic temporaries are
-//! separate. One caller executes a proof's tiles serially under its existing backend lease.
+//! plan metadata, auxiliary-source state, consumer copies and arithmetic temporaries are separate. One caller executes a proof's tiles serially under its existing backend lease.
 //!
 //! TODO: Connect lookup compression and its bounded argument/output owners to an admitted stored
 //! prover. This is not the optimized quotient GraphEvaluator, a permutation product builder, or
@@ -22,13 +21,19 @@ use crate::{
     poly::{
         LagrangeCoeff, Polynomial,
         stored_advice::{
-            STORED_SCALARS_PER_CHUNK_V1, StoredAdviceErrorV1, StoredAdviceLayoutV1,
-            StoredAdviceSnapshotV1, StoredPolynomialBasisV1, assignment::StoredAssignmentFieldV1,
+            STORED_SCALARS_PER_CHUNK_V1, StoredPolynomialBasisV1, StoredPolynomialErrorV1,
+            StoredPolynomialLayoutV1, StoredPolynomialSnapshotV1,
+            assignment::StoredAssignmentFieldV1,
+            reader::{StoredAdviceChunkSourceV1, StoredAdviceSliceReaderV1},
         },
     },
 };
 
 const TILE: usize = STORED_SCALARS_PER_CHUNK_V1;
+
+mod auxiliary;
+pub(crate) use auxiliary::StoredAuxiliarySourceV1;
+use auxiliary::{AuxiliaryRoleV1, DenseAuxiliarySourceV1, read_auxiliary};
 
 /// Nonsecret failure at this internal expression-consumer boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,13 +49,13 @@ pub(crate) enum StoredExpressionErrorV1 {
     /// Checked allocation of public planning metadata or guarded fields failed.
     Allocation,
     /// The authenticated backend or its canonical decoder failed.
-    Store(StoredAdviceErrorV1),
+    Store(StoredPolynomialErrorV1),
     /// The complete-tile consumer rejected the result.
     Consumer,
 }
 
-impl From<StoredAdviceErrorV1> for StoredExpressionErrorV1 {
-    fn from(error: StoredAdviceErrorV1) -> Self {
+impl From<StoredPolynomialErrorV1> for StoredExpressionErrorV1 {
+    fn from(error: StoredPolynomialErrorV1) -> Self {
         Self::Store(error)
     }
 }
@@ -63,18 +68,15 @@ impl From<StoredAdviceErrorV1> for StoredExpressionErrorV1 {
 /// the `LagrangeCoeff` Rust marker alone does not prove that interpretation or key identity.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StoredExpressionContextV1<'a> {
-    pub(crate) domain: StoredAdviceLayoutV1,
-    pub(crate) advice: &'a [StoredAdviceLayoutV1],
+    pub(crate) domain: StoredPolynomialLayoutV1,
+    pub(crate) advice: &'a [StoredPolynomialLayoutV1],
     pub(crate) fixed_columns: usize,
     pub(crate) instance_columns: usize,
     pub(crate) challenge_phases: &'a [u8],
 }
 
-/// Borrowed backend owner paired with independently supplied exact trusted metadata.
-pub(crate) struct StoredAdviceInputV1<'a, S> {
-    pub(crate) expected: StoredAdviceLayoutV1,
-    pub(crate) snapshot: &'a mut S,
-}
+/// Original borrowed-snapshot input retained for the raw helper entry point.
+pub(crate) use crate::poly::stored_advice::reader::StoredAdviceInputV1;
 
 /// One aligned, nonempty tile; its final length is exactly the remaining domain rows.
 #[derive(Clone, Copy, Debug)]
@@ -136,12 +138,17 @@ pub(crate) struct StoredExpressionPlanV1<'a, F> {
 }
 
 impl<F> StoredExpressionPlanV1<'_, F> {
+    /// Borrow the exact metadata admitted during planning; this contains no witness fields.
+    pub(crate) fn context(&self) -> StoredExpressionContextV1<'_> {
+        self.context
+    }
+
     /// Exact initialized field payload retained during evaluation (excluding backend memory).
     pub(crate) fn scratch_bytes(&self) -> usize {
         self.scratch_bytes
     }
 
-    /// Worst-case authenticated callbacks for one tile; short domains need only one per leaf.
+    /// Worst-case authenticated advice callbacks per tile; auxiliary scalar access is separate.
     pub(crate) fn maximum_chunk_reads(&self) -> usize {
         self.advice_leaves
             * if self.context.domain.scalar_count() <= TILE {
@@ -178,7 +185,10 @@ fn validate_context<F: StoredAssignmentFieldV1>(
         return Err(StoredExpressionErrorV1::Context);
     }
     for (column, layout) in context.advice.iter().enumerate() {
-        if usize::try_from(layout.column()).ok() != Some(column)
+        let (advice_column, _) = layout
+            .advice_coordinates()
+            .map_err(|_| StoredExpressionErrorV1::Context)?;
+        if usize::try_from(advice_column).ok() != Some(column)
             || !layout.same_proof_context(domain)
             || layout.field() != domain.field()
             || layout.k() != domain.k()
@@ -255,7 +265,9 @@ pub(crate) fn prepare_stored_expression_v1<'a, F: StoredAssignmentFieldV1>(
                         if admitted
                             .advice
                             .get(query.column_index())
-                            .map(|layout| layout.phase())
+                            .and_then(|layout| {
+                                layout.advice_coordinates().ok().map(|(_, phase)| phase)
+                            })
                             != Some(query.phase())
                         {
                             return Err(StoredExpressionErrorV1::Context);
@@ -382,13 +394,13 @@ fn rotated_first(start: usize, rotation: i32, size: usize) -> usize {
     (start + i64::from(rotation).rem_euclid(size as i64) as usize) % size
 }
 
-fn read_advice<F: StoredAssignmentFieldV1, S: StoredAdviceSnapshotV1>(
-    input: &mut StoredAdviceInputV1<'_, S>,
+fn read_advice<F: StoredAssignmentFieldV1, A: StoredAdviceChunkSourceV1>(
+    advice: &mut A,
+    layout: StoredPolynomialLayoutV1,
     tile: StoredRowTileV1,
     rotation: i32,
     destination: &mut [F],
 ) -> Result<(), StoredExpressionErrorV1> {
-    let layout = input.expected;
     let size = layout.scalar_count();
     if tile.start >= size
         || tile.start % TILE != 0
@@ -397,19 +409,17 @@ fn read_advice<F: StoredAssignmentFieldV1, S: StoredAdviceSnapshotV1>(
     {
         return Err(StoredExpressionErrorV1::Tile);
     }
-    if input.snapshot.layout() != layout {
-        return Err(StoredExpressionErrorV1::Context);
-    }
+    advice.validate_layout(layout).map_err(layout_error)?;
     let first = rotated_first(tile.start, rotation, size);
     if size <= TILE {
         // Both sides of a small-domain wrap live in this single authenticated chunk.
-        input.snapshot.with_chunk(layout, 0, |encoded| {
+        advice.with_chunk(layout, 0, |encoded| {
             if encoded.len() != size {
-                return Err(StoredAdviceErrorV1::Encoding);
+                return Err(StoredPolynomialErrorV1::Encoding);
             }
             for (offset, value) in destination[..tile.len].iter_mut().enumerate() {
                 *value = Option::<F>::from(F::from_repr(encoded[(first + offset) % size]))
-                    .ok_or(StoredAdviceErrorV1::Encoding)?;
+                    .ok_or(StoredPolynomialErrorV1::Encoding)?;
             }
             Ok(())
         })?;
@@ -421,14 +431,14 @@ fn read_advice<F: StoredAssignmentFieldV1, S: StoredAdviceSnapshotV1>(
             let chunk = row / TILE;
             let within = row % TILE;
             let take = (TILE - within).min(tile.len - output);
-            input.snapshot.with_chunk(layout, chunk as u64, |encoded| {
+            advice.with_chunk(layout, chunk as u64, |encoded| {
                 if encoded.len() != layout.chunk_scalar_count(chunk as u64)? {
-                    return Err(StoredAdviceErrorV1::Encoding);
+                    return Err(StoredPolynomialErrorV1::Encoding);
                 }
                 for offset in 0..take {
                     destination[output + offset] =
                         Option::<F>::from(F::from_repr(encoded[within + offset]))
-                            .ok_or(StoredAdviceErrorV1::Encoding)?;
+                            .ok_or(StoredPolynomialErrorV1::Encoding)?;
                 }
                 Ok(())
             })?;
@@ -436,17 +446,23 @@ fn read_advice<F: StoredAssignmentFieldV1, S: StoredAdviceSnapshotV1>(
             row = (row + take) % size;
         }
     }
-    if input.snapshot.layout() != layout {
-        return Err(StoredExpressionErrorV1::Context);
-    }
+    advice.validate_layout(layout).map_err(layout_error)?;
     Ok(())
 }
 
-// Shared preflight for expression and future graph tiles; no backend plaintext is opened here.
-fn validate_inputs<F: StoredAssignmentFieldV1, S: StoredAdviceSnapshotV1>(
+fn layout_error(error: StoredPolynomialErrorV1) -> StoredExpressionErrorV1 {
+    if error == StoredPolynomialErrorV1::Context {
+        StoredExpressionErrorV1::Context
+    } else {
+        error.into()
+    }
+}
+
+// Shared preflight for expression and graph tiles; no backend plaintext is opened here.
+fn validate_inputs<F: StoredAssignmentFieldV1, A: StoredAdviceChunkSourceV1>(
     context: &StoredExpressionContextV1<'_>,
     tile: StoredRowTileV1,
-    advice: &[StoredAdviceInputV1<'_, S>],
+    advice: &mut A,
     fixed: &[Polynomial<F, LagrangeCoeff>],
     instance: &[Polynomial<F, LagrangeCoeff>],
     challenges: &[F],
@@ -455,7 +471,7 @@ fn validate_inputs<F: StoredAssignmentFieldV1, S: StoredAdviceSnapshotV1>(
     if tile.start >= size || tile.start % TILE != 0 || tile.len != TILE.min(size - tile.start) {
         return Err(StoredExpressionErrorV1::Tile);
     }
-    if advice.len() != context.advice.len()
+    if advice.column_count() != context.advice.len()
         || fixed.len() != context.fixed_columns
         || instance.len() != context.instance_columns
         || challenges.len() != context.challenge_phases.len()
@@ -463,11 +479,11 @@ fn validate_inputs<F: StoredAssignmentFieldV1, S: StoredAdviceSnapshotV1>(
             .iter()
             .chain(instance)
             .any(|column| column.len() != size)
-        || advice.iter().zip(context.advice).any(|(input, expected)| {
-            input.expected != *expected || input.snapshot.layout() != *expected
-        })
     {
         return Err(StoredExpressionErrorV1::Context);
+    }
+    for expected in context.advice {
+        advice.validate_layout(*expected).map_err(layout_error)?;
     }
     Ok(())
 }
@@ -486,10 +502,75 @@ pub(crate) fn with_stored_expression_chunk_v1<F, S, R>(
 ) -> Result<R, StoredExpressionErrorV1>
 where
     F: StoredAssignmentFieldV1,
-    S: StoredAdviceSnapshotV1,
+    S: StoredPolynomialSnapshotV1,
 {
+    with_stored_expression_reader_v1(
+        plan,
+        tile,
+        &mut StoredAdviceSliceReaderV1::new(advice),
+        fixed,
+        instance,
+        challenges,
+        consume,
+    )
+}
+
+/// Shared arithmetic over a chunk-only source; ownership belongs to the concrete caller.
+pub(crate) fn with_stored_expression_reader_v1<F, A, R>(
+    plan: &StoredExpressionPlanV1<'_, F>,
+    tile: StoredRowTileV1,
+    advice: &mut A,
+    fixed: &[Polynomial<F, LagrangeCoeff>],
+    instance: &[Polynomial<F, LagrangeCoeff>],
+    challenges: &[F],
+    consume: impl FnOnce(&[F]) -> Result<R, StoredExpressionErrorV1>,
+) -> Result<R, StoredExpressionErrorV1>
+where
+    F: StoredAssignmentFieldV1,
+    A: StoredAdviceChunkSourceV1,
+{
+    // Preserve the dense entry point's exact n-sized fixed/instance validation contract.
     validate_inputs(&plan.context, tile, advice, fixed, instance, challenges)?;
+    let mut auxiliary = DenseAuxiliarySourceV1::new(plan.context.domain, fixed, instance);
+    with_stored_expression_sources_v1(plan, tile, advice, &mut auxiliary, challenges, consume)
+}
+
+/// Evaluate a tile using bounded advice and fallible, role-separated auxiliary scalar sources.
+///
+/// The source validates the exact expected proof/domain/basis/dimensions before any witness
+/// read, around each auxiliary leaf and again before the final consumer. Rotations and every
+/// arithmetic operation remain evaluator-owned. Only the existing guarded tile scratch is
+/// allocated; source-owned buffers/caches are outside this allocation count. Source metadata is
+/// not key authentication: a concrete same-key owner must retain source provenance and enclose
+/// the entire operation, propagating every error or unwind and discarding partial outputs.
+/// No auxiliary source/storage handle or borrowed witness reference can escape this function.
+pub(crate) fn with_stored_expression_sources_v1<F, A, X, R>(
+    plan: &StoredExpressionPlanV1<'_, F>,
+    tile: StoredRowTileV1,
+    advice: &mut A,
+    auxiliary: &mut X,
+    challenges: &[F],
+    consume: impl FnOnce(&[F]) -> Result<R, StoredExpressionErrorV1>,
+) -> Result<R, StoredExpressionErrorV1>
+where
+    F: StoredAssignmentFieldV1,
+    A: StoredAdviceChunkSourceV1,
+    X: StoredAuxiliarySourceV1<F>,
+{
+    validate_context::<F>(&plan.context)?;
     let size = plan.context.domain.scalar_count();
+    if tile.start >= size || tile.start % TILE != 0 || tile.len != TILE.min(size - tile.start) {
+        return Err(StoredExpressionErrorV1::Tile);
+    }
+    if advice.column_count() != plan.context.advice.len()
+        || challenges.len() != plan.context.challenge_phases.len()
+    {
+        return Err(StoredExpressionErrorV1::Context);
+    }
+    auxiliary.validate(plan.context)?;
+    for expected in plan.context.advice {
+        advice.validate_layout(*expected).map_err(layout_error)?;
+    }
     let mut scratch = Scratch::<F>::new(plan.slots)?;
     for instruction in &plan.instructions {
         match *instruction {
@@ -501,7 +582,13 @@ where
                 target,
                 column,
                 rotation,
-            } => read_advice(&mut advice[column], tile, rotation, scratch.slot(target))?,
+            } => read_advice(
+                advice,
+                plan.context.advice[column],
+                tile,
+                rotation,
+                scratch.slot(target),
+            )?,
             Instruction::Fixed {
                 target,
                 column,
@@ -512,15 +599,20 @@ where
                 column,
                 rotation,
             } => {
-                let source = if matches!(instruction, Instruction::Fixed { .. }) {
-                    &fixed[column]
+                let role = if matches!(instruction, Instruction::Fixed { .. }) {
+                    AuxiliaryRoleV1::Fixed
                 } else {
-                    &instance[column]
+                    AuxiliaryRoleV1::Instance
                 };
-                let first = rotated_first(tile.start, rotation, size);
-                for (offset, value) in scratch.slot(target)[..tile.len].iter_mut().enumerate() {
-                    *value = source[(first + offset) % size];
-                }
+                read_auxiliary(
+                    auxiliary,
+                    plan.context,
+                    role,
+                    column,
+                    tile,
+                    rotation,
+                    scratch.slot(target),
+                )?;
             }
             Instruction::Negated { target } => {
                 for value in &mut scratch.slot(target)[..tile.len] {
@@ -546,6 +638,10 @@ where
                 clear_fields(scratch.slot(right));
             }
         }
+    }
+    auxiliary.validate(plan.context)?;
+    for expected in plan.context.advice {
+        advice.validate_layout(*expected).map_err(layout_error)?;
     }
     consume(&scratch.0[..tile.len])
 }

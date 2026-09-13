@@ -2,7 +2,8 @@
 //!
 //! Axiom owns metadata and backend-neutral traits; Core reuses `iroha_crypto`'s already-locked
 //! authenticated, unlinked confidential spool. Each snapshot gets the spool's fresh key/arena;
-//! a separate fresh public proof context and monotonic ordinal bind polynomial interpretation.
+//! a separate fresh public proof context, monotonic ordinal, and explicit advice/lookup role bind
+//! polynomial interpretation. Every role shares the same window, ordinal sequence, and live limit.
 //! Neither storage randomness nor ciphertext digests enter the proof transcript.
 //!
 //! A provider permits one active plaintext operation across all its writers/snapshots. Reads
@@ -21,9 +22,10 @@
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 use halo2_proofs::poly::stored_advice::{
-    STORED_SCALAR_BYTES_V1, STORED_SCALARS_PER_CHUNK_V1, StoredAdviceErrorV1, StoredAdviceLayoutV1,
-    StoredAdviceProviderV1, StoredAdviceSnapshotV1, StoredAdviceWriterV1, StoredPastaFieldV1,
-    StoredPolynomialBasisV1,
+    STORED_SCALAR_BYTES_V1, STORED_SCALARS_PER_CHUNK_V1, StoredPastaFieldV1,
+    StoredPolynomialBasisV1, StoredPolynomialErrorV1, StoredPolynomialLayoutV1,
+    StoredPolynomialProviderV1, StoredPolynomialRoleV1, StoredPolynomialSnapshotV1,
+    StoredPolynomialWriterV1,
 };
 use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1, ConfidentialSpoolLayoutV1,
@@ -39,7 +41,7 @@ const MAX_LIVE_SNAPSHOTS_PER_PROOF: usize = 512;
 ///
 /// This type deliberately provides neither `Clone` nor `Debug`. Its handle budget is a
 /// foundation bound, not a production configuration knob or a Claim capacity declaration.
-pub struct CoreStoredAdviceProviderV1 {
+pub struct CoreStoredPolynomialProviderV1 {
     directory: PathBuf,
     proof_context: [u8; 32],
     next_ordinal: u64,
@@ -47,18 +49,18 @@ pub struct CoreStoredAdviceProviderV1 {
     handles: Rc<LiveSnapshotBudget>,
 }
 
-impl CoreStoredAdviceProviderV1 {
+impl CoreStoredPolynomialProviderV1 {
     /// Create a fresh process-local proof context without consuming transcript randomness.
     ///
     /// # Errors
     /// Rejects unavailable OS entropy or an all-zero context. File checks occur in `create`.
-    pub fn new(directory: impl Into<PathBuf>) -> Result<Self, StoredAdviceErrorV1> {
+    pub fn new(directory: impl Into<PathBuf>) -> Result<Self, StoredPolynomialErrorV1> {
         let mut proof_context = [0; 32];
         OsRng
             .try_fill_bytes(&mut proof_context)
-            .map_err(|_| StoredAdviceErrorV1::Backend)?;
+            .map_err(|_| StoredPolynomialErrorV1::Backend)?;
         if proof_context == [0; 32] {
-            return Err(StoredAdviceErrorV1::Backend);
+            return Err(StoredPolynomialErrorV1::Backend);
         }
         Ok(Self {
             directory: directory.into(),
@@ -83,10 +85,10 @@ struct LiveSnapshotBudget {
 struct LiveSnapshotLease(Rc<LiveSnapshotBudget>);
 
 impl LiveSnapshotLease {
-    fn acquire(budget: &Rc<LiveSnapshotBudget>) -> Result<Self, StoredAdviceErrorV1> {
+    fn acquire(budget: &Rc<LiveSnapshotBudget>) -> Result<Self, StoredPolynomialErrorV1> {
         let live = budget.live.get();
         if live >= budget.limit {
-            return Err(StoredAdviceErrorV1::Capacity);
+            return Err(StoredPolynomialErrorV1::Capacity);
         }
         budget.live.set(live + 1);
         Ok(Self(Rc::clone(budget)))
@@ -102,9 +104,9 @@ impl Drop for LiveSnapshotLease {
 struct PlaintextWindow(Rc<Cell<bool>>);
 
 impl PlaintextWindow {
-    fn acquire(window: &Rc<Cell<bool>>) -> Result<Self, StoredAdviceErrorV1> {
+    fn acquire(window: &Rc<Cell<bool>>) -> Result<Self, StoredPolynomialErrorV1> {
         if window.replace(true) {
-            return Err(StoredAdviceErrorV1::Busy);
+            return Err(StoredPolynomialErrorV1::Busy);
         }
         Ok(Self(Rc::clone(window)))
     }
@@ -116,8 +118,8 @@ impl Drop for PlaintextWindow {
 }
 
 /// Move-only sequential polynomial writer; no plaintext chunks escape as owned values.
-pub struct CoreStoredAdviceWriterV1 {
-    layout: StoredAdviceLayoutV1,
+pub struct CoreStoredPolynomialWriterV1 {
+    layout: StoredPolynomialLayoutV1,
     next_chunk: u64,
     raw: Option<ConfidentialSpoolWriterV1>,
     window: Rc<Cell<bool>>,
@@ -125,40 +127,38 @@ pub struct CoreStoredAdviceWriterV1 {
 }
 
 /// Move-only authenticated polynomial snapshot with a shared bounded plaintext window.
-pub struct CoreStoredAdviceSnapshotV1 {
-    layout: StoredAdviceLayoutV1,
+pub struct CoreStoredPolynomialSnapshotV1 {
+    layout: StoredPolynomialLayoutV1,
     raw: Option<ConfidentialSpoolSnapshotV1>,
     window: Rc<Cell<bool>>,
     _lease: LiveSnapshotLease,
     #[cfg(test)]
-    injected_read_error: Option<StoredAdviceErrorV1>,
+    injected_read_error: Option<StoredPolynomialErrorV1>,
     #[cfg(test)]
     panic_on_read: bool,
 }
 
-impl StoredAdviceProviderV1 for CoreStoredAdviceProviderV1 {
-    type Writer = CoreStoredAdviceWriterV1;
+impl StoredPolynomialProviderV1 for CoreStoredPolynomialProviderV1 {
+    type Writer = CoreStoredPolynomialWriterV1;
 
     fn create(
         &mut self,
         field: StoredPastaFieldV1,
         basis: StoredPolynomialBasisV1,
         k: u32,
-        column: u32,
-        phase: u8,
-    ) -> Result<Self::Writer, StoredAdviceErrorV1> {
+        role: StoredPolynomialRoleV1,
+    ) -> Result<Self::Writer, StoredPolynomialErrorV1> {
         let next_ordinal = self
             .next_ordinal
             .checked_add(1)
-            .ok_or(StoredAdviceErrorV1::Capacity)?;
-        let layout = StoredAdviceLayoutV1::new(
+            .ok_or(StoredPolynomialErrorV1::Capacity)?;
+        let layout = StoredPolynomialLayoutV1::new(
             self.proof_context,
             self.next_ordinal,
             field,
             basis,
             k,
-            column,
-            phase,
+            role,
         )?;
         let spool_layout = ConfidentialSpoolLayoutV1::new_v1(
             layout.chunk_count() as u64,
@@ -172,7 +172,7 @@ impl StoredAdviceProviderV1 for CoreStoredAdviceProviderV1 {
         self.next_ordinal = next_ordinal;
         let raw = ConfidentialSpoolWriterV1::create_in_v1(&self.directory, spool_layout)
             .map_err(map_spool_error)?;
-        Ok(CoreStoredAdviceWriterV1 {
+        Ok(CoreStoredPolynomialWriterV1 {
             layout,
             next_chunk: 0,
             raw: Some(raw),
@@ -182,30 +182,34 @@ impl StoredAdviceProviderV1 for CoreStoredAdviceProviderV1 {
     }
 }
 
-impl StoredAdviceWriterV1 for CoreStoredAdviceWriterV1 {
-    type Snapshot = CoreStoredAdviceSnapshotV1;
+impl StoredPolynomialWriterV1 for CoreStoredPolynomialWriterV1 {
+    type Snapshot = CoreStoredPolynomialSnapshotV1;
 
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
 
-    fn write_chunk(&mut self, chunk: u64, scalars: &[[u8; 32]]) -> Result<(), StoredAdviceErrorV1> {
+    fn write_chunk(
+        &mut self,
+        chunk: u64,
+        scalars: &[[u8; 32]],
+    ) -> Result<(), StoredPolynomialErrorV1> {
         if self.raw.is_none() {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         if chunk != self.next_chunk || self.layout.chunk_scalar_count(chunk)? != scalars.len() {
-            return Err(StoredAdviceErrorV1::WriteOrder);
+            return Err(StoredPolynomialErrorV1::WriteOrder);
         }
         if scalars
             .iter()
             .any(|scalar| !self.layout.field().is_canonical(scalar))
         {
-            return Err(StoredAdviceErrorV1::Encoding);
+            return Err(StoredPolynomialErrorV1::Encoding);
         }
         let _window = PlaintextWindow::acquire(&self.window)?;
         // Keep the resources outside self until success: allocation/I/O/encryption errors and
         // unwinding all leave this writer poisoned and drop its retained key/file.
-        let mut raw = self.raw.take().ok_or(StoredAdviceErrorV1::Poisoned)?;
+        let mut raw = self.raw.take().ok_or(StoredPolynomialErrorV1::Poisoned)?;
         let mut plaintext =
             ConfidentialSpoolChunkV1::new_zeroed_v1(CHUNK_BYTES as u64).map_err(map_spool_error)?;
         for (destination, scalar) in plaintext
@@ -222,21 +226,21 @@ impl StoredAdviceWriterV1 for CoreStoredAdviceWriterV1 {
         Ok(())
     }
 
-    fn seal(mut self) -> Result<Self::Snapshot, StoredAdviceErrorV1> {
+    fn seal(mut self) -> Result<Self::Snapshot, StoredPolynomialErrorV1> {
         if self.raw.is_none() {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         if self.next_chunk != self.layout.chunk_count() as u64 {
-            return Err(StoredAdviceErrorV1::Incomplete);
+            return Err(StoredPolynomialErrorV1::Incomplete);
         }
         let _window = PlaintextWindow::acquire(&self.window)?;
         let raw = self
             .raw
             .take()
-            .ok_or(StoredAdviceErrorV1::Poisoned)?
+            .ok_or(StoredPolynomialErrorV1::Poisoned)?
             .seal_v1()
             .map_err(map_spool_error)?;
-        Ok(CoreStoredAdviceSnapshotV1 {
+        Ok(CoreStoredPolynomialSnapshotV1 {
             layout: self.layout,
             raw: Some(raw),
             window: Rc::clone(&self.window),
@@ -249,13 +253,13 @@ impl StoredAdviceWriterV1 for CoreStoredAdviceWriterV1 {
     }
 }
 
-impl CoreStoredAdviceSnapshotV1 {
-    fn preflight(&self, expected: StoredAdviceLayoutV1) -> Result<(), StoredAdviceErrorV1> {
+impl CoreStoredPolynomialSnapshotV1 {
+    fn preflight(&self, expected: StoredPolynomialLayoutV1) -> Result<(), StoredPolynomialErrorV1> {
         if self.raw.is_none() {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         if expected != self.layout {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         Ok(())
     }
@@ -264,17 +268,17 @@ impl CoreStoredAdviceSnapshotV1 {
         &mut self,
         operation: impl FnOnce(
             &mut ConfidentialSpoolSnapshotV1,
-            StoredAdviceLayoutV1,
-        ) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+            StoredPolynomialLayoutV1,
+        ) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         let _window = PlaintextWindow::acquire(&self.window)?;
         // The lower-level spool restores its owner after a successful raw read. Taking it here
         // additionally makes scalar validation and callback errors/panics fail-stop.
-        let mut raw = self.raw.take().ok_or(StoredAdviceErrorV1::Poisoned)?;
+        let mut raw = self.raw.take().ok_or(StoredPolynomialErrorV1::Poisoned)?;
         #[cfg(test)]
         {
             if std::mem::take(&mut self.panic_on_read) {
-                panic!("injected advice read panic");
+                panic!("injected polynomial read panic");
             }
             if let Some(error) = self.injected_read_error.take() {
                 return Err(error);
@@ -287,12 +291,12 @@ impl CoreStoredAdviceSnapshotV1 {
 }
 
 fn validated_chunk<'a>(
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     index: u64,
     plaintext: &'a ConfidentialSpoolChunkV1,
-) -> Result<&'a [[u8; 32]], StoredAdviceErrorV1> {
+) -> Result<&'a [[u8; 32]], StoredPolynomialErrorV1> {
     if plaintext.as_slice_v1().len() != CHUNK_BYTES {
-        return Err(StoredAdviceErrorV1::Encoding);
+        return Err(StoredPolynomialErrorV1::Encoding);
     }
     let (scalars, remainder) = plaintext.as_slice_v1().as_chunks::<32>();
     let count = layout.chunk_scalar_count(index)?;
@@ -302,22 +306,22 @@ fn validated_chunk<'a>(
             .any(|scalar| !layout.field().is_canonical(scalar))
         || scalars[count..].iter().any(|scalar| *scalar != [0; 32])
     {
-        return Err(StoredAdviceErrorV1::Encoding);
+        return Err(StoredPolynomialErrorV1::Encoding);
     }
     Ok(&scalars[..count])
 }
 
-impl StoredAdviceSnapshotV1 for CoreStoredAdviceSnapshotV1 {
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+impl StoredPolynomialSnapshotV1 for CoreStoredPolynomialSnapshotV1 {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
 
     fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         self.preflight(expected)?;
         self.layout.chunk_scalar_count(chunk)?;
         self.read_operation(|raw, layout| {
@@ -330,15 +334,15 @@ impl StoredAdviceSnapshotV1 for CoreStoredAdviceSnapshotV1 {
 
     fn with_column<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        expected: StoredPolynomialLayoutV1,
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         self.preflight(expected)?;
         self.read_operation(|raw, layout| {
             let mut column = Zeroizing::new(Vec::<[u8; 32]>::new());
             column
                 .try_reserve_exact(layout.scalar_count())
-                .map_err(|_| StoredAdviceErrorV1::Allocation)?;
+                .map_err(|_| StoredPolynomialErrorV1::Allocation)?;
             column.resize(layout.scalar_count(), [0; 32]);
             for index in 0..layout.chunk_count() as u64 {
                 let plaintext = raw
@@ -354,7 +358,7 @@ impl StoredAdviceSnapshotV1 for CoreStoredAdviceSnapshotV1 {
     }
 }
 
-fn map_spool_error(error: ConfidentialSpoolErrorV1) -> StoredAdviceErrorV1 {
+fn map_spool_error(error: ConfidentialSpoolErrorV1) -> StoredPolynomialErrorV1 {
     match error {
         ConfidentialSpoolErrorV1::EmptyLayout
         | ConfidentialSpoolErrorV1::EmptyChunk
@@ -362,25 +366,25 @@ fn map_spool_error(error: ConfidentialSpoolErrorV1) -> StoredAdviceErrorV1 {
         | ConfidentialSpoolErrorV1::AddressSpaceExceeded
         | ConfidentialSpoolErrorV1::InertContextDigest
         | ConfidentialSpoolErrorV1::LimitExceeded(_)
-        | ConfidentialSpoolErrorV1::CipherMessageLimit => StoredAdviceErrorV1::Layout,
-        ConfidentialSpoolErrorV1::Allocation(_) => StoredAdviceErrorV1::Allocation,
+        | ConfidentialSpoolErrorV1::CipherMessageLimit => StoredPolynomialErrorV1::Layout,
+        ConfidentialSpoolErrorV1::Allocation(_) => StoredPolynomialErrorV1::Allocation,
         ConfidentialSpoolErrorV1::UnsupportedPlatform
         | ConfidentialSpoolErrorV1::EntropyUnavailable
-        | ConfidentialSpoolErrorV1::WeakEntropy(_) => StoredAdviceErrorV1::Backend,
-        ConfidentialSpoolErrorV1::SlotOutOfRange { .. } => StoredAdviceErrorV1::ChunkIndex,
+        | ConfidentialSpoolErrorV1::WeakEntropy(_) => StoredPolynomialErrorV1::Backend,
+        ConfidentialSpoolErrorV1::SlotOutOfRange { .. } => StoredPolynomialErrorV1::ChunkIndex,
         ConfidentialSpoolErrorV1::UnexpectedWriteSlot { .. }
-        | ConfidentialSpoolErrorV1::ChunkLength { .. } => StoredAdviceErrorV1::WriteOrder,
-        ConfidentialSpoolErrorV1::ContextDigestMismatch => StoredAdviceErrorV1::Context,
-        ConfidentialSpoolErrorV1::Incomplete { .. } => StoredAdviceErrorV1::Incomplete,
+        | ConfidentialSpoolErrorV1::ChunkLength { .. } => StoredPolynomialErrorV1::WriteOrder,
+        ConfidentialSpoolErrorV1::ContextDigestMismatch => StoredPolynomialErrorV1::Context,
+        ConfidentialSpoolErrorV1::Incomplete { .. } => StoredPolynomialErrorV1::Incomplete,
         ConfidentialSpoolErrorV1::Encryption | ConfidentialSpoolErrorV1::Authentication => {
-            StoredAdviceErrorV1::Authentication
+            StoredPolynomialErrorV1::Authentication
         }
-        ConfidentialSpoolErrorV1::Poisoned => StoredAdviceErrorV1::Poisoned,
+        ConfidentialSpoolErrorV1::Poisoned => StoredPolynomialErrorV1::Poisoned,
         ConfidentialSpoolErrorV1::FileOperation { .. }
         | ConfidentialSpoolErrorV1::UnsafeTemporaryFile
         | ConfidentialSpoolErrorV1::TemporaryFileIdentityMismatch
         | ConfidentialSpoolErrorV1::UnsafeDetachedFile
-        | ConfidentialSpoolErrorV1::FileLength { .. } => StoredAdviceErrorV1::Storage,
+        | ConfidentialSpoolErrorV1::FileLength { .. } => StoredPolynomialErrorV1::Storage,
     }
 }
 

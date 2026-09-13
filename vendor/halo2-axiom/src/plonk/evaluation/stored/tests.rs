@@ -13,6 +13,7 @@ use ff::{Field, WithSmallOrderMulGroup};
 use halo2curves::pasta::{Fp, Fq};
 
 use super::*;
+use crate::poly::stored_advice::{StoredLookupSideV1, StoredPolynomialRoleV1};
 use crate::{
     plonk::{
         AdviceQuery, ConstraintSystem, FirstPhase, FixedQuery, InstanceQuery, SecondPhase,
@@ -44,28 +45,28 @@ impl Drop for Window {
 }
 
 struct Snapshot {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     values: Vec<[u8; 32]>,
     state: Rc<State>,
     poisoned: bool,
 }
 
-impl StoredAdviceSnapshotV1 for Snapshot {
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+impl StoredPolynomialSnapshotV1 for Snapshot {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
 
     fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         if self.poisoned {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         if self.layout != expected {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         let count = expected.chunk_scalar_count(chunk)?;
         assert!(
@@ -76,11 +77,13 @@ impl StoredAdviceSnapshotV1 for Snapshot {
         self.poisoned = true;
         let (fail, panic, short) = {
             let mut record = self.state.record.borrow_mut();
-            record.reads.push((self.layout.column(), chunk));
+            record
+                .reads
+                .push((self.layout.advice_coordinates().unwrap().0, chunk));
             (record.fail, record.panic, record.short)
         };
         if fail == Some(chunk) {
-            return Err(StoredAdviceErrorV1::Authentication);
+            return Err(StoredPolynomialErrorV1::Authentication);
         }
         assert!(panic != Some(chunk), "injected storage unwind");
         let start = chunk as usize * TILE;
@@ -94,27 +97,26 @@ impl StoredAdviceSnapshotV1 for Snapshot {
 
     fn with_column<R>(
         &mut self,
-        _: StoredAdviceLayoutV1,
-        _: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        _: StoredPolynomialLayoutV1,
+        _: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         panic!("expression evaluation must never materialize a column")
     }
 }
 
-fn layout<F: StoredAssignmentFieldV1>(k: u32, column: u32, phase: u8) -> StoredAdviceLayoutV1 {
-    StoredAdviceLayoutV1::new(
+fn layout<F: StoredAssignmentFieldV1>(k: u32, column: u32, phase: u8) -> StoredPolynomialLayoutV1 {
+    StoredPolynomialLayoutV1::new(
         [37; 32],
         u64::from(column) + 11,
         F::STORED_FIELD,
         StoredPolynomialBasisV1::Lagrange,
         k,
-        column,
-        phase,
+        StoredPolynomialRoleV1::Advice { column, phase },
     )
     .unwrap()
 }
 
-fn context<'a>(layouts: &'a [StoredAdviceLayoutV1]) -> StoredExpressionContextV1<'a> {
+fn context<'a>(layouts: &'a [StoredPolynomialLayoutV1]) -> StoredExpressionContextV1<'a> {
     StoredExpressionContextV1 {
         domain: layouts[0],
         advice: layouts,
@@ -139,7 +141,7 @@ fn advice<F>(column: usize, rotation: i32, phase: u8) -> Expression<F> {
 }
 
 fn snapshot<F: StoredAssignmentFieldV1>(
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     values: &[F],
     state: &Rc<State>,
 ) -> Snapshot {
@@ -246,14 +248,16 @@ fn differential<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>(coset: b
             part: 3,
         };
         for (column, binding) in layouts.iter_mut().enumerate() {
-            *binding = StoredAdviceLayoutV1::new(
+            *binding = StoredPolynomialLayoutV1::new(
                 [37; 32],
                 column as u64 + 11,
                 F::STORED_FIELD,
                 basis,
                 k,
-                column as u32,
-                column as u8,
+                StoredPolynomialRoleV1::Advice {
+                    column: column as u32,
+                    phase: column as u8,
+                },
             )
             .unwrap();
         }
@@ -530,7 +534,15 @@ fn context_rejects_duplicate_missing_cross_proof_field_basis_k_and_phase_binding
     let original = [layout::<Fp>(9, 0, 0), layout::<Fp>(9, 1, 1)];
     let expression = advice::<Fp>(1, 0, 1);
     let make = |proof, ordinal, field, basis, k, column, phase| {
-        StoredAdviceLayoutV1::new(proof, ordinal, field, basis, k, column, phase).unwrap()
+        StoredPolynomialLayoutV1::new(
+            proof,
+            ordinal,
+            field,
+            basis,
+            k,
+            StoredPolynomialRoleV1::Advice { column, phase },
+        )
+        .unwrap()
     };
     let variants = [
         original[0], // duplicate physical coordinate and ordinal
@@ -781,24 +793,27 @@ fn invalid_tile_binding_and_bank_dimensions_expose_no_plaintext_or_result() {
     };
     assert_eq!(
         read_advice(
-            &mut StoredAdviceInputV1 {
+            &mut StoredAdviceSliceReaderV1::new(&mut [StoredAdviceInputV1 {
                 expected: layouts[0],
-                snapshot: &mut source
-            },
+                snapshot: &mut source,
+            }]),
+            layouts[0],
             tile,
             1,
             &mut [Fp::ZERO; 1],
         ),
         Err(StoredExpressionErrorV1::Tile),
     );
-    let wrong = StoredAdviceLayoutV1::new(
+    let wrong = StoredPolynomialLayoutV1::new(
         [37; 32],
         91,
         StoredPastaFieldV1::Fp,
         StoredPolynomialBasisV1::Lagrange,
         9,
-        0,
-        0,
+        StoredPolynomialRoleV1::Advice {
+            column: 0,
+            phase: 0,
+        },
     )
     .unwrap();
     assert_eq!(
@@ -904,9 +919,9 @@ fn read_failure<F: StoredAssignmentFieldV1>(kind: u8) {
         assert!(result.is_err());
     } else {
         let expected = if kind == 0 {
-            StoredAdviceErrorV1::Authentication
+            StoredPolynomialErrorV1::Authentication
         } else {
-            StoredAdviceErrorV1::Encoding
+            StoredPolynomialErrorV1::Encoding
         };
         assert_eq!(
             result.unwrap(),
@@ -978,4 +993,49 @@ fn consumer_error_and_unwind_clear_complete_result_after_window_is_closed() {
         assert!(!source.poisoned); // Consumer is outside the backend callback; caller aborts proof.
         CLEAR_OBSERVATION.with(|record| assert_eq!(record.get(), (TILE, true)));
     }
+}
+
+mod auxiliary;
+
+fn reject_lookup_advice_bindings<F: StoredAssignmentFieldV1>() {
+    for k in [4, 9] {
+        for basis in [
+            StoredPolynomialBasisV1::Lagrange,
+            StoredPolynomialBasisV1::CosetPart {
+                extension_log: 1,
+                part: 1,
+            },
+        ] {
+            for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+                let wrong = StoredPolynomialLayoutV1::new(
+                    [37; 32],
+                    11,
+                    F::STORED_FIELD,
+                    basis,
+                    k,
+                    StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side },
+                )
+                .unwrap();
+                // Even a constant expression must reject a self-consistent non-advice
+                // receipt in the advice bindings, before allocating witness scratch.
+                let bindings = [wrong];
+                let admitted = context(&bindings);
+                CLEAR_OBSERVATION.with(|record| record.set((0, true)));
+                for expression in [Expression::Constant(F::ONE), advice::<F>(0, 0, 0)] {
+                    assert_eq!(
+                        prepare_stored_expression_v1(&expression, admitted, usize::MAX)
+                            .unwrap_err(),
+                        StoredExpressionErrorV1::Context,
+                    );
+                }
+                CLEAR_OBSERVATION.with(|record| assert_eq!(record.get(), (0, true)));
+            }
+        }
+    }
+}
+
+#[test]
+fn both_pasta_expression_plans_reject_self_consistent_lookup_roles_as_advice() {
+    reject_lookup_advice_bindings::<Fp>();
+    reject_lookup_advice_bindings::<Fq>();
 }

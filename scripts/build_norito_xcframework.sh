@@ -1341,6 +1341,8 @@ stage_cargo_library() {
   run_isolated_python "$PQCRYPTO_ARCHIVE_NORMALIZER" \
     --library "$staged_library" \
     --cargo-build-dir "$CARGO_TARGET_DIR/$target_triple/release/build" \
+    --cargo-messages "$STAGE_DIR/cargo-messages/$target_triple.jsonl" \
+    --package-root "$ROOT_DIR/vendor/pqcrypto-internals-0.2.11" \
     --target "$target_triple" --cargo-lock "$CARGO_LOCKFILE" \
     --report "$staged_library.pqcrypto-normalization.json" || return $?
   rebuild_apple_archive_index "$staged_library" || return $?
@@ -1355,6 +1357,20 @@ run_hermetic_apple_cargo() {
   local cargo_subcommand="$1"
   shift
   local cargo_status
+  local target_triple="" previous_argument="" argument
+  for argument in "$@"; do
+    if [[ "$previous_argument" == "--target" ]]; then
+      [[ -z "$target_triple" ]] || { echo "[-] Duplicate Apple Cargo target" >&2; return 1; }
+      target_triple="$argument"
+    fi
+    previous_argument="$argument"
+  done
+  case "$target_triple" in
+    aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|aarch64-apple-darwin|x86_64-apple-darwin) ;;
+    *) echo "[-] Missing or unsupported Apple Cargo target" >&2; return 1 ;;
+  esac
+  local cargo_messages="$STAGE_DIR/cargo-messages/$target_triple.jsonl"
+  mkdir -p "$STAGE_DIR/cargo-messages"
   local platform_environment=()
   case "$profile" in
     apple-ios-device)
@@ -1408,12 +1424,16 @@ run_hermetic_apple_cargo() {
       --set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT" \
       "${platform_environment[@]}" \
       -- "$CARGO_BINARY" "$cargo_subcommand" \
-      -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" "$@"; then
+      -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" \
+      --message-format=json-render-diagnostics "$@" > "$cargo_messages"; then
     cargo_status=0
   else
     cargo_status=$?
   fi
   assert_selected_cargo_lock "the $profile Cargo invocation"
+  if [[ "$cargo_status" != "0" ]]; then
+    echo "[-] Cargo diagnostic messages retained at $cargo_messages" >&2
+  fi
   return "$cargo_status"
 }
 

@@ -15,11 +15,9 @@ use crate::{
         range::RangeInstructions,
     },
     halo2_proofs::{
+        SerdeCurveAffine, SerdePrimeField,
         circuit::{Cell, Layouter, Value, floor_planner::V1},
-        halo2curves::{
-            CurveAffine,
-            pasta::{EpAffine, EqAffine, Fp, Fq},
-        },
+        halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
         plonk::{
             Advice, Any, Assigned, Assignment, Challenge, Circuit, Column, ConstraintSystem, Error,
             Fixed, FloorPlanner, Instance, Selector,
@@ -31,6 +29,7 @@ use crate::{
 
 use super::raw_assign_advice_cell;
 
+#[path = "cell_assignment_tests/baseline.rs"]
 mod baseline;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -473,7 +472,7 @@ fn cell_only_helper_returns_actual_offset_cells() {
         cells: Arc::default(),
         marker: PhantomData,
     };
-    let mut meta = ConstraintSystem::default();
+    let mut meta = ConstraintSystem::<Fp>::default();
     let config = OffsetFixture::configure(&mut meta);
     let mut recorder = Recorder::<Fp>::new(true);
     V1::synthesize(&mut recorder, &fixture, config, vec![]).unwrap();
@@ -503,20 +502,20 @@ fn cell_only_helper_returns_actual_offset_cells() {
 
 fn compare_real_ipa<C>()
 where
-    C: CurveAffine,
-    C::ScalarExt: ScalarField + WithSmallOrderMulGroup<3>,
+    C: SerdeCurveAffine,
+    C::ScalarExt: ScalarField + SerdePrimeField + WithSmallOrderMulGroup<3>,
 {
     use crate::halo2_proofs::{
         SerdeFormat,
         plonk::{create_proof, keygen_pk, keygen_vk, verify_proof},
         poly::{
+            VerificationStrategy,
             commitment::ParamsProver,
             ipa::{
                 commitment::{IPACommitmentScheme, ParamsIPA},
                 multiopen::{ProverIPA, VerifierIPA},
                 strategy::SingleStrategy,
             },
-            strategy::VerificationStrategy,
         },
         transcript::{
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,

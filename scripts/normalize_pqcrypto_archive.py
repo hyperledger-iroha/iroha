@@ -149,39 +149,72 @@ def read_regular(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def cargo_references(build_dir: Path, target: str) -> tuple[dict[str, bytes], dict[str, str]]:
-    """Bind references to one recorded pqcrypto-internals Cargo build output."""
+def cargo_references(
+    build_dir: Path, target: str, messages_path: Path, package_root: Path,
+) -> tuple[dict[str, bytes], dict[str, str]]:
+    """Bind references to the exact package selected by this completed Cargo invocation."""
     if target.startswith("aarch64-apple-"):
         backend = "libkeccak2x.a"
     elif target.startswith("x86_64-apple-"):
         backend = "libkeccak4x.a"
     else:
         raise ValueError("archive normalization requires a supported Apple target")
+    for path in (build_dir, package_root):
+        if not path.is_absolute() or path.resolve(strict=True) != path or not path.is_dir():
+            raise ValueError("Cargo provenance directories must be canonical and non-symbolic")
+    manifest_bytes = read_regular(package_root / "Cargo.toml")
+    package = tomllib.loads(manifest_bytes.decode("utf-8")).get("package", {})
+    if package.get("name") != "pqcrypto-internals" or package.get("version") != "0.2.11":
+        raise ValueError("Cargo package provenance requires pqcrypto-internals 0.2.11")
+    package_id = package_root.as_uri().replace("file:", "path+file:", 1) + "#pqcrypto-internals@0.2.11"
+    messages_bytes = read_regular(messages_path)
+    messages = [json.loads(line) for line in messages_bytes.decode("utf-8").splitlines()]
+    if (not messages or any(not isinstance(message, dict) for message in messages)
+            or messages[-1] != {"reason": "build-finished", "success": True}
+            or sum(message.get("reason") == "build-finished" for message in messages) != 1):
+        raise ValueError("Cargo provenance requires one successfully completed build")
     candidates = []
-    for candidate in sorted(build_dir.glob("pqcrypto-internals-*")):
-        if not re.fullmatch(r"pqcrypto-internals-[0-9a-f]+", candidate.name):
+    for message in messages:
+        if message.get("reason") != "build-script-executed" or message.get("package_id") != package_id:
             continue
-        output = candidate / "output"
-        if not output.exists():
+        out_value = message.get("out_dir")
+        if not isinstance(out_value, str):
+            raise ValueError("Cargo package output directory is malformed")
+        out_dir = Path(out_value)
+        # A package may also be built for the host. Only this target's exact output is eligible.
+        if out_dir.parent.parent != build_dir:
             continue
-        if candidate.is_symlink() or (candidate / "out").is_symlink():
-            raise ValueError("reference Cargo build directory must not be symbolic")
-        lines = read_regular(output).decode("utf-8").splitlines()
-        out_dir = (candidate / "out").resolve(strict=True)
-        search = f"cargo:rustc-link-search=native={out_dir}"
-        required = {search, "cargo:rustc-link-lib=static=pqclean_common", f"cargo:rustc-link-lib=static={backend[3:-2]}"}
-        if not required <= set(lines):
-            continue
-        archives = {name: read_regular(out_dir / name) for name in ("libpqclean_common.a", backend)}
-        trusted_reference_members(archives)
-        candidates.append((archives, {
-            "cargo_build_output": str(output.resolve()),
-            "cargo_build_output_sha256": hashlib.sha256(read_regular(output)).hexdigest(),
-            **{name: hashlib.sha256(value).hexdigest() for name, value in archives.items()},
-        }))
+        if (out_dir.name != "out"
+                or not re.fullmatch(r"pqcrypto-internals-[0-9a-f]+", out_dir.parent.name)
+                or not out_dir.is_absolute() or out_dir.resolve(strict=True) != out_dir):
+            raise ValueError("Cargo package output directory is not canonical")
+        candidates.append((message, out_dir))
     if len(candidates) != 1:
-        raise ValueError(f"reference provenance requires exactly one matching Cargo build output, found {len(candidates)}")
-    return candidates[0]
+        raise ValueError(f"reference provenance requires exactly one current Cargo build output, found {len(candidates)}")
+    message, out_dir = candidates[0]
+    search = f"native={out_dir}"
+    links = {"static=pqclean_common", f"static={backend[3:-2]}"}
+    if (not isinstance(message.get("linked_paths"), list)
+            or search not in message["linked_paths"]
+            or not isinstance(message.get("linked_libs"), list)
+            or not links <= set(message["linked_libs"])):
+        raise ValueError("current Cargo build output has conflicting link directives")
+    output = out_dir.parent / "output"
+    output_bytes = read_regular(output)
+    lines = output_bytes.decode("utf-8").splitlines()
+    required = {f"cargo:rustc-link-search={search}", *{f"cargo:rustc-link-lib={link}" for link in links}}
+    if not required <= set(lines):
+        raise ValueError("recorded Cargo build output has conflicting link directives")
+    archives = {name: read_regular(out_dir / name) for name in ("libpqclean_common.a", backend)}
+    trusted_reference_members(archives)
+    return archives, {
+        "cargo_build_output": str(output),
+        "cargo_build_output_sha256": hashlib.sha256(output_bytes).hexdigest(),
+        "cargo_messages_sha256": hashlib.sha256(messages_bytes).hexdigest(),
+        "cargo_package_id": package_id,
+        "cargo_package_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        **{name: hashlib.sha256(value).hexdigest() for name, value in archives.items()},
+    }
 
 
 def main() -> int:
@@ -189,6 +222,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--cargo-build-dir", type=Path, required=True)
+    parser.add_argument("--cargo-messages", type=Path, required=True)
+    parser.add_argument("--package-root", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--cargo-lock", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
@@ -198,7 +233,9 @@ def main() -> int:
     if len(packages) != 1 or packages[0].get("version") != "0.2.11":
         raise ValueError("reference provenance requires locked pqcrypto-internals 0.2.11")
     original = read_regular(args.library)
-    references, provenance = cargo_references(args.cargo_build_dir, args.target)
+    references, provenance = cargo_references(
+        args.cargo_build_dir, args.target, args.cargo_messages, args.package_root,
+    )
     normalized, removed = normalize_archive_bytes(original, references)
     report = {
         "schema": "iroha.pqcrypto-common-archive-normalization.v1",

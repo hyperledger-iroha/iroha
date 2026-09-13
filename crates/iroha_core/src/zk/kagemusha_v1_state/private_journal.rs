@@ -51,6 +51,8 @@ pub(crate) struct PrivateJournal {
     // One verified immutable prefix, scoped to this held descriptor and invalidated by poison.
     verified_recovery_prefix: Cell<Option<super::KagemushaRecoveryJournalPrefixV1>>,
     poisoned: Cell<bool>,
+    // A consumer cannot recursively materialize another record through this same owner.
+    scanning: Cell<bool>,
     #[cfg(test)]
     pub(crate) failure: Cell<Option<TestPersistenceFailure>>,
 }
@@ -173,6 +175,7 @@ impl PrivateJournal {
             previous_frame_hash: [0; 32],
             verified_recovery_prefix: Cell::new(None),
             poisoned: Cell::new(false),
+            scanning: Cell::new(false),
             #[cfg(test)]
             failure: Cell::new(None),
         };
@@ -194,27 +197,15 @@ impl PrivateJournal {
         self.journal
             .read_exact(&mut header)
             .map_err(|_| PrivateJournalError::Corrupt)?;
-        let length = u64::from_le_bytes(
-            header[8..16]
-                .try_into()
-                .map_err(|_| PrivateJournalError::Corrupt)?,
-        );
-        let sequence = u64::from_le_bytes(
-            header[16..24]
-                .try_into()
-                .map_err(|_| PrivateJournalError::Corrupt)?,
-        );
+        let sequence = self.next_sequence;
+        let parsed =
+            validate_frame_header(&header, self.format, sequence, self.previous_frame_hash)?;
+        let length = parsed.length;
         let remaining = self
             .acknowledged_bytes
             .saturating_sub(self.read_bytes)
             .saturating_sub(FRAME_HEADER_BYTES as u64);
-        if &header[..8] != self.format.magic
-            || sequence != self.next_sequence
-            || header[24..56] != self.previous_frame_hash
-            || length == 0
-            || length > self.format.maximum_payload_bytes
-            || length > remaining
-        {
+        if length > remaining {
             return Err(PrivateJournalError::Corrupt);
         }
         let mut payload =
@@ -223,7 +214,7 @@ impl PrivateJournal {
             .read_exact(&mut payload)
             .map_err(|_| PrivateJournalError::Corrupt)?;
         let hash = self.frame_hash(&header[..56], &payload);
-        if header[56..] != hash {
+        if parsed.hash != hash {
             return Err(PrivateJournalError::Corrupt);
         }
         self.read_bytes = self
@@ -316,24 +307,8 @@ impl PrivateJournal {
             self.journal
                 .read_exact_at(&mut header, offset)
                 .map_err(storage_error)?;
-            let length = u64::from_le_bytes(
-                header[8..16]
-                    .try_into()
-                    .map_err(|_| PrivateJournalError::Corrupt)?,
-            );
-            let stored_sequence = u64::from_le_bytes(
-                header[16..24]
-                    .try_into()
-                    .map_err(|_| PrivateJournalError::Corrupt)?,
-            );
-            if &header[..8] != self.format.magic
-                || stored_sequence != sequence
-                || header[24..56] != previous
-                || length == 0
-                || length > self.format.maximum_payload_bytes
-            {
-                return Err(PrivateJournalError::Corrupt);
-            }
+            let parsed = validate_frame_header(&header, self.format, sequence, previous)?;
+            let length = parsed.length;
             offset = offset
                 .checked_add(FRAME_HEADER_BYTES as u64)
                 .ok_or(PrivateJournalError::Corrupt)?;
@@ -356,12 +331,101 @@ impl PrivateJournal {
                 remaining -= count as u64;
             }
             let actual: DigestV1 = hash.finalize().into();
-            if header[56..] != actual {
+            if parsed.hash != actual {
                 return Err(PrivateJournalError::Corrupt);
             }
             previous = actual;
         }
         Ok(offset == expected.byte_len && previous == expected.head)
+    }
+
+    /// Visit every complete record through this owner's original locked descriptor.
+    ///
+    /// The journal must already be fully replayed. The complete end/head are captured once;
+    /// every original frame, including any unselected suffix, is checked again. Positional
+    /// reads preserve the file offset and all replay/append counters. Existing named-path
+    /// probes only verify ownership; they never supply replay bytes or acquire another lock.
+    ///
+    /// The borrowed callback is data plumbing, not an authentication decision or capability.
+    /// Payloads remain owner-specific untrusted bytes; their canonical Norito schema and any
+    /// signatures, selected hardware prefix or suffix semantics require a separate verifier.
+    /// At most one payload of the format's maximum size is allocated by this scan; allocations
+    /// performed by the callback are outside that bound. Recursive scans on this owner fail
+    /// before allocating or reading another record.
+    ///
+    /// # Errors
+    /// Incomplete replay or reentrancy refuses admission without poisoning. Once admitted,
+    /// read/framing/ownership errors, callback errors and unwinding poison the owner and clear
+    /// its cached prefix. Success leaves it usable. No path initializes, appends, fsyncs,
+    /// truncates or retires journal records; the caller must discard partial callback results.
+    pub(crate) fn scan_complete(
+        &self,
+        mut consume: impl FnMut(u64, &[u8]) -> Result<(), PrivateJournalError>,
+    ) -> Result<super::KagemushaRecoveryJournalPrefixV1, PrivateJournalError> {
+        if self.scanning.get() {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        let expected = self.recovery_prefix()?;
+        self.scanning.set(true);
+        let mut lease = CompleteScanLease {
+            journal: self,
+            complete: false,
+        };
+        let mut offset = 0_u64;
+        let mut previous = [0; 32];
+        for sequence in 0..expected.sequence {
+            self.check_owned()?;
+            if expected.byte_len.saturating_sub(offset) < FRAME_HEADER_BYTES as u64 {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            let mut header = [0_u8; FRAME_HEADER_BYTES];
+            self.journal
+                .read_exact_at(&mut header, offset)
+                .map_err(storage_error)?;
+            let parsed = validate_frame_header(&header, self.format, sequence, previous)?;
+            let payload_offset = offset
+                .checked_add(FRAME_HEADER_BYTES as u64)
+                .ok_or(PrivateJournalError::Corrupt)?;
+            if parsed.length > expected.byte_len.saturating_sub(payload_offset) {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            let length =
+                usize::try_from(parsed.length).map_err(|_| PrivateJournalError::Corrupt)?;
+            let mut payload = Vec::new();
+            payload
+                .try_reserve_exact(length)
+                .map_err(|_| PrivateJournalError::StorageUnavailable)?;
+            payload.resize(length, 0);
+            self.journal
+                .read_exact_at(&mut payload, payload_offset)
+                .map_err(storage_error)?;
+            let actual = self.frame_hash(&header[..56], &payload);
+            if actual != parsed.hash {
+                return Err(PrivateJournalError::Corrupt);
+            }
+            // Never deliver bytes read across an externally changed file generation.
+            self.check_owned()?;
+            let result = consume(sequence, &payload);
+            // This check runs even for an ordinary callback error. Unwinding drops the lease,
+            // which poisons and invalidates the owner before any later method can acknowledge it.
+            self.check_owned()?;
+            result?;
+            offset = payload_offset
+                .checked_add(parsed.length)
+                .ok_or(PrivateJournalError::Corrupt)?;
+            previous = actual;
+        }
+        // A callback may own a destructor that mutates storage or unwinds. Complete it
+        // while the scan lease is still armed, before the final ownership check.
+        drop(consume);
+        if offset != expected.byte_len
+            || previous != expected.head
+            || self.recovery_prefix()? != expected
+        {
+            return Err(PrivateJournalError::Corrupt);
+        }
+        lease.complete = true;
+        Ok(expected)
     }
 
     pub(crate) fn check_owned(&self) -> Result<(), PrivateJournalError> {
@@ -496,6 +560,59 @@ impl PrivateJournal {
         }
         Ok(written_version)
     }
+}
+
+// Completion is deliberately local to one scan, not a retained authentication receipt.
+struct CompleteScanLease<'a> {
+    journal: &'a PrivateJournal,
+    complete: bool,
+}
+impl Drop for CompleteScanLease<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.journal.poisoned.set(true);
+            self.journal.verified_recovery_prefix.set(None);
+        }
+        self.journal.scanning.set(false);
+    }
+}
+
+struct ValidatedFrameHeader {
+    length: u64,
+    hash: DigestV1,
+}
+
+// All replay paths share the same fixed frame grammar; owners still decode their own payloads.
+fn validate_frame_header(
+    header: &[u8; FRAME_HEADER_BYTES],
+    format: PrivateJournalFormat,
+    expected_sequence: u64,
+    previous_hash: DigestV1,
+) -> Result<ValidatedFrameHeader, PrivateJournalError> {
+    let length = u64::from_le_bytes(
+        header[8..16]
+            .try_into()
+            .map_err(|_| PrivateJournalError::Corrupt)?,
+    );
+    let sequence = u64::from_le_bytes(
+        header[16..24]
+            .try_into()
+            .map_err(|_| PrivateJournalError::Corrupt)?,
+    );
+    if &header[..8] != format.magic
+        || sequence != expected_sequence
+        || header[24..56] != previous_hash
+        || length == 0
+        || length > format.maximum_payload_bytes
+    {
+        return Err(PrivateJournalError::Corrupt);
+    }
+    Ok(ValidatedFrameHeader {
+        length,
+        hash: header[56..88]
+            .try_into()
+            .map_err(|_| PrivateJournalError::Corrupt)?,
+    })
 }
 
 fn validate_format(format: PrivateJournalFormat) -> Result<(), PrivateJournalError> {
@@ -811,3 +928,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "private_journal_held_scan_tests.rs"]
+mod held_scan_tests;

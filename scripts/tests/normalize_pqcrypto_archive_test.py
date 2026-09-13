@@ -213,9 +213,27 @@ def cargo_fixture(build_dir: Path, suffix: str = "01234567"):
     return refs, names, objects, output
 
 
+
+def cargo_context(build_dir: Path, output: Path):
+    package_root = build_dir.parent / (build_dir.name + "-source") / "vendor/pqcrypto-internals-0.2.11"
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "Cargo.toml").write_text('[package]\nname = "pqcrypto-internals"\nversion = "0.2.11"\n')
+    messages = build_dir.parent / (build_dir.name + "-messages.jsonl")
+    record = {
+        "reason": "build-script-executed",
+        "package_id": "path+" + package_root.as_uri() + "#pqcrypto-internals@0.2.11",
+        "out_dir": str(output.parent / "out"),
+        "linked_libs": ["static=pqclean_common", "static=keccak2x"],
+        "linked_paths": ["native=" + str(output.parent / "out")],
+    }
+    messages.write_text(json.dumps(record) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n")
+    return messages, package_root
+
+
 def test_cargo_reference_provenance_binds_recorded_search_path_and_file_hashes(tmp_path):
     refs, _, _, output = cargo_fixture(tmp_path)
-    actual, provenance = NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios")
+    messages, package = cargo_context(tmp_path, output)
+    actual, provenance = NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
     assert actual == refs
     assert provenance["cargo_build_output"] == str(output.resolve())
     assert provenance["cargo_build_output_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
@@ -224,10 +242,14 @@ def test_cargo_reference_provenance_binds_recorded_search_path_and_file_hashes(t
 
 
 def test_two_matching_cargo_outputs_are_rejected(tmp_path):
-    cargo_fixture(tmp_path, "0123")
-    cargo_fixture(tmp_path, "abcd")
+    _, _, _, first = cargo_fixture(tmp_path, "0123")
+    _, _, _, second = cargo_fixture(tmp_path, "abcd")
+    messages, package = cargo_context(tmp_path, first)
+    rows = [json.loads(line) for line in messages.read_text().splitlines()]
+    other = dict(rows[0], out_dir=str(second.parent / "out"))
+    messages.write_text("\n".join(json.dumps(row) for row in [rows[0], other, rows[1]]) + "\n")
     with pytest.raises(ValueError, match="exactly one"):
-        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios")
+        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
 
 
 @pytest.mark.parametrize("defect", ["different_search_path", "missing_common_link", "wrong_architecture_link"])
@@ -241,8 +263,9 @@ def test_cargo_reference_requires_its_exact_recorded_link_directives(tmp_path, d
     else:
         text = text.replace("static=keccak2x", "static=keccak4x")
     output.write_text(text)
-    with pytest.raises(ValueError, match="exactly one"):
-        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios")
+    messages, package = cargo_context(tmp_path, output)
+    with pytest.raises(ValueError, match="link directives"):
+        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
 
 
 def test_cargo_reference_rejects_a_malformed_archive_inventory(tmp_path):
@@ -250,8 +273,9 @@ def test_cargo_reference_rejects_a_malformed_archive_inventory(tmp_path):
     (output.parent / "out" / "libpqclean_common.a").write_bytes(
         MAGIC + raw_member(COMMON_NAMES[0], payload(COMMON_NAMES[0]))
     )
+    messages, package = cargo_context(tmp_path, output)
     with pytest.raises(ValueError, match="reference"):
-        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios")
+        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
 
 
 def test_read_regular_rejects_symbolic_provenance_files(tmp_path):
@@ -266,7 +290,8 @@ def test_read_regular_rejects_symbolic_provenance_files(tmp_path):
 
 @pytest.mark.parametrize("version", ["0.2.10", "0.2.12"])
 def test_cli_rejects_any_other_locked_pqcrypto_version_without_writing(tmp_path, version):
-    _, _, objects, _ = cargo_fixture(tmp_path / "build")
+    _, _, objects, output = cargo_fixture(tmp_path / "build")
+    messages, package = cargo_context(tmp_path / "build", output)
     original = MAGIC + b"".join(objects) + objects[0]
     library = tmp_path / "library.a"
     library.write_bytes(original)
@@ -276,6 +301,7 @@ def test_cli_rejects_any_other_locked_pqcrypto_version_without_writing(tmp_path,
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--library", str(library),
          "--cargo-build-dir", str(tmp_path / "build"), "--target", "aarch64-apple-ios",
+         "--cargo-messages", str(messages), "--package-root", str(package),
          "--cargo-lock", str(lock), "--report", str(report)],
         capture_output=True, text=True, check=False, timeout=10,
     )
@@ -286,7 +312,8 @@ def test_cli_rejects_any_other_locked_pqcrypto_version_without_writing(tmp_path,
 
 
 def test_cli_records_the_exact_authenticated_input_and_output(tmp_path):
-    refs, names, objects, _ = cargo_fixture(tmp_path / "build")
+    refs, names, objects, output = cargo_fixture(tmp_path / "build")
+    messages, package = cargo_context(tmp_path / "build", output)
     original = MAGIC + b"".join(objects) + objects[0]
     library = tmp_path / "library.a"
     library.write_bytes(original)
@@ -296,6 +323,7 @@ def test_cli_records_the_exact_authenticated_input_and_output(tmp_path):
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--library", str(library),
          "--cargo-build-dir", str(tmp_path / "build"), "--target", "aarch64-apple-ios",
+         "--cargo-messages", str(messages), "--package-root", str(package),
          "--cargo-lock", str(lock), "--report", str(report)],
         capture_output=True, text=True, check=False, timeout=10,
     )
@@ -307,3 +335,73 @@ def test_cli_records_the_exact_authenticated_input_and_output(tmp_path):
     assert record["removed_identical_members"] == [names[0]]
     for name, data in refs.items():
         assert record["references"][name] == hashlib.sha256(data).hexdigest()
+
+
+def test_current_cargo_selection_ignores_unselected_warm_cache_without_changing_it(tmp_path):
+    _, _, _, old = cargo_fixture(tmp_path, "0123")
+    refs, _, _, current = cargo_fixture(tmp_path, "abcd")
+    _, _, _, unrelated = cargo_fixture(tmp_path, "ffff")
+    # Even an invalid unselected old archive cannot override this invocation's selection.
+    old_archive = old.parent / "out/libpqclean_common.a"
+    old_archive.write_bytes(b"retained historical archive")
+    before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    messages, package = cargo_context(tmp_path, current)
+    actual, provenance = NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
+    assert actual == refs
+    assert provenance["cargo_build_output"] == str(current)
+    assert provenance["cargo_package_id"] == "path+" + package.as_uri() + "#pqcrypto-internals@0.2.11"
+    for name, data in before.items():
+        assert Path(name).read_bytes() == data
+    assert unrelated.exists()
+
+
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "wrong_package_path", "registry_package", "wrong_target", "unsuccessful", "unfinished", "malformed_json", "wrong_link"])
+def test_current_cargo_selection_rejects_missing_conflicting_or_foreign_records(tmp_path, defect):
+    _, _, _, output = cargo_fixture(tmp_path)
+    messages, package = cargo_context(tmp_path, output)
+    rows = [json.loads(line) for line in messages.read_text().splitlines()]
+    if defect == "missing": rows = rows[1:]
+    elif defect == "duplicate": rows.insert(0, rows[0].copy())
+    elif defect == "wrong_package_path": rows[0]["package_id"] = rows[0]["package_id"].replace(package.as_uri(), package.parent.as_uri())
+    elif defect == "registry_package": rows[0]["package_id"] = "registry+https://github.com/rust-lang/crates.io-index#pqcrypto-internals@0.2.11"
+    elif defect == "wrong_target": rows[0]["out_dir"] = str(tmp_path.parent / "other-target/release/build/pqcrypto-internals-abcd/out")
+    elif defect == "unsuccessful": rows[-1]["success"] = False
+    elif defect == "unfinished": rows.pop()
+    elif defect == "wrong_link": rows[0]["linked_paths"] = ["native=/other/build"]
+    if defect == "malformed_json": messages.write_text("not Cargo JSON\n")
+    else: messages.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    with pytest.raises(ValueError):
+        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
+
+
+def test_current_cargo_selection_rejects_symlinked_output_directory(tmp_path):
+    _, _, _, output = cargo_fixture(tmp_path)
+    messages, package = cargo_context(tmp_path, output)
+    original = output.parent / "out"
+    moved = output.parent / "retained-out"
+    original.rename(moved)
+    original.symlink_to(moved, target_is_directory=True)
+    with pytest.raises(ValueError, match="canonical"):
+        NORMALIZER.cargo_references(tmp_path, "aarch64-apple-ios", messages, package)
+
+
+@pytest.mark.parametrize("exit_code", [0, 73])
+def test_actual_hermetic_builder_captures_current_messages_and_preserves_cargo_exit(tmp_path, exit_code):
+    builder = (SCRIPT.parent / "build_norito_xcframework.sh").read_text()
+    function = builder[builder.index("run_hermetic_apple_cargo() {"):builder.index('\nif [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then', builder.index("run_hermetic_apple_cargo() {"))]
+    script = tmp_path / "runner.sh"
+    script.write_text("""set -e
+STAGE_DIR="$1"
+FIXTURE_EXIT="$2"
+run_isolated_python() {
+  printf '%s\\n' "$@" > "$STAGE_DIR/arguments.txt"
+  printf '{"reason":"build-finished","success":true}\\n'
+  return "$FIXTURE_EXIT"
+}
+assert_selected_cargo_lock() { :; }
+""" + function + '\nrun_hermetic_apple_cargo apple-macos /sdk build --locked --offline --jobs 1 --target aarch64-apple-darwin\n')
+    result = subprocess.run(["/bin/bash", str(script), str(tmp_path), str(exit_code)], capture_output=True, text=True, check=False, timeout=10)
+    assert result.returncode == exit_code, result.stderr
+    records = tmp_path / "cargo-messages/aarch64-apple-darwin.jsonl"
+    assert json.loads(records.read_text()) == {"reason": "build-finished", "success": True}
+    assert "--message-format=json-render-diagnostics" in (tmp_path / "arguments.txt").read_text().splitlines()

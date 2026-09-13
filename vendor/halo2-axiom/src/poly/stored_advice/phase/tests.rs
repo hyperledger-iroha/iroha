@@ -18,11 +18,29 @@ use std::{
 use super::*;
 use crate::{
     plonk::{FirstPhase, SecondPhase, ThirdPhase},
-    poly::commitment::ParamsProver,
+    poly::{commitment::ParamsProver, stored_advice::StoredLookupSideV1},
     transcript::{Blake2bWrite, Challenge255, Transcript, TranscriptWriterBuffer},
 };
 
 mod completion;
+
+fn set_column(layout: &mut StoredPolynomialLayoutV1, column: u32) {
+    let (_, phase) = layout.advice_coordinates().unwrap();
+    layout.role = StoredPolynomialRoleV1::Advice { column, phase };
+}
+
+fn increment_column(layout: &mut StoredPolynomialLayoutV1) {
+    let (column, phase) = layout.advice_coordinates().unwrap();
+    layout.role = StoredPolynomialRoleV1::Advice {
+        column: column + 1,
+        phase,
+    };
+}
+
+fn set_phase(layout: &mut StoredPolynomialLayoutV1, phase: u8) {
+    let (column, _) = layout.advice_coordinates().unwrap();
+    layout.role = StoredPolynomialRoleV1::Advice { column, phase };
+}
 
 thread_local! {
     // Observe initialized scalar storage immediately after the real SecretBlind destructor
@@ -51,7 +69,7 @@ struct Recording {
     writer_drops: usize,
     snapshot_drops: usize,
     read_count: usize,
-    sealed: Vec<(StoredAdviceLayoutV1, Vec<[u8; 32]>)>,
+    sealed: Vec<(StoredPolynomialLayoutV1, Vec<[u8; 32]>)>,
     rng_draws: usize,
     seals_at_draw: Vec<usize>,
 }
@@ -63,9 +81,9 @@ struct Backend {
 }
 struct Window(Rc<Backend>);
 impl Window {
-    fn acquire(backend: &Rc<Backend>) -> Result<Self, StoredAdviceErrorV1> {
+    fn acquire(backend: &Rc<Backend>) -> Result<Self, StoredPolynomialErrorV1> {
         if backend.busy.replace(true) {
-            return Err(StoredAdviceErrorV1::Busy);
+            return Err(StoredPolynomialErrorV1::Busy);
         }
         Ok(Self(Rc::clone(backend)))
     }
@@ -77,7 +95,7 @@ impl Drop for Window {
 }
 
 struct Writer {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     backend: Rc<Backend>,
     values: Vec<[u8; 32]>,
     next: u64,
@@ -85,7 +103,7 @@ struct Writer {
     change_ordinal_on_layout_read: Option<(usize, u64)>,
 }
 struct Snapshot {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     backend: Rc<Backend>,
     values: Vec<[u8; 32]>,
     poisoned: bool,
@@ -101,9 +119,9 @@ impl Drop for Snapshot {
     }
 }
 
-impl StoredAdviceWriterV1 for Writer {
+impl StoredPolynomialWriterV1 for Writer {
     type Snapshot = Snapshot;
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         let read = self.layout_reads.get() + 1;
         self.layout_reads.set(read);
         let mut layout = self.layout;
@@ -114,13 +132,17 @@ impl StoredAdviceWriterV1 for Writer {
         }
         layout
     }
-    fn write_chunk(&mut self, chunk: u64, values: &[[u8; 32]]) -> Result<(), StoredAdviceErrorV1> {
+    fn write_chunk(
+        &mut self,
+        chunk: u64,
+        values: &[[u8; 32]],
+    ) -> Result<(), StoredPolynomialErrorV1> {
         let _window = Window::acquire(&self.backend)?;
         let record = self.backend.record.borrow();
-        let location = (self.layout.column(), chunk);
+        let location = (self.layout.advice_coordinates().unwrap().0, chunk);
         assert_ne!(record.panic_write, Some(location), "injected write unwind");
         if record.fail_write == Some(location) {
-            return Err(StoredAdviceErrorV1::Storage);
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         assert_eq!(self.next, chunk);
         assert_eq!(values.len(), self.layout.chunk_scalar_count(chunk).unwrap());
@@ -133,11 +155,11 @@ impl StoredAdviceWriterV1 for Writer {
         self.next += 1;
         Ok(())
     }
-    fn seal(mut self) -> Result<Snapshot, StoredAdviceErrorV1> {
+    fn seal(mut self) -> Result<Snapshot, StoredPolynomialErrorV1> {
         let _window = Window::acquire(&self.backend)?;
         let mut record = self.backend.record.borrow_mut();
-        if record.fail_seal == Some(self.layout.column()) {
-            return Err(StoredAdviceErrorV1::Storage);
+        if record.fail_seal == Some(self.layout.advice_coordinates().unwrap().0) {
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         assert_eq!(self.next as usize, self.layout.chunk_count());
         let draws = record.rng_draws;
@@ -151,31 +173,31 @@ impl StoredAdviceWriterV1 for Writer {
         })
     }
 }
-impl StoredAdviceSnapshotV1 for Snapshot {
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+impl StoredPolynomialSnapshotV1 for Snapshot {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
     fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         if self.poisoned {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         if expected != self.layout {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         let _window = Window::acquire(&self.backend)?;
         self.poisoned = true;
-        let location = (self.layout.column(), chunk);
+        let location = (self.layout.advice_coordinates().unwrap().0, chunk);
         let (corrupt, short, change) = {
             let mut record = self.backend.record.borrow_mut();
             record.read_count += 1;
             assert_ne!(record.panic_read, Some(location), "injected read unwind");
             if record.fail_read == Some(location) {
-                return Err(StoredAdviceErrorV1::Authentication);
+                return Err(StoredPolynomialErrorV1::Authentication);
             }
             (
                 record.corrupt_read == Some(location),
@@ -190,16 +212,16 @@ impl StoredAdviceSnapshotV1 for Snapshot {
         }
         let value = consume(&self.values[start..start + count - usize::from(short)])?;
         if change {
-            self.layout.column += 1;
+            increment_column(&mut self.layout);
         }
         self.poisoned = false;
         Ok(value)
     }
     fn with_column<R>(
         &mut self,
-        _expected: StoredAdviceLayoutV1,
-        _consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        _expected: StoredPolynomialLayoutV1,
+        _consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         panic!("phase commitment must not materialize an encoded whole column");
     }
 }
@@ -307,14 +329,16 @@ fn writers<C: CurveAffine>(
         .iter()
         .enumerate()
         .map(|(index, column)| Writer {
-            layout: StoredAdviceLayoutV1::new(
+            layout: StoredPolynomialLayoutV1::new(
                 [9; 32],
                 first_ordinal + index as u64,
                 plan.field,
                 StoredPolynomialBasisV1::Lagrange,
                 plan.k,
-                *column as u32,
-                phase as u8,
+                StoredPolynomialRoleV1::Advice {
+                    column: *column as u32,
+                    phase: phase as u8,
+                },
             )
             .unwrap(),
             backend: Rc::clone(backend),
@@ -337,7 +361,11 @@ fn configured<F: Field>() -> ConstraintSystem<F> {
     meta
 }
 
-fn phase_inputs<F: Field>(column: usize, usable: usize, prior: F) -> Vec<(usize, Assigned<F>)> {
+fn phase_inputs<F: Field + From<u64>>(
+    column: usize,
+    usable: usize,
+    prior: F,
+) -> Vec<(usize, Assigned<F>)> {
     vec![
         (0, Assigned::Rational(F::from(6), F::from(2))),
         (2, Assigned::Rational(F::ONE, F::ZERO)),
@@ -601,13 +629,16 @@ fn writer_admission_rejects_duplicates_omissions_reordering_and_wrong_coordinate
             0 => {
                 input.pop();
             }
-            1 => input[1].layout.column = input[0].layout.column,
+            1 => {
+                let column = input[0].layout.advice_coordinates().unwrap().0;
+                set_column(&mut input[1].layout, column);
+            }
             2 => input.swap(0, 1),
             3 => input[1].layout.ordinal = input[0].layout.ordinal,
             4 => input[1].layout.proof_context = [10; 32],
             5 => input[0].layout.field = StoredPastaFieldV1::Fq,
             6 => input[0].layout.k += 1,
-            7 => input[0].layout.phase = 1,
+            7 => set_phase(&mut input[0].layout, 1),
             8 => input[0].layout.basis = StoredPolynomialBasisV1::Coefficient,
             9 => input[1].layout.ordinal = input[0].layout.ordinal - 1,
             _ => input[0].layout.proof_context = [0; 32],
@@ -632,7 +663,7 @@ fn writer_layout_substitution_during_admission_drops_every_writer() {
             StoredPhaseAssignmentsV1::<EqAffine, Writer>::begin(plan, input),
             Err(StoredPhaseErrorV1::Admission)
                 | Err(StoredPhaseErrorV1::Assignment(
-                    StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Context)
+                    StoredAssignmentErrorV1::Store(StoredPolynomialErrorV1::Context)
                 ))
         ));
         assert_eq!(backend.record.borrow().writer_drops, 2);
@@ -854,7 +885,7 @@ fn prepared_metadata_substitution_is_rejected_before_transcript_writes() {
     let mut rng = CountingRng::new(&backend);
     let mut transcript = CountingTranscript::<EqAffine>::new();
     let mut prepared = owner.finish(&mut rng).unwrap();
-    prepared.columns[1].snapshot.layout.column += 1;
+    increment_column(&mut prepared.columns[1].snapshot.layout);
     assert!(matches!(
         prepared.absorb(&mut transcript),
         Err(StoredPhaseErrorV1::Admission)
@@ -876,3 +907,39 @@ fn guarded_polynomial_clear_preserves_allocation_and_clears_every_slot() {
 
 #[path = "synthesis_tests.rs"]
 mod synthesis;
+
+#[test]
+fn lookup_roles_are_rejected_before_phase_admission_and_transcript_absorption() {
+    let params = ParamsIPA::<EqAffine>::new(4);
+    for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+        let (plan, backend) = simple_setup(&params);
+        let mut input = writers(&plan, 0, 7, &backend);
+        input[0].layout.role = StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side };
+        assert!(matches!(
+            StoredPhaseAssignmentsV1::<EqAffine, Writer>::begin(plan, input),
+            Err(StoredPhaseErrorV1::Admission)
+        ));
+        assert_eq!(backend.record.borrow().writer_drops, 2);
+        assert_eq!(backend.record.borrow().read_count, 0);
+        assert_eq!(backend.record.borrow().rng_draws, 0);
+
+        let (plan, backend) = simple_setup(&params);
+        let input = writers(&plan, 0, 7, &backend);
+        let owner = StoredPhaseAssignmentsV1::<EqAffine, Writer>::begin(plan, input).unwrap();
+        let mut rng = CountingRng::new(&backend);
+        let mut transcript = CountingTranscript::<EqAffine>::new();
+        let mut prepared = owner.finish(&mut rng).unwrap();
+        // Keep cached and live identities equal: explicit role admission must still reject.
+        prepared.columns[0].layout.role =
+            StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side };
+        prepared.columns[0].snapshot.layout = prepared.columns[0].layout;
+        let reads = backend.record.borrow().read_count;
+        assert!(matches!(
+            prepared.absorb(&mut transcript),
+            Err(StoredPhaseErrorV1::Admission)
+        ));
+        assert_eq!((transcript.writes, transcript.squeezes), (0, 0));
+        assert_eq!(backend.record.borrow().read_count, reads);
+        assert_eq!(backend.record.borrow().snapshot_drops, 2);
+    }
+}

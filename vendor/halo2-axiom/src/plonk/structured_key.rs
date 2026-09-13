@@ -2,7 +2,8 @@
 //!
 //! Fixed columns have canonical constant/bitset/raw modes; permutation cells store exact u32
 //! target IDs. There is no implicit codec fallback. Authentication, circuit/role binding and
-//! outer EOF remain caller duties. This prototype does not reduce resident proving-key memory.
+//! outer EOF remain caller duties. The ordinary reader retains both polynomial banks; the indexed
+//! reader retains checked range metadata for the caller-owned original frame. Neither authenticates it.
 
 use super::{
     Circuit, Coeff, EvaluationDomain, Evaluator, LagrangeCoeff, Polynomial, ProvingKey,
@@ -223,45 +224,88 @@ fn write_fixed<F: PrimeField, W: Write>(writer: &mut W, values: &[F]) -> io::Res
     }
 }
 
-fn read_fixed<F: PrimeField, R: Read>(reader: &mut R, rows: usize) -> io::Result<Vec<F>> {
+// One streaming mode parser is used by the full scan and the standalone dense test adapter.
+// A None event starts a validated-size column; Some(value) appends `count` repetitions.
+fn scan_fixed<F: PrimeField, R: Read, W: Write, V>(
+    reader: &mut R,
+    rows: usize,
+    writer: &mut W,
+    mut values: V,
+) -> io::Result<u8>
+where
+    V: FnMut(Option<F>, usize) -> io::Result<()>,
+{
     if rows == 0 {
         return Err(invalid("empty structured fixed column"));
     }
     let mut mode = [0];
     reader.read_exact(&mut mode)?;
-    // Validate the tag before allocating the trusted-size column.
     fixed_payload_bytes::<F>(mode[0], rows)?;
-    let mut values = reserved(rows)?;
+    values(None, rows)?;
+    writer.write_all(&mode)?;
     match mode[0] {
-        CONSTANT => values.resize(rows, read_scalar(reader)?),
+        CONSTANT => {
+            let value = read_scalar::<F, _>(reader)?;
+            writer.write_all(value.to_repr().as_ref())?;
+            values(Some(value), rows)?;
+        }
         BITSET => {
-            while values.len() < rows {
+            let (mut at, mut any_zero, mut any_one) = (0, false, false);
+            while at < rows {
                 let mut byte = [0];
                 reader.read_exact(&mut byte)?;
-                let bits = (rows - values.len()).min(8);
+                let bits = (rows - at).min(8);
                 if bits < 8 && byte[0] >> bits != 0 {
                     return Err(invalid("nonzero structured bitset padding"));
                 }
                 for bit in 0..bits {
-                    values.push(if byte[0] >> bit & 1 == 0 {
-                        F::ZERO
-                    } else {
-                        F::ONE
-                    });
+                    let one = byte[0] >> bit & 1 != 0;
+                    any_one |= one;
+                    any_zero |= !one;
+                    values(Some(if one { F::ONE } else { F::ZERO }), 1)?;
                 }
+                writer.write_all(&byte)?;
+                at += bits;
+            }
+            if !any_zero || !any_one {
+                return Err(invalid("nonminimal structured fixed mode"));
             }
         }
         RAW => {
+            let mut first = None;
+            let (mut constant, mut binary) = (true, true);
             for _ in 0..rows {
-                values.push(read_scalar(reader)?);
+                let value = read_scalar::<F, _>(reader)?;
+                if let Some(first) = first {
+                    constant &= value == first;
+                } else {
+                    first = Some(value);
+                }
+                binary &= value == F::ZERO || value == F::ONE;
+                writer.write_all(value.to_repr().as_ref())?;
+                values(Some(value), 1)?;
+            }
+            if constant || binary {
+                return Err(invalid("nonminimal structured fixed mode"));
             }
         }
         _ => return Err(invalid("unknown structured fixed mode")),
     }
-    if fixed_mode(&values)? != mode[0] {
-        return Err(invalid("nonminimal structured fixed mode"));
-    }
-    Ok(values)
+    Ok(mode[0])
+}
+
+#[cfg(test)]
+fn read_fixed<F: PrimeField, R: Read>(reader: &mut R, rows: usize) -> io::Result<Vec<F>> {
+    let mut result = Vec::new();
+    scan_fixed::<F, _, _, _>(reader, rows, &mut io::sink(), |value, count| {
+        if let Some(value) = value {
+            result.extend(std::iter::repeat_n(value, count));
+        } else {
+            result = reserved(count)?;
+        }
+        Ok(())
+    })?;
+    Ok(result)
 }
 
 fn read_count<R: Read>(reader: &mut R, expected: usize) -> io::Result<()> {
@@ -410,6 +454,366 @@ where
         .and_then(|n| n.checked_add((cells as u64) * 4))
         .ok_or_else(|| invalid("structured key size overflow"))?;
     Ok((bytes, rows))
+}
+
+// Checked positions are derived only from this bounded frame reader.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CheckedRange {
+    offset: u64,
+    length: u64,
+}
+
+impl CheckedRange {
+    fn new(offset: u64, length: u64, frame_bytes: u64) -> io::Result<Self> {
+        offset
+            .checked_add(length)
+            .filter(|end| *end <= frame_bytes)
+            .ok_or_else(|| invalid("structured range exceeds its frame"))?;
+        Ok(Self { offset, length })
+    }
+}
+
+#[derive(Debug)]
+struct FixedRecord {
+    mode: u8,
+    payload: CheckedRange,
+}
+
+#[derive(Debug)]
+struct StructuredMetadata {
+    rows: usize,
+    frame_bytes: u64,
+    masks: [CheckedRange; 3],
+    fixed: Vec<FixedRecord>,
+    permutation_targets: CheckedRange,
+    permutation_columns: usize,
+}
+
+struct ScannedStructuredKey<C: SerdeCurveAffine, V> {
+    vk: VerifyingKey<C>,
+    metadata: StructuredMetadata,
+    values: V,
+}
+
+// The scan owns every acceptance rule. Consumers only choose whether to retain decoded values.
+trait StructuredValues<F: PrimeField> {
+    fn begin_mask(&mut self, _mask: usize, _rows: usize) -> io::Result<()> {
+        Ok(())
+    }
+    fn mask_scalar(&mut self, _mask: usize, _value: F) -> io::Result<()> {
+        Ok(())
+    }
+    fn begin_fixed(&mut self, _rows: usize) -> io::Result<()> {
+        Ok(())
+    }
+    fn fixed_values(&mut self, _value: F, _count: usize) -> io::Result<()> {
+        Ok(())
+    }
+    fn begin_permutations(&mut self, _rows: usize, _columns: usize, _omega: F) -> io::Result<()> {
+        Ok(())
+    }
+    fn begin_permutation(&mut self, _rows: usize) -> io::Result<()> {
+        Ok(())
+    }
+    fn permutation_target(&mut self, _target: u32, _rows: usize) -> io::Result<()> {
+        Ok(())
+    }
+    fn end_permutations(&mut self) {}
+}
+
+struct NoValues;
+impl<F: PrimeField> StructuredValues<F> for NoValues {}
+
+struct DenseValues<F: PrimeField> {
+    masks: [Vec<F>; 3],
+    fixed: Vec<Vec<F>>,
+    permutations: Vec<Vec<F>>,
+    omega_powers: Vec<F>,
+    deltas: Vec<F>,
+}
+
+impl<F: PrimeField> Default for DenseValues<F> {
+    fn default() -> Self {
+        Self {
+            masks: std::array::from_fn(|_| Vec::new()),
+            fixed: Vec::new(),
+            permutations: Vec::new(),
+            omega_powers: Vec::new(),
+            deltas: Vec::new(),
+        }
+    }
+}
+
+impl<F: PrimeField> StructuredValues<F> for DenseValues<F> {
+    fn begin_mask(&mut self, mask: usize, rows: usize) -> io::Result<()> {
+        self.masks[mask] = reserved(rows)?;
+        Ok(())
+    }
+    fn mask_scalar(&mut self, mask: usize, value: F) -> io::Result<()> {
+        self.masks[mask].push(value);
+        Ok(())
+    }
+    fn begin_fixed(&mut self, rows: usize) -> io::Result<()> {
+        self.fixed.try_reserve(1).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "cannot reserve structured fixed vector",
+            )
+        })?;
+        self.fixed.push(reserved(rows)?);
+        Ok(())
+    }
+    fn fixed_values(&mut self, value: F, count: usize) -> io::Result<()> {
+        self.fixed
+            .last_mut()
+            .ok_or_else(|| invalid("missing structured fixed destination"))?
+            .extend(std::iter::repeat_n(value, count));
+        Ok(())
+    }
+    fn begin_permutations(&mut self, rows: usize, columns: usize, omega: F) -> io::Result<()> {
+        self.omega_powers = reserved(rows)?;
+        let mut value = F::ONE;
+        for _ in 0..rows {
+            self.omega_powers.push(value);
+            value *= omega;
+        }
+        self.deltas = reserved(columns)?;
+        let mut delta = F::ONE;
+        for _ in 0..columns {
+            self.deltas.push(delta);
+            delta *= F::DELTA;
+        }
+        self.permutations = reserved(columns)?;
+        Ok(())
+    }
+    fn begin_permutation(&mut self, rows: usize) -> io::Result<()> {
+        self.permutations.push(reserved(rows)?);
+        Ok(())
+    }
+    fn permutation_target(&mut self, target: u32, rows: usize) -> io::Result<()> {
+        let target = target as usize;
+        let value = self.omega_powers[target % rows] * self.deltas[target / rows];
+        self.permutations
+            .last_mut()
+            .ok_or_else(|| invalid("missing structured permutation destination"))?
+            .push(value);
+        Ok(())
+    }
+    fn end_permutations(&mut self) {
+        self.omega_powers = Vec::new();
+        self.deltas = Vec::new();
+    }
+}
+
+struct CanonicalOutput<'a, W> {
+    writer: &'a mut W,
+    expected: u64,
+    written: u64,
+}
+
+impl<W: Write> Write for CanonicalOutput<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let length = u64::try_from(bytes.len())
+            .map_err(|_| invalid("canonical structured output size overflow"))?;
+        self.written
+            .checked_add(length)
+            .filter(|end| *end <= self.expected)
+            .ok_or_else(|| invalid("canonical structured output exceeds frame"))?;
+        let count = self.writer.write(bytes)?;
+        if count > bytes.len() {
+            return Err(invalid(
+                "canonical structured sink returned an invalid count",
+            ));
+        }
+        self.written += count as u64;
+        Ok(count)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+fn frame_position<R: Read>(frame: &io::Take<R>, expected: u64) -> io::Result<u64> {
+    expected
+        .checked_sub(frame.limit())
+        .ok_or_else(|| invalid("structured frame position overflow"))
+}
+
+fn scan_structured<C, R, W, ConcreteCircuit, V>(
+    reader: &mut R,
+    expected_k: u32,
+    expected_bytes: u64,
+    #[cfg(feature = "circuit-params")] params: ConcreteCircuit::Params,
+    canonical_writer: &mut W,
+    mut values: V,
+) -> io::Result<ScannedStructuredKey<C, V>>
+where
+    C: SerdeCurveAffine,
+    C::Scalar: SerdePrimeField + FromUniformBytes<64>,
+    R: Read,
+    W: Write,
+    ConcreteCircuit: Circuit<C::Scalar>,
+    V: StructuredValues<C::Scalar>,
+{
+    if expected_bytes < HEADER_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "structured frame bound is too small",
+        ));
+    }
+    let mut frame = reader.take(expected_bytes);
+    let (mut magic, mut curve, mut length) = ([0; 16], [0; 32], [0; 8]);
+    frame.read_exact(&mut magic)?;
+    if magic != *MAGIC {
+        return Err(invalid("unexpected structured proving-key format"));
+    }
+    frame.read_exact(&mut curve)?;
+    if curve != curve_domain::<C>() {
+        return Err(invalid("structured curve domain mismatch"));
+    }
+    frame.read_exact(&mut length)?;
+    if u64::from_le_bytes(length) != expected_bytes {
+        return Err(invalid("structured frame length mismatch"));
+    }
+    let vk = VerifyingKey::<C>::read_checked::<_, ConcreteCircuit>(
+        &mut frame,
+        SerdeFormat::Processed,
+        expected_k,
+        #[cfg(feature = "circuit-params")]
+        params,
+    )?;
+    let (base_bytes, rows) = shape_bytes(&vk)?;
+    let fixed_columns = vk.cs.num_fixed_columns;
+    let columns = fixed_columns as u64;
+    let constant = fixed_payload_bytes::<C::Scalar>(CONSTANT, rows)?;
+    let binary = fixed_payload_bytes::<C::Scalar>(BITSET, rows)?;
+    let raw = fixed_payload_bytes::<C::Scalar>(RAW, rows)?;
+    let minimum = columns
+        .checked_mul(1 + constant.min(binary).min(raw))
+        .and_then(|n| base_bytes.checked_add(n))
+        .ok_or_else(|| invalid("structured minimum size overflow"))?;
+    let maximum = columns
+        .checked_mul(1 + constant.max(binary).max(raw))
+        .and_then(|n| base_bytes.checked_add(n))
+        .ok_or_else(|| invalid("structured maximum size overflow"))?;
+    if expected_bytes < minimum || expected_bytes > maximum {
+        return Err(invalid(
+            "structured frame length is outside configured shape bounds",
+        ));
+    }
+    let mut output = CanonicalOutput {
+        writer: canonical_writer,
+        expected: expected_bytes,
+        written: 0,
+    };
+    output.write_all(MAGIC)?;
+    output.write_all(&curve_domain::<C>())?;
+    output.write_all(&expected_bytes.to_le_bytes())?;
+    vk.write(&mut output, SerdeFormat::Processed)?;
+    let mut masks = [CheckedRange::default(); 3];
+    for (mask, range) in masks.iter_mut().enumerate() {
+        let mut count = [0; 4];
+        frame.read_exact(&mut count)?;
+        let count = usize::try_from(u32::from_be_bytes(count))
+            .map_err(|_| invalid("polynomial length does not fit usize"))?;
+        if count != rows {
+            return Err(invalid(
+                "polynomial length does not match configured domain",
+            ));
+        }
+        output.write_all(&(rows as u32).to_be_bytes())?;
+        let offset = frame_position(&frame, expected_bytes)?;
+        values.begin_mask(mask, rows)?;
+        for _ in 0..rows {
+            let mut repr = <C::Scalar as PrimeField>::Repr::default();
+            frame.read_exact(repr.as_mut())?;
+            let value = Option::<C::Scalar>::from(C::Scalar::from_repr(repr))
+                .ok_or_else(|| invalid("noncanonical polynomial coefficient"))?;
+            output.write_all(value.to_repr().as_ref())?;
+            values.mask_scalar(mask, value)?;
+        }
+        *range = CheckedRange::new(
+            offset,
+            frame_position(&frame, expected_bytes)? - offset,
+            expected_bytes,
+        )?;
+    }
+    read_count(&mut frame, fixed_columns)?;
+    output.write_all(&(fixed_columns as u32).to_be_bytes())?;
+    let mut fixed = reserved(fixed_columns)?;
+    for _ in 0..fixed_columns {
+        let offset = frame_position(&frame, expected_bytes)?
+            .checked_add(1)
+            .ok_or_else(|| invalid("structured fixed offset overflow"))?;
+        let mode =
+            scan_fixed::<C::Scalar, _, _, _>(&mut frame, rows, &mut output, |value, count| {
+                if let Some(value) = value {
+                    values.fixed_values(value, count)
+                } else {
+                    values.begin_fixed(count)
+                }
+            })?;
+        let payload = CheckedRange::new(
+            offset,
+            fixed_payload_bytes::<C::Scalar>(mode, rows)?,
+            expected_bytes,
+        )?;
+        if payload.offset + payload.length != frame_position(&frame, expected_bytes)? {
+            return Err(invalid("structured fixed payload length mismatch"));
+        }
+        fixed.push(FixedRecord { mode, payload });
+    }
+    let columns = vk.cs.permutation.columns.len();
+    read_count(&mut frame, columns)?;
+    output.write_all(&(columns as u32).to_be_bytes())?;
+    let cells = permutation_cells(rows, columns, vk.domain.get_omega())?;
+    let mut seen = Seen::new(cells)?;
+    let mut classes = reserved(columns)?;
+    let step = row_power(C::Scalar::DELTA, rows);
+    let mut class = C::Scalar::ONE;
+    for column in 0..columns {
+        classes.push((class.to_repr(), column as u32));
+        class *= step;
+    }
+    sorted_unique::<C::Scalar>(&mut classes)?;
+    drop(classes);
+    values.begin_permutations(rows, columns, vk.domain.get_omega())?;
+    let offset = frame_position(&frame, expected_bytes)?;
+    for _ in 0..columns {
+        values.begin_permutation(rows)?;
+        for _ in 0..rows {
+            let mut bytes = [0; 4];
+            frame.read_exact(&mut bytes)?;
+            let target = u32::from_le_bytes(bytes);
+            seen.mark(target)?;
+            output.write_all(&target.to_le_bytes())?;
+            values.permutation_target(target, rows)?;
+        }
+    }
+    drop(seen);
+    values.end_permutations();
+    let target_bytes = (cells as u64)
+        .checked_mul(4)
+        .ok_or_else(|| invalid("structured target size overflow"))?;
+    let permutation_targets = CheckedRange::new(offset, target_bytes, expected_bytes)?;
+    if frame.limit() != 0 {
+        return Err(invalid("structured frame was not fully consumed"));
+    }
+    if output.written != expected_bytes {
+        return Err(invalid("canonical structured output did not fill frame"));
+    }
+    Ok(ScannedStructuredKey {
+        vk,
+        metadata: StructuredMetadata {
+            rows,
+            frame_bytes: expected_bytes,
+            masks,
+            fixed,
+            permutation_targets,
+            permutation_columns: columns,
+        },
+        values,
+    })
 }
 
 impl<C: SerdeCurveAffine> ProvingKey<C>
@@ -584,99 +988,33 @@ where
         expected_bytes: u64,
         #[cfg(feature = "circuit-params")] params: ConcreteCircuit::Params,
     ) -> io::Result<Self> {
-        if expected_bytes < HEADER_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "structured frame bound is too small",
-            ));
-        }
-        let mut frame = reader.take(expected_bytes);
-        let (mut magic, mut curve, mut length) = ([0; 16], [0; 32], [0; 8]);
-        frame.read_exact(&mut magic)?;
-        if magic != *MAGIC {
-            return Err(invalid("unexpected structured proving-key format"));
-        }
-        frame.read_exact(&mut curve)?;
-        if curve != curve_domain::<C>() {
-            return Err(invalid("structured curve domain mismatch"));
-        }
-        frame.read_exact(&mut length)?;
-        if u64::from_le_bytes(length) != expected_bytes {
-            return Err(invalid("structured frame length mismatch"));
-        }
-        let vk = VerifyingKey::<C>::read_checked::<_, ConcreteCircuit>(
-            &mut frame,
-            SerdeFormat::Processed,
+        let scanned = scan_structured::<C, _, _, ConcreteCircuit, DenseValues<C::Scalar>>(
+            reader,
             expected_k,
+            expected_bytes,
             #[cfg(feature = "circuit-params")]
             params,
+            &mut io::sink(),
+            DenseValues::default(),
         )?;
-        let (base_bytes, rows) = shape_bytes(&vk)?;
-        let columns = vk.cs.num_fixed_columns as u64;
-        let constant = fixed_payload_bytes::<C::Scalar>(CONSTANT, rows)?;
-        let binary = fixed_payload_bytes::<C::Scalar>(BITSET, rows)?;
-        let raw = fixed_payload_bytes::<C::Scalar>(RAW, rows)?;
-        let minimum = columns
-            .checked_mul(1 + constant.min(binary).min(raw))
-            .and_then(|n| base_bytes.checked_add(n))
-            .ok_or_else(|| invalid("structured minimum size overflow"))?;
-        let maximum = columns
-            .checked_mul(1 + constant.max(binary).max(raw))
-            .and_then(|n| base_bytes.checked_add(n))
-            .ok_or_else(|| invalid("structured maximum size overflow"))?;
-        if expected_bytes < minimum || expected_bytes > maximum {
-            return Err(invalid(
-                "structured frame length is outside configured shape bounds",
-            ));
-        }
-        let l0 = Polynomial::read_checked(&mut frame, SerdeFormat::Processed, rows)?;
-        let l_last = Polynomial::read_checked(&mut frame, SerdeFormat::Processed, rows)?;
-        let l_active_row = Polynomial::read_checked(&mut frame, SerdeFormat::Processed, rows)?;
-        read_count(&mut frame, vk.cs.num_fixed_columns)?;
-        let mut fixed_values = reserved(vk.cs.num_fixed_columns)?;
-        for _ in 0..vk.cs.num_fixed_columns {
-            fixed_values.push(vk.domain.lagrange_from_vec(read_fixed(&mut frame, rows)?));
-        }
-        let columns = vk.cs.permutation.columns.len();
-        read_count(&mut frame, columns)?;
-        let cells = permutation_cells(rows, columns, vk.domain.get_omega())?;
-        let mut seen = Seen::new(cells)?;
-        let mut omega_powers = reserved(rows)?;
-        let mut value = C::Scalar::ONE;
-        for _ in 0..rows {
-            omega_powers.push(value);
-            value *= vk.domain.get_omega();
-        }
-        let mut deltas = reserved(columns)?;
-        let mut classes = reserved(columns)?;
-        let step = row_power(C::Scalar::DELTA, rows);
-        let (mut delta, mut class) = (C::Scalar::ONE, C::Scalar::ONE);
-        for column in 0..columns {
-            deltas.push(delta);
-            classes.push((class.to_repr(), column as u32));
-            delta *= C::Scalar::DELTA;
-            class *= step;
-        }
-        sorted_unique::<C::Scalar>(&mut classes)?;
-        drop(classes);
-        let mut permutations = reserved(columns)?;
-        for _ in 0..columns {
-            let mut values = reserved(rows)?;
-            for _ in 0..rows {
-                let mut bytes = [0; 4];
-                frame.read_exact(&mut bytes)?;
-                let target = u32::from_le_bytes(bytes);
-                seen.mark(target)?;
-                values.push(omega_powers[target as usize % rows] * deltas[target as usize / rows]);
-            }
-            permutations.push(vk.domain.lagrange_from_vec(values));
-        }
-        drop(seen);
-        drop(omega_powers);
-        drop(deltas);
-        if frame.limit() != 0 {
-            return Err(invalid("structured frame was not fully consumed"));
-        }
+        let ScannedStructuredKey { vk, values, .. } = scanned;
+        let DenseValues {
+            masks: [l0, l_last, l_active_row],
+            fixed,
+            permutations,
+            ..
+        } = values;
+        let l0 = vk.domain.coeff_from_vec(l0);
+        let l_last = vk.domain.coeff_from_vec(l_last);
+        let l_active_row = vk.domain.coeff_from_vec(l_active_row);
+        let fixed_values = fixed
+            .into_iter()
+            .map(|values| vk.domain.lagrange_from_vec(values))
+            .collect::<Vec<_>>();
+        let permutations = permutations
+            .into_iter()
+            .map(|values| vk.domain.lagrange_from_vec(values))
+            .collect::<Vec<_>>();
         let fixed_polys = reconstruct(&vk.domain, &fixed_values)?;
         let polys = reconstruct(&vk.domain, &permutations)?;
         let ev = Evaluator::new(vk.cs());
@@ -696,5 +1034,10 @@ where
     }
 }
 
+mod indexed;
+pub use indexed::IndexedStructuredProvingKeyV1;
+
+#[cfg(test)]
+mod indexed_tests;
 #[cfg(test)]
 mod tests;

@@ -22,7 +22,7 @@ use crate::{
     plonk::{
         Advice, Any, Assigned, Assignment, Challenge, Column, Error, Fixed, Instance, Selector,
     },
-    poly::stored_advice::StoredAdviceWriterV1,
+    poly::stored_advice::StoredPolynomialWriterV1,
 };
 
 /// Bounded diagnostics for a refused single-phase synthesis; never includes witness material.
@@ -40,7 +40,7 @@ pub(crate) enum StoredSynthesisErrorV1 {
     Synthesis,
 }
 
-struct State<'params, C: CurveAffine, W: StoredAdviceWriterV1>
+struct State<'params, C: CurveAffine, W: StoredPolynomialWriterV1>
 where
     C::Scalar: StoredAssignmentFieldV1,
 {
@@ -48,7 +48,7 @@ where
     error: Option<StoredSynthesisErrorV1>,
 }
 
-impl<C: CurveAffine, W: StoredAdviceWriterV1> State<'_, C, W>
+impl<C: CurveAffine, W: StoredPolynomialWriterV1> State<'_, C, W>
 where
     C::Scalar: StoredAssignmentFieldV1,
 {
@@ -74,7 +74,7 @@ pub(crate) struct StoredSinglePhaseAssignmentV1<'params, 'instances, C, W>
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    W: StoredAdviceWriterV1,
+    W: StoredPolynomialWriterV1,
 {
     state: Mutex<State<'params, C, W>>,
     instances: &'instances [&'instances [C::Scalar]],
@@ -87,7 +87,7 @@ impl<'params, 'instances, C, W> StoredSinglePhaseAssignmentV1<'params, 'instance
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    W: StoredAdviceWriterV1,
+    W: StoredPolynomialWriterV1,
 {
     /// Admit exactly one configured phase and the complete supplied instance-column shape.
     /// Derivation of this internal plan from the owned proving key remains the caller's duty.
@@ -178,7 +178,7 @@ impl<C, W> Assignment<C::Scalar> for StoredSinglePhaseAssignmentV1<'_, '_, C, W>
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    W: StoredAdviceWriterV1,
+    W: StoredPolynomialWriterV1,
 {
     fn enter_region<NR: Into<String>, N: FnOnce() -> NR>(&mut self, _: N) {}
     fn exit_region(&mut self) {}

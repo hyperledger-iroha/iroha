@@ -12,8 +12,26 @@ use std::{
 use ff::Field;
 use halo2curves::pasta::{Fp, Fq};
 
-use super::super::StoredPastaFieldV1;
+use super::super::{StoredLookupSideV1, StoredPastaFieldV1, StoredPolynomialRoleV1};
 use super::*;
+
+fn advance_role_index(layout: &mut StoredPolynomialLayoutV1) {
+    match &mut layout.role {
+        StoredPolynomialRoleV1::Advice { column, .. } => *column += 1,
+        StoredPolynomialRoleV1::LookupCompressed { lookup, .. }
+        | StoredPolynomialRoleV1::LookupSorted { lookup, .. }
+        | StoredPolynomialRoleV1::LookupLeftoverTable { lookup }
+        | StoredPolynomialRoleV1::LookupPermuted { lookup, .. }
+        | StoredPolynomialRoleV1::LookupProduct { lookup } => *lookup += 1,
+        StoredPolynomialRoleV1::CopyPermutationProduct { set } => *set += 1,
+        StoredPolynomialRoleV1::Instance { column } => *column += 1,
+        StoredPolynomialRoleV1::QuotientAliasedPart { part, .. } => *part += 1,
+        StoredPolynomialRoleV1::QuotientPiece { piece } => *piece += 1,
+        StoredPolynomialRoleV1::VanishingRandom | StoredPolynomialRoleV1::QuotientNumerator => {
+            layout.role = StoredPolynomialRoleV1::Instance { column: 0 };
+        }
+    }
+}
 
 #[derive(Default)]
 struct Record {
@@ -30,8 +48,8 @@ struct Record {
     panic_write: Option<u64>,
     fail_seal: bool,
     short_chunk: bool,
-    destination_override: Option<StoredAdviceLayoutV1>,
-    returned_override: Option<StoredAdviceLayoutV1>,
+    destination_override: Option<StoredPolynomialLayoutV1>,
+    returned_override: Option<StoredPolynomialLayoutV1>,
     change_writer_after_write: bool,
     change_source_after_read: Option<u64>,
 }
@@ -45,9 +63,9 @@ struct State {
 struct Window(Rc<State>);
 
 impl Window {
-    fn acquire(state: &Rc<State>) -> Result<Self, StoredAdviceErrorV1> {
+    fn acquire(state: &Rc<State>) -> Result<Self, StoredPolynomialErrorV1> {
         if state.active.replace(true) {
-            return Err(StoredAdviceErrorV1::Busy);
+            return Err(StoredPolynomialErrorV1::Busy);
         }
         Ok(Self(Rc::clone(state)))
     }
@@ -65,14 +83,14 @@ struct Provider {
 }
 
 struct Writer {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     state: Rc<State>,
     values: Vec<[u8; 32]>,
     chunks: u64,
 }
 
 struct Snapshot {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     state: Rc<State>,
     values: Vec<[u8; 32]>,
     poisoned: bool,
@@ -90,7 +108,7 @@ impl Drop for Snapshot {
     }
 }
 
-impl StoredAdviceProviderV1 for Provider {
+impl StoredPolynomialProviderV1 for Provider {
     type Writer = Writer;
 
     fn create(
@@ -98,25 +116,23 @@ impl StoredAdviceProviderV1 for Provider {
         field: StoredPastaFieldV1,
         basis: StoredPolynomialBasisV1,
         k: u32,
-        column: u32,
-        phase: u8,
-    ) -> Result<Writer, StoredAdviceErrorV1> {
+        role: StoredPolynomialRoleV1,
+    ) -> Result<Writer, StoredPolynomialErrorV1> {
         let _window = Window::acquire(&self.state)?;
         let mut record = self.state.record.borrow_mut();
         record.creates += 1;
         if record.fail_create {
-            return Err(StoredAdviceErrorV1::Storage);
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         let layout = record
             .destination_override
-            .unwrap_or(StoredAdviceLayoutV1::new(
+            .unwrap_or(StoredPolynomialLayoutV1::new(
                 [5; 32],
                 self.next_ordinal,
                 field,
                 basis,
                 k,
-                column,
-                phase,
+                role,
             )?);
         self.next_ordinal += 1;
         Ok(Writer {
@@ -128,24 +144,28 @@ impl StoredAdviceProviderV1 for Provider {
     }
 }
 
-impl StoredAdviceWriterV1 for Writer {
+impl StoredPolynomialWriterV1 for Writer {
     type Snapshot = Snapshot;
 
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         let mut layout = self.layout;
         if self.chunks != 0 && self.state.record.borrow().change_writer_after_write {
-            layout.column += 1;
+            advance_role_index(&mut layout);
         }
         layout
     }
 
-    fn write_chunk(&mut self, chunk: u64, values: &[[u8; 32]]) -> Result<(), StoredAdviceErrorV1> {
+    fn write_chunk(
+        &mut self,
+        chunk: u64,
+        values: &[[u8; 32]],
+    ) -> Result<(), StoredPolynomialErrorV1> {
         let _window = Window::acquire(&self.state)?;
         let mut record = self.state.record.borrow_mut();
         record.writes += 1;
         assert_ne!(record.panic_write, Some(chunk), "injected write panic");
         if record.fail_write == Some(chunk) {
-            return Err(StoredAdviceErrorV1::Storage);
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         assert_eq!(chunk, self.chunks);
         assert_eq!(values.len(), self.layout.chunk_scalar_count(chunk).unwrap());
@@ -159,12 +179,12 @@ impl StoredAdviceWriterV1 for Writer {
         Ok(())
     }
 
-    fn seal(mut self) -> Result<Snapshot, StoredAdviceErrorV1> {
+    fn seal(mut self) -> Result<Snapshot, StoredPolynomialErrorV1> {
         let _window = Window::acquire(&self.state)?;
         let mut record = self.state.record.borrow_mut();
         record.seals += 1;
         if record.fail_seal {
-            return Err(StoredAdviceErrorV1::Storage);
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         assert_eq!(self.chunks as usize, self.layout.chunk_count());
         Ok(Snapshot {
@@ -176,22 +196,22 @@ impl StoredAdviceWriterV1 for Writer {
     }
 }
 
-impl StoredAdviceSnapshotV1 for Snapshot {
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+impl StoredPolynomialSnapshotV1 for Snapshot {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
 
     fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         if self.poisoned {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         if expected != self.layout {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         let _window = Window::acquire(&self.state)?;
         self.poisoned = true;
@@ -200,7 +220,7 @@ impl StoredAdviceSnapshotV1 for Snapshot {
             record.reads += 1;
             assert_ne!(record.panic_read, Some(chunk), "injected read panic");
             if record.fail_read == Some(chunk) {
-                return Err(StoredAdviceErrorV1::Authentication);
+                return Err(StoredPolynomialErrorV1::Authentication);
             }
             record.short_chunk
         };
@@ -208,7 +228,7 @@ impl StoredAdviceSnapshotV1 for Snapshot {
         let count = self.layout.chunk_scalar_count(chunk)? - usize::from(short_chunk);
         let result = consume(&self.values[start..start + count])?;
         if self.state.record.borrow().change_source_after_read == Some(chunk) {
-            self.layout.column += 1;
+            advance_role_index(&mut self.layout);
         }
         self.poisoned = false;
         Ok(result)
@@ -216,9 +236,9 @@ impl StoredAdviceSnapshotV1 for Snapshot {
 
     fn with_column<R>(
         &mut self,
-        _expected: StoredAdviceLayoutV1,
-        _consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        _expected: StoredPolynomialLayoutV1,
+        _consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         panic!("conversion must not allocate a second complete encoded column")
     }
 }
@@ -229,7 +249,18 @@ fn setup<F: StoredAssignmentFieldV1>(
     values: &[F],
 ) -> (Provider, Snapshot, Rc<State>) {
     let state = Rc::new(State::default());
-    let layout = StoredAdviceLayoutV1::new([5; 32], 7, F::STORED_FIELD, basis, k, 3, 1).unwrap();
+    let layout = StoredPolynomialLayoutV1::new(
+        [5; 32],
+        7,
+        F::STORED_FIELD,
+        basis,
+        k,
+        StoredPolynomialRoleV1::Advice {
+            column: 3,
+            phase: 1,
+        },
+    )
+    .unwrap();
     assert_eq!(values.len(), layout.scalar_count());
     (
         Provider {
@@ -279,7 +310,9 @@ fn oracle<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>(
     }
 }
 
-fn conversion_matrix<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>() {
+fn conversion_matrix<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>(
+    role: StoredPolynomialRoleV1,
+) {
     use StoredPolynomialBasisV1::{Coefficient, CosetPart, Lagrange};
     for k in [0, 1, 3, 9] {
         let domain = EvaluationDomain::<F>::new(5, k);
@@ -324,6 +357,7 @@ fn conversion_matrix<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>() {
             assert_eq!(recovered, coefficients);
             for to in bases {
                 let (mut provider, mut source, state) = setup(from, k, &source_values);
+                source.layout.role = role;
                 let expected = source.layout;
                 let destination =
                     convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, to)
@@ -339,8 +373,11 @@ fn conversion_matrix<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>() {
                 assert_eq!(destination.layout.ordinal(), 8);
                 assert_eq!(destination.layout.basis(), to);
                 assert_eq!(destination.layout.field(), expected.field());
-                assert_eq!(destination.layout.column(), expected.column());
-                assert_eq!(destination.layout.phase(), expected.phase());
+                assert_eq!(destination.layout.role(), expected.role());
+                assert_eq!(
+                    destination.layout.advice_coordinates(),
+                    expected.advice_coordinates()
+                );
                 assert_eq!(destination.layout.proof_context, expected.proof_context);
                 assert_eq!(source.layout, expected);
                 assert_eq!(
@@ -364,12 +401,18 @@ fn conversion_matrix<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>() {
 
 #[test]
 fn fp_all_basis_pairs_match_existing_domain_transforms() {
-    conversion_matrix::<Fp>();
+    conversion_matrix::<Fp>(StoredPolynomialRoleV1::Advice {
+        column: 3,
+        phase: 1,
+    });
 }
 
 #[test]
 fn fq_all_basis_pairs_match_existing_domain_transforms() {
-    conversion_matrix::<Fq>();
+    conversion_matrix::<Fq>(StoredPolynomialRoleV1::Advice {
+        column: 3,
+        phase: 1,
+    });
 }
 
 #[test]
@@ -384,12 +427,18 @@ fn wrong_source_identity_field_domain_and_coset_fail_before_backend_creation() {
     variants[2].field = StoredPastaFieldV1::Fq;
     variants[3].basis = Coefficient;
     variants[4].k += 1;
-    variants[5].column += 1;
-    variants[6].phase += 1;
+    variants[5].role = StoredPolynomialRoleV1::Advice {
+        column: 4,
+        phase: 1,
+    };
+    variants[6].role = StoredPolynomialRoleV1::Advice {
+        column: 3,
+        phase: 2,
+    };
     for expected in variants {
         assert!(matches!(
             convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient),
-            Err(StoredAdviceErrorV1::Context)
+            Err(StoredPolynomialErrorV1::Context)
         ));
     }
     let wrong_field = EvaluationDomain::<Fq>::new(5, 3);
@@ -401,7 +450,7 @@ fn wrong_source_identity_field_domain_and_coset_fail_before_backend_creation() {
             original,
             Coefficient
         ),
-        Err(StoredAdviceErrorV1::Context)
+        Err(StoredPolynomialErrorV1::Context)
     ));
     let wrong_domain = EvaluationDomain::<Fp>::new(5, 2);
     assert!(matches!(
@@ -412,7 +461,7 @@ fn wrong_source_identity_field_domain_and_coset_fail_before_backend_creation() {
             original,
             Coefficient
         ),
-        Err(StoredAdviceErrorV1::Context)
+        Err(StoredPolynomialErrorV1::Context)
     ));
     assert!(matches!(
         convert_stored_advice_v1(
@@ -425,7 +474,7 @@ fn wrong_source_identity_field_domain_and_coset_fail_before_backend_creation() {
                 part: 0
             }
         ),
-        Err(StoredAdviceErrorV1::Context)
+        Err(StoredPolynomialErrorV1::Context)
     ));
     for (extension_log, part) in [(0, 0), (2, 4), (32, 0)] {
         assert!(matches!(
@@ -439,7 +488,7 @@ fn wrong_source_identity_field_domain_and_coset_fail_before_backend_creation() {
                     part
                 }
             ),
-            Err(StoredAdviceErrorV1::Layout)
+            Err(StoredPolynomialErrorV1::Layout)
         ));
     }
     source.layout.basis = CosetPart {
@@ -449,7 +498,7 @@ fn wrong_source_identity_field_domain_and_coset_fail_before_backend_creation() {
     let expected = source.layout;
     assert!(matches!(
         convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient),
-        Err(StoredAdviceErrorV1::Context)
+        Err(StoredPolynomialErrorV1::Context)
     ));
     assert_eq!(state.record.borrow().creates, 0);
     assert_eq!(state.record.borrow().reads, 0);
@@ -471,13 +520,19 @@ fn destination_requires_same_coordinates_and_a_strictly_newer_identity() {
     variants[3].field = StoredPastaFieldV1::Fq;
     variants[4].basis = Lagrange;
     variants[5].k += 1;
-    variants[6].column += 1;
-    variants[7].phase += 1;
+    variants[6].role = StoredPolynomialRoleV1::Advice {
+        column: 4,
+        phase: 1,
+    };
+    variants[7].role = StoredPolynomialRoleV1::Advice {
+        column: 3,
+        phase: 2,
+    };
     for wrong in variants {
         state.record.borrow_mut().destination_override = Some(wrong);
         assert!(matches!(
             convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient),
-            Err(StoredAdviceErrorV1::Context)
+            Err(StoredPolynomialErrorV1::Context)
         ));
     }
     assert_eq!(state.record.borrow().reads, 0);
@@ -498,7 +553,7 @@ fn malformed_scalar_and_chunk_length_poison_source_without_output() {
         }
         assert!(matches!(
             convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient),
-            Err(StoredAdviceErrorV1::Encoding)
+            Err(StoredPolynomialErrorV1::Encoding)
         ));
         assert!(source.poisoned);
         assert!(!state.active.get());
@@ -516,7 +571,7 @@ fn metadata_changed_by_the_last_read_rejects_before_transform_or_output() {
     state.record.borrow_mut().change_source_after_read = Some(1);
     assert!(matches!(
         convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient),
-        Err(StoredAdviceErrorV1::Context)
+        Err(StoredPolynomialErrorV1::Context)
     ));
     let record = state.record.borrow();
     assert_eq!(record.reads, expected.chunk_count());
@@ -545,7 +600,7 @@ fn backend_failures_never_return_a_partial_destination() {
             convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient);
         assert!(matches!(
             error,
-            Err(StoredAdviceErrorV1::Storage | StoredAdviceErrorV1::Authentication)
+            Err(StoredPolynomialErrorV1::Storage | StoredPolynomialErrorV1::Authentication)
         ));
         assert_eq!(source.poisoned, stage == 1);
         assert!(!state.active.get());
@@ -601,7 +656,7 @@ fn changing_writer_or_returned_snapshot_metadata_rejects_output() {
         }
         assert!(matches!(
             convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient),
-            Err(StoredAdviceErrorV1::Context)
+            Err(StoredPolynomialErrorV1::Context)
         ));
         assert_eq!(state.record.borrow().seals, usize::from(!changed_writer));
         assert_eq!(
@@ -621,7 +676,7 @@ fn active_backend_window_is_not_bypassed() {
     let window = Window::acquire(&state).unwrap();
     assert!(matches!(
         convert_stored_advice_v1(&domain, &mut provider, &mut source, expected, Coefficient),
-        Err(StoredAdviceErrorV1::Busy)
+        Err(StoredPolynomialErrorV1::Busy)
     ));
     assert!(state.active.get());
     assert_eq!(state.record.borrow().reads, 0);
@@ -673,4 +728,355 @@ fn borrowed_domain_helper_rejects_bad_geometry_before_mutation() {
         );
         assert_eq!(values, [Fp::ONE; 4]);
     }
+}
+
+#[test]
+fn fp_lookup_roles_preserve_every_basis_conversion() {
+    for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+        conversion_matrix::<Fp>(StoredPolynomialRoleV1::LookupCompressed {
+            lookup: u32::MAX,
+            side,
+        });
+    }
+}
+
+#[test]
+fn fq_lookup_roles_preserve_every_basis_conversion() {
+    for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+        conversion_matrix::<Fq>(StoredPolynomialRoleV1::LookupCompressed {
+            lookup: u32::MAX,
+            side,
+        });
+    }
+}
+
+fn rejects_role_substitution<F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>>() {
+    use StoredPolynomialBasisV1::{Coefficient, Lagrange};
+    let roles = [
+        StoredPolynomialRoleV1::Advice {
+            column: 3,
+            phase: 0,
+        },
+        StoredPolynomialRoleV1::Advice {
+            column: 3,
+            phase: 1,
+        },
+        StoredPolynomialRoleV1::LookupCompressed {
+            lookup: 3,
+            side: StoredLookupSideV1::Input,
+        },
+        StoredPolynomialRoleV1::LookupCompressed {
+            lookup: 3,
+            side: StoredLookupSideV1::Table,
+        },
+        StoredPolynomialRoleV1::LookupCompressed {
+            lookup: 4,
+            side: StoredLookupSideV1::Input,
+        },
+    ];
+    for role in roles {
+        for wrong_role in roles.into_iter().filter(|wrong| *wrong != role) {
+            for stage in 0..3 {
+                let domain = EvaluationDomain::<F>::new(5, 9);
+                let (mut provider, mut source, state) = setup(Lagrange, 9, &[F::ONE; 512]);
+                source.layout.role = role;
+                let mut expected = source.layout;
+                let mut wrong = expected;
+                wrong.role = wrong_role;
+                if stage == 0 {
+                    expected = wrong;
+                } else {
+                    wrong.ordinal = 8;
+                    wrong.basis = Coefficient;
+                    if stage == 1 {
+                        state.record.borrow_mut().destination_override = Some(wrong);
+                    } else {
+                        state.record.borrow_mut().returned_override = Some(wrong);
+                    }
+                }
+                assert!(
+                    matches!(
+                        convert_stored_advice_v1(
+                            &domain,
+                            &mut provider,
+                            &mut source,
+                            expected,
+                            Coefficient
+                        ),
+                        Err(StoredPolynomialErrorV1::Context)
+                    ),
+                    "role={role:?}, wrong={wrong_role:?}, stage={stage}"
+                );
+                assert!(!state.active.get());
+                assert!(!source.poisoned);
+                assert_eq!(source.layout.role(), role);
+                let record = state.record.borrow();
+                assert_eq!(record.creates, usize::from(stage != 0));
+                assert_eq!(
+                    record.reads,
+                    if stage == 2 {
+                        expected.chunk_count()
+                    } else {
+                        0
+                    }
+                );
+                assert_eq!(
+                    record.writes,
+                    if stage == 2 {
+                        expected.chunk_count()
+                    } else {
+                        0
+                    }
+                );
+                assert_eq!(record.seals, usize::from(stage == 2));
+                assert_eq!(record.writer_drops, usize::from(stage != 0));
+                assert_eq!(record.snapshot_drops, usize::from(stage == 2));
+            }
+        }
+    }
+}
+
+#[test]
+fn fp_role_substitutions_reject_before_reads_or_discard_sealed_output() {
+    rejects_role_substitution::<Fp>();
+}
+
+#[test]
+fn fq_role_substitutions_reject_before_reads_or_discard_sealed_output() {
+    rejects_role_substitution::<Fq>();
+}
+
+/// Undivided numerator parts never enter an ordinary basis conversion, even an equal-basis copy.
+fn numerator_scratch_refuses_generic_conversion<
+    F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>,
+>() {
+    use StoredPolynomialBasisV1::{Coefficient, CosetPart, Lagrange};
+    for k in [7, 8, 9] {
+        let domain = EvaluationDomain::<F>::new(5, k);
+        let extension_log = domain.extended_k() - k;
+        assert_eq!(extension_log, 2);
+        for part in 0..(1_u32 << extension_log) {
+            let basis = CosetPart {
+                extension_log,
+                part,
+            };
+            let different = CosetPart {
+                extension_log,
+                part: (part + 1) % 4,
+            };
+            for destination in [Coefficient, Lagrange, basis, different] {
+                let (mut provider, mut source, state) = setup(basis, k, &vec![F::ONE; 1 << k]);
+                source.layout.role = StoredPolynomialRoleV1::QuotientNumerator;
+                let expected = source.layout;
+                assert!(matches!(
+                    convert_stored_advice_v1(
+                        &domain,
+                        &mut provider,
+                        &mut source,
+                        expected,
+                        destination
+                    ),
+                    Err(StoredPolynomialErrorV1::Context)
+                ));
+                assert_eq!(provider.next_ordinal, 8);
+                assert_eq!(source.layout, expected);
+                assert!(!source.poisoned);
+                assert!(!state.active.get());
+                let record = state.record.borrow();
+                assert_eq!(
+                    (record.creates, record.reads, record.writes, record.seals),
+                    (0, 0, 0, 0)
+                );
+                assert_eq!((record.writer_drops, record.snapshot_drops), (0, 0));
+            }
+            // An already-created, otherwise valid numerator writer cannot bypass refusal.
+            for destination in [basis, different] {
+                let (mut provider, mut source, state) = setup(basis, k, &vec![F::ONE; 1 << k]);
+                source.layout.role = StoredPolynomialRoleV1::QuotientNumerator;
+                let expected = source.layout;
+                let writer = provider
+                    .create(
+                        F::STORED_FIELD,
+                        destination,
+                        k,
+                        StoredPolynomialRoleV1::QuotientNumerator,
+                    )
+                    .unwrap();
+                let destination_layout = writer.layout();
+                assert!(matches!(
+                    convert_stored_advice_with_writer_v1(
+                        &domain,
+                        &mut source,
+                        expected,
+                        destination,
+                        writer,
+                        destination_layout
+                    ),
+                    Err(StoredPolynomialErrorV1::Context)
+                ));
+                assert_eq!(source.layout, expected);
+                assert!(!source.poisoned);
+                assert!(!state.active.get());
+                let record = state.record.borrow();
+                assert_eq!(
+                    (record.creates, record.reads, record.writes, record.seals),
+                    (1, 0, 0, 0)
+                );
+                assert_eq!((record.writer_drops, record.snapshot_drops), (1, 0));
+            }
+        }
+    }
+}
+
+#[test]
+fn fp_numerator_scratch_refuses_generic_conversion_before_source_io() {
+    numerator_scratch_refuses_generic_conversion::<Fp>();
+}
+
+#[test]
+fn fq_numerator_scratch_refuses_generic_conversion_before_source_io() {
+    numerator_scratch_refuses_generic_conversion::<Fq>();
+}
+
+/// Inverse aliases must not be mistaken for ordinary n-coefficient polynomials.
+fn inverse_roles_preserve_closed_conversion_bounds<
+    F: StoredAssignmentFieldV1 + WithSmallOrderMulGroup<3>,
+>() {
+    use StoredPolynomialBasisV1::{Coefficient, CosetPart, Lagrange};
+    for k in [7, 8, 9] {
+        let domain = EvaluationDomain::<F>::new(5, k);
+        let extension_log = domain.extended_k() - k;
+        for part in 0..4 {
+            let role = StoredPolynomialRoleV1::QuotientAliasedPart {
+                part,
+                extension_log,
+            };
+            for destination in [
+                Coefficient,
+                Lagrange,
+                CosetPart {
+                    extension_log,
+                    part,
+                },
+            ] {
+                let (mut provider, mut source, state) =
+                    setup(Coefficient, k, &vec![F::ONE; 1 << k]);
+                source.layout.role = role;
+                let expected = source.layout;
+                assert!(matches!(
+                    convert_stored_advice_v1(
+                        &domain,
+                        &mut provider,
+                        &mut source,
+                        expected,
+                        destination
+                    ),
+                    Err(StoredPolynomialErrorV1::Context)
+                ));
+                assert_eq!(provider.next_ordinal, 8);
+                assert!(!source.poisoned);
+                assert!(!state.active.get());
+                let record = state.record.borrow();
+                assert_eq!(
+                    (
+                        record.creates,
+                        record.reads,
+                        record.writes,
+                        record.seals,
+                        record.writer_drops,
+                        record.snapshot_drops
+                    ),
+                    (0, 0, 0, 0, 0, 0)
+                );
+            }
+            let (mut provider, mut source, state) = setup(Coefficient, k, &vec![F::ONE; 1 << k]);
+            source.layout.role = role;
+            let expected = source.layout;
+            let writer = provider
+                .create(F::STORED_FIELD, Coefficient, k, role)
+                .unwrap();
+            let destination = writer.layout();
+            assert!(matches!(
+                convert_stored_advice_with_writer_v1(
+                    &domain,
+                    &mut source,
+                    expected,
+                    Coefficient,
+                    writer,
+                    destination
+                ),
+                Err(StoredPolynomialErrorV1::Context)
+            ));
+            assert!(!source.poisoned);
+            assert!(!state.active.get());
+            let record = state.record.borrow();
+            assert_eq!(
+                (
+                    record.creates,
+                    record.reads,
+                    record.writes,
+                    record.seals,
+                    record.writer_drops,
+                    record.snapshot_drops
+                ),
+                (1, 0, 0, 0, 1, 0)
+            );
+        }
+        for piece in [0, (1_u32 << (super::super::STORED_MAX_K_V1 - k)) - 1] {
+            let role = StoredPolynomialRoleV1::QuotientPiece { piece };
+            let values: Vec<F> = (0..(1 << k)).map(|v| F::from(v as u64 + 1)).collect();
+            let (mut provider, mut source, state) = setup(Coefficient, k, &values);
+            source.layout.role = role;
+            let expected = source.layout;
+            let mut result = convert_stored_advice_v1(
+                &domain,
+                &mut provider,
+                &mut source,
+                expected,
+                Coefficient,
+            )
+            .unwrap();
+            assert_eq!(result.layout.role(), role);
+            assert_eq!(result.layout.basis(), Coefficient);
+            assert_eq!(result.values, source.values);
+            assert!(!source.poisoned);
+            assert!(!state.active.get());
+            assert_eq!(result.layout.ordinal(), 8);
+            let record = state.record.borrow();
+            assert_eq!(
+                (record.creates, record.reads, record.writes, record.seals),
+                (1, expected.chunk_count(), expected.chunk_count(), 1)
+            );
+            let before = (record.creates, record.reads, record.writes, record.seals);
+            // Changing the basis would no longer represent an ordinary coefficient piece.
+            drop(record);
+            for basis in [
+                Lagrange,
+                CosetPart {
+                    extension_log,
+                    part: 0,
+                },
+            ] {
+                let layout = result.layout;
+                assert!(matches!(
+                    convert_stored_advice_v1(&domain, &mut provider, &mut result, layout, basis),
+                    Err(StoredPolynomialErrorV1::Layout)
+                ));
+            }
+            let record = state.record.borrow();
+            assert_eq!(
+                (record.creates, record.reads, record.writes, record.seals),
+                before
+            );
+        }
+    }
+}
+
+#[test]
+fn fp_inverse_roles_preserve_closed_conversion_bounds() {
+    inverse_roles_preserve_closed_conversion_bounds::<Fp>();
+}
+#[test]
+fn fq_inverse_roles_preserve_closed_conversion_bounds() {
+    inverse_roles_preserve_closed_conversion_bounds::<Fq>();
 }

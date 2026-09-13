@@ -1,3 +1,5 @@
+mod stored;
+
 #[cfg(feature = "profile")]
 use ark_std::{end_timer, start_timer};
 use ff::{BatchInvert, Field, WithSmallOrderMulGroup};
@@ -1002,12 +1004,13 @@ impl<F: Field> OwnedAdviceColumn<F> {
 /// Creates a proof for one owned circuit while releasing generation-only
 /// storage at its last use.
 ///
-/// This is the memory-bounded counterpart to [`create_proof`]. It accepts one
+/// This is the consuming counterpart to [`create_proof`]. It accepts one
 /// owned circuit and one owned proving key, drops the circuit immediately after
 /// witness synthesis, then drops the proving key's Lagrange-only preprocessing
 /// after lookup and permutation commitments. On success it returns the
 /// proving key's owned verifier key so callers can verify the new proof without
-/// reparsing or retaining a duplicate verifier domain.
+/// reparsing or retaining a duplicate verifier domain. Last-use release does not
+/// establish a whole-process RSS bound; full advice polynomial banks remain.
 pub fn create_proof_consuming<
     'params,
     'a,
