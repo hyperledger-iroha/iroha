@@ -423,7 +423,7 @@ fn run_maintenance(request: &MaintenanceRequest) -> Result<json::Value> {
     };
     publish(
         "stopped-owner-maintenance-intent.json",
-        &json::json!({
+        &norito::json!({
             "schema": "taira.stopped-owner-maintenance.intent.v1", "operation": (scope.operation.clone()),
             "all_four_preflighted": true, "kills_or_flushes": false,
         }),
@@ -432,13 +432,13 @@ fn run_maintenance(request: &MaintenanceRequest) -> Result<json::Value> {
         stopped_runtime::apply_stopped_owner(plan, true, &vacant)?;
         publish(
             &format!("stopped-owner-maintenance-slot-{slot}.json"),
-            &json::json!({
+            &norito::json!({
                 "slot": slot, "stopped_owner_clean": true,
             }),
         )?;
     }
     vacant()?;
-    let result = json::json!({"schema": RESULT_SCHEMA, "operation": (scope.operation),
+    let result = norito::json!({"schema": RESULT_SCHEMA, "operation": (scope.operation),
         "all_four_stopped_owners_clean": true});
     publish("stopped-owner-maintenance-result.json", &result)?;
     Ok(result)
@@ -454,7 +454,7 @@ mod tests {
             .iter()
             .map(|slug| {
                 let raw = format!("[Unit]\nDescription={slug}\n");
-                json::json!({"role": (*slug), "before": (BASE64.encode(raw.as_bytes())),
+                norito::json!({"role": (*slug), "before": (BASE64.encode(raw.as_bytes())),
                 "before_sha256": (sha256_hex(raw.as_bytes()))})
             })
             .collect::<Vec<_>>();
@@ -472,7 +472,7 @@ mod tests {
                     },
                 },
             },
-            json::json!({"schema": "taira.daemon-update.plan.v1", "operation": operation,
+            norito::json!({"schema": "taira.daemon-update.plan.v1", "operation": operation,
                 "commit": ("b".repeat(40)), "units": units,
                 "deployment": {"runtime_root": "/private/runtime/taira", "config_root": "/srv/taira",
                     "state_root": "/var/lib/taira", "roles": (super::super::super::VALIDATOR_SLUGS),
@@ -491,7 +491,7 @@ mod tests {
         );
         plan.as_object_mut().unwrap().insert(
             "failed_start".into(),
-            json::json!({"installed": {
+            norito::json!({"installed": {
             "daemon": "/private/runtime/taira/failed/bin/iroha3d_taira"}}),
         );
         assert_eq!(
@@ -504,7 +504,7 @@ mod tests {
             .get_mut(3_usize)
             .unwrap()
             .get_mut("role")
-            .unwrap() = json::json!("taira-validator-3");
+            .unwrap() = norito::json!("taira-validator-3");
         assert!(maintenance_scope(&request, &plan).is_err());
         let (request, mut plan) = fixture();
         *plan
@@ -513,7 +513,7 @@ mod tests {
             .get_mut(3_usize)
             .unwrap()
             .get_mut("before")
-            .unwrap() = json::json!(BASE64.encode(b"changed"));
+            .unwrap() = norito::json!(BASE64.encode(b"changed"));
         assert!(maintenance_scope(&request, &plan).is_err());
         let (mut request, plan) = fixture();
         request.operation_directory.push_str("/extra");
@@ -523,7 +523,7 @@ mod tests {
             .get_mut("deployment")
             .unwrap()
             .get_mut("state_root")
-            .unwrap() = json::json!("/private/runtime/taira");
+            .unwrap() = norito::json!("/private/runtime/taira");
         assert!(maintenance_scope(&request, &plan).is_err());
         Ok(())
     }
