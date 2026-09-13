@@ -23,6 +23,11 @@ FAILED_START_CHAIN_SCHEMA = 'taira.failed-start-chain.v1'
 MAX_FAILED_START_ATTEMPTS = 16
 MAX_FAILED_START_RECORD_BYTES = 8 * 1024 * 1024
 MAX_FAILED_START_CHAIN_BYTES = 32 * 1024 * 1024
+COHORT_STALL_TIMEOUT_SECONDS = 600
+COHORT_MAX_TIMEOUT_SECONDS = 90 * 60
+COHORT_OBSERVATION_SCHEMA = 'taira.cohort-observation-intent.v1'
+COHORT_REMAINING_ACTIONS = ('observe_cohort', 'verify_strict_restore',
+                          'public_basic_doctor', 'publish_completion_receipts')
 FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
                       'start-intent.json', 'failure.json')
 BOUND = False
@@ -761,14 +766,16 @@ def verify_cohort_processes(observations, expected=None):
              + ' observed=' + process_summary(props) + '; current=' + process_summary(current))
 
 
-def observe_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
+def observe_healthy_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
+    """Observe every candidate process, including healthy peers still catching up."""
     observations = [observe(row, after=after) for row in rows]
     for old, new in zip(before, observations, strict=True):
         compare_retained_identity(old, new)
         need(new['public']['commit'] == commit
-             and new['public']['height'] >= max(old['public']['height'], retained_tip['height']),
-             'revision or common retained cohort height is not ready: ' + new['role'])
-        require_retained_tip(new['role'], retained_tip)
+             and new['public']['height'] >= old['public']['height'],
+             'revision or retained validator height is not ready: ' + new['role'])
+        if new['public']['height'] >= retained_tip['height']:
+            require_retained_tip(new['role'], retained_tip)
     for row in rows:
         index = ROLES.index(row['role'])
         public_probe(index, '/readyz')
@@ -776,21 +783,133 @@ def observe_cohort(rows, before, *, after, commit, retained_tip, expected_proces
     return observations
 
 
-def wait_for_cohort(rows, before, *, after, commit, retained_tip, timeout=600):
-    # Snapshot startup and catch-up share this budget. A lagging retained peer
-    # may need hundreds of existing blocks before it can meet the common tip.
-    deadline = time.monotonic() + timeout
+def observe_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
+    observations = observe_healthy_cohort(rows, before, after=after, commit=commit,
+                                        retained_tip=retained_tip, expected_processes=expected_processes)
+    for observed in observations:
+        need(observed['public']['height'] >= retained_tip['height'],
+             'common retained cohort height is not ready: ' + observed['role'])
+    return observations
+
+
+def wait_for_cohort(rows, before, *, after, commit, retained_tip,
+                    timeout=COHORT_STALL_TIMEOUT_SECONDS,
+                    max_timeout=COHORT_MAX_TIMEOUT_SECONDS):
+    """Extend catch-up only for advancing peers; never restart or rebuild here."""
+    need(0 < timeout <= max_timeout <= COHORT_MAX_TIMEOUT_SECONDS,
+         'cohort observation time bounds are invalid')
+    started = time.monotonic()
+    hard_deadline = started + max_timeout
+    progress_deadlines = [started + timeout for _ in rows]
+    pending = list(range(len(rows)))
+    previous_heights = None
+    expected_processes = None
+    last_healthy = started
+    deadline = min(hard_deadline, started + timeout)
     latest = None
     while time.monotonic() < deadline:
         try:
-            return observe_cohort(rows, before, after=after, commit=commit,
-                                  retained_tip=retained_tip)
+            observations = observe_healthy_cohort(
+                rows, before, after=after, commit=commit, retained_tip=retained_tip,
+                expected_processes=expected_processes)
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as error:
             latest = str(error)
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                time.sleep(min(2, remaining))
+        else:
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            heights = [row['public']['height'] for row in observations]
+            if previous_heights is not None:
+                for index, (previous, height) in enumerate(zip(previous_heights, heights, strict=True)):
+                    need(height >= previous, 'committed catch-up height regressed: ' + rows[index]['role'])
+                    if previous < retained_tip['height'] and height > previous:
+                        progress_deadlines[index] = now + timeout
+            if expected_processes is None:
+                expected_processes = [{'role': row['role'], 'systemd': dict(row['systemd'])}
+                                      for row in observations]
+            previous_heights = heights
+            last_healthy = now
+            pending = [index for index, height in enumerate(heights) if height < retained_tip['height']]
+            if not pending:
+                return observations
+            latest = 'common retained cohort height is not ready: ' + ', '.join(
+                rows[index]['role'] for index in pending)
+        deadline = min(hard_deadline, last_healthy + timeout,
+                       *(progress_deadlines[index] for index in pending))
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(2, remaining))
     raise RuntimeError('cohort observation deadline: ' + str(latest))
+
+
+def read_bounded_proc(path, limit):
+    """Read only an explicitly selected public procfs projection."""
+    with path.open('rb') as source:
+        raw = source.read(limit + 1)
+    need(len(raw) <= limit, 'public updater process projection exceeds bound')
+    return raw
+
+
+def cohort_process_start_time(pid):
+    """Read a live process's public start-time field without its environment."""
+    need(type(pid) is int and pid > 0, 'invalid updater process PID')
+    raw = read_bounded_proc(Path('/proc') / str(pid) / 'stat', 4096)
+    parts = raw.rsplit(b') ', 1)
+    need(len(parts) == 2, 'updater process stat is malformed')
+    prefix, fields = parts
+    fields = fields.split()
+    need(prefix.split(b' ', 1)[0] == str(pid).encode() and len(fields) >= 20
+         and fields[0] not in (b'Z', b'X') and fields[19].isdigit(),
+         'updater process identity is not live')
+    return int(fields[19])
+
+
+def cohort_observation_owner(pid=None):
+    """Identify a live guest Python process holding the exact update flock."""
+    pid = os.getpid() if pid is None else pid
+    start_time = cohort_process_start_time(pid)
+    process = Path('/proc') / str(pid)
+    argv = read_bounded_proc(process / 'cmdline', 4096).split(b'\0')
+    need(argv == [b'/usr/bin/python3', b'-I', b'-', b''], 'updater process argv differs')
+    lock_path = BASE / '.routine-update.lock'
+    lock = stamp(lock_path)
+    need(stat.S_ISREG(lock[2]) and lock[3] == 0 and lock[5] == 1
+         and stat.S_IMODE(lock[2]) == 0o600, 'invalid guest update lock')
+    device, inode = lock[:2]
+    matches = []
+    for line in read_bounded_proc(Path('/proc/locks'), 1024 * 1024).splitlines():
+        row = line.split()
+        if len(row) != 8 or row[1:5] != [b'FLOCK', b'ADVISORY', b'WRITE', str(pid).encode()]:
+            continue
+        identity = row[5].split(b':')
+        if len(identity) == 3 and row[6:] == [b'0', b'EOF']:
+            major, minor, number = int(identity[0], 16), int(identity[1], 16), int(identity[2])
+            if (major, minor, number) == (os.major(device), os.minor(device), inode):
+                matches.append(row)
+    need(len(matches) == 1, 'updater no longer holds the exact update flock')
+    need(stamp(lock_path) == lock and cohort_process_start_time(pid) == start_time
+         and read_bounded_proc(process / 'cmdline', 4096).split(b'\0') == argv,
+         'updater process or lock changed during observation')
+    return {'pid': pid, 'start_time_ticks': start_time,
+            'argv': ['/usr/bin/python3', '-I', '-'], 'lock': {'device': device, 'inode': inode}}
+
+
+def verify_cohort_observation_owner(intent):
+    """Read-only proof of an active observation owner; never acquire its lock."""
+    need(intent.get('schema') == COHORT_OBSERVATION_SCHEMA
+         and intent.get('operation') == ATTEMPT.name and intent.get('phase') == 'cohort_observation'
+         and re.fullmatch('[0-9a-f]{40}', intent.get('commit', ''))
+         and DAEMON == BASE / ('release-' + intent['commit'] + '-' + ATTEMPT.name) / 'bin/iroha3d_taira'
+         and intent.get('automatic_restart_or_rollback_after_start') is False
+         and intent.get('remaining_actions') == list(COHORT_REMAINING_ACTIONS),
+         'cohort observation intent differs')
+    terminal = [ATTEMPT / name for name in ('result.json', 'failure.json', 'rollback.json')]
+    need(not any(os.path.lexists(path) for path in terminal), 'cohort observation already terminated')
+    expected = intent['owner']
+    owner = cohort_observation_owner(expected['pid'])
+    need(owner == expected and not any(os.path.lexists(path) for path in terminal),
+         'cohort observation owner changed or terminated')
+    return owner
 
 
 def retained_public_record(directory, name, digest=None, budget=None):
@@ -970,6 +1089,12 @@ def apply(plan):
                  'stopped Kura tip changed before new runtime startup')
         new_start_attempted = True
         command(['/usr/bin/systemctl', 'start', *UNITS], timeout=150, name='start')
+        record('cohort-observation-intent.json', {
+            'schema': COHORT_OBSERVATION_SCHEMA, 'operation': plan['operation'],
+            'commit': plan['commit'], 'phase': 'cohort_observation',
+            'owner': cohort_observation_owner(),
+            'automatic_restart_or_rollback_after_start': False,
+            'remaining_actions': list(COHORT_REMAINING_ACTIONS)})
         after = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'],
                                 retained_tip=retained_tip)
         record('after.json', after)

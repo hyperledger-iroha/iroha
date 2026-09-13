@@ -13,6 +13,7 @@ import fcntl
 import secrets
 from urllib.parse import urlsplit
 import taira_retry as retry
+from taira_update_guest import COHORT_MAX_TIMEOUT_SECONDS, MAX_FAILED_START_ATTEMPTS
 import base64
 import hashlib
 import importlib.util
@@ -27,6 +28,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+GUEST_OPERATION_TIMEOUT_SECONDS = COHORT_MAX_TIMEOUT_SECONDS + 60 * 60 + MAX_FAILED_START_ATTEMPTS * 4 * 20
 
 
 def need(value, reason):
@@ -279,8 +281,9 @@ def apply_plan(args):
     payload = guest_source + b'\napply_locked(' + repr(plan).encode() + b')\n'
     with (args.output / 'stdout.json').open('xb') as out, (args.output / 'stderr.log').open('xb') as err:
         # Bound the complete guest operation beyond its individual preflight,
-        # stop/start, ten-minute catch-up, doctor and final observation budgets.
-        process = subprocess.run(argv, input=payload, stdout=out, stderr=err, timeout=1800)
+        # stop/start, progress-bounded catch-up, doctor and final observation budgets.
+        process = subprocess.run(argv, input=payload, stdout=out, stderr=err,
+                                 timeout=GUEST_OPERATION_TIMEOUT_SECONDS)
     write_new(args.output / 'exit.json', json.dumps({'exit_code': process.returncode}).encode())
     need(process.returncode == 0, 'guest update failed; inspect owner-private attempt, never blindly reapply')
     result = json.loads(read_public(args.output / 'stdout.json'))

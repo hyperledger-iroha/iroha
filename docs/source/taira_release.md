@@ -268,10 +268,21 @@ Probe failures identify the validator, endpoint and native exit code. Process
 observations include PID, invocation and restart count so an unavailable listener
 can be distinguished from a restarted worker without exposing response bodies,
 configuration or native error output.
-Startup and catch-up share a ten-minute observation budget; the host allows
-thirty minutes for the complete bounded operation. The updater returns as soon
-as the existing common tip and all readiness checks pass. It never waits for
-empty blocks or a fixed soak period.
+Startup and unhealthy observations have a ten-minute limit. Each lagging peer
+gets another ten minutes only when healthy observations of the same candidate
+processes show that peer's committed height advancing. Another peer's progress
+cannot conceal a stalled validator, and a height regression is rejected.
+Catch-up has an absolute ninety-minute limit; the host adds a conservative
+bounded allowance for staging, final checks and all sixteen possible ancestry
+records. The updater returns as soon as
+all four peers verify the existing common prefix and readiness. Waiting never
+restarts a daemon, rebuilds a binary, requires empty blocks, or adds a fixed soak.
+
+After native start succeeds, `cohort-observation-intent.json` identifies the
+read-only observation phase by operation, candidate, updater PID/start time and
+the existing update flock's device/inode. A separate observer can verify that
+live owner through public procfs and check that no terminal receipt exists.
+This records an in-progress rollout; it does not assert four-peer completion.
 
 Validate this controller without Cargo or network:
 

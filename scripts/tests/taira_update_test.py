@@ -3,6 +3,7 @@
 Run from a normal checkout with python3 scripts/tests/taira_update_test.py.
 """
 import argparse
+import ast
 import base64
 from contextlib import ExitStack, redirect_stdout
 import copy
@@ -698,8 +699,8 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'common retained cohort height is not ready'):
                 guest.wait_for_cohort(rows, before, after=True, commit=guest.OLD,
                                       retained_tip=tip, timeout=3)
-            ready.assert_not_called()
-            states.assert_not_called()
+            self.assertGreater(ready.call_count, 0, 'catch-up extensions require readiness')
+            self.assertGreater(states.call_count, 0, 'catch-up extensions require stable processes')
             current[2]['public']['height'] = 1260
             hashes.reset_mock()
             self.assertEqual(guest.wait_for_cohort(rows, before, after=True, commit=guest.OLD,
@@ -726,6 +727,26 @@ class CoordinatorTests(unittest.TestCase):
         with patch.object(guest, 'systemd', return_value=props):
             with self.assertRaisesRegex(RuntimeError, 'process changed across cohort verification'):
                 guest.verify_cohort_processes(restarted, observations)
+
+    def test_observation_intent_is_published_after_start_before_completion(self):
+        _, records, _, plan = self.simulate()
+        intent = records['cohort-observation-intent.json']
+        self.assertEqual(intent, {
+            'schema': 'taira.cohort-observation-intent.v1',
+            'operation': plan['operation'], 'commit': plan['commit'],
+            'phase': 'cohort_observation',
+            'owner': {'pid': 991, 'start_time_ticks': 1234,
+                      'argv': ['/usr/bin/python3', '-I', '-'],
+                      'lock': {'device': 1, 'inode': 9}},
+            'automatic_restart_or_rollback_after_start': False,
+            'remaining_actions': ['observe_cohort', 'verify_strict_restore',
+                                  'public_basic_doctor', 'publish_completion_receipts']})
+        names = list(records)
+        self.assertLess(names.index('start-intent.json'), names.index('cohort-observation-intent.json'))
+        self.assertLess(names.index('cohort-observation-intent.json'), names.index('after.json'))
+        _, failed, _, _ = self.simulate('start')
+        self.assertNotIn('cohort-observation-intent.json', failed)
+        self.assertIn('failure.json', failed)
 
     def test_retained_attempt_binds_exact_completed_predecessor(self):
         build, old_plan = fixture()
@@ -941,6 +962,13 @@ class CoordinatorTests(unittest.TestCase):
             stack.enter_context(patch.object(guest, 'command', side_effect=native))
             stack.enter_context(patch.object(guest, 'native_private_command', side_effect=lambda *a, **k: events.append(k['name'])))
             stack.enter_context(patch.object(guest, 'observe', side_effect=observe))
+            def observing_owner():
+                self.assertIn('start', events)
+                self.assertNotIn('after.json', records)
+                return {'pid': 991, 'start_time_ticks': 1234,
+                        'argv': ['/usr/bin/python3', '-I', '-'],
+                        'lock': {'device': 1, 'inode': 9}}
+            stack.enter_context(patch.object(guest, 'cohort_observation_owner', side_effect=observing_owner))
             prior = ([identity(row) for row in plan['units']],
                      failed_records['checkpoint-stopped.json'] if recovery else [{} for _ in guest.ROLES])
             stack.enter_context(patch.object(guest, 'retained_attempt', return_value=prior))
@@ -1165,6 +1193,246 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'one deployment'):
                 local_guest.configure({'deployment':value,'commit':commit,'operation':operation})
         self.assertEqual(len(set(paths)),2)
+
+
+class CohortProgressTests(unittest.TestCase):
+    def setUp(self):
+        plan_for()
+        self.now = 0.0
+        self.rows = [{'role': role} for role in guest.ROLES]
+        self.props = [{'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
+                       'MainPID': str(42 + index), 'InvocationID': str(index + 1) * 32}
+                      for index in range(4)]
+        self.before = [{'role': role, 'config_stamp': [1], 'state_root_identity': [2],
+                        'current_target': 'same', 'systemd': self.props[index],
+                        'public': {'height': 200, 'commit': guest.OLD}}
+                       for index, role in enumerate(guest.ROLES)]
+
+    def run_catchup(self, sample, *, target=220, timeout=6, max_timeout=30, ready=None, systemd=None):
+        def observation(row, **_kwargs):
+            index = guest.ROLES.index(row['role'])
+            result = copy.deepcopy(self.before[index])
+            result['public']['height'] = sample(index, self.now, result)
+            return result
+
+        def sleep(seconds):
+            self.now += seconds
+
+        with patch.object(guest.time, 'monotonic', side_effect=lambda: self.now), \
+             patch.object(guest.time, 'sleep', side_effect=sleep), \
+             patch.object(guest, 'observe', side_effect=observation), \
+             patch.object(guest, 'systemd', side_effect=systemd or (lambda unit: self.props[guest.UNITS.index(unit)])), \
+             patch.object(guest, 'native_kura_hash', return_value='c' * 64), \
+             patch.object(guest, 'command', side_effect=ready, return_value=b''), \
+             patch.object(guest, 'stop_all') as stop:
+            try:
+                return guest.wait_for_cohort(
+                    self.rows, self.before, after=True, commit=guest.OLD,
+                    retained_tip={'height': target, 'hash': 'c' * 64},
+                    timeout=timeout, max_timeout=max_timeout)
+            finally:
+                stop.assert_not_called()
+
+    def test_advancing_peer_can_finish_after_original_deadline_without_empty_blocks(self):
+        result = self.run_catchup(lambda index, now, row: 200 + int(now) if index == 2 else 220)
+        self.assertEqual(self.now, 20)
+        self.assertEqual([row['public']['height'] for row in result], [220] * 4)
+
+    def test_another_advancing_peer_cannot_extend_a_stalled_validator(self):
+        def sample(index, now, row):
+            return 200 + int(now) if index == 0 else (200 if index == 2 else 220)
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*common retained'):
+            self.run_catchup(sample)
+        self.assertEqual(self.now, 6)
+
+    def test_dead_listener_cannot_borrow_another_peers_progress_budget(self):
+        def sample(index, now, row):
+            if index == 2 and now >= 2:
+                raise RuntimeError('validator not running')
+            return 200 + int(now)
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*not running'):
+            self.run_catchup(sample)
+        self.assertEqual(self.now, 6)
+
+    def test_restart_or_wrong_candidate_never_earns_more_observation_time(self):
+        for change in ('restart', 'commit'):
+            with self.subTest(change=change):
+                self.now = 0
+                def sample(index, now, row):
+                    if index == 2 and now >= 2:
+                        if change == 'restart':
+                            row['systemd']['InvocationID'] = 'f' * 32
+                        else:
+                            row['public']['commit'] = 'f' * 40
+                    return 200 + int(now)
+                def systemd(unit):
+                    index = guest.UNITS.index(unit)
+                    props = dict(self.props[index])
+                    if change == 'restart' and index == 2 and self.now >= 2:
+                        props['InvocationID'] = 'f' * 32
+                    return props
+                with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
+                    self.run_catchup(sample, systemd=systemd)
+                self.assertEqual(self.now, 6)
+
+    def test_advancing_but_unready_peer_does_not_extend_the_deadline(self):
+        def ready(argv, **kwargs):
+            if self.now >= 2:
+                raise RuntimeError('readyz 503')
+            return b''
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*readyz'):
+            self.run_catchup(lambda index, now, row: 200 + int(now), ready=ready)
+        self.assertEqual(self.now, 6)
+
+    def test_first_healthy_late_sample_alone_does_not_extend_the_deadline(self):
+        def sample(index, now, row):
+            if now < 4:
+                raise RuntimeError('warming')
+            return 219
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
+            self.run_catchup(sample)
+        self.assertEqual(self.now, 6)
+
+    def test_converged_observation_finishing_after_deadline_is_not_accepted(self):
+        for deadline_kind in ('stall', 'absolute'):
+            with self.subTest(deadline_kind=deadline_kind):
+                self.now = 0
+                def sample(index, now, row):
+                    late_at = 4 if deadline_kind == 'stall' else 8
+                    if now >= late_at and index == 3:
+                        self.now = 7 if deadline_kind == 'stall' else 11
+                    return 220 if now >= late_at else 200 + int(now)
+                with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
+                    self.run_catchup(sample, timeout=4 if deadline_kind == 'stall' else 6,
+                                     max_timeout=10)
+
+    def test_height_regression_is_rejected_before_a_later_recovery_can_hide_it(self):
+        def sample(index, now, row):
+            return (202 if now == 0 else 201) if index == 2 else 220
+        with self.assertRaisesRegex(RuntimeError, 'committed catch-up height regressed'):
+            self.run_catchup(sample)
+        self.assertEqual(self.now, 2)
+
+    def test_continuous_progress_has_an_absolute_deadline(self):
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
+            self.run_catchup(lambda index, now, row: 200 + int(now),
+                             target=1000, max_timeout=10)
+        self.assertEqual(self.now, 10)
+
+    def test_deadlines_reject_unbounded_inputs_and_host_covers_guest_maximum(self):
+        for timeout, maximum in ((0, 30), (6, 5), (6, guest.COHORT_MAX_TIMEOUT_SECONDS + 1)):
+            with self.subTest(timeout=timeout, maximum=maximum), \
+                 self.assertRaisesRegex(RuntimeError, 'time bounds are invalid'):
+                self.run_catchup(lambda index, now, row: 220, timeout=timeout, max_timeout=maximum)
+        self.assertEqual(guest.COHORT_STALL_TIMEOUT_SECONDS, 600)
+        self.assertEqual(guest.COHORT_MAX_TIMEOUT_SECONDS, 90 * 60)
+        self.assertEqual(runner.GUEST_OPERATION_TIMEOUT_SECONDS,
+                         guest.COHORT_MAX_TIMEOUT_SECONDS + 60 * 60 + guest.MAX_FAILED_START_ATTEMPTS * 4 * 20)
+        tree = ast.parse(Path(runner.__file__).read_text())
+        apply = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'apply_plan')
+        remote = [node for node in ast.walk(apply) if isinstance(node, ast.Call)
+                  and any(keyword.arg == 'input' and isinstance(keyword.value, ast.Name)
+                          and keyword.value.id == 'payload' for keyword in node.keywords)]
+        self.assertEqual(len(remote), 1)
+        deadline = next(keyword.value for keyword in remote[0].keywords if keyword.arg == 'timeout')
+        self.assertIsInstance(deadline, ast.Name)
+        self.assertEqual(deadline.id, 'GUEST_OPERATION_TIMEOUT_SECONDS')
+
+
+class CohortObservationOwnerTests(unittest.TestCase):
+    def setUp(self):
+        plan = plan_for()
+        self.device = os.makedev(8, 1)
+        self.lock = [self.device, 9, 0o100600, 0, 0, 1, 0, 0, 0]
+        self.proc = {
+            '/proc/991/stat': b'991 (python3) S ' + b'0 ' * 18 + b'1234',
+            '/proc/991/cmdline': b'/usr/bin/python3\0-I\0-\0',
+            '/proc/locks': b'77: FLOCK ADVISORY WRITE 991 08:01:9 0 EOF\n'}
+        self.owner = {'pid': 991, 'start_time_ticks': 1234,
+                      'argv': ['/usr/bin/python3', '-I', '-'],
+                      'lock': {'device': self.device, 'inode': 9}}
+        self.intent = {'schema': guest.COHORT_OBSERVATION_SCHEMA, 'operation': plan['operation'],
+                       'commit': plan['commit'], 'phase': 'cohort_observation', 'owner': self.owner,
+                       'automatic_restart_or_rollback_after_start': False,
+                       'remaining_actions': list(guest.COHORT_REMAINING_ACTIONS)}
+
+    def verify(self, *, terminal=None):
+        def read(path, limit):
+            raw = self.proc[str(path)]
+            if isinstance(raw, list):
+                raw = raw.pop(0)
+            self.assertLessEqual(len(raw), limit)
+            return raw
+        with patch.object(guest, 'read_bounded_proc', side_effect=read), \
+             patch.object(guest, 'stamp', return_value=self.lock), \
+             patch.object(guest.os.path, 'lexists', side_effect=terminal or (lambda path: False)), \
+             patch.object(fcntl, 'flock') as flock:
+            try:
+                return guest.verify_cohort_observation_owner(self.intent)
+            finally:
+                flock.assert_not_called()
+
+    def test_live_process_and_exact_flock_are_verified_without_lock_acquisition(self):
+        self.assertEqual(self.verify(), self.owner)
+
+    def test_changed_pid_start_time_argv_and_lock_cannot_be_reused(self):
+        original = dict(self.proc)
+        for path, raw in (
+            ('/proc/991/stat', b'991 (python3) S ' + b'0 ' * 18 + b'9999'),
+            ('/proc/991/stat', b'991 (python3) Z ' + b'0 ' * 18 + b'1234'),
+            ('/proc/991/cmdline', b'/usr/bin/python3\0-c\0different\0'),
+            ('/proc/locks', b'77: FLOCK ADVISORY WRITE 992 08:01:9 0 EOF\n'),
+            ('/proc/locks', b'77: FLOCK ADVISORY WRITE 991 08:01:10 0 EOF\n'),
+            ('/proc/locks', b'77: -> FLOCK ADVISORY WRITE 991 08:01:9 0 EOF\n'),
+        ):
+            with self.subTest(path=path, raw=raw):
+                self.proc = dict(original, **{path: raw})
+                with self.assertRaises(RuntimeError):
+                    self.verify()
+
+    def test_terminal_markers_are_checked_before_and_after_owner_projection(self):
+        for name in ('result.json', 'failure.json', 'rollback.json'):
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'already terminated'):
+                self.verify(terminal=lambda path: path.name == name)
+        calls = [0]
+        def terminal(path):
+            calls[0] += 1
+            return calls[0] > 3 and path.name == 'result.json'
+        with self.assertRaisesRegex(RuntimeError, 'owner changed or terminated'):
+            self.verify(terminal=terminal)
+
+    def test_final_process_sample_must_still_be_live_and_well_formed(self):
+        original = self.proc['/proc/991/stat']
+        for final in (b'991 (python3) Z ' + b'0 ' * 18 + b'1234',
+                      b'991 (python3) S 0', b'malformed'):
+            with self.subTest(final=final):
+                self.proc['/proc/991/stat'] = [original, final]
+                with self.assertRaises(RuntimeError):
+                    self.verify()
+
+    def test_lock_device_inode_and_custody_are_exact(self):
+        original = self.lock[:]
+        for index, value in ((0, os.makedev(8, 2)), (1, 10), (2, 0o100644), (3, 1000), (5, 2)):
+            with self.subTest(index=index):
+                self.lock = original[:]
+                self.lock[index] = value
+                with self.assertRaises(RuntimeError):
+                    self.verify()
+
+    def test_wrong_operation_phase_or_candidate_cannot_claim_the_observation(self):
+        for field, value in (('operation', 'update-' + 'f' * 32), ('phase', 'install'),
+                             ('commit', 'f' * 40), ('automatic_restart_or_rollback_after_start', True)):
+            with self.subTest(field=field):
+                original = self.intent[field]
+                self.intent[field] = value
+                with self.assertRaisesRegex(RuntimeError, 'intent differs'):
+                    self.verify()
+                self.intent[field] = original
+
+    def test_proc_projection_reads_are_bounded(self):
+        with patch.object(Path, 'open', return_value=io.BytesIO(b'a' * 5)):
+            with self.assertRaisesRegex(RuntimeError, 'exceeds bound'):
+                guest.read_bounded_proc(Path('/proc/locks'), 4)
 
 
 class FailedStartChainTests(unittest.TestCase):
