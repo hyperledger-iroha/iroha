@@ -215,16 +215,16 @@ pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLin
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 #[allow(unused_imports, reason = "reviewed replay-evidence namespace")]
 pub(in crate::sumeragi) use replay_authority::{
-    AuthenticatedRecoveredLifecycleOutputV1, DurableCertifiedFetchPendingMintPermit,
-    DurableLifecycleOutputPendingMintPermit, DurableStandaloneValidatePendingMintPermit,
-    DurableValidateReplayEvidenceV1, InvalidBodyReportReplayEvidenceV1,
-    LocalBodyPreIntentReplaySealV1, LocalProposalIntentReplayEvidenceV1,
-    LocalProposalReadyReplayEvidenceV1, LocalValidateReplayEvidenceV1,
-    PreparedLifecycleLocalProposalReadyV1, PublishedLifecycleLocalProposalReadyV1,
-    RecoveredDecisionApplyReplayLineageV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
-    RecoveredLifecycleNextWalVoteSealV1, RemoteProposalFetchReplayEvidenceV1,
-    RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
-    RemoteProposalValidateReplayEvidenceV1,
+    AuthenticatedBodyPipelineColdReplayOriginV1, AuthenticatedRecoveredLifecycleOutputV1,
+    DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
+    DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
+    InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
+    LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
+    LocalValidateReplayEvidenceV1, PreparedLifecycleLocalProposalReadyV1,
+    PublishedLifecycleLocalProposalReadyV1, RecoveredDecisionApplyReplayLineageV1,
+    RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
+    RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
+    RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
 };
 pub(crate) use replay_authority::{
     RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,

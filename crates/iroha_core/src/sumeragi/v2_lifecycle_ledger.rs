@@ -2967,6 +2967,19 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
                 ProductionLifecycleStartupErrorKindV1::InvalidBodyPipelineCensus,
             )
         })?;
+        let (ledger, body_pipeline) = ledger
+            .reconcile_timeout_body_pipeline_startup(
+                &verified,
+                &body_store,
+                &ledger_store,
+                &adapter_startup,
+                body_pipeline,
+            )
+            .map_err(|reason| {
+                ProductionLifecycleStartupErrorV1::new(
+                    ProductionLifecycleStartupErrorKindV1::BodyPipelineAdapterReplay(reason),
+                )
+            })?;
         let (body_pipeline, adapter_startup) = body_pipeline
             .replay_adapter_startup(adapter_startup)
             .map_err(|reason| {
@@ -3318,6 +3331,15 @@ impl ProductionLifecycleOwnerV1 {
                             "recovered control cold pair body-pipeline census authentication failed",
                         )
                     })?;
+                let (opened, body_pipeline) = opened
+                    .reconcile_timeout_body_pipeline_startup(
+                        &verified,
+                        &body_store,
+                        &ledger_store,
+                        &adapter_startup,
+                        body_pipeline,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
                 let (body_pipeline, adapter_startup) = body_pipeline
                     .replay_adapter_startup(adapter_startup)
                     .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
@@ -3411,6 +3433,15 @@ impl ProductionLifecycleOwnerV1 {
                             "cold Proposal continuation body-pipeline authentication failed",
                         )
                     })?;
+                let (opened, body_pipeline) = opened
+                    .reconcile_timeout_body_pipeline_startup(
+                        &verified,
+                        &body_store,
+                        &ledger_store,
+                        &adapter_startup,
+                        body_pipeline,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
                 let (body_pipeline, adapter_startup) = body_pipeline
                     .replay_adapter_startup(adapter_startup)
                     .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
@@ -3495,6 +3526,15 @@ impl ProductionLifecycleOwnerV1 {
                         "recovered control Broadcast body-pipeline census authentication failed",
                     )
                 })?;
+            let (opened, body_pipeline) = opened
+                .reconcile_timeout_body_pipeline_startup(
+                    &verified,
+                    &body_store,
+                    &ledger_store,
+                    &adapter_startup,
+                    body_pipeline,
+                )
+                .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
             let (body_pipeline, adapter_startup) = body_pipeline
                 .replay_adapter_startup(adapter_startup)
                 .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
@@ -3659,6 +3699,15 @@ impl ProductionLifecycleOwnerV1 {
                         "recovered control body-pipeline census authentication failed",
                     )
                 })?;
+            let (repaired, body_pipeline) = repaired
+                .reconcile_timeout_body_pipeline_startup(
+                    &verified,
+                    &body_store,
+                    &ledger_store,
+                    &adapter_startup,
+                    body_pipeline,
+                )
+                .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
             let (body_pipeline, adapter_startup) = body_pipeline
                 .replay_adapter_startup(adapter_startup)
                 .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;

@@ -483,3 +483,37 @@ mod tests;
 mod witness_replay_tests;
 #[cfg(test)]
 mod witness_tests;
+
+// Only the authenticated lifecycle/body-store join can enter this embedded
+// recovery seam. The standalone reducer harness exposes no production mint.
+impl Reducer {
+    pub(in crate::sumeragi) fn restore_retained_body_pipeline(
+        &mut self,
+        origin: &super::v2_lifecycle_coordinator::AuthenticatedBodyPipelineColdReplayOriginV1,
+        tag: EventTag,
+        round: Round,
+        manifest: PayloadManifest,
+    ) -> Result<(), ReducerError> {
+        use norito::codec::Encode as _;
+        let source = origin.manifest();
+        let expected_subject =
+            Subject::new(iroha_crypto::Hash::new(source.subject.encode()).into());
+        if origin.tag() != tag
+            || self.context().id() != ContextId::new(*source.round.context_id.0.as_ref())
+            || round != Round::new(source.round.height, source.round.view)
+            || manifest.subject() != expected_subject
+            || manifest.payload_hash() != Digest::new(*source.subject.payload_hash.as_ref())
+            || manifest.chunk_root() != Digest::new(*source.chunk_root.as_ref())
+            || manifest.byte_len() != source.payload_size_bytes
+            || usize::try_from(manifest.chunk_count()).ok() != Some(source.chunk_hashes.len())
+        {
+            return Err(ReducerError::InvalidRetainedBodyPipeline);
+        }
+        self.restore_retained_body_pipeline_custody(
+            tag,
+            round,
+            manifest,
+            origin.locally_available(),
+        )
+    }
+}

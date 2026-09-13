@@ -61,7 +61,8 @@ use super::{
         ValidatedBodyReceipt,
     },
     v2_lifecycle_coordinator::{
-        AdapterEffectAdmissionError, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
+        AdapterEffectAdmissionError, AuthenticatedBodyPipelineColdReplayOriginV1,
+        AuthenticatedRecoveredLifecycleSuccessorFloorV1,
         AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalStandaloneSignProjection,
@@ -606,6 +607,7 @@ pub(in crate::sumeragi) struct CertifiedBodyPipelineColdReplayStepV1 {
 }
 #[derive(Clone, Debug)]
 enum CertifiedBodyPipelineColdReplayKindV1 {
+    BodyOrigin(AuthenticatedBodyPipelineColdReplayOriginV1),
     BodyAvailable {
         tag: reducer::EventTag,
         manifest: wire::PayloadManifest,
@@ -622,10 +624,21 @@ impl CertifiedBodyPipelineColdReplayStepV1 {
     /// both reducer inputs at one immutable lifecycle ordinal.
     pub(in crate::sumeragi) const fn order_key(&self) -> (u128, u8) {
         let sequence = match &self.kind {
-            CertifiedBodyPipelineColdReplayKindV1::BodyAvailable { .. } => 0,
-            CertifiedBodyPipelineColdReplayKindV1::BodyStored { .. } => 1,
+            CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(_) => 0,
+            CertifiedBodyPipelineColdReplayKindV1::BodyAvailable { .. } => 1,
+            CertifiedBodyPipelineColdReplayKindV1::BodyStored { .. } => 2,
         };
         (self.ordinal, sequence)
+    }
+    /// Retain the complete authenticated predecessor before body completion replay.
+    pub(in crate::sumeragi) fn body_origin(
+        ordinal: u128,
+        origin: AuthenticatedBodyPipelineColdReplayOriginV1,
+    ) -> Option<Self> {
+        (ordinal != 0 && origin.tag().height() == origin.manifest().round.height).then_some(Self {
+            ordinal,
+            kind: CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(origin),
+        })
     }
     /// Seal one terminal Fetch input and its exact live Store effect.
     pub(in crate::sumeragi) fn body_available(
@@ -693,6 +706,9 @@ impl CertifiedBodyPipelineColdReplayStepV1 {
     #[cfg(test)]
     fn is_structurally_exact_for_test(&self) -> bool {
         match &self.kind {
+            CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(origin) => {
+                origin.tag().height() == origin.manifest().round.height
+            }
             CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
                 tag,
                 manifest,
@@ -1115,6 +1131,28 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
     }
 
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn recovered_for_test(
+        adapter: SumeragiV2Adapter,
+        effects: Vec<AdapterEffect>,
+    ) -> Self {
+        Self::recovered(adapter, effects)
+    }
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn into_adapter_for_test(
+        self,
+    ) -> (SumeragiV2Adapter, Vec<AdapterEffect>) {
+        match self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply: None,
+                local_proposal_attempt: None,
+                leader_wire_launch_prepared: false,
+            } => (adapter, effects),
+            _ => panic!("cold body replay fixture retained foreign startup debt"),
+        }
+    }
     fn recovered_with_local_proposal_attempt(
         adapter: SumeragiV2Adapter,
         effects: Vec<AdapterEffect>,
@@ -1181,8 +1219,9 @@ impl ProductionLifecycleAdapterStartupV1 {
     /// Replay the exact terminal ordinary certified-body prefix retained by
     /// LedgerV1 before any Store or Validate successor is exposed as Ready.
     ///
-    /// Each input is prepared on cloned reducer state and must apply with the
-    /// exact effect already authenticated by the lifecycle/body-store join.
+    /// The authenticated origin first restores the exact volatile body predecessor.
+    /// Each completion is then prepared on cloned reducer state and must apply
+    /// with the exact effect authenticated by the lifecycle/body-store join.
     /// Busy, stale, duplicate, missing-work, or effect-shape outcomes are all
     /// startup-fatal: accepting any of them would publish a concrete carrier
     /// whose reducer predecessor was not reconstructed in this process.
@@ -1244,6 +1283,9 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
         for step in steps {
             match &step.kind {
+                CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(origin) => {
+                    adapter.restore_authenticated_cold_body_origin(origin)?;
+                }
                 CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
                     tag,
                     manifest,
@@ -2966,6 +3008,7 @@ impl VerifiedHeightContext {
     }
 }
 include!("v2_verified_height_context_recovered_output_auth.rs");
+include!("v2_cold_body_pipeline_origin.rs");
 /// A canonical message whose safety intent is already durable and may be signed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SignRequest {

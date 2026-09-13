@@ -138,6 +138,27 @@ impl LifecycleReplayAuthorityV1 {
                 | BodyPipelineOriginV1::Certified { .. }
         ) && (current.strictly_advances(original) || (current == original && !is_decided_body))
     }
+    /// Compare the authenticated source execution with an actual installed
+    /// timeout frontier without exposing or rebinding its retained tag.
+    pub(super) fn ordinary_body_is_superseded_by_timeout(
+        &self,
+        frontier: crate::sumeragi::v2::LeaderWireRecoveryAuthority,
+    ) -> bool {
+        let LifecycleReplaySourceV1::BodyPipeline(source) = &self.source else {
+            return false;
+        };
+        let Some(manifest) = standalone_origin_manifest(source) else {
+            return false;
+        };
+        frontier.proves_superseded_body_execution(
+            manifest.round.context_id,
+            EventTag::new(
+                source.tag.height,
+                source.tag.view,
+                crate::sumeragi::v2_core::Generation::new(source.tag.generation),
+            ),
+        )
+    }
     /// Return whether this canonical authority is one deterministic invalid-body report.
     pub(super) fn is_invalid_body_report_origin(&self) -> bool {
         matches!(
@@ -4498,23 +4519,63 @@ pub(super) struct DurableCertifiedFetchReplayProjectionV1 {
     completion_digest: LifecycleDigest,
     expected_manifest_hash: HashOf<wire::PayloadManifest>,
 }
+/// Authenticated origin retained by the exact LedgerV1/body-store cold join.
+///
+/// The private source can be minted only after the complete source and durable
+/// body have been authenticated. It grants reconstruction of body custody;
+/// it does not grant a fresh vote, WAL write, or proposal signature.
+#[derive(Clone, Debug)]
+pub(in crate::sumeragi) struct AuthenticatedBodyPipelineColdReplayOriginV1 {
+    source: BodyPipelineReplaySourceV1,
+}
+impl AuthenticatedBodyPipelineColdReplayOriginV1 {
+    pub(in crate::sumeragi) fn manifest(&self) -> &wire::PayloadManifest {
+        standalone_origin_manifest(&self.source)
+            .expect("authenticated body origin retains its manifest")
+    }
+    pub(in crate::sumeragi) fn proposal(&self) -> Option<&wire::Proposal> {
+        match &self.source.origin {
+            BodyPipelineOriginV1::Proposal(proposal) => Some(proposal),
+            _ => None,
+        }
+    }
+    pub(in crate::sumeragi) fn certificate(&self) -> Option<&wire::QuorumCertificate> {
+        match &self.source.origin {
+            BodyPipelineOriginV1::Certified { certificate, .. } => Some(certificate),
+            _ => None,
+        }
+    }
+    pub(in crate::sumeragi) fn locally_available(&self) -> bool {
+        matches!(&self.source.origin, BodyPipelineOriginV1::LocalBody(_))
+    }
+    pub(in crate::sumeragi) fn tag(&self) -> EventTag {
+        EventTag::new(
+            self.source.tag.height,
+            self.source.tag.view,
+            crate::sumeragi::v2_core::Generation::new(self.source.tag.generation),
+        )
+    }
+}
 /// Opaque result of the consuming LedgerV1/body-store Certified-Fetch join.
 #[must_use = "recovered durable Fetch authority must enter coordinator and registry recovery"]
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedFetchV1
 {
     completion: CertifiedFetchCompletion,
     candidate: CandidateAdmission,
+    origin_replay: CertifiedBodyPipelineColdReplayStepV1,
 }
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedStoreV1
 {
     candidate: CandidateAdmission,
     carrier: DurableStoreBody,
+    origin_replay: CertifiedBodyPipelineColdReplayStepV1,
     replay: CertifiedBodyPipelineColdReplayStepV1,
 }
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedValidateV1
 {
     candidate: CandidateAdmission,
     carrier: DurableValidateBody,
+    origin_replay: CertifiedBodyPipelineColdReplayStepV1,
     fetch_replay: CertifiedBodyPipelineColdReplayStepV1,
     store_replay: CertifiedBodyPipelineColdReplayStepV1,
 }
@@ -4579,6 +4640,7 @@ impl AuthenticatedRecoveredDurableCertifiedFetchV1 {
         let store = AuthenticatedRecoveredDurableCertifiedStoreV1 {
             candidate,
             carrier,
+            origin_replay: self.origin_replay,
             replay,
         };
         store.is_exact().then_some(store)
@@ -4632,6 +4694,7 @@ impl AuthenticatedRecoveredDurableCertifiedStoreV1 {
         let validate = AuthenticatedRecoveredDurableCertifiedValidateV1 {
             candidate,
             carrier,
+            origin_replay: self.origin_replay,
             fetch_replay,
             store_replay,
         };
@@ -4659,7 +4722,7 @@ impl AuthenticatedRecoveredDurableStandaloneValidateV1 {
             LifecycleWorkClass::Validate,
             LifecycleStageKind::ValidateBody,
         ) && self.carrier.validates(self.carrier.ready_digest())
-            && matches!(self.replay_steps.as_slice(), [_] | [_, _])
+            && matches!(self.replay_steps.as_slice(), [_, _] | [_, _, _])
             && self
                 .replay_steps
                 .iter()
@@ -4728,11 +4791,15 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
         replay_steps: &mut Vec<CertifiedBodyPipelineColdReplayStepV1>,
     ) -> PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
         match self {
-            Self::Fetch(entry) => PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
-                candidate: Some(entry.candidate),
-                work: PreparedDurableCertifiedBodyPipelineWorkV1::Fetch(entry.completion),
-            },
+            Self::Fetch(entry) => {
+                replay_steps.push(entry.origin_replay);
+                PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
+                    candidate: Some(entry.candidate),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Fetch(entry.completion),
+                }
+            }
             Self::Store(entry) => {
+                replay_steps.push(entry.origin_replay);
                 replay_steps.push(entry.replay);
                 PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
                     candidate: Some(entry.candidate),
@@ -4740,6 +4807,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
                 }
             }
             Self::Validate(entry) => {
+                replay_steps.push(entry.origin_replay);
                 replay_steps.push(entry.fetch_replay);
                 replay_steps.push(entry.store_replay);
                 PreparedDurableCertifiedBodyPipelineStartupEntryV1 {

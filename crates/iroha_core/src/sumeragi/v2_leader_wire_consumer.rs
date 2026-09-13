@@ -190,6 +190,25 @@ impl LeaderWireRecoveryAuthority {
     pub(crate) const fn consumer_tag(self) -> reducer::EventTag {
         self.consumer_tag
     }
+    /// Prove that an installed timeout superseded this exact body execution.
+    /// Same-view timeout upgrades advance generation; ordinary advances reset
+    /// generation. A bare current tag or uninstalled timeout intent cannot
+    /// authorize cancellation of a retained lifecycle owner.
+    pub(in crate::sumeragi) fn proves_superseded_body_execution(
+        self,
+        context_id: wire::HeightContextId,
+        original: reducer::EventTag,
+    ) -> bool {
+        self.context_id == context_id
+            && self.height == original.height()
+            && self.consumer_tag.height() == self.height
+            && self.wal_id.get() != 0
+            && self
+                .installed_timeout_view
+                .and_then(|view| view.checked_add(1))
+                == Some(self.consumer_tag.view())
+            && self.consumer_tag.strictly_advances(original)
+    }
     /// Prove that a durable Decision closed this height or an installed timeout
     /// closed this older Proposal view. A bare tag or TimeoutIntent is insufficient.
     pub(in crate::sumeragi) fn proves_obsolete_proposal(self, round: wire::ConsensusRound) -> bool {
