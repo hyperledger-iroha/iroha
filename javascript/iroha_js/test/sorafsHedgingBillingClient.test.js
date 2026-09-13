@@ -19,7 +19,7 @@ const AFTER_STATEMENT_ID = "33".repeat(32);
 const AFTER_PROJECTION = "44".repeat(32);
 const PRIVATE_KEY = Buffer.alloc(32, 29);
 const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
-const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID, 753);
 const PRIVATE_KEY_OBJECT = crypto.createPrivateKey({
   key: Buffer.concat([
     Buffer.from("302e020100300506032b657004220420", "hex"),

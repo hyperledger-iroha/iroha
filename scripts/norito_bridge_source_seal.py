@@ -68,6 +68,7 @@ APPLE_ROOT_INPUTS = (
     "scripts/render_norito_bridge_podspec.py",
     "scripts/update_norito_bridge_swift_pins.py",
     "scripts/validate_norito_bridge_xcframework.py",
+    "scripts/norito_bridge_local_integration.py",
 )
 APPLE_REQUIRED_ROOT_INPUTS = ("IrohaSwift/Package.resolved",)
 # CBSI consumes these Gradle builds directly through composite substitution, so

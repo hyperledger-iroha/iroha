@@ -1026,12 +1026,12 @@ function buildTopUpInstruction(value) {
   });
 }
 
-function encodeTopUpInstruction(value) {
-  return Uint8Array.from(noritoEncodeInstruction(buildTopUpInstruction(value)));
+function encodeTopUpInstruction(value, networkPrefix) {
+  return Uint8Array.from(noritoEncodeInstruction(buildTopUpInstruction(value), networkPrefix));
 }
 
-function decodeTopUpInstruction(raw) {
-  const decoded = noritoDecodeInstruction(raw);
+function decodeTopUpInstruction(raw, networkPrefix) {
+  const decoded = noritoDecodeInstruction(raw, networkPrefix);
   exactRecord(decoded, "top-up instruction", ["TopUpKagemushaV1"]);
   exactRecord(
     decoded.TopUpKagemushaV1,

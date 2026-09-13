@@ -10,7 +10,7 @@ import {
 import { AccountAddress } from "../src/address.js";
 
 const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
-const SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+const SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID, 753);
 const privateKey = Buffer.alloc(32, 0x29);
 const publicKey = Buffer.from(ed25519.getPublicKey(privateKey));
 const accountId = AccountAddress.fromAccount({ publicKey }).toI105();

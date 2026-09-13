@@ -395,6 +395,7 @@ const SIGNATURE_FIELDS = new Set([
 ]);
 const SIGNABLE_FIELDS = new Set([
   "networkId",
+  "networkPrefix",
   "payloadBytes",
   "payloadHashHex",
   "authority",
@@ -803,6 +804,7 @@ function validateNexusTransferSignable(signable, constraints = {}) {
 function copyValidatedSignable(signable) {
   return Object.freeze({
     networkId: signable.networkId,
+    networkPrefix: signable.networkPrefix,
     payloadBytes: Buffer.from(signable.payloadBytes),
     payloadHashHex: signable.payloadHashHex,
     authority: signable.authority,
@@ -991,10 +993,10 @@ function normalizePayloadBuildResult(result) {
   return { payloadBytes, assertedHashHex };
 }
 
-function canonicalSignedTransactionHashHex(signedTransaction) {
+function canonicalSignedTransactionHashHex(signedTransaction, networkPrefix) {
   try {
     return exactHashHex(
-      _browserSignedTransferTransactionHashHex(signedTransaction),
+      _browserSignedTransferTransactionHashHex(signedTransaction, networkPrefix),
       "canonical signed transaction hash",
       "invalid_transaction_hash",
     );
@@ -1008,7 +1010,7 @@ function canonicalSignedTransactionHashHex(signedTransaction) {
   }
 }
 
-function normalizeFinalizedTransaction(result) {
+function normalizeFinalizedTransaction(result, networkPrefix) {
   if (
     result === null ||
     typeof result !== "object" ||
@@ -1046,7 +1048,7 @@ function normalizeFinalizedTransaction(result) {
       "transaction finalizer result must include an exact canonical transaction hash",
     );
   }
-  const computedHashHex = canonicalSignedTransactionHashHex(signedTransaction);
+  const computedHashHex = canonicalSignedTransactionHashHex(signedTransaction, networkPrefix);
   if (assertedHashHex !== computedHashHex) {
     throw new NexusAppError(
       "transaction_hash_mismatch",
@@ -2387,7 +2389,7 @@ export class NexusAppClient {
     }
     const payloadInput = {
       networkId,
-      chainDiscriminant,
+      networkPrefix: chainDiscriminant,
       authority,
       sourceAssetHoldingId,
       quantity,
@@ -2456,6 +2458,7 @@ export class NexusAppClient {
       try {
         codecHash = Reflect.apply(payloadHasher, transactionCodec, [
           Buffer.from(payloadBytes),
+          chainDiscriminant,
         ]);
       } catch (error) {
         throw new NexusAppError(
@@ -2498,6 +2501,7 @@ export class NexusAppClient {
       input: { ...payloadInput, signingPublicKey },
       signable: {
         networkId,
+        networkPrefix: chainDiscriminant,
         payloadBytes,
         payloadHashHex,
         authority,
@@ -2572,6 +2576,7 @@ export class NexusAppClient {
     );
     const canonicalSignable = validateNexusTransferSignable(signable, {
       networkId: this.config.networkId ?? null,
+      networkPrefix: chainDiscriminant,
       authority: approvedAccount ?? configuredAuthority,
       signingPublicKey: expectedSigningPublicKey,
     });
@@ -2741,6 +2746,7 @@ export class NexusAppClient {
       },
       {
         networkId: this.config.networkId ?? null,
+        networkPrefix: this.requireAccountChainDiscriminant(),
         signingPublicKey: publicKey,
       },
     );
@@ -2815,7 +2821,7 @@ export class NexusAppClient {
     throwIfStatusWaitAborted(statusOptions, shouldWait);
     let finalized;
     try {
-      finalized = normalizeFinalizedTransaction(finalizedResult);
+      finalized = normalizeFinalizedTransaction(finalizedResult, canonicalSignable.networkPrefix);
     } catch (error) {
       let code = "invalid_signed_transaction";
       try {

@@ -477,6 +477,47 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
+    /// Transform one borrowed column while its caller retains the zeroizing owner.
+    ///
+    /// `inverse` maps evaluations to coefficients. `extended_omega_factor`, when present,
+    /// selects the same coset as `coeff_to_extended_part`; absence selects the base domain.
+    /// The existing baseline FFT uses only public twiddle allocations, avoiding the parallel
+    /// FFT's witness temporary and recursive FFT's retained witness scratch. Its roots and
+    /// scaling are identical to the existing domain transforms; existing dispatch is unchanged.
+    ///
+    /// Panics on a wrong column length or a zero coset factor, before changing the input.
+    pub(crate) fn stored_column_transform_in_place(
+        &self,
+        a: &mut [F],
+        inverse: bool,
+        extended_omega_factor: Option<F>,
+    ) {
+        assert_eq!(a.len(), 1 << self.k);
+        let coset = extended_omega_factor.map(|factor| self.g_coset * factor);
+        let inverse_coset = coset.map(|factor| {
+            factor
+                .invert()
+                .expect("stored-column coset factor must be nonzero")
+        });
+        let unused_fft_data = FFTData::default();
+        if inverse {
+            crate::fft::baseline::fft(a, self.omega_inv, self.k, &unused_fft_data, true);
+            parallelize(a, |chunk, _| {
+                for value in chunk {
+                    *value *= &self.ifft_divisor;
+                }
+            });
+            if let Some(factor) = inverse_coset {
+                self.distribute_powers(a, factor);
+            }
+        } else {
+            if let Some(factor) = coset {
+                self.distribute_powers(a, factor);
+            }
+            crate::fft::baseline::fft(a, self.omega, self.k, &unused_fft_data, false);
+        }
+    }
+
     /// Rotate the extended domain polynomial over the original domain.
     pub fn rotate_extended(
         &self,

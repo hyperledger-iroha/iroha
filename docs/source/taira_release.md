@@ -9,7 +9,7 @@ Run only the early native gate:
 
     python3 scripts/taira_release.py check
 
-Prepare binaries from an exact signed, clean commit on optimizations:
+Prepare binaries from the exact signed HEAD on optimizations:
 
     python3 scripts/taira_release.py prepare \
       --expected-commit FULL_SIGNED_COMMIT \
@@ -25,13 +25,17 @@ Use independently reviewed tool digests and the full signing-key fingerprint
 locally known key is rejected. Paths must be absolute and contain no
 symlinks; PATH must resolve cargo-zigbuild to the supplied executable. Source
 verification binds the maintained helper scripts to the supplied signed commit.
-Git replacement refs are disabled. Every tracked file is checked against its
-indexed blob and mode even when Git index flags conceal local edits.
-Gitlinks retain their exact indexed mode and commit; their worktree paths must
-be uninitialized empty directories or absent. Initial admission rejects populated worktree submodules; captured gitlinks always
-remain empty. There are no embedded tool digests or release-number-specific paths to update.
+Git replacement refs are disabled. Every `BUILD_SOURCES` controller file is checked
+against its signed Git blob and executable mode, independently of the mutable
+index and flags that conceal local edits. Imported controller modules must come
+from those checked paths; additional checkout modules cannot enter the controller.
+Unrelated staged, unstaged and untracked work stays untouched and is never copied
+into the build. Gitlinks retain their signed mode and commit in the capture and
+remain empty there; worktree submodule contents are excluded. There are no
+embedded tool digests or release-number-specific paths to update.
 
-Before preparation starts, the clean checkout and its signed commit are checked.
+Before fresh preparation starts, the optimizations HEAD, its signature and the
+controller sources are checked.
 The command then reads that commit's Git objects into a private, read-only source
 capture under the selected Cargo target's `taira-release-sources/`. It creates no Git repository,
 worktree or branch. Both native checks and the Linux build consume this capture;
@@ -44,8 +48,9 @@ read-only. Subsequent
 checkout edits, merges or HEAD changes cannot mix source versions into
 the build. Native test selection is loaded from the captured gate helper, including
 a resumed check after the checkout has changed. Resume authenticates the recorded
-commit and captured bytes without
-requiring the working checkout to remain unchanged.
+commit, the controller files against that commit, and the captured bytes. Unrelated
+HEAD advancement is allowed on optimizations; changes to controller files require
+a new preparation for their signed commit.
 
 Each selected warm Cargo lane has one stable source path. A lane-wide lock covers
 capture refresh, native checks, Linux compilation and artifact capture, including
@@ -151,7 +156,8 @@ hash source or artifacts while reporting progress and does not impose an arbitra
 cold-build deadline. Captured source, tools and artifacts are checked at actual consumption
 and reuse boundaries. Runtime secrets remain excluded from the child environment.
 
-Before initial source capture, local admission includes its exact file bytes.
+Before initial source capture, local admission counts the signed Git blobs' exact
+byte sizes without reading unrelated worktree files.
 Before compilation, it groups requirements by filesystem and checks an 8 GiB
 Cargo working-space floor plus 256 MiB capture headroom. Before capture,
 it checks the exact binary-copy bytes plus that headroom. The build floor is an

@@ -16,7 +16,8 @@ use crate::{
     },
 };
 use iroha_data_model::fastpq::{
-    FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1, FastpqCompactArtifactDecodeLimits,
+    FastpqArtifactIdentityDescriptionV1, FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1,
+    FastpqCommitmentDescriptionV1, FastpqCompactArtifactDecodeLimits, FastpqProofKindV1,
 };
 use norito::core::DecodeLimits;
 use sha2::{Digest as _, Sha256};
@@ -517,6 +518,191 @@ fn public_producer_generates_complete_ordinary_and_axt_artifacts() {
             bytes.len(),
             verified.work(),
             path.display()
+        );
+    }
+}
+
+#[test]
+#[ignore = "read-only complete artifacts supplied by FASTPQ_TEST_ORDINARY_ARTIFACT and FASTPQ_TEST_AXT_ARTIFACT"]
+fn captured_public_producer_artifacts_verify_against_independent_fixture() {
+    // The paths are test-only inputs. Expectations come from the same independent
+    // fixture as the producer regression, never from the supplied artifact bytes.
+    let f = fixture();
+    let statement = f.model();
+    let expected = expected(&statement);
+    let (metadata, mirrors) = axt_fields(&f);
+    let context = ExpectedAxtContext {
+        binding: &f.axt.binding,
+        metadata: &metadata,
+        mirrors,
+        remote_spend_claims: f.axt.remote.as_deref(),
+    };
+    let profile = crate::offline_compact::quantity_profile_id();
+    for (is_axt, variable) in [
+        (false, "FASTPQ_TEST_ORDINARY_ARTIFACT"),
+        (true, "FASTPQ_TEST_AXT_ARTIFACT"),
+    ] {
+        let path = std::env::var_os(variable).unwrap_or_else(|| panic!("set {variable}"));
+        let bytes = std::fs::read(&path).unwrap();
+        let verify = |bytes: &[u8], expected| {
+            if is_axt {
+                verify_quantity_axt_artifact(bytes, expected, context, policy())
+            } else {
+                verify_quantity_ordinary_artifact(bytes, expected, policy())
+            }
+        };
+        let started = std::time::Instant::now();
+        let verified = verify(&bytes, expected).unwrap();
+        let elapsed = started.elapsed();
+        let frame = if is_axt {
+            let artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
+                &bytes,
+                profile,
+                policy().transport,
+            )
+            .unwrap();
+            assert_eq!(artifact.statement, statement);
+            artifact.bundle_frame
+        } else {
+            let artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
+                &bytes,
+                profile,
+                policy().transport,
+            )
+            .unwrap();
+            assert_eq!(artifact.statement, statement);
+            artifact.bundle_frame
+        };
+        let wire: BundleWire = if is_axt {
+            let wire: AxtBundleWire =
+                norito::decode_canonical_with_limits(&frame, policy().total_decode).unwrap();
+            BundleWire {
+                version: wire.version,
+                intermediate_roots: wire.intermediate_roots,
+                segments: wire.segments,
+            }
+        } else {
+            norito::decode_canonical_with_limits(&frame, policy().total_decode).unwrap()
+        };
+        assert_eq!(verified.expected_statement(), expected);
+        assert_eq!(verified.segments(), 2);
+        assert_eq!(wire.segments.len(), 2);
+        assert_eq!(verified.work().air_evaluations, 750);
+        assert_eq!(verified.work().terminal_degree_checks, 2);
+        assert_eq!(verified.work().transcripts, 2);
+        assert_eq!(verified.bundle_frame_bytes(), frame.len());
+        assert_eq!(
+            verified.work().proof_bytes,
+            wire.segments.iter().map(Vec::len).sum::<usize>()
+        );
+        let identity = verified.identity();
+        assert_eq!(identity.profile_id, profile);
+        assert_eq!(
+            identity.proof_kind,
+            if is_axt {
+                FastpqProofKindV1::AxtCompact
+            } else {
+                FastpqProofKindV1::OrdinaryCompact
+            }
+        );
+        assert_eq!(
+            identity.public_statement_digest,
+            expected.public_statement_digest
+        );
+        assert_eq!(
+            identity.artifact_digest,
+            <[u8; 32]>::from(Hash::new(&bytes))
+        );
+        assert_eq!(
+            identity.inner_bundle_digest,
+            <[u8; 32]>::from(Hash::new(&frame))
+        );
+        assert_eq!(identity.artifact_bytes, u64::try_from(bytes.len()).unwrap());
+        let FastpqCommitmentDescriptionV1::OrderedCompactAir(roots) = &identity.commitments else {
+            panic!("quantity artifact must retain complete ordered AIR commitments")
+        };
+        assert_eq!(roots.segment_count, 2);
+        assert_eq!(roots.segment_air_row_roots.len(), 2);
+        assert_eq!(roots.segment_air_row_roots, verified.air_row_roots());
+        assert_eq!(
+            norito::decode_canonical::<FastpqArtifactIdentityDescriptionV1>(
+                &norito::encode_canonical(identity).unwrap()
+            )
+            .unwrap(),
+            *identity
+        );
+
+        let mut wrong = expected;
+        wrong.public_statement_digest[0] ^= 1;
+        assert!(matches!(
+            verify(&bytes, wrong),
+            Err(crate::offline_compact::VerificationError::Verify(
+                Error::PublicIoMismatch {
+                    field: "compact_artifact_public_statement_digest"
+                }
+            ))
+        ));
+        wrong = expected;
+        wrong.inputs.old_root[0] ^= 1;
+        assert!(matches!(
+            verify(&bytes, wrong),
+            Err(crate::offline_compact::VerificationError::Verify(
+                Error::PublicIoMismatch {
+                    field: "compact_model_public_io"
+                }
+            ))
+        ));
+
+        // Re-encode valid outer transports so rejection reaches child proof
+        // validation rather than merely detecting damage to an outer checksum.
+        for reorder in [true, false] {
+            let mut changed = wire.clone();
+            if reorder {
+                changed.segments.swap(0, 1);
+            } else {
+                assert!(changed.segments[0].pop().is_some());
+            }
+            let frame = if is_axt {
+                compact_bundle::encode_axt_wire(
+                    &AxtBundleWire {
+                        version: changed.version,
+                        intermediate_roots: changed.intermediate_roots,
+                        segments: changed.segments,
+                    },
+                    2,
+                    policy().bundle.internal(),
+                )
+            } else {
+                compact_bundle::encode_wire(&changed, 2, policy().bundle.internal())
+            }
+            .unwrap();
+            let changed = Artifact::new(&statement, is_axt.then_some(context))
+                .finish(frame, policy())
+                .unwrap();
+            let error = verify(&changed, expected).unwrap_err();
+            if reorder {
+                assert!(matches!(
+                    error,
+                    crate::offline_compact::VerificationError::Verify(
+                        Error::TransferInvariant { details }
+                    ) if details == "shared table indices differ from the exact transcript-derived set"
+                ));
+            } else {
+                // A truncated child's canonical frame must fail before its
+                // cryptographic relation is evaluated.
+                assert!(matches!(
+                    error,
+                    crate::offline_compact::VerificationError::Verify(Error::Encode(_))
+                ));
+            }
+        }
+        eprintln!(
+            "captured_quantity_artifact={variable}; bytes={}; sha256={:x}; bundle_frame_bytes={}; segment_bytes={:?}; independent_verification={elapsed:?}; work={:?}",
+            bytes.len(),
+            Sha256::digest(&bytes),
+            frame.len(),
+            wire.segments.iter().map(Vec::len).collect::<Vec<_>>(),
+            verified.work()
         );
     }
 }

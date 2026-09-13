@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] --lockfile-path <absolute-path> [--apple-only|--android-only] [--require-built-android] [--allow-dirty-source]
+  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] --lockfile-path <absolute-path> [--apple-only|--android-only] [--require-built-android] [--allow-dirty-source] [--local-integration]
 
 Validate the sole first-release mobile SDK surface:
   - exact KAGEMUSHA V1 C/header exports;
@@ -20,6 +20,7 @@ CHECK_APPLE=1
 CHECK_ANDROID=1
 REQUIRE_ANDROID_OUTPUTS="${MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS:-0}"
 ALLOW_DIRTY_SOURCE="${MOBILE_SDK_ALLOW_DIRTY_SOURCE:-0}"
+LOCAL_INTEGRATION=0
 
 if [[ -n "${MOBILE_SDK_SKIP_BINARY_INSPECTION+x}" ]]; then
   echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_SKIP_BINARY_INSPECTION is retired; binary inspection is mandatory" >&2
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --root=*) ROOT_ARG="${1#*=}" ;;
     --apple-only) CHECK_APPLE=1; CHECK_ANDROID=0 ;;
+    --local-integration) LOCAL_INTEGRATION=1 ;;
     --android-only) CHECK_APPLE=0; CHECK_ANDROID=1 ;;
     --require-built-android) REQUIRE_ANDROID_OUTPUTS=1 ;;
     --allow-dirty-source) ALLOW_DIRTY_SOURCE=1 ;;
@@ -76,6 +78,13 @@ fi
   exit 64
 }
 
+if [[ "$LOCAL_INTEGRATION" == "1" ]] && \
+    [[ "$CHECK_APPLE" != "1" || "$CHECK_ANDROID" != "0" \
+      || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-0}" == "1" \
+      || -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+  echo "[mobile-sdk-artifacts] local integration requires --apple-only and cannot enter a release corridor" >&2
+  exit 64
+fi
 if [[ -z "$ROOT_ARG" ]]; then
   ROOT_ARG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
@@ -164,6 +173,9 @@ if [[ -z "$CHECK_USER_HOME_DIR" ]]; then
     'import pathlib; print(pathlib.Path.home().resolve(strict=True))')"
 fi
 CHECK_TMPDIR="/tmp"
+if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+  CHECK_TMPDIR="$ROOT_DIR/target/norito-bridge-local/build"
+fi
 for trusted_path in "$CHECK_PYTHON_BINARY" "$CHECK_USER_HOME_DIR" "$CHECK_TMPDIR"; do
   if [[ "$trusted_path" != /* ]]; then
     echo "[mobile-sdk-artifacts] ERROR: verifier runtime path is not absolute: $trusted_path" >&2
@@ -186,6 +198,12 @@ run_isolated_checker_python() {
     LC_ALL=C.UTF-8 \
     "$CHECK_PYTHON_BINARY" -I -S -B "$@"
 }
+
+if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+  CHECK_TMPDIR="$(run_isolated_checker_python \
+    "$ROOT_DIR/scripts/norito_bridge_local_integration.py" --root "$ROOT_DIR" \
+    --path "$CHECK_TMPDIR" --role build)" || exit 69
+fi
 
 SOURCE_SEAL_TOOLS_INITIALIZED=0
 SOURCE_SEAL_CARGO_BINARY=""
@@ -240,6 +258,11 @@ initialize_source_seal_tools() {
     echo "[mobile-sdk-artifacts] ERROR: source authentication requires an explicit CARGO_TARGET_DIR" >&2
     return 1
   fi
+  if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+    SOURCE_SEAL_CARGO_TARGET_DIR="$(run_isolated_checker_python \
+      "$ROOT_DIR/scripts/norito_bridge_local_integration.py" --root "$ROOT_DIR" \
+      --path "$CARGO_TARGET_DIR" --role cargo)" || return 1
+  else
   if ! SOURCE_SEAL_CARGO_TARGET_DIR="$(run_isolated_checker_python - \
       "$CARGO_TARGET_DIR" "$ROOT_DIR" <<'PY'
 import os
@@ -270,6 +293,7 @@ PY
   )"; then
     echo "[mobile-sdk-artifacts] ERROR: CARGO_TARGET_DIR must be a writable, non-symbolic canonical directory outside the Iroha source tree" >&2
     return 1
+  fi
   fi
   SOURCE_SEAL_CARGO_BINARY="$(
     env -i \
@@ -420,6 +444,17 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_device_capabilities_v1
   connect_norito_kagemusha_device_execute_v1
   connect_norito_kagemusha_device_command_response_v1_verify
+  connect_norito_kagemusha_reserve_finality_hint_v1
+  connect_norito_kagemusha_reserve_finality_verify_v1
+  connect_norito_kagemusha_top_up_signed_request_validate_v1
+)
+
+RESERVE_FINALITY_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeHint
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeVerify
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate
 )
 
 REQUIRED_PROTOCOL_C_SYMBOLS=(
@@ -472,6 +507,13 @@ check_binary_symbols() {
       fail "$label is missing $symbol"
     fi
   done
+  if [[ "$nm_mode" == "elf" ]]; then
+    for symbol in "${RESERVE_FINALITY_JNI_SYMBOLS[@]}"; do
+      if ! grep -Fxq -- "$symbol" <<<"$symbols"; then
+        fail "$label is missing $symbol"
+      fi
+    done
+  fi
   for symbol in "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"; do
     if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
       fail "$label is missing $symbol"
@@ -522,6 +564,9 @@ check_apple() {
       --swift-loader "$loader"
       --verify-repository-provenance
     )
+    if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+      validation+=(--local-integration)
+    fi
     if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
       validation+=(--allow-dirty-source)
     fi

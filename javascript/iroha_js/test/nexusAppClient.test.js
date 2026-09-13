@@ -1307,7 +1307,7 @@ test("NexusAppClient independently verifies finalized bytes and hash aliases", a
   const firstSignatureByteOffset = signaturePrefixOffset + 1;
   alternateSignedTransaction[firstSignatureByteOffset] ^= 0xff;
   const alternateHash = browserSignedTransactionHashHex(
-    alternateSignedTransaction,
+    alternateSignedTransaction, 753,
   );
   const revoked = Proxy.revocable({}, {});
   revoked.revoke();

@@ -34,7 +34,7 @@ function demoAccountId() {
 }
 
 const ACCOUNT_ID = demoAccountId();
-const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xa5)));
+const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xa5)), 753);
 const APPLICATION_AUTH = Object.freeze({ accountId: ACCOUNT_ID, privateKey: Buffer.alloc(32, 0x5a) });
 const RESOLVER_PUBLIC_KEY =
   "ed25519:ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";

@@ -14,7 +14,7 @@ const FIXTURE_ACCOUNT_ID = "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄo
 const FIXTURE_RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
-  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)), 753,
 );
 
 function createResponse({ status, jsonData = {}, headers, textBody }) {

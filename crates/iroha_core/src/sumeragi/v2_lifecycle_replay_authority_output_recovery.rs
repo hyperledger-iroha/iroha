@@ -13,6 +13,52 @@ struct RecoveredInvalidBodySourceV1 {
 }
 
 impl LifecycleReplayAuthorityV1 {
+    /// Describe only public source coordinates for an explicitly selected incident fixture.
+    #[cfg(test)]
+    pub(super) fn public_incident_metadata_for_test(&self) -> String {
+        let proposal_metadata = |kind, proposal: &wire::Proposal| {
+            format!(
+                "source={kind} round={:?} parent={:?} block={} payload={} manifest={}",
+                proposal.round,
+                proposal.subject.parent_block_hash,
+                proposal.subject.block_hash,
+                proposal.subject.payload_hash,
+                HashOf::new(&proposal.manifest),
+            )
+        };
+        let kind = match &self.source {
+            LifecycleReplaySourceV1::Wal(source) => match &source.action {
+                WalReplayActionV1::SignProposal(proposal) => {
+                    return proposal_metadata("Wal/SignProposal", proposal);
+                }
+                WalReplayActionV1::SignVote(_) => "Wal/SignVote",
+                WalReplayActionV1::SignTimeoutVote(_) => "Wal/SignTimeoutVote",
+                WalReplayActionV1::ApplyDecision(_) => "Wal/ApplyDecision",
+                WalReplayActionV1::EnterView { .. } => "Wal/EnterView",
+                WalReplayActionV1::FetchDecision { .. } => "Wal/FetchDecision",
+            },
+            LifecycleReplaySourceV1::ConsensusBroadcast(message) => match &message.payload {
+                wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                    return proposal_metadata("ConsensusBroadcast/Proposal", proposal);
+                }
+                wire::ConsensusMessageV2Payload::Vote(_) => "ConsensusBroadcast/Vote",
+                wire::ConsensusMessageV2Payload::QuorumCertificate(_) => {
+                    "ConsensusBroadcast/QuorumCertificate"
+                }
+                wire::ConsensusMessageV2Payload::TimeoutVote(_) => "ConsensusBroadcast/TimeoutVote",
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => {
+                    "ConsensusBroadcast/TimeoutCertificate"
+                }
+                _ => "ConsensusBroadcast/Other",
+            },
+            LifecycleReplaySourceV1::BodyPipeline(_) => "BodyPipeline",
+            LifecycleReplaySourceV1::Equivocation(_) => "Equivocation",
+            LifecycleReplaySourceV1::InvalidCertifiedBody(_) => "InvalidCertifiedBody",
+            LifecycleReplaySourceV1::CertifiedServeStorage(_) => "CertifiedServeStorage",
+        };
+        format!("source={kind}")
+    }
+
     /// Compare only the closed origin relation; cryptography and the actual
     /// durable outcome remain mandatory in the subsequent open transaction.
     pub(super) fn matches_invalid_body_validate_origin(
@@ -54,6 +100,7 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredLifecycleOutputV1 {
     owner: OwnerId,
     ordinal: u128,
     invalid_body: Option<RecoveredInvalidBodySourceV1>,
+    proposal_cancellation: Option<crate::sumeragi::v2::LeaderWireRecoveryAuthority>,
 }
 
 impl core::fmt::Debug for AuthenticatedRecoveredLifecycleOutputV1 {
@@ -68,6 +115,19 @@ impl core::fmt::Debug for AuthenticatedRecoveredLifecycleOutputV1 {
 }
 
 impl AuthenticatedRecoveredLifecycleOutputV1 {
+    /// Derive the sole allowed terminal transition from this carrier's sealed disposition.
+    pub(super) const fn terminal_outcome(&self) -> TerminalOutcome {
+        if self.proposal_cancellation.is_some() {
+            TerminalOutcome::Cancelled
+        } else {
+            TerminalOutcome::Advanced
+        }
+    }
+
+    /// Obsolete Proposal cancellation has no external output operation.
+    pub(super) const fn requires_output_service(&self) -> bool {
+        self.proposal_cancellation.is_none()
+    }
     /// Borrow the authenticated output while its exact durable owner stays sealed.
     pub(in crate::sumeragi) const fn effect(&self) -> &AdapterEffect {
         &self.effect
@@ -121,10 +181,13 @@ impl AuthenticatedRecoveredLifecycleOutputV1 {
         }
         match &self.effect {
             AdapterEffect::Broadcast(message) => {
-                !matches!(
-                    &message.payload,
-                    wire::ConsensusMessageV2Payload::Proposal(_)
-                ) && verified.verify_consensus_message(message).is_ok()
+                let disposition_is_exact = match &message.payload {
+                    wire::ConsensusMessageV2Payload::Proposal(proposal) => self
+                        .proposal_cancellation
+                        .is_some_and(|frontier| frontier.proves_obsolete_proposal(proposal.round)),
+                    _ => self.proposal_cancellation.is_none(),
+                };
+                disposition_is_exact && verified.verify_consensus_message(message).is_ok()
             }
             AdapterEffect::ReportEquivocation { evidence } => verified
                 .authenticate_recovered_equivocation(&evidence.to_wire())
@@ -266,6 +329,11 @@ pub(super) fn authenticate_durable_lifecycle_output(
     continuation: super::schema::DurableContinuation,
     authority: &LifecycleReplayAuthorityV1,
     invalid_parent: Option<RecoveredInvalidBodyValidateOriginV1<'_>>,
+    obsolete_proposal: Option<(
+        &LifecycleReplayAuthorityV1,
+        DurablePayloadReference,
+        crate::sumeragi::v2::LeaderWireRecoveryAuthority,
+    )>,
 ) -> Option<AuthenticatedRecoveredLifecycleOutputV1> {
     if terminal.is_some()
         || payload != DurablePayloadReference::None
@@ -277,22 +345,39 @@ pub(super) fn authenticate_durable_lifecycle_output(
         return None;
     }
 
+    let mut proposal_cancellation = None;
     let (effect, invalid_body) = match &authority.source {
         LifecycleReplaySourceV1::ConsensusBroadcast(message)
-            if work_class == LifecycleWorkClass::Broadcast
-                && invalid_parent.is_none()
-                && !matches!(
-                    &message.payload,
-                    wire::ConsensusMessageV2Payload::Proposal(_)
-                ) =>
+            if work_class == LifecycleWorkClass::Broadcast && invalid_parent.is_none() =>
         {
             verified.verify_consensus_message(message).ok()?;
+            match &message.payload {
+                wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                    let (parent, parent_payload, frontier) = obsolete_proposal?;
+                    if !frontier.proves_obsolete_proposal(proposal.round)
+                        || signed_broadcast_continuation_is_exact(
+                            DurableContinuationEdge::SignProposalToBroadcast,
+                            parent,
+                            parent_payload,
+                            authority,
+                            payload,
+                        ) != Some(true)
+                    {
+                        return None;
+                    }
+                    proposal_cancellation = Some(frontier);
+                }
+                _ if obsolete_proposal.is_some() => return None,
+                _ => {}
+            }
             let effect = AdapterEffect::Broadcast(message.clone());
             (exact_signed_broadcast_authority(&effect).as_ref() == Some(authority))
                 .then_some((effect, None))?
         }
         LifecycleReplaySourceV1::Equivocation(persisted)
-            if work_class == LifecycleWorkClass::EquivocationReport && invalid_parent.is_none() =>
+            if work_class == LifecycleWorkClass::EquivocationReport
+                && invalid_parent.is_none()
+                && obsolete_proposal.is_none() =>
         {
             let evidence = verified
                 .authenticate_recovered_equivocation(persisted)
@@ -302,7 +387,8 @@ pub(super) fn authenticate_durable_lifecycle_output(
                 .then_some((effect, None))?
         }
         LifecycleReplaySourceV1::InvalidCertifiedBody(source)
-            if work_class == LifecycleWorkClass::InvalidBodyReport =>
+            if work_class == LifecycleWorkClass::InvalidBodyReport
+                && obsolete_proposal.is_none() =>
         {
             let origin = invalid_parent?;
             if !source.cryptographically_authenticates(verified)
@@ -374,5 +460,6 @@ pub(super) fn authenticate_durable_lifecycle_output(
             owner,
             ordinal,
             invalid_body,
+            proposal_cancellation,
         })
 }

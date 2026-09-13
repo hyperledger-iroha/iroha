@@ -1065,6 +1065,38 @@ impl ProductionLeaderWireLaunchAuthorityV1 {
     }
 }
 impl ProductionLifecycleAdapterStartupV1 {
+    /// Retain the actual replayed WAL frontier for same-row obsolete output cancellation.
+    /// This comparison capability never reconstructs a runtime producer or permits fanout.
+    pub(in crate::sumeragi) fn recovered_lifecycle_output_frontier(
+        &self,
+        verified: &VerifiedHeightContext,
+    ) -> Result<Option<LeaderWireRecoveryAuthority>, &'static str> {
+        let adapter = match &self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                leader_wire_launch_prepared,
+                ..
+            } if effects.is_empty() && !*leader_wire_launch_prepared => adapter,
+            #[cfg(test)]
+            ProductionLifecycleAdapterStartupStateV1::Fixture => return Ok(None),
+            _ => return Err("cold output frontier requires pristine recovered adapter startup"),
+        };
+        if &adapter.wire_context != verified.context()
+            || adapter.proofs_of_possession.as_slice() != verified.proofs_of_possession()
+            || adapter.current_tag().height() != verified.context().height
+        {
+            return Err("cold output frontier changed its verified context");
+        }
+        adapter
+            .authenticate_recovered_wal_frontier()
+            .map_err(|_| "cold output frontier changed its authenticated WAL")?;
+        adapter
+            .leader_wire_recovery_authority()
+            .map(Some)
+            .map_err(|_| "cold output frontier lost its durable reducer authority")
+    }
+
     fn recovered(adapter: SumeragiV2Adapter, effects: Vec<AdapterEffect>) -> Self {
         Self {
             state: ProductionLifecycleAdapterStartupStateV1::Recovered {
@@ -18957,6 +18989,8 @@ enum WalRecordV2 {
     InstallTimeout(wire::TimeoutCertificate),
     Decision(wire::QuorumCertificate),
 }
+#[cfg(test)]
+include!("v2_retained_incident_diagnostic.rs");
 #[derive(Clone, Default)]
 struct WireRegistry {
     wire_context: Option<wire::HeightContext>,

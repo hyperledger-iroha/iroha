@@ -190,6 +190,42 @@ impl LeaderWireRecoveryAuthority {
     pub(crate) const fn consumer_tag(self) -> reducer::EventTag {
         self.consumer_tag
     }
+    /// Prove that an installed durable timeout has closed this older Proposal view.
+    /// A bare current tag, TimeoutIntent, or future/current Proposal is insufficient.
+    pub(in crate::sumeragi) fn proves_obsolete_proposal(self, round: wire::ConsensusRound) -> bool {
+        self.context_id == round.context_id
+            && self.height == round.height
+            && self.consumer_tag.height() == self.height
+            && self.wal_id.get() != 0
+            && self
+                .installed_timeout_view
+                .and_then(|view| view.checked_add(1))
+                == Some(self.consumer_tag.view())
+            && round.view < self.consumer_tag.view()
+    }
+    /// Authenticate a timeout for isolated cancellation tests without exposing production minting.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn from_verified_installed_timeout_for_test(
+        verified: &super::VerifiedHeightContext,
+        certificate: &wire::TimeoutCertificate,
+    ) -> Option<Self> {
+        verified
+            .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate.clone()),
+            ))
+            .ok()?;
+        let view = certificate.round.view.checked_add(1)?;
+        Some(Self {
+            wal_id: reducer::PersistenceId::new(1),
+            ..Self::from_replayed_adapter(
+                verified.context().id(),
+                verified.context().height,
+                [0; 32],
+                view,
+                false,
+            )
+        })
+    }
     /// Verify the exact view and body owner already published from the WAL.
     pub(crate) fn matches_entered_view(
         self,

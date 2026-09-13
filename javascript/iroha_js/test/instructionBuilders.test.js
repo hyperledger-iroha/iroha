@@ -86,10 +86,10 @@ import {
   noritoRequiredMethods,
 } from "./helpers/native.js";
 import {
-  assertNativeAndPureInstructionParity,
+  assertNativeInstructionAdapterRoundTrip,
   normalizedHashHex,
   toByteArray,
-  withPureJsInstructionCodec,
+  withNativeInstructionCodec,
 } from "./helpers/instructionCodec.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
@@ -150,7 +150,7 @@ function loadInstructionFixture(name) {
 
 function decodeFixtureInstruction(name) {
   const fixture = loadInstructionFixture(name);
-  const decoded = noritoDecodeInstruction(Buffer.from(fixture.instruction, "base64"));
+  const decoded = noritoDecodeInstruction(Buffer.from(fixture.instruction, "base64"), 753);
   return { fixture, decoded: canonicalizeClone(decoded) };
 }
 import {
@@ -233,16 +233,16 @@ function canonicalizeAccountIdUsingNorito(accountId) {
         metadata: {},
       },
     },
-  });
-  const decoded = noritoDecodeInstruction(encoded);
+  }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   return canonicalizeValue(decoded).Register.Account.id;
 }
 
 function canonicalizeAssetIdUsingNorito(assetId) {
   const encoded = noritoEncodeInstruction({
     Mint: { Asset: { object: "1", destination: assetId } },
-  });
-  const decoded = noritoDecodeInstruction(encoded);
+  }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   return canonicalizeValue(decoded).Mint.Asset.destination;
 }
 
@@ -716,7 +716,7 @@ test("buildBurnAssetInstruction matches canonical numeric Norito fixture", () =>
   const { destination, object } = decoded.Burn.Asset;
   const instruction = buildBurnAssetInstruction({ assetId: destination, quantity: object });
   assert.deepEqual(instruction, decoded);
-  const encoded = noritoEncodeInstruction(instruction);
+  const encoded = noritoEncodeInstruction(instruction, 753);
   assert.equal(
     encoded.toString("hex"),
     Buffer.from(fixture.instruction, "base64").toString("hex"),
@@ -729,7 +729,7 @@ test("buildBurnAssetInstruction matches canonical fractional Norito fixture", ()
   const { destination, object } = decoded.Burn.Asset;
   const instruction = buildBurnAssetInstruction({ assetId: destination, quantity: object });
   assert.deepEqual(instruction, decoded);
-  const encoded = noritoEncodeInstruction(instruction);
+  const encoded = noritoEncodeInstruction(instruction, 753);
   assert.equal(
     encoded.toString("hex"),
     Buffer.from(fixture.instruction, "base64").toString("hex"),
@@ -871,26 +871,26 @@ test("NftId implicit universal and Name rules match native V1", () => {
     nftId: "dragon$wonderland.universal",
     destinationAccountId: ACCOUNT_ID,
   });
-  const pureImplicit = Buffer.from(
-    withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(implicit)),
+  const adapterImplicit = Buffer.from(
+    withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(implicit, 753)),
   );
   const nativeImplicit = Buffer.from(
-    nativeBinding.noritoEncodeInstruction(JSON.stringify(implicit)),
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(implicit), 753),
   );
-  const pureExplicit = Buffer.from(
-    withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(explicit)),
+  const adapterExplicit = Buffer.from(
+    withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(explicit, 753)),
   );
-  assert.deepEqual(pureImplicit, nativeImplicit);
-  assert.deepEqual(pureImplicit, pureExplicit);
+  assert.deepEqual(adapterImplicit, nativeImplicit);
+  assert.deepEqual(adapterImplicit, adapterExplicit);
   assert.deepEqual(
-    JSON.parse(nativeBinding.noritoDecodeInstruction(pureImplicit)),
+    JSON.parse(nativeBinding.noritoDecodeInstruction(adapterImplicit, 753)),
     explicit,
   );
   assert.deepEqual(
-    withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(nativeImplicit)),
+    withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(nativeImplicit, 753)),
     explicit,
   );
 
@@ -906,19 +906,19 @@ test("NftId implicit universal and Name rules match native V1", () => {
   });
   assert.deepEqual(
     Buffer.from(
-      withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-        noritoEncodeInstruction(decomposed)),
+      withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+        noritoEncodeInstruction(decomposed, 753)),
     ),
-    Buffer.from(nativeBinding.noritoEncodeInstruction(JSON.stringify(decomposed))),
+    Buffer.from(nativeBinding.noritoEncodeInstruction(JSON.stringify(decomposed), 753)),
   );
   assert.deepEqual(
     Buffer.from(
-      withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-        noritoEncodeInstruction(decomposed)),
+      withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+        noritoEncodeInstruction(decomposed, 753)),
     ),
     Buffer.from(
-      withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-        noritoEncodeInstruction(composed)),
+      withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+        noritoEncodeInstruction(composed, 753)),
     ),
   );
 
@@ -929,17 +929,17 @@ test("NftId implicit universal and Name rules match native V1", () => {
   });
   assert.throws(
     () =>
-      withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-        noritoEncodeInstruction(invalid)),
+      withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+        noritoEncodeInstruction(invalid, 753)),
     /reserved Name character/u,
   );
   assert.throws(
-    () => nativeBinding.noritoEncodeInstruction(JSON.stringify(invalid)),
+    () => nativeBinding.noritoEncodeInstruction(JSON.stringify(invalid), 753),
     /parse|name|Nft/u,
   );
 });
 
-test("nominal DomainId pure-JS frames byte-match native V1", () => {
+test("nominal DomainId native-backed frames byte-match native V1", () => {
   const instructions = [
     [
       "Register.Domain",
@@ -971,7 +971,7 @@ test("nominal DomainId pure-JS frames byte-match native V1", () => {
     ],
   ];
   for (const [name, instruction] of instructions) {
-    const encoded = assertNativeAndPureInstructionParity(instruction, name);
+    const encoded = assertNativeInstructionAdapterRoundTrip(instruction, name);
     assert.equal(encoded[39], 0x02, `${name} must use compact Norito framing`);
   }
 });
@@ -1015,7 +1015,7 @@ test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
       },
     },
   });
-  const encoded = assertNativeAndPureInstructionParity(
+  const encoded = assertNativeInstructionAdapterRoundTrip(
     instruction,
     "RegisterRwa",
   );
@@ -1078,15 +1078,15 @@ test("rwa scalar instruction builders cover lifecycle operations", () => {
   assert.deepEqual(encodeAndDecode(freeze), {
     FreezeRwa: { rwa: RWA_ID },
   });
-  const freezeBytes = assertNativeAndPureInstructionParity(freeze, "FreezeRwa");
+  const freezeBytes = assertNativeInstructionAdapterRoundTrip(freeze, "FreezeRwa");
   assert.equal(freezeBytes[39], 0x02, "FreezeRwa must use compact Norito framing");
   const evenHashRwaId = RWA_ID.replace(/ef\$/u, "ee$");
   assert.throws(
     () =>
-      withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
+      withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
         noritoEncodeInstruction({
           FreezeRwa: { rwa: evenHashRwaId },
-        }),
+        }, 753),
       ),
     /marker bit/u,
   );
@@ -1095,7 +1095,7 @@ test("rwa scalar instruction builders cover lifecycle operations", () => {
       nativeBinding.noritoEncodeInstruction(
         JSON.stringify({
           FreezeRwa: { rwa: evenHashRwaId },
-        }),
+        }), 753,
       ),
     /hash|parse|marker/u,
   );
@@ -1443,7 +1443,7 @@ baseTest("Kaigi relay builders enforce the V1 hop and decoded-key bounds", () =>
   );
 });
 
-baseTest("Kaigi instruction envelopes use the exact V1 registry wire IDs", () => {
+test("Kaigi instruction envelopes use the exact V1 registry wire IDs", () => {
   const callId = "wonderland.sora:wire-id";
   const cases = [
     [
@@ -1490,17 +1490,17 @@ baseTest("Kaigi instruction envelopes use the exact V1 registry wire IDs", () =>
     ],
   ];
 
-  withPureJsInstructionCodec(({
+  withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
     for (const [name, instruction] of cases) {
-      const encoded = noritoEncodeInstruction(instruction);
+      const encoded = noritoEncodeInstruction(instruction, 753);
       assert.equal(
         readInstructionEnvelopeWireId(encoded, `Kaigi.${name}`),
         `iroha.instruction.v1::kaigi::${name}`,
       );
-      assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+      assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
     }
   });
 });
@@ -1616,7 +1616,7 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
-  const encoded = assertNativeAndPureInstructionParity(
+  const encoded = assertNativeInstructionAdapterRoundTrip(
     instruction,
     "Kaigi.CreateKaigi",
   );
@@ -1633,8 +1633,8 @@ test("noritoDecodeInstruction decodes Kaigi manifests", () => {
       hops: kaigiRelayHops(),
     },
   });
-  const encoded = noritoEncodeInstruction(instruction);
-  const decoded = noritoDecodeInstruction(encoded);
+  const encoded = noritoEncodeInstruction(instruction, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(canonicalizeClone(decoded), canonicalizeClone(instruction));
 });
 
@@ -1742,21 +1742,21 @@ test("buildLeaveKaigiInstruction accepts minimal payload", () => {
   assert.deepEqual(encodeAndDecode(instruction), expected);
 });
 
-baseTest("final Kaigi V1 instructions match the native scalar wire fixture", () => {
+test("final Kaigi V1 instructions match the native scalar wire fixture", () => {
   const fixture = JSON.parse(fs.readFileSync(new URL(
     "./fixtures/kaigi_authorization_scalar_wire_v1.json", import.meta.url,
   ), "utf8"));
   assert.equal(fixture.length, 5);
-  withPureJsInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
+  withNativeInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
     for (const { instruction, wire_base64: wire } of fixture) {
       const bytes = Buffer.from(wire, "base64");
-      assert.deepEqual(encode(instruction), bytes);
-      assert.deepEqual(decode(bytes), instruction);
+      assert.deepEqual(encode(instruction, 753), bytes);
+      assert.deepEqual(decode(bytes, 753), instruction);
     }
   });
 });
 
-baseTest("final Kaigi V1 scalar codec preserves every bit and rejects field mutations", () => {
+test("final Kaigi V1 scalar codec preserves every bit and rejects field mutations", () => {
   const modulus = Buffer.from("01000000ed302d991bf94c09fc98462200000000000000000000000000000040", "hex");
   const maximum = Buffer.from(modulus);
   maximum[0] -= 1;
@@ -1772,9 +1772,9 @@ baseTest("final Kaigi V1 scalar codec preserves every bit and rejects field muta
     buildRecordKaigiUsageInstruction({ callId: "wonderland.sora:scalars", durationMs: 1,
       usageCommitment: maximum }),
   ];
-  withPureJsInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
+  withNativeInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
     for (const instruction of cases) {
-      assert.deepEqual(decode(encode(instruction)), instruction);
+      assert.deepEqual(decode(encode(instruction), 753), instruction);
     }
     for (const invalid of [modulus, Buffer.alloc(32, 0xff), Buffer.alloc(31),
       Buffer.alloc(33), "12".repeat(32), new Array(32), Array(32).fill(256)]) {
@@ -1786,12 +1786,12 @@ baseTest("final Kaigi V1 scalar codec preserves every bit and rejects field muta
         durationMs: 1, usageCommitment: invalid }));
       const malformed = structuredClone(cases[0]);
       malformed.Kaigi.CreateKaigi.commitment.commitment = invalid;
-      assert.throws(() => encode(malformed));
+      assert.throws(() => encode(malformed, 753));
     }
     for (const field of ["alias_tag", "aliasTag", "unknown"]) {
       const malformed = structuredClone(cases[0]);
       malformed.Kaigi.CreateKaigi.commitment[field] = null;
-      assert.throws(() => encode(malformed), /requires only commitment/u);
+      assert.throws(() => encode(malformed, 753), /requires only commitment/u);
     }
     for (const field of ["issued_at_ms", "issuedAtMs", "issuedAt", "hash"]) {
       assert.throws(() => buildJoinKaigiInstruction({ callId: "wonderland.sora:scalars",
@@ -1799,12 +1799,12 @@ baseTest("final Kaigi V1 scalar codec preserves every bit and rejects field muta
       /requires only digest/u);
       const malformed = structuredClone(cases[0]);
       malformed.Kaigi.CreateKaigi.nullifier[field] = 0;
-      assert.throws(() => encode(malformed), /requires only digest/u);
+      assert.throws(() => encode(malformed, 753), /requires only digest/u);
     }
   });
 });
 
-baseTest("final Kaigi V1 leave carries exact authorization artifacts", () => {
+test("final Kaigi V1 leave carries exact authorization artifacts", () => {
   const commitment = Buffer.alloc(32, 0x12);
   const nullifier = Buffer.alloc(32, 0x24);
   const instruction = buildLeaveKaigiInstruction({
@@ -1817,8 +1817,8 @@ baseTest("final Kaigi V1 leave carries exact authorization artifacts", () => {
   });
   assert.deepEqual(instruction.Kaigi.LeaveKaigi.commitment, { commitment: Array.from(commitment) });
   assert.deepEqual(instruction.Kaigi.LeaveKaigi.nullifier, { digest: Array.from(nullifier) });
-  withPureJsInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
-    assert.deepEqual(decode(encode(instruction)), instruction);
+  withNativeInstructionCodec(({ noritoEncodeInstruction: encode, noritoDecodeInstruction: decode }) => {
+    assert.deepEqual(decode(encode(instruction), 753), instruction);
   });
 });
 
@@ -2064,7 +2064,7 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
-  assertNativeAndPureInstructionParity(
+  assertNativeInstructionAdapterRoundTrip(
     instruction,
     "Kaigi.RegisterKaigiRelay",
   );
@@ -2083,7 +2083,7 @@ test("buildUnregisterKaigiRelayInstruction encodes the canonical relay id", () =
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
-  assertNativeAndPureInstructionParity(
+  assertNativeInstructionAdapterRoundTrip(
     instruction,
     "Kaigi.UnregisterKaigiRelay",
   );
@@ -2113,7 +2113,7 @@ baseTest("RegisterKaigiRelay requires a non-zero bandwidth class", () => {
   }
 });
 
-baseTest("RegisterKaigiRelay encodes its HPKE key as a Norito Vec<u8>", () => {
+test("RegisterKaigiRelay encodes its HPKE key as a Norito Vec<u8>", () => {
   const hpkePublicKey = Buffer.alloc(32, 0xaa);
   const instruction = buildRegisterKaigiRelayInstruction({
     relayId: RELAY_ACCOUNT_ID,
@@ -2121,8 +2121,8 @@ baseTest("RegisterKaigiRelay encodes its HPKE key as a Norito Vec<u8>", () => {
     bandwidthClass: 7,
   });
   const encoded = Buffer.from(
-    withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(instruction)),
+    withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(instruction, 753)),
   );
   const keyOffset = encoded.indexOf(hpkePublicKey);
   assert.ok(keyOffset >= 8, "encoded HPKE key must have a Vec length prefix");
@@ -2130,8 +2130,8 @@ baseTest("RegisterKaigiRelay encodes its HPKE key as a Norito Vec<u8>", () => {
   expectedLength.writeBigUInt64LE(BigInt(hpkePublicKey.length));
   assert.deepEqual(encoded.subarray(keyOffset - 8, keyOffset), expectedLength);
   assert.deepEqual(
-    withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(encoded)),
+    withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(encoded, 753)),
     instruction,
   );
 });
@@ -2160,7 +2160,7 @@ test("buildReportKaigiRelayHealthInstruction normalizes relay feedback", () => {
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
-  assertNativeAndPureInstructionParity(
+  assertNativeInstructionAdapterRoundTrip(
     instruction,
     "Kaigi.ReportKaigiRelayHealth",
   );
@@ -2240,7 +2240,7 @@ baseTest("ReportKaigiRelayHealth validates status, timestamp, and notes", () => 
   }
 });
 
-baseTest("ReportKaigiRelayHealth pure-JS codec preserves canonical field order", () => {
+test("ReportKaigiRelayHealth native-backed codec preserves canonical field order", () => {
   const instruction = buildReportKaigiRelayHealthInstruction({
     callId: "wonderland.sora:weekly-sync",
     relayId: RELAY_ACCOUNT_ID,
@@ -2248,8 +2248,8 @@ baseTest("ReportKaigiRelayHealth pure-JS codec preserves canonical field order",
     reportedAtMs: 1701123456789,
     notes: "latency spike observed",
   });
-  withPureJsInstructionCodec(({ noritoEncodeInstruction }) => {
-    const encoded = noritoEncodeInstruction(instruction);
+  withNativeInstructionCodec(({ noritoEncodeInstruction }) => {
+    const encoded = noritoEncodeInstruction(instruction, 753);
     const outer = validateNoritoFrame(encoded);
     assert.equal(outer.flags, 0x02);
     const wire = readCompactFieldPayload(
@@ -2310,7 +2310,7 @@ baseTest("ReportKaigiRelayHealth pure-JS codec preserves canonical field order",
     assert.deepEqual(status.payload, Buffer.from([1, 0, 0, 0]));
     assert.equal(reportedAt.payload.readBigUInt64LE(0), 1701123456789n);
     assert.equal(notes.payload[0], 1);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
   });
 });
 
@@ -3043,7 +3043,7 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
   assert.equal(withoutReason.RemoveSmartContractBytes.reason, undefined);
 });
 
-baseTest("every pure-JS instruction binding matches the Rust registry and inner type", () => {
+baseTest("every native-backed instruction binding matches the Rust registry and inner type", () => {
   const rustBindings = readRustInstructionRegistryBindings();
   const jsBindings = _createNoritoInstructionApi(
     Object.freeze({}),
@@ -3081,7 +3081,7 @@ baseTest("every pure-JS instruction binding matches the Rust registry and inner 
   }
 });
 
-baseTest("smart-contract instructions bind canonical outer ids to Rust payload schemas", () => {
+test("smart-contract instructions bind canonical outer ids to Rust payload schemas", () => {
   const contractAddress =
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
   const hash = `${"aa".repeat(31)}ab`;
@@ -3198,10 +3198,10 @@ baseTest("smart-contract instructions bind canonical outer ids to Rust payload s
     ],
   ];
 
-  withPureJsInstructionCodec(({ noritoEncodeInstruction }) => {
+  withNativeInstructionCodec(({ noritoEncodeInstruction }) => {
     for (const [name, instruction] of cases) {
       const identity = readInstructionEnvelopeIdentity(
-        noritoEncodeInstruction(instruction),
+        noritoEncodeInstruction(instruction, 753),
         name,
       );
       assert.equal(
@@ -3218,7 +3218,7 @@ baseTest("smart-contract instructions bind canonical outer ids to Rust payload s
   });
 });
 
-baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload", () => {
+test("buildProposeDeployContractInstruction normalizes the typed V1 payload", () => {
   const instruction = buildProposeDeployContractInstruction({
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: `blake2b32:0x${"AA".repeat(32)}`,
@@ -3234,12 +3234,12 @@ baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload"
     },
   };
   assert.deepEqual(instruction, expected);
-  const decoded = withPureJsInstructionCodec((codec) =>
+  const decoded = withNativeInstructionCodec((codec) =>
     encodeAndDecode(instruction, codec));
   assert.deepEqual(decoded, expected);
-  withPureJsInstructionCodec(({ noritoEncodeInstruction }) => {
+  withNativeInstructionCodec(({ noritoEncodeInstruction }) => {
     const identity = readInstructionEnvelopeIdentity(
-      noritoEncodeInstruction(instruction),
+      noritoEncodeInstruction(instruction, 753),
       "ProposeDeployContract",
     );
     assert.equal(
@@ -3255,7 +3255,7 @@ baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload"
   });
 });
 
-baseTest("buildProposeDeployContractInstruction encodes optional manifest provenance", () => {
+test("buildProposeDeployContractInstruction encodes optional manifest provenance", () => {
   const instruction = buildProposeDeployContractInstruction({
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
@@ -3271,7 +3271,7 @@ baseTest("buildProposeDeployContractInstruction encodes optional manifest proven
   });
   assert.equal(Object.hasOwn(instruction.ProposeDeployContract, "limits"), false);
 
-  const decoded = withPureJsInstructionCodec((codec) =>
+  const decoded = withNativeInstructionCodec((codec) =>
     encodeAndDecode(instruction, codec));
   assert.deepEqual(
     decoded.ProposeDeployContract.manifest_provenance,
@@ -3422,7 +3422,7 @@ baseTest("governance proposal builder rejects every private-key alias recursivel
   }
 });
 
-baseTest("buildProposeDeployContractInstruction rejects retired lifecycle controls", () => {
+test("buildProposeDeployContractInstruction rejects retired lifecycle controls", () => {
   const base = {
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
@@ -3452,7 +3452,7 @@ baseTest("buildProposeDeployContractInstruction rejects retired lifecycle contro
             abi_version: 1,
             [field]: null,
           },
-        }),
+        }, 753),
       new RegExp(field, "u"),
     );
   }
@@ -3526,7 +3526,7 @@ baseTest("buildCastZkBallotInstruction has a closed camel-case request shape", (
   }
 });
 
-baseTest("buildCastZkBallotInstruction canonicalizes all six scalar inputs losslessly", () => {
+test("buildCastZkBallotInstruction canonicalizes all six scalar inputs losslessly", () => {
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-3",
     proof: Buffer.from([0x04]),
@@ -3543,7 +3543,7 @@ baseTest("buildCastZkBallotInstruction canonicalizes all six scalar inputs lossl
     instruction.CastZkBallot.public_inputs_json,
     `{"root_hint":"${"aa".repeat(32)}","owner":"${SAMPLE_ACCOUNT_I105_LITERAL}","amount":"18446744073709551616.25","duration_blocks":18446744073709551615,"direction":"Nay","nullifier":"${"bb".repeat(32)}"}`,
   );
-  const decoded = withPureJsInstructionCodec((codec) =>
+  const decoded = withNativeInstructionCodec((codec) =>
     encodeAndDecode(instruction, codec));
   assert.equal(
     decoded.CastZkBallot.public_inputs_json,
@@ -3737,7 +3737,7 @@ baseTest("direct governance Norito validation runs before native dispatch", () =
   assert.equal(nativeCalls, 0);
 });
 
-baseTest("direct pure-JS CastZkBallot preserves a raw max-u64 JSON token", () => {
+test("direct native-backed CastZkBallot preserves a raw max-u64 JSON token", () => {
   const instructionJson = JSON.stringify({
     CastZkBallot: {
       election_id: "ref-direct",
@@ -3748,29 +3748,29 @@ baseTest("direct pure-JS CastZkBallot preserves a raw max-u64 JSON token", () =>
         '","amount":"1","direction":"Abstain"}',
     },
   });
-  const decoded = withPureJsInstructionCodec(({
+  const decoded = withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) =>
-    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson)));
+    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson, 753), 753));
   assert.equal(
     decoded.CastZkBallot.public_inputs_json,
     `{"owner":"${SAMPLE_ACCOUNT_I105_LITERAL}","amount":"1","duration_blocks":18446744073709551615,"direction":"Abstain"}`,
   );
 });
 
-baseTest("direct pure-JS deploy proposal roundtrips typed hashes and ABI V1", () => {
+test("direct native-backed deploy proposal roundtrips typed hashes and ABI V1", () => {
   const instructionJson =
     '{"ProposeDeployContract":{' +
     '"contract_address":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",' +
     `"code_hash":"${"aa".repeat(32)}",` +
     `"abi_hash":"${"bb".repeat(32)}",` +
     '"abi_version":1}}';
-  const decoded = withPureJsInstructionCodec(({
+  const decoded = withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) =>
-    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson)));
+    noritoDecodeInstruction(noritoEncodeInstruction(instructionJson, 753), 753));
   assert.equal(decoded.ProposeDeployContract.code_hash, "aa".repeat(32));
   assert.equal(decoded.ProposeDeployContract.abi_hash, "bb".repeat(32));
   assert.equal(decoded.ProposeDeployContract.abi_version, 1);
@@ -3844,7 +3844,7 @@ test("buildCastPlainBallotInstruction rejects lossy and noncanonical Quantity in
   }
 });
 
-baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quantity", () => {
+test("CastPlainBallot native-backed Norito codec preserves strict fractional Quantity", () => {
   const instruction = {
     CastPlainBallot: {
       referendum_id: "ref-quantity",
@@ -3854,11 +3854,11 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
       direction: 1,
     },
   };
-  withPureJsInstructionCodec(({
+  withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
-    const encoded = noritoEncodeInstruction(instruction);
+    const encoded = noritoEncodeInstruction(instruction, 753);
     const outerFrame = validateNoritoFrame(encoded);
     assert.equal(outerFrame.flags, 0x02);
     const wireField = readCompactFieldPayload(
@@ -3888,7 +3888,7 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
       .subarray(0, 16);
     assert.equal(expectedSchemaHash.toString("hex"), "62b23313103064bc2c9d528ac3548949");
     assert.deepEqual(validatedInner.schemaHash, expectedSchemaHash);
-    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
 
     for (const amount of [
       1,
@@ -3911,7 +3911,7 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
               ...instruction.CastPlainBallot,
               amount,
             },
-          }),
+          }, 753),
         /canonical|JavaScript numbers are rejected|mantissa|negative/u,
         `amount ${String(amount).slice(0, 32)} must be rejected`,
       );
@@ -3919,7 +3919,7 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
   });
 });
 
-test("CastPlainBallot pure-JS bytes match native compact framing", () => {
+test("CastPlainBallot native-backed bytes match native compact framing", () => {
   const instruction = {
     CastPlainBallot: {
       referendum_id: "ref-quantity",
@@ -3929,7 +3929,7 @@ test("CastPlainBallot pure-JS bytes match native compact framing", () => {
       direction: 1,
     },
   };
-  const encoded = assertNativeAndPureInstructionParity(
+  const encoded = assertNativeInstructionAdapterRoundTrip(
     instruction,
     "CastPlainBallot",
   );
@@ -4127,7 +4127,7 @@ descriptorTest("retired generic confidential instructions stay absent from build
     const wireId = ["iroha_data_model::isi::zk::", variant].join("");
     assert.equal(instructionBuilderExports[builder], undefined, builder);
     assert.throws(
-      () => noritoEncodeInstruction({ zk: { [variant]: {} } }),
+      () => noritoEncodeInstruction({ zk: { [variant]: {} } }, 753),
       /retired|does not support|unsupported/u,
       variant,
     );
@@ -4410,7 +4410,7 @@ baseTest("proof attachments reject malformed and impossible lane Merkle witnesse
   }
 });
 
-baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
+test("native-backed Norito rejects non-canonical lane HashOf markers", () => {
   const instruction = buildFinalizeElectionInstruction({
     electionId: "elec-1",
     tally: [1],
@@ -4432,11 +4432,11 @@ baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
     },
   });
   const encoded = Buffer.from(
-    withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(instruction)),
+    withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(instruction, 753)),
   );
-  const decoded = withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-    noritoDecodeInstruction(encoded),
+  const decoded = withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+    noritoDecodeInstruction(encoded, 753),
   );
   const decodedSibling =
     decoded.zk.FinalizeElection.tally_proof.lane_privacy.witness.payload.proof
@@ -4446,8 +4446,8 @@ baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
   instruction.zk.FinalizeElection.tally_proof.lane_privacy.witness.payload.proof
     .audit_path[0][31] &= 0xfe;
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(instruction)),
+    () => withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(instruction, 753)),
     /native hash with its marker bit set|canonical prehashed HashOf/,
   );
 
@@ -4465,8 +4465,8 @@ baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
   missingSibling[siblingOffset - 2] = 0;
   rewriteNestedInstructionCrcs(missingSibling);
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(missingSibling)),
+    () => withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(missingSibling, 753)),
     /None option contained trailing bytes/,
   );
 
@@ -4474,8 +4474,8 @@ baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
   emptyPath.writeBigUInt64LE(0n, countOffset);
   rewriteNestedInstructionCrcs(emptyPath);
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(emptyPath)),
+    () => withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(emptyPath, 753)),
     /trailing bytes/,
   );
 
@@ -4483,8 +4483,8 @@ baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
   deepPath.writeBigUInt64LE(256n, countOffset);
   rewriteNestedInstructionCrcs(deepPath);
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(deepPath)),
+    () => withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(deepPath, 753)),
     /exceeds the 255-item limit/,
   );
 
@@ -4492,21 +4492,21 @@ baseTest("pure JS Norito rejects non-canonical lane HashOf markers", () => {
   impossibleIndex.writeUInt32LE(2, leafIndexOffset);
   rewriteNestedInstructionCrcs(impossibleIndex);
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(impossibleIndex)),
+    () => withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(impossibleIndex, 753)),
     /impossible for the Merkle path depth/,
   );
 
   encoded[siblingOffset + 31] &= 0xfe;
   rewriteNestedInstructionCrcs(encoded);
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(encoded)),
+    () => withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(encoded, 753)),
     /native hash with its marker bit set|canonical prehashed HashOf/,
   );
 });
 
-baseTest("pure JS ProofAttachment decoder rejects invalid ids and extra tails", () => {
+test("native-backed ProofAttachment decoder rejects invalid ids and extra tails", () => {
   const proofBytes = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe]);
   const instruction = buildFinalizeElectionInstruction({
     electionId: "elec-1",
@@ -4529,8 +4529,8 @@ baseTest("pure JS ProofAttachment decoder rejects invalid ids and extra tails", 
     },
   });
   const encoded = Buffer.from(
-    withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
-      noritoEncodeInstruction(instruction)),
+    withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(instruction, 753)),
   );
   const invalidId = Buffer.from(encoded);
   const nameOffset = invalidId.indexOf(Buffer.from("unique_vk_name", "utf8"));
@@ -4538,8 +4538,8 @@ baseTest("pure JS ProofAttachment decoder rejects invalid ids and extra tails", 
   invalidId[nameOffset] = "U".charCodeAt(0);
   rewriteNestedInstructionCrcs(invalidId);
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(invalidId)),
+    () => withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(invalidId, 753)),
     /portable verifier-key registry syntax/,
   );
 
@@ -4558,16 +4558,16 @@ baseTest("pure JS ProofAttachment decoder rejects invalid ids and extra tails", 
   rewriteNestedInstructionCrcs(oversizedProof);
   assert.throws(
     () =>
-      withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-        noritoDecodeInstruction(oversizedProof),
+      withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+        noritoDecodeInstruction(oversizedProof, 753),
       ),
     /exceeds its \d+-byte decoding limit/,
   );
 
   const extraTail = appendFinalizeProofAttachmentTail(encoded, Buffer.of(0));
   assert.throws(
-    () => withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
-      noritoDecodeInstruction(extraTail)),
+    () => withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(extraTail, 753)),
     /trailing bytes/,
   );
 

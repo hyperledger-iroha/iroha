@@ -7,7 +7,7 @@ use crate::{
         head_key, height_key, key_path, read_active, read_record,
         read_stream_token_custody_control_at_v1, record_digest, record_key, validate_state_binding,
     },
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    state::{StateTransaction, WorldReadOnly},
 };
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{

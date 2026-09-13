@@ -49,7 +49,7 @@ export const INTEGRATION_OPERATOR_SIGNING_CONTEXT = new OperatorSigningContext(N
 export class AuthenticatedIntegrationToriiClient extends ToriiClient {
   constructor(baseUrl, options = {}) {
     super(baseUrl, {
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
       canonicalRequestAuth: { accountId: ACCOUNT_ID, privateKey: PRIVATE_KEY },
       operatorSigningContext: INTEGRATION_OPERATOR_SIGNING_CONTEXT,
       ...options,

@@ -58,10 +58,11 @@ fn pending_kura_mixed_decision_fetch_services_older_cold_output_before_producer_
         &[
             "let Some(first_ready) = coordinator.ready_index.first().copied()",
             "if coordinator.active_lease.is_some() || first_ready < ordinal",
+            "if output.requires_output_service()",
             "execute(output.effect())",
             "LifecycleOutputServiceDispositionV1::SourceRetained",
             "RecoveredLifecycleOutputSettlementV1::SourceRetained",
-            "finish_terminal(ordinal, super::TerminalOutcome::Advanced)",
+            "finish_terminal(ordinal, output.terminal_outcome())",
             "persist_exact_staged_successor(&staged)",
             "let retired = outputs",
             ".remove(&ordinal)",

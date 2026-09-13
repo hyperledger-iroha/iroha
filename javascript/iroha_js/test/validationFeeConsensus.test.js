@@ -9,7 +9,7 @@ import {
 } from "../src/validationFeeConsensus.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
 
 const binding = Object.freeze({
@@ -232,7 +232,7 @@ function verifyProjectionFixture(projection) {
       verify(
         Buffer.from([9]),
         binding,
-        binding.checkpoint,
+        binding.checkpoint, 753,
       ),
   );
 }
@@ -352,7 +352,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
       const verified = verify(
         Buffer.from([9]),
         binding,
-        binding.checkpoint,
+        binding.checkpoint, 753,
       );
       assert.equal(verified.head_policy_version, 2n);
       assert.equal(verified.evaluated_block_height, 127n);
@@ -364,7 +364,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
           verify(
             Buffer.from([9]),
             binding,
-            binding.checkpoint,
+            binding.checkpoint, 753,
           ),
         /canonical Iroha hash marker/u,
       );
@@ -596,6 +596,7 @@ test("Torii validation-fee proofs use the client native runtime", async () => {
     },
   };
   const client = new ToriiClient("https://torii.invalid", {
+    localSigningContext: new LocalSigningContext(binding.networkId, 753),
     fetchImpl: async () => assert.fail("overridden request path should be used"),
     [TORII_TEST_NATIVE_BINDING]: native,
   });
@@ -625,6 +626,7 @@ test("Torii validation-fee proofs use the client native runtime", async () => {
 
 test("proof catch-up promotes only consecutive locally verified pages", async () => {
   const client = new ToriiClient("https://torii.invalid", {
+    localSigningContext: new LocalSigningContext(binding.networkId, 753),
     fetchImpl: async () => {
       throw new Error("network must not be used by this fixture");
     },
@@ -659,6 +661,7 @@ test("proof catch-up promotes only consecutive locally verified pages", async ()
 
 test("proof catch-up fails closed when a non-final page does not advance", async () => {
   const client = new ToriiClient("https://torii.invalid", {
+    localSigningContext: new LocalSigningContext(binding.networkId, 753),
     fetchImpl: async () => {
       throw new Error("network must not be used by this fixture");
     },

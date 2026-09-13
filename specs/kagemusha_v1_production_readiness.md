@@ -32,6 +32,93 @@ exchange bytes. Device gates retain 128 MiB process RSS, 10 s proving p95,
 1 s verification p95, and 30 s handoff p95. These are required acceptance limits,
 not current achieved measurements or a claim of optimality.
 
+## Active implementation — 2026-09-12
+
+Work remains confined to `/Users/takemiyamakoto/dev/iroha`, branch
+`optimizations`. The encrypted polynomial-store foundation, bounded
+write-once advice assignment and single-column basis conversions are now applied. The store authenticates the proof
+context, field, basis, column/phase, ordinal and chunk geometry. Its 512-handle
+limit counts live owners; dropping a predecessor releases capacity without
+reusing its ordinal. Assignment buffers one 256-row numerator/denominator chunk
+per column, preserves rational zero-denominator behavior and ordered tail
+values, and destroys the active writer after an operational error or unwind.
+
+The existing prover still owns its full scalar banks. These new components are
+not yet a stored consuming prover, and their logical buffer bounds do not
+establish full-process RSS, latency or production qualification. The actual vendor suite passes 25 tests in each of default and no-multicore
+configurations (50 executions), covering metadata, both-field assignment
+comparison, all basis-conversion pairs and failure/unwind handling. The new
+basis conversion retains one guarded field column and uses the existing baseline
+FFT arithmetic, preserving current prover dispatch. The encrypted Core adapter
+passes all 16 tests for authentication, owner lifetime, assignment and basis
+conversion on the freshly rebuilt development harness. All 1,827 captured
+Core/Crypto/Axiom/curve and build/lock inputs remained unchanged throughout
+compilation and execution. These results do not qualify the
+existing MSM scratch lifecycle or any complete proof.
+
+A later 24-path implementation batch is applied after the validator source
+capture. It adds ordered IPA phase commitments, bounded expression and
+retained-graph tiles, MSM scalar-encoding cleanup, Base assignments returning
+only actual cells, and monotone native Poseidon BUS emission. The graph helper
+caches advice tiles and retains one row of graph intermediates. The BUS retains
+one block of guarded endpoints and replays its original copy order. The block uses
+the existing safe zeroization API; the cleanup regression covers both Pasta
+fields on normal return and unwind. These regressions remain unexecuted.
+
+The batch also includes a strict internal single-phase Assignment bridge and
+consuming completion into globally ordered receipts. Unknown witnesses,
+reference-return requests, backward writes, ignored instance errors and premature
+phase changes invalidate the whole assignment owner. Selector/fixed/copy calls
+retain the ordinary prover's PK-frozen semantics, including direct selector
+conversion that removes the original selector count. Completion preserves the
+original snapshots and guarded blinds; a failed or unwound bounded read destroys
+all receipts. These primitives do not yet enforce concrete producer/key admission
+or final-producer destruction before commitment. The consuming caller must also
+destroy the owner on an external synthesis unwind.
+
+The claim carrier RLC now emits one guarded logical row at a time and retains only
+cell metadata for its equality bindings. It preserves the full 4,090-value capacity,
+physical row order and sorted pack-copy order. The removed vector held at least
+26.4423 MiB of scalar payload; this is source accounting, not measured RSS. Eight
+new tests compare the frozen vector oracle and small seeded proofs in both Pasta
+fields, and exercise failure/unwind cleanup. They remain unexecuted. The legitimate
+standalone curve lock was generated from its complete manifest graph without
+changing dependencies or discarding development targets.
+
+The required full-proof and device limits remain unchanged. The complete stored
+prover, original instance-prefix integration and producer memory work remain
+incomplete. All 85 new regression tests are prepared, but compilation and
+execution await the shared build resource window. The earlier
+50 vendor and 16 Core executions above precede these changes and do not validate
+them. Formatting, source review and patch checks are not proof equivalence.
+Application and static receipts are under
+`target/kagemusha-validation/stored-prover-next-window-20260912`.
+
+Before this batch, the native enrollment library and test sources passed a
+separate `cargo check`. That check does not validate these later Core/vendor
+changes; linked test execution and native artifacts remain pending. The six package
+surface tests pass after correcting two stale JavaScript public-subpath
+expectations, preserving all coordinator enum and fixture checks. These scoped
+receipts are copied under `target/kagemusha-validation/mobile-taira-reconnect-20260912`
+and `target/kagemusha-validation/package-public-path-20260912`.
+
+The explicit Apple local-integration build path now accepts the current root
+lockfile while retaining locked/offline builds and authenticated source/tool
+boundaries. Its fixed owner-only output paths remain inside this checkout.
+Every resulting artifact is marked `local-integration`; archive and release
+publication reject that scope. This enables native integration work without
+conferring canonical release provenance. Fourteen local-policy tests, all 29
+archive tests, 24 source-seal tests, 12 Swift-pin tests and 19 strict validator
+tests pass (98 in total). Native artifact
+construction, complete Swift execution and canonical release qualification
+remain pending. The archive tests use an isolated fixed source graph and
+independently encoded expected ZIP bytes; release path guards remain enforced.
+
+Current application and execution receipts are retained under
+`target/kagemusha-validation/20260912-source-window`,
+`target/kagemusha-apple-archive-fixture-followup` and the Apple follow-up test
+records. Prior source-bound results below remain historical scoped evidence.
+
 ## Current validation boundary — 2026-09-08
 
 The canonical checkout is `optimizations`. The completed R5 SDK chain at
@@ -49,8 +136,8 @@ After the release71 source hold ended at
 `f0322420c46aa6cfc35b37b4b0c4abe57457817f`, the Kotlin retry-archive correction
 below passed all 13 focused tests. JavaScript Parliament parity passed all 24
 tests, including the TypeScript consumer check for `RegisterInitialSortition`.
-The corresponding Swift source and tests are preserved in a local reapply patch
-for the clean native checkpoint. The required canonical ABI-23
+The corresponding Swift source and tests were restored to the canonical checkout
+after the clean native checkpoint. The required canonical ABI-23
 `dist/NoritoBridge.xcframework` is absent, so Swift execution remains open.
 Neither focused SDK result rebuilds native proof authority for later Core changes.
 

@@ -293,6 +293,14 @@ test("published recipe documentation exactly matches the portable allowlist", ()
 });
 
 test("package smoke rejects every non-portable or missing required artifact", () => {
+  const requiredBrowserCodecPaths = [
+    "browser-codec.d.ts",
+    "dist/public/browserCodec.js",
+    "dist/browserCodec.js",
+    "dist/browserCodecRuntime.js",
+    "dist/wasm/iroha_js_codec_wasm.js",
+    "dist/wasm/iroha_js_codec_wasm_bg.wasm",
+  ];
   const requiredLazyPaths = [
     "dist/smartContractDeploymentSubmit.js",
     "dist/sumeragiTyped.js",
@@ -319,6 +327,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/sorafsOrderbookSubmission.js",
     "dist/sorafsOrderbookSubmission.d.ts",
     "dist/tairaTestnetProfile.js",
+    ...requiredBrowserCodecPaths,
     ...requiredLazyPaths,
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
@@ -344,6 +353,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "dist/atomicPrivateSettlement.js",
     "dist/kagemusha.js",
     "dist/tairaTestnetProfile.js",
+    ...requiredBrowserCodecPaths,
     ...PORTABLE_RECIPES,
     ...requiredLazyPaths,
   ]) {
@@ -392,25 +402,12 @@ test("runtime namespace declarations expose exactly their module exports", async
     checker.getExportsOfModule(moduleSymbol).map((symbol) => [symbol.name, symbol]),
   );
 
-  for (const [namespaceName, moduleName, internalNames = []] of [
+  const rootTargets = ["../src/index.js", "../dist/index.js"];
+  const rootModules = await Promise.all(rootTargets.map((target) => import(target)));
+  for (const [namespaceName, moduleName, rootOnlyNames = []] of [
     ["Torii", "toriiClient"],
-    [
-      "Norito",
-      "norito",
-      ["_canonicalAccountIdNoritoValue", "_createNoritoInstructionApi"],
-    ],
-    [
-      "Crypto",
-      "crypto",
-      [
-        "CONFIDENTIAL_MEMO_SUITES_V1",
-        "ConfidentialMemoKeypairV1",
-        "_createCryptoApi",
-        "generateConfidentialMemoKeypairV1",
-        "openConfidentialMemoV1",
-        "sealConfidentialMemoV1",
-      ],
-    ],
+    ["Norito", "public/norito", ["decodeAccountIdNoritoValue"]],
+    ["Crypto", "public/crypto"],
   ]) {
     const namespaceSymbol = declarationExports.get(namespaceName);
     assert.ok(namespaceSymbol, `missing ${namespaceName} declaration`);
@@ -423,13 +420,19 @@ test("runtime namespace declarations expose exactly their module exports", async
       .map((symbol) => symbol.name)
       .sort();
     const runtimeModule = await import(`../src/${moduleName}.js`);
-    const internal = new Set(internalNames);
-    const runtimeNames = Object.keys(runtimeModule).filter((name) => !internal.has(name));
+    const runtimeNames = [...Object.keys(runtimeModule), ...rootOnlyNames].sort();
     assert.deepEqual(
       declaredNames,
-      runtimeNames.sort(),
+      runtimeNames,
       `${namespaceName} declaration diverges from ${moduleName}.js`,
     );
+    for (const [index, rootModule] of rootModules.entries()) {
+      assert.deepEqual(
+        Object.keys(rootModule[namespaceName]).sort(),
+        runtimeNames,
+        `${rootTargets[index]} ${namespaceName} diverges from ${moduleName}.js`,
+      );
+    }
   }
 });
 
@@ -527,45 +530,43 @@ test("narrow subpath declarations exactly match their runtime values", async () 
     });
     const declaration = program.getSourceFile(declarationPath);
     assert.ok(declaration, `${subpath} declaration did not load`);
-    const declaredValues = [];
-    for (const statement of declaration.statements) {
-      if (
-        ts.isExportDeclaration(statement) &&
-        statement.isTypeOnly !== true &&
-        statement.exportClause !== undefined &&
-        ts.isNamedExports(statement.exportClause)
-      ) {
-        declaredValues.push(
-          ...statement.exportClause.elements
-            .filter((element) => element.isTypeOnly !== true)
-            .map((element) => element.name.text),
-        );
-        continue;
-      }
-      const isExported = statement.modifiers?.some(
-        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-      );
-      if (!isExported) continue;
-      if (
-        (ts.isClassDeclaration(statement) ||
-          ts.isFunctionDeclaration(statement) ||
-          ts.isEnumDeclaration(statement)) &&
-        statement.name
-      ) {
-        declaredValues.push(statement.name.text);
-        continue;
-      }
-      if (ts.isVariableStatement(statement)) {
-        for (const declarationNode of statement.declarationList.declarations) {
-          assert.ok(
-            ts.isIdentifier(declarationNode.name),
-            `${subpath} exports a destructured declaration`,
-          );
-          declaredValues.push(declarationNode.name.text);
+    const checker = program.getTypeChecker();
+    const declaredValueNames = (source, seen = new Set()) => {
+      if (seen.has(source.fileName)) return [];
+      seen.add(source.fileName);
+      return source.statements.flatMap((statement) => {
+        if (ts.isExportDeclaration(statement)) {
+          if (statement.isTypeOnly) return [];
+          if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+            return statement.exportClause.elements
+              .filter((element) => !element.isTypeOnly)
+              .map((element) => element.name.text);
+          }
+          if (!statement.exportClause && statement.moduleSpecifier) {
+            const target = checker.getSymbolAtLocation(statement.moduleSpecifier);
+            assert.ok(target, `${subpath} wildcard export did not resolve`);
+            return (target.declarations ?? []).flatMap((targetDeclaration) =>
+              ts.isSourceFile(targetDeclaration)
+                ? declaredValueNames(targetDeclaration, seen)
+                : []);
+          }
+          return [];
         }
-      }
-    }
-    const uniqueDeclaredValues = [...new Set(declaredValues)].sort();
+        if (!statement.modifiers?.some(
+          (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+        )) return [];
+        if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement) ||
+             ts.isEnumDeclaration(statement)) && statement.name) return [statement.name.text];
+        if (ts.isVariableStatement(statement)) {
+          return statement.declarationList.declarations.map((entry) => {
+            assert.ok(ts.isIdentifier(entry.name), `${subpath} exports a destructured declaration`);
+            return entry.name.text;
+          });
+        }
+        return [];
+      });
+    };
+    const uniqueDeclaredValues = [...new Set(declaredValueNames(declaration))].sort();
 
     const runtimeTargets = new Set(
       [descriptor.import, descriptor.browser].filter(Boolean),
@@ -782,7 +783,9 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "const privacyManifest: PrivacyExact12CapabilityManifestV1 = decodePrivacyExact12CapabilityManifestV1(exact12ManifestArchive);",
         "const privacyCommittedHeight: bigint = privacyManifest.committed_height;",
         "declare const privacyExpectedNetwork: RootSdk.NetworkId;",
-        "const privacyNode = new ToriiClient('https://torii.example', { localSigningContext: new RootSdk.LocalSigningContext(privacyExpectedNetwork) });",
+        "// @ts-expect-error local signing requires the deployment's explicit I105 discriminant.",
+        "new RootSdk.LocalSigningContext(privacyExpectedNetwork);",
+        "const privacyNode = new ToriiClient('https://torii.example', { localSigningContext: new RootSdk.LocalSigningContext(privacyExpectedNetwork, 753) });",
         "const privacyNodeResult: Promise<PrivacyExact12CapabilityManifestV1> = getPrivacyExact12CapabilityManifestV1(privacyNode, { canonicalAuth: { accountId: 'i105...', privateKey: '11'.repeat(32) } });",
         'const privacyProofSystems: PrivacyProofSystemIdV1[] = ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "anonymous-pgc-p256", "iroha-verange-p256", "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512", "vega-neutron-nova-spartan-hyrax-t256", "jindo-polynomial-commitment", "lantern-lnp22-module-linear-norm", "halo2-ipa-pasta", "fcmp-plus-plus-curve-tree-bulletproofs"];',
         'const privacyEngines: PrivacyEngineIdV1[] = ["native-goldilocks-poseidon-x7-stark-fri-6x64-v1", "native-anonymous-pgc-p256", "native-verange-p256", "native-zk-ams-masked-relaxed-spartan-t256-ristretto255", "native-vega", "native-jindo", "native-lantern-lnp22", "native-halo2-orchard", "native-fcmp-plus-plus"];',

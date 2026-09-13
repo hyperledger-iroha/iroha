@@ -137,7 +137,7 @@ const VK_SIGNING_NETWORK_ID = FocusNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
 const VK_LOCAL_SIGNING_CONTEXT = new FocusLocalSigningContext(
-  VK_SIGNING_NETWORK_ID,
+  VK_SIGNING_NETWORK_ID, 753,
 );
 const ISO_OPERATOR_SIGNING_CONTEXT =
   sumeragiDiagnosticsFocus?.operatorSigningContext
@@ -146,7 +146,7 @@ const DIST_VK_SIGNING_NETWORK_ID = DistNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
 const DIST_LOCAL_SIGNING_CONTEXT = new DistLocalSigningContext(
-  DIST_VK_SIGNING_NETWORK_ID,
+  DIST_VK_SIGNING_NETWORK_ID, 753,
 );
 const DIST_OPERATOR_SIGNING_CONTEXT = new DistOperatorSigningContext(
   DIST_VK_SIGNING_NETWORK_ID,
@@ -22049,7 +22049,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
   };
   const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const result = await client.prepareContractCall({
     authority: FIXTURE_ALICE_ID,
@@ -22155,7 +22155,7 @@ test("prepareContractCall rejects submitted and unmarked response state", async 
     });
   const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const prepare = () => client.prepareContractCall({
     authority: FIXTURE_ALICE_ID,
@@ -22202,7 +22202,7 @@ test("callContract response requires operation_receipt", async () => {
     });
   const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
 
   await assert.rejects(
@@ -22297,7 +22297,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
           jsonData: payload,
           headers: { "content-type": "application/json" },
         }),
-      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
     });
     await assert.rejects(
       () =>
@@ -22463,7 +22463,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
         jsonData: responsePayload,
         headers: { "content-type": "application/json" },
       }),
-      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
     });
     await assert.rejects(
       () => client.prepareContractCall(request),
@@ -22482,7 +22482,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
       jsonData: aliasResponse,
       headers: { "content-type": "application/json" },
     }),
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const { contractAddress: _address, ...aliasRequest } = request;
   await assert.rejects(
@@ -22507,7 +22507,7 @@ test("prepareContractCall validates caller-trusted payload intent before fetch",
       fetchCalls += 1;
       throw new Error("fetch must not run for mismatched caller intent");
     },
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   await assert.rejects(
     () => client.prepareContractCall({
@@ -22538,7 +22538,7 @@ test("prepareContractCall rejects a zero explicit creation time before fetch", a
       fetchCalls += 1;
       throw new Error("fetch must not run for an invalid creation time");
     },
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   await assert.rejects(
     () => client.prepareContractCall({
@@ -22672,7 +22672,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const result = await client.proposeMultisig({
     multisigAccountAlias: "cbdc@banka",
@@ -22752,7 +22752,7 @@ test("proposeMultisig binds every unsigned payload to local caller intent", asyn
         jsonData: responseFor(draft),
         headers: { "content-type": "application/json" },
       }),
-      localSigningContext: new LocalSigningContext(networkId),
+      localSigningContext: new LocalSigningContext(networkId, 753),
     });
 
   await assert.rejects(
@@ -23072,7 +23072,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
           jsonData,
           headers: { "content-type": "application/json" },
         }),
-      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
     });
   const validDraft = {
     ...bindingDraft,
@@ -23256,7 +23256,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const result = await client.proposeMultisigContractCall({
     multisigAccountAlias: "cbdc@banka",

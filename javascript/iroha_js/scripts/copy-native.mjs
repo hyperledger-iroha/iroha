@@ -426,6 +426,34 @@ if (wrongResult.length > 0) {
   );
   process.exitCode = 1;
 }
+const instructionCodecs = [
+  "noritoEncodeInstruction", "noritoDecodeInstruction",
+  "noritoEncodeInstructionBoxArchive", "noritoDecodeInstructionBoxArchive",
+];
+if (instructionCodecs.every((name) => required.includes(name) && typeof binding[name] === "function")) {
+  try {
+    const json = '{"Custom":{"payload":{"probe":"explicit-network-context"}}}';
+    for (const [encode, decode] of [[instructionCodecs[0], instructionCodecs[1]], [instructionCodecs[2], instructionCodecs[3]]]) {
+      const bytes = binding[encode](json, 369);
+      if (!Buffer.isBuffer(bytes) || bytes.byteLength === 0 || bytes.byteLength > 65536) {
+        throw new Error(encode + " must return bounded non-empty Buffer bytes");
+      }
+      if (binding[decode](bytes, 369) !== json) {
+        throw new Error(decode + " must roundtrip canonical instruction JSON");
+      }
+      for (const prefix of [undefined, -1, 0.5, 65536, NaN, Infinity]) {
+        for (const [name, input] of [[encode, json], [decode, bytes]]) {
+          let rejected = false;
+          try { binding[name](input, prefix); } catch { rejected = true; }
+          if (!rejected) throw new Error(name + " accepted a missing or invalid network prefix");
+        }
+      }
+    }
+  } catch (error) {
+    process.stderr.write("invalid native instruction network context contract: " + String(error?.message ?? error));
+    process.exitCode = 1;
+  }
+}
 if (
   required.includes("privacyCompiledProfileCatalogV1") &&
   required.includes("privacyValidateCompiledProfileCatalogV1") &&

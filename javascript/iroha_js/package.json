@@ -26,8 +26,8 @@
       "types": "./browser.d.ts"
     },
     "./kagemusha": {
-      "browser": "./dist/kagemusha.js",
-      "import": "./dist/kagemusha.js",
+      "browser": "./dist/public/kagemusha.js",
+      "import": "./dist/public/kagemusha.js",
       "types": "./kagemusha.d.ts"
     },
     "./privacy-capabilities": {
@@ -152,6 +152,9 @@
   },
   "typesVersions": {
     "*": {
+      "nft": [
+        "./nft.d.ts"
+      ],
       "address": [
         "./address.d.ts"
       ],
@@ -231,7 +234,7 @@
         "./classed-race.d.ts"
       ],
       "game": [
-        "game.d.ts"
+        "./game.d.ts"
       ],
       "browser-codec": [
         "./browser-codec.d.ts"

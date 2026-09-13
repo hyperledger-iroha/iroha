@@ -635,6 +635,20 @@ pub(super) fn lifecycle_storage_owner_test_authority(
     ]);
     AuthenticatedEpisodeAuthority::from_verified_height_context(verified, geometry)
 }
+/// Bound focused cold-output owner fixtures by their complete live output census.
+#[cfg(test)]
+pub(super) fn lifecycle_output_owner_test_authority(
+    verified: &VerifiedHeightContext,
+    output_capacity: usize,
+) -> Option<AuthenticatedEpisodeAuthority> {
+    let geometry = CapacityGeometry::new([
+        (CapacityClass::Consensus, output_capacity.max(1)),
+        (CapacityClass::Effect, 1),
+        (CapacityClass::Serve, 1),
+        (CapacityClass::Producer, 1),
+    ]);
+    AuthenticatedEpisodeAuthority::from_verified_height_context(verified, geometry)
+}
 /// Typed height rollover snapshot carrying an opaque verified successor authority.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]

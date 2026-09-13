@@ -438,6 +438,11 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
+Every instruction codec operation and local signing context requires the deployment’s
+explicit `networkPrefix` (an integer in `0..65535`, `369` for Taira). Obtain it
+from the selected deployment alongside its exact `NetworkId`; there is no
+implicit network default. Decoders take `(bytes, networkPrefix, options)`.
+
 ### External transaction signing
 
 Use `@iroha/iroha-js/transaction-codec` in a Node runtime with the verified
@@ -477,7 +482,7 @@ const payloadBytes = buildBrowserTransferPayload({
 });
 
 // Sign the exact 32-byte Iroha prehash, not the payload bytes or hex text.
-const payloadHashHex = browserTransactionPayloadHashHex(payloadBytes);
+const payloadHashHex = browserTransactionPayloadHashHex(payloadBytes, networkPrefix);
 const payloadHash = Uint8Array.from(
   payloadHashHex.match(/../g),
   (octet) => Number.parseInt(octet, 16),
@@ -947,7 +952,7 @@ You can also use namespaced exports when you prefer grouped imports:
 import { Torii, Norito, Crypto } from "@iroha/iroha-js";
 
 const torii = new Torii.ToriiClient("https://torii.example");
-const encoded = Norito.noritoEncodeInstruction({ Register: { Domain: { id: "wonderland" } } });
+const encoded = Norito.noritoEncodeInstruction({ Register: { Domain: { id: "wonderland" } } }, networkPrefix);
 const keys = Crypto.generateKeyPair();
 ```
 
@@ -1221,7 +1226,7 @@ console.log(confidential.nkHex); // cb7149cc...
 const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
 const canonicalAuth = { accountId: authority, privateKey };
 const torii = new ToriiClient("https://localhost:8080", {
-  localSigningContext: new LocalSigningContext(networkId),
+  localSigningContext: new LocalSigningContext(networkId, networkPrefix),
 });
 const meta = await torii.uploadAttachment(Buffer.from("{}"), {
   contentType: "application/json",
@@ -1243,8 +1248,8 @@ const instruction = buildRegisterDomainInstruction({
   domainId: "wonderland",
   metadata: { key: "value" },
 });
-const encoded = noritoEncodeInstruction(instruction);
-const decoded = noritoDecodeInstruction(encoded);
+const encoded = noritoEncodeInstruction(instruction, networkPrefix);
+const decoded = noritoDecodeInstruction(encoded, networkPrefix);
 console.log(decoded.Register.Domain.id); // "wonderland"
 // `noritoDecodeInstruction` throws on malformed bytes and when neither the
 // portable codec nor the native runtime owns a wire ID, so handle decode errors.
@@ -1253,7 +1258,7 @@ const registerAccountInstruction = buildRegisterAccountInstruction({
   accountId: newAccountId,
   metadata: { nickname: "alice" },
 });
-console.log(noritoDecodeInstruction(registerAccountInstruction).Register.Account.id);
+console.log(noritoDecodeInstruction(registerAccountInstruction, networkPrefix).Register.Account.id);
 
 const { signedTransaction } = buildTransaction({
   networkId,
@@ -1411,7 +1416,7 @@ Rust goldens.
 
 ```js
 const registerDomain = noritoEncodeInstruction(
-  buildRegisterDomainInstruction({ domainId: "wonderland" }),
+  buildRegisterDomainInstruction({ domainId: "wonderland" }), networkPrefix,
 );
 const registerAccount = buildRegisterAccountInstruction({
   accountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
@@ -1429,7 +1434,7 @@ const transferTx = buildTransaction({
   feePayment,
   privateKey,
 });
-console.log(noritoDecodeInstruction(registerDomain).Register.Domain.id);
+console.log(noritoDecodeInstruction(registerDomain, networkPrefix).Register.Domain.id);
 console.log(transferTx.signedTransaction.length); // deterministic Norito bytes
 ```
 
@@ -1764,7 +1769,7 @@ const payload = noritoEncodeInstruction(
   buildRegisterDomainInstruction({
     domainId: "wonderland",
     metadata: {},
-  }),
+  }), networkPrefix,
 );
 
 // Returns the raw Norito bytes Torii responds with (Uint8Array).
@@ -1934,7 +1939,7 @@ now mirrors the Python helper coverage:
 ```js
 const torii = new ToriiClient("http://localhost:8080", {
   config: { torii: { apiTokens: ["bridge-token"] } },
-  localSigningContext: new LocalSigningContext(networkId),
+  localSigningContext: new LocalSigningContext(networkId, networkPrefix),
 });
 
 const resolved = await torii.resolveAlias("GB82 WEST 1234 5698 7654 32");
@@ -2514,7 +2519,7 @@ for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
   break;
 }
 // LocalSigningContext must carry the deployment's exact NetworkId and I105
-// chain discriminant (369 for Taira; the constructor default is 753/Sora).
+// network prefix explicitly (369 for Taira); no prefix is inferred or defaulted.
 const orderResult =
   await torii.submitSorafsOrderbookOrder(signedSubmitOrderTransaction, {
     expectedReceiptSigner: toriiReceiptPublicKey,
@@ -2678,7 +2683,7 @@ import { contractPayloadDigestHex } from "@iroha/iroha-js/contract-payload";
 const authority = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
 const canonicalAuth = { accountId: authority, privateKey: runtimePrivateKey };
 const torii = new ToriiClient(toriiUrl, {
-  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId)),
+  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId), networkPrefix),
 });
 
 const manifest = JSON.parse(
@@ -3187,7 +3192,7 @@ const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
   canonicalRequestAuth: { accountId: AUTHORITY_ACCOUNT_ID, privateKey: runtimePrivateKey },
   authToken: process.env.IROHA_TORII_AUTH_TOKEN,
   localSigningContext: new LocalSigningContext(
-    NetworkId.parse(EXACT_NETWORK_ID_LITERAL),
+    NetworkId.parse(EXACT_NETWORK_ID_LITERAL), networkPrefix,
   ),
 });
 
@@ -3573,7 +3578,7 @@ const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
 
 const torii = new ToriiClient("http://localhost:8080", {
   // Immutable local-signing context. Read-only clients may omit this.
-  localSigningContext: new LocalSigningContext(networkId),
+  localSigningContext: new LocalSigningContext(networkId, networkPrefix),
 });
 const list = await torii.listVerifyingKeys({ backend: "halo2/ipa", status: "Active" });
 console.log(list[0]?.record?.commitment_hex);
@@ -4245,7 +4250,7 @@ const canonicalAuth = {
 };
 
 const torii = new ToriiClient("https://torii.example", {
-  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId)),
+  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId), networkPrefix),
   config: {
     toriiClient: {
       timeoutMs: 10_000,

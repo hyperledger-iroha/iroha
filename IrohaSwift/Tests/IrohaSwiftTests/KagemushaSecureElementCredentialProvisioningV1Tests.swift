@@ -7,6 +7,24 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaSecureElementCredentialProvisioningV1Tests: XCTestCase {
+  func testReleaseIDAllowsZeroBytesButRejectsAllZero() throws {
+    let product = UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!
+    var release = Data(repeating: 0, count: 32)
+    release[31] = 1
+    let configuration = try KagemushaSecureElementCredentialConfigurationV1.foundation(
+      productConfigurationIdentifier: product, displayName: "KAGEMUSHA", releaseID: release)
+    XCTAssertEqual(configuration.releaseID, release)
+    XCTAssertThrowsError(
+      try KagemushaSecureElementCredentialConfigurationV1.foundation(
+        productConfigurationIdentifier: product, displayName: "KAGEMUSHA",
+        releaseID: Data(repeating: 0, count: 32))
+    ) { error in
+      XCTAssertEqual(
+        error as? KagemushaDeviceLifecycleBridgeErrorV1,
+        .invalidContract("releaseID must contain exactly 32 bytes and not all zero"))
+    }
+  }
+
   func testConfigurationRejectsInvalidValuesWithoutTrapping() throws {
     let product = UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!
     let release = Data(repeating: 0x44, count: 32)

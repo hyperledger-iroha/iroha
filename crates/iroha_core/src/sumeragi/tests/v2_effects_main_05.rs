@@ -6583,3 +6583,4 @@ fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
     assert!(executor.output_guard.restart_required());
 }
 include!("v2_effects_02_admission_handoffs.rs");
+include!("v2_effects_proposal_fetch_store_refinement.rs");

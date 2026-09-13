@@ -3770,8 +3770,8 @@ export function buildExecuteTriggerInstruction(triggerOrOptions, args) {
  * @param {any} [args]
  * @returns {Buffer}
  */
-export function buildExecuteTriggerNorito(triggerOrOptions, args) {
-  return noritoEncodeInstruction(buildExecuteTriggerInstruction(triggerOrOptions, args));
+export function buildExecuteTriggerNorito(triggerOrOptions, networkPrefix, args) {
+  return noritoEncodeInstruction(buildExecuteTriggerInstruction(triggerOrOptions, args), networkPrefix);
 }
 
 /**
@@ -3880,8 +3880,8 @@ export function buildMultisigExecuteTriggerInstruction(options) {
  * @param {{ trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, signerAccountId?: string, multisigSpec?: MultisigSpec | object, spec?: MultisigSpec | object, strictSignerCheck?: boolean }} options
  * @returns {Buffer}
  */
-export function buildMultisigExecuteTriggerNorito(options) {
-  return noritoEncodeInstruction(buildMultisigExecuteTriggerInstruction(options));
+export function buildMultisigExecuteTriggerNorito(options, networkPrefix) {
+  return noritoEncodeInstruction(buildMultisigExecuteTriggerInstruction(options), networkPrefix);
 }
 
 /**
@@ -3984,8 +3984,8 @@ export function buildProposeMultisigExecuteTriggerInstruction(options) {
  * @param {{ accountId: string, trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, spec: MultisigSpec | object, signerAccountId?: string, strictSignerCheck?: boolean, transactionTtlMs?: number | null }} options
  * @returns {Buffer}
  */
-export function buildProposeMultisigExecuteTriggerNorito(options) {
-  return noritoEncodeInstruction(buildProposeMultisigExecuteTriggerInstruction(options));
+export function buildProposeMultisigExecuteTriggerNorito(options, networkPrefix) {
+  return noritoEncodeInstruction(buildProposeMultisigExecuteTriggerInstruction(options), networkPrefix);
 }
 
 function normalizeMultisigProposeInstructionInput(value, context) {

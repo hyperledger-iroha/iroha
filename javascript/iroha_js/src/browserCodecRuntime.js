@@ -63,7 +63,7 @@ function bytesArgument(value) {
 
 function prefixArgument(value) {
   if (!Number.isInteger(value) || value < 0 || value > 65535) {
-    throw argumentError("Account network prefix must be an integer in 0..65535");
+    throw argumentError("Network prefix must be an integer in 0..65535");
   }
   return value;
 }
@@ -71,9 +71,12 @@ function prefixArgument(value) {
 function bindingFromModule(module) {
   const methods = Object.create(null);
   for (const name of METHODS) {
-    const descriptor = Object.getOwnPropertyDescriptor(module, name);
-    if (!descriptor || typeof descriptor.value !== "function") throw invalidOutput();
-    methods[name] = descriptor.value;
+    if (!Object.prototype.hasOwnProperty.call(module, name)) throw invalidOutput();
+    // Bundlers expose ES module live bindings through own getters. Resolve each
+    // package-owned export once, then retain the verified function immutably.
+    const method = module[name];
+    if (typeof method !== "function") throw invalidOutput();
+    methods[name] = method;
   }
   return Object.freeze({
     accountAddressParseEncoded(input, expectedPrefix) {
@@ -101,17 +104,17 @@ function bindingFromModule(module) {
       }
       return value;
     },
-    noritoEncodeInstruction(json) {
-      return bytesResult(methods.noritoEncodeInstruction(stringArgument(json)));
+    noritoEncodeInstruction(json, networkPrefix) {
+      return bytesResult(methods.noritoEncodeInstruction(stringArgument(json), prefixArgument(networkPrefix)));
     },
-    noritoDecodeInstruction(bytes) {
-      return stringResult(methods.noritoDecodeInstruction(bytesArgument(bytes)));
+    noritoDecodeInstruction(bytes, networkPrefix) {
+      return stringResult(methods.noritoDecodeInstruction(bytesArgument(bytes), prefixArgument(networkPrefix)));
     },
-    noritoEncodeInstructionBoxArchive(json) {
-      return bytesResult(methods.noritoEncodeInstructionBoxArchive(stringArgument(json)));
+    noritoEncodeInstructionBoxArchive(json, networkPrefix) {
+      return bytesResult(methods.noritoEncodeInstructionBoxArchive(stringArgument(json), prefixArgument(networkPrefix)));
     },
-    noritoDecodeInstructionBoxArchive(bytes) {
-      return stringResult(methods.noritoDecodeInstructionBoxArchive(bytesArgument(bytes)));
+    noritoDecodeInstructionBoxArchive(bytes, networkPrefix) {
+      return stringResult(methods.noritoDecodeInstructionBoxArchive(bytesArgument(bytes), prefixArgument(networkPrefix)));
     },
   });
 }

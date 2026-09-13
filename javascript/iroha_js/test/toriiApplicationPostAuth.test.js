@@ -32,7 +32,7 @@ function client(networkByte, fetchImpl, defaultHeaders) {
     fetchImpl,
     defaultHeaders,
     localSigningContext: new LocalSigningContext(
-      NetworkId.fromBytes(Buffer.alloc(32, networkByte)),
+      NetworkId.fromBytes(Buffer.alloc(32, networkByte)), 753,
     ),
   });
 }

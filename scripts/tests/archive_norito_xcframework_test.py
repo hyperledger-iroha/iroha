@@ -10,6 +10,9 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
+import struct
+import zlib
 import stat
 import subprocess
 import sys
@@ -20,14 +23,28 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = ROOT
 OWNER = ROOT / "scripts/archive_norito_xcframework.py"
 VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
-# Binds the current authoritative header/symbol inventory and root source lock.
-# Reconstructed independently using the fixed ZIP metadata below.
-KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "36ac5c05c4e5941c8c54dd7e17afd319735f811f8759d3389e9a869bb2010936"
+# Mechanical fixtures never select a moving checkout or release Cargo graph.
+FIXTURE_CARGO_LOCK = (
+    b'version = 4\n\n[[package]]\nname = "archive-owner-fixture"\nversion = "0.0.0"\n'
+)
+FIXTURE_SOURCE_FILES = (
+    "scripts/archive_norito_xcframework.py",
+    "scripts/validate_norito_bridge_xcframework.py",
+    "scripts/norito_bridge_source_seal.py",
+    "scripts/check_mobile_sdk_artifact_pin_commit.py",
+    "scripts/run_mobile_hermetic_command.py",
+    "scripts/build_norito_xcframework.sh",
+    "scripts/check_mobile_sdk_artifacts.sh",
+    "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+    "crates/connect_norito_bridge/include/NoritoBridge.h",
+    "crates/connect_norito_bridge/module.modulemap.template",
+    "crates/connect_norito_bridge/src/lib.rs",
+    "crates/iroha_data_model/src/privacy/protocol.rs",
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -42,6 +59,50 @@ SLICE_METADATA = {
 
 def digest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def reference_stored_zip(framework: Path) -> bytes:
+    """Encode the small ASCII fixture's ZIP records without the archive owner.
+
+    This independent oracle fixes the ZIP record layout, metadata and ordering,
+    while taking payload bytes from the fixture. It intentionally handles only
+    these small stored entries; production ZIP64 remains the owner's concern.
+    """
+    year, month, day, hour, minute, second = NORMALIZED_ZIP_TIME
+    dos_time = (hour << 11) | (minute << 5) | (second // 2)
+    dos_date = ((year - 1980) << 9) | (month << 5) | day
+    entries = [(b"NoritoBridge.xcframework/", framework)]
+    for path in framework.rglob("*"):
+        name = "NoritoBridge.xcframework/" + path.relative_to(framework).as_posix()
+        entries.append(((name + ("/" if path.is_dir() else "")).encode("ascii"), path))
+    entries.sort(key=lambda item: item[0])
+    local = bytearray()
+    central = bytearray()
+    for name, path in entries:
+        directory = path.is_dir()
+        contents = b"" if directory else path.read_bytes()
+        checksum = zlib.crc32(contents) & 0xFFFFFFFF
+        size = len(contents)
+        mode = (stat.S_IFDIR | 0o755) if directory else (stat.S_IFREG | 0o644)
+        attributes = (mode << 16) | (0x10 if directory else 0)
+        offset = len(local)
+        local.extend(struct.pack(
+            "<IHHHHHIIIHH", 0x04034B50, 20, 0, 0, dos_time, dos_date,
+            checksum, size, size, len(name), 0,
+        ))
+        local.extend(name)
+        local.extend(contents)
+        central.extend(struct.pack(
+            "<IHHHHHHIIIHHHHHII", 0x02014B50, (3 << 8) | 20, 20, 0, 0,
+            dos_time, dos_date, checksum, size, size, len(name), 0, 0, 0, 0,
+            attributes, offset,
+        ))
+        central.extend(name)
+    end = struct.pack(
+        "<IHHHHIIH", 0x06054B50, 0, 0, len(entries), len(entries),
+        len(central), len(local), 0,
+    )
+    return bytes(local + central) + end
 
 
 def load_owner_module():
@@ -74,6 +135,28 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
             prefix="norito-bridge-archive-owner-test."
         )
         self.root = Path(self.temporary.name).resolve(strict=True)
+        # A source fixture and sibling outputs exercise the real external-path
+        # rules even when the entire test lives under checkout-local TMPDIR.
+        # These are current owner scripts plus unit inputs, not a native build.
+        source_root = self.root / "reviewed-source"
+        for relative in FIXTURE_SOURCE_FILES:
+            destination = source_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPOSITORY_ROOT / relative, destination)
+        (source_root / "Cargo.lock").write_bytes(FIXTURE_CARGO_LOCK)
+        graph_owner = source_root / "ci/privacy_sdk_cargo_lockfile.sh"
+        graph_owner.parent.mkdir()
+        graph_owner.write_text(
+            'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n"'
+            + digest(FIXTURE_CARGO_LOCK) + '"\n', encoding="utf-8",
+        )
+        source_context = mock.patch.multiple(
+            sys.modules[__name__], ROOT=source_root,
+            OWNER=source_root / "scripts/archive_norito_xcframework.py",
+            VALIDATOR=source_root / "scripts/validate_norito_bridge_xcframework.py",
+        )
+        source_context.start()
+        self.addCleanup(source_context.stop)
         self.artifact_root = self.root / "artifacts"
         self.output_root = self.root / "packages"
         self.scratch_root = self.root / "scratch"
@@ -290,6 +373,22 @@ else:
             payload["source_fingerprint_sha256"],
         )
 
+    def test_local_integration_scope_cannot_be_archived_even_with_dirty_allowance(self) -> None:
+        """Actual archive generation admission rejects scope before provenance."""
+        owner = load_owner_module()
+        validator = load_validator_module()
+        manifest_path = self.framework / "NoritoBridge.artifacts.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["artifact_scope"] = "local-integration"
+        for dirty in (False, True):
+            with self.subTest(dirty=dirty):
+                payload["source_tree_dirty"] = dirty
+                manifest_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+                with mock.patch.object(owner, "_load_generation_validator", return_value=validator):
+                    with self.assertRaisesRegex(owner.ArchiveError, "field inventory"):
+                        owner._validate_generation(self.framework, lockfile_path=ROOT / "Cargo.lock", allow_dirty_source=True)
+                self.assertEqual(list(self.output_root.iterdir()), [])
+
     def test_dirty_archive_cli_keeps_real_tool_provenance(self) -> None:
         """The actual owner/validator, without mocks, must reject absent Cargo."""
         manifest_path = self.framework / "NoritoBridge.artifacts.json"
@@ -362,8 +461,12 @@ else:
         second_result = self._run(second)
 
         self.assertEqual(first.read_bytes(), second.read_bytes())
-        expected_digest = digest(first.read_bytes())
-        self.assertEqual(expected_digest, KNOWN_FIXTURE_ARCHIVE_SHA256)
+        # Construct the complete expected archive independently of both the
+        # owner and zipfile's writer; source/header changes cannot stale a hash.
+        expected_bytes = reference_stored_zip(self.framework)
+        self.assertEqual(first.read_bytes(), expected_bytes)
+        expected_digest = digest(expected_bytes)
+        self.assertEqual(digest(first.read_bytes()), expected_digest)
         self.assertEqual(first_result.stdout.split()[0], expected_digest)
         self.assertEqual(second_result.stdout.split()[0], expected_digest)
         with zipfile.ZipFile(first) as archive:
@@ -446,7 +549,9 @@ else:
         validator = load_validator_module()
         lock_owner = owner._load_source_lock_owner()
         selected = self.root / "selected-Cargo.lock"
-        selected.write_bytes((ROOT / "Cargo.lock").read_bytes())
+        selected.write_bytes(FIXTURE_CARGO_LOCK)
+        selected.chmod(0o400)
+        self.assertEqual((ROOT / "Cargo.lock").read_bytes(), FIXTURE_CARGO_LOCK)
         selected_digest = digest(selected.read_bytes())
         manifest = self.framework / "NoritoBridge.artifacts.json"
         payload = json.loads(manifest.read_text())

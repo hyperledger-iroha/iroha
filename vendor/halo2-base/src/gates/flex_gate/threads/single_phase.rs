@@ -7,15 +7,17 @@ use crate::halo2_proofs::circuit::Cell;
 #[cfg(not(feature = "halo2-axiom"))]
 use crate::utils::halo2::raw_assign_advice;
 use crate::{
+    Context, ContextCell, FIRST_PHASE_CELL_TYPE_ID, SECOND_PHASE_CELL_TYPE_ID,
+    THIRD_PHASE_CELL_TYPE_ID,
     gates::{
         circuit::CircuitBuilderStage,
         flex_gate::{BasicGateConfig, ThreadBreakPoints},
     },
-    utils::halo2::{raw_assign_advice_discarding_value, raw_constrain_equal},
     utils::ScalarField,
+    utils::halo2::{
+        raw_assign_advice_cell, raw_assign_advice_discarding_value, raw_constrain_equal,
+    },
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
-    Context, ContextCell, FIRST_PHASE_CELL_TYPE_ID, SECOND_PHASE_CELL_TYPE_ID,
-    THIRD_PHASE_CELL_TYPE_ID,
 };
 use crate::{
     halo2_proofs::circuit::{Region, Value},
@@ -231,13 +233,7 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
             } else {
                 Value::known(advice)
             };
-            #[cfg(feature = "halo2-axiom")]
-            let cell = region.assign_advice(column, row_offset, value).cell();
-            #[cfg(not(feature = "halo2-axiom"))]
-            let cell = region
-                .assign_advice(|| "", column, row_offset, || value)
-                .unwrap()
-                .cell();
+            let cell = raw_assign_advice_cell(region, column, row_offset, value);
             if let Some(old_cell) = copy_manager
                 .assigned_advices
                 .insert(ContextCell::new(ctx.type_id, ctx.context_id, i), cell)
@@ -269,13 +265,8 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
                         .get(gate_index)
                         .unwrap_or_else(|| panic!("NOT ENOUGH ADVICE COLUMNS. Perhaps blinding factors were not taken into account. The max non-poisoned rows is {max_rows}"));
                 let column = basic_gate.value;
-                #[cfg(feature = "halo2-axiom")]
-                let ncell = region.assign_advice(column, row_offset, value);
-                #[cfg(not(feature = "halo2-axiom"))]
-                let ncell = region
-                    .assign_advice(|| "", column, row_offset, || value)
-                    .unwrap();
-                raw_constrain_equal(region, ncell.cell(), cell);
+                let ncell = raw_assign_advice_cell(region, column, row_offset, value);
+                raw_constrain_equal(region, ncell, cell);
             }
 
             if q {
@@ -378,9 +369,9 @@ mod physical_mapping_tests {
 
     use super::*;
     use crate::{
-        gates::circuit::{builder::BaseCircuitBuilder, BaseCircuitParams},
-        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr, plonk::Assigned},
         QuantumCell,
+        gates::circuit::{BaseCircuitParams, builder::BaseCircuitBuilder},
+        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr, plonk::Assigned},
     };
 
     const K: u32 = 6;
@@ -652,11 +643,13 @@ mod physical_mapping_tests {
         // layouter invocation. The virtual graph and pinned breakpoints remain
         // intact, and the assignment pass rebuilds the identical mapping.
         circuit.reset_synthesis_state();
-        assert!(copy_manager
-            .lock()
-            .expect("copy manager")
-            .assigned_advices
-            .is_empty());
+        assert!(
+            copy_manager
+                .lock()
+                .expect("copy manager")
+                .assigned_advices
+                .is_empty()
+        );
         assert_eq!(circuit.break_points()[0], break_points);
         assert_eq!(
             circuit.core().phase_manager[0].total_advice(),

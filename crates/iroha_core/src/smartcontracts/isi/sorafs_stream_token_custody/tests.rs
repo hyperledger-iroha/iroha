@@ -3,7 +3,7 @@ use super::*;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, World},
+    state::{State, StateReadOnly, World},
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{

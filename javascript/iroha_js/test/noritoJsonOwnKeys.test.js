@@ -10,7 +10,7 @@ function ownerInput(instruction) {
   const api = _createNoritoInstructionApi(createNativeRuntime({
     noritoEncodeInstruction(json) { input = JSON.parse(json); return Uint8Array.of(0); },
   }));
-  api.noritoEncodeInstruction(instruction);
+  api.noritoEncodeInstruction(instruction, 753);
   return input;
 }
 
@@ -66,7 +66,7 @@ test("a prototype-named key cannot become an inherited instruction variant", () 
       throw new Error("Rust owner rejects unknown instruction variant");
     },
   }));
-  assert.throws(() => api.noritoEncodeInstruction(instruction), /Rust owner rejects/);
+  assert.throws(() => api.noritoEncodeInstruction(instruction, 753), /Rust owner rejects/);
 });
 
 test("Map and null-prototype objects preserve own prototype-named keys", () => {

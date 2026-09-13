@@ -19,12 +19,12 @@ const page = (items, next = null, limit = 2) => ({ items, pagination: { limit, h
 test("owned NFT transfer uses canonical native bytes, pins source to signer, and checks signature/network", () => {
   const input = { networkId, authority: owner, nftId, destinationAccountId: destination, feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", maxAmount: "0.1" }] }, creationTimeMs: 1, ttlMs: 100_000 };
   const payloadBytes = buildBrowserOwnedNftTransferPayloadV1(input);
-  const signable = { networkId, authority: owner, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes) };
+  const signable = { networkId, authority: owner, signingPublicKey: publicKey, payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) };
   validateBrowserExecutableBatchSignable(signable);
   const hash = Uint8Array.from(blake2b256(payloadBytes)); hash[31] |= 1;
   const signature = ed25519.sign(hash, key);
   const signed = finalizeBrowserExecutableBatchTransaction(signable, signature, publicKey);
-  assert.equal(browserSignedTransactionHashHex(signed.signedTransaction), signed.hashHex);
+  assert.equal(browserSignedTransactionHashHex(signed.signedTransaction, 753), signed.hashHex);
   assert.throws(() => validateBrowserExecutableBatchSignable({ ...signable, networkId: NetworkId.fromBytes(new Uint8Array(32).fill(19)) }), /network/i);
   assert.throws(() => finalizeBrowserExecutableBatchTransaction(signable, new Uint8Array(64), publicKey), /signature/i);
   assert.throws(() => buildBrowserOwnedNftTransferPayloadV1({ ...input, ownerAccountId: destination }), /unsupported field/);
@@ -77,7 +77,7 @@ test("native NFT offer codecs bind all purchase terms and the exact metadata con
     const payload = name === "OfferNftV1" ? { offer_id: offer.offer_id, nft_id: nftId, payment_asset: offer.payment_asset, price: offer.price, expires_at_height: offer.expires_at_height, reserved_buyer: null }
       : name === "BuyNftV1" ? { offer } : { offer_id: offer.offer_id, expected_offer_hash: record.offer_hash };
     const instruction = buildNftMarketInstructionV1(name, payload);
-    assert.deepEqual(noritoDecodeInstructionBoxArchive(noritoEncodeInstructionBoxArchive(instruction)), instruction);
+    assert.deepEqual(noritoDecodeInstructionBoxArchive(noritoEncodeInstructionBoxArchive(instruction, 753), 753), instruction);
     assert.throws(() => buildNftMarketInstructionV1(name, { ...payload, arbitrary_code: [] }), /exact/);
   }
   const bytes = encodeNftMarketValueV1("NftSaleRecordV1", record);
@@ -92,5 +92,5 @@ test("native NFT offer codecs bind all purchase terms and the exact metadata con
     assert.equal(normalizeNftSaleRecordV1(closed, networkId.toString()).status.kind, status.kind);
   }
   const payloadBytes = buildBrowserInstructionTransactionPayload({ networkId, authority: destination, instructions: [buildNftMarketInstructionV1("BuyNftV1", { offer })], feePayment: { payer: "authority", chargeLimits: [] }, creationTimeMs: 1 });
-  validateBrowserInstructionTransactionSignable({ networkId, authority: destination, signingPublicKey: ed25519.getPublicKey(new Uint8Array(32).fill(9)), payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes) });
+  validateBrowserInstructionTransactionSignable({ networkId, authority: destination, signingPublicKey: ed25519.getPublicKey(new Uint8Array(32).fill(9)), payloadBytes, payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753) });
 });

@@ -1,3 +1,4 @@
+import { requireNetworkPrefix } from "./networkPrefix.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
 
@@ -166,6 +167,7 @@ const TORII_BROWSER_CLIENT_OPTION_KEYS = new Set([
   "defaultHeaders",
   "fetchImpl",
   "networkId",
+  "networkPrefix",
   "operatorSigningContext",
   "timeoutMs",
 ]);
@@ -2010,6 +2012,7 @@ export class ToriiBrowserClient {
   #defaultHeaders;
   #fetchImpl;
   #networkId;
+  #networkPrefix;
   #operatorSigningContext;
   #timeoutMs;
 
@@ -2047,6 +2050,9 @@ export class ToriiBrowserClient {
       (TEXT_TORII_BROWSER_CLIENT + "options.timeoutMs"),
       null,
     );
+    this.#networkPrefix = normalizedOptions.networkPrefix === undefined
+      ? null
+      : requireNetworkPrefix(normalizedOptions.networkPrefix, "ToriiBrowserClient options.networkPrefix");
     this.#networkId = normalizedOptions.networkId ?? null;
     if (this.#networkId !== null) {
       networkIdBytes(this.#networkId, (TEXT_TORII_BROWSER_CLIENT + "options.networkId"));
@@ -2119,7 +2125,7 @@ export class ToriiBrowserClient {
       signedTransaction,
       "submitKagemushaTopUp signedTransaction",
     );
-    browserSignedTransactionHashHex(body);
+    browserSignedTransactionHashHex(body, this.#networkPrefix);
     return this._submitKagemushaOperationBodyV1(
       "/v1/kagemusha/top-up",
       "top_up",
@@ -2397,7 +2403,7 @@ export class ToriiBrowserClient {
       signedTransaction,
       "submitTransaction signedTransaction",
     );
-    const expectedEntrypointHash = browserSignedTransactionHashHex(body);
+    const expectedEntrypointHash = browserSignedTransactionHashHex(body, this.#networkPrefix);
     return this._json("POST", "/v1/pipeline/transactions", {
       rawBody: body,
       contentType: FIELD_APPLICATION_X_NORITO,
@@ -2539,7 +2545,7 @@ export class ToriiBrowserClient {
       signedTransaction,
       (TEXT_SUBMIT_TRANSACTION_AND_WAIT + "signedTransaction"),
     );
-    const hashHex = browserSignedTransactionHashHex(body);
+    const hashHex = browserSignedTransactionHashHex(body, this.#networkPrefix);
     if (opts.hashHex !== undefined) {
       const assertedHash = requireExactHashHex(
         opts.hashHex,
@@ -3367,7 +3373,7 @@ export class ToriiBrowserClient {
     const opts = requireObject(options, "submitMultisigPropose options");
     rejectSuccessStatuses(opts, "submitMultisigPropose options");
     return this._json("POST", "/v1/multisig/propose", {
-      rawBody: noritoEncodeMultisigProposeRequest(requireObject(request, "submitMultisigPropose request")),
+      rawBody: noritoEncodeMultisigProposeRequest(requireObject(request, "submitMultisigPropose request"), this.#networkPrefix),
       contentType: FIELD_APPLICATION_X_NORITO,
       headers: { Accept: FIELD_APPLICATION_JSON, ...(opts.headers ?? {}) },
       signal: signalFrom(opts),

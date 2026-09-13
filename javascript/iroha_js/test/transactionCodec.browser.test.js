@@ -277,6 +277,7 @@ function replaceSignedPayload(versioned, payload) {
 
 function sampleInput(overrides = {}) {
   return {
+    networkPrefix: 753,
     networkId: NETWORK_ID,
     authority: AUTHORITY,
     sourceAssetHoldingId: SOURCE_ASSET,
@@ -316,7 +317,7 @@ function nativeBuild(input) {
 }
 
 function signPayload(payload) {
-  const hashHex = browserTransactionPayloadHashHex(payload);
+  const hashHex = browserTransactionPayloadHashHex(payload, 753);
   return {
     hashHex,
     signature: Buffer.from(ed25519.sign(Buffer.from(hashHex, "hex"), PRIVATE_KEY)),
@@ -388,7 +389,7 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     const native = nativeBuild(input);
     assert.deepEqual(browserPayload, Buffer.from(native.payloadBytes));
     assert.equal(
-      browserTransactionPayloadHashHex(browserPayload),
+      browserTransactionPayloadHashHex(browserPayload, 753),
       Buffer.from(native.payloadHash).toString("hex"),
     );
     assert.equal({}.safe, undefined, "metadata normalization must not mutate prototypes");
@@ -433,6 +434,7 @@ test("browser payload pins canonical TransactionDomain::Network wire and rejects
     Buffer.concat([field(archive), payload.subarray(domain.next)]);
   const validate = (payloadBytes) =>
     validateBrowserTransferSignable({
+      networkPrefix: 753,
       networkId: NETWORK_ID,
       payloadBytes,
       authority: AUTHORITY,
@@ -464,6 +466,7 @@ test("browser payload requires signature-bound QueuePlan admission", () => {
   expectCodecError(
     () =>
       validateBrowserTransferSignable({
+        networkPrefix: 753,
         networkId: NETWORK_ID,
         payloadBytes: replacePayloadField(payload, 7, u32(0)),
         authority: AUTHORITY,
@@ -478,6 +481,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   const payload = buildBrowserTransferPayload(input);
   const { hashHex, signature } = signPayload(payload);
   const signable = {
+    networkPrefix: 753,
     networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex: hashHex,
@@ -504,14 +508,14 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   assert.deepEqual(browser.signedTransaction, Buffer.from(native.signedTransaction));
   assert.deepEqual(browser.hash, Buffer.from(native.hash));
   assert.equal(browser.hashHex, Buffer.from(native.hash).toString("hex"));
-  assert.equal(browserSignedTransactionHashHex(browser.signedTransaction), browser.hashHex);
+  assert.equal(browserSignedTransactionHashHex(browser.signedTransaction, 753), browser.hashHex);
 
   const differentlyAuthorized = Buffer.from(browser.signedTransaction);
   const signatureField = readField(differentlyAuthorized.subarray(1), 0);
   differentlyAuthorized[signatureField.next] ^= 1;
   assert.notDeepEqual(differentlyAuthorized, browser.signedTransaction);
   assert.equal(
-    browserSignedTransactionHashHex(differentlyAuthorized),
+    browserSignedTransactionHashHex(differentlyAuthorized, 753),
     browser.hashHex,
     "authorization proof bytes must not change transaction intent identity",
   );
@@ -521,7 +525,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
     field(Buffer.of(0)),
   ]);
   expectCodecError(
-    () => browserSignedTransactionHashHex(legacyOuterAttachment),
+    () => browserSignedTransactionHashHex(legacyOuterAttachment, 753),
     "malformed_payload",
   );
 });
@@ -545,7 +549,7 @@ test("shared compact Android/native golden stays generic while browser rejects o
   const signature = readField(bare, 0);
   const payload = readField(bare, signature.next);
   assert.equal(
-    browserTransactionPayloadHashHex(payload.value),
+    browserTransactionPayloadHashHex(payload.value, 753),
     fixture["payload.prehash"],
   );
 
@@ -562,7 +566,7 @@ test("shared compact Android/native golden stays generic while browser rejects o
   directHash[directHash.length - 1] |= 1;
   assert.equal(directHash.toString("hex"), fixture["canonical.hash"]);
   expectCodecError(
-    () => browserSignedTransactionHashHex(versioned),
+    () => browserSignedTransactionHashHex(versioned, 753),
     "malformed_signed_transaction",
     "ordinary-admission shared fixture",
   );
@@ -608,7 +612,7 @@ test("browser payload binds canonical authority and sponsor fee payment intents"
       },
     }),
   );
-  assert.match(browserTransactionPayloadHashHex(authorityPayload), /^[0-9a-f]{64}$/u);
+  assert.match(browserTransactionPayloadHashHex(authorityPayload, 753), /^[0-9a-f]{64}$/u);
 
   const sponsorPayload = buildBrowserTransferPayload(
     sampleInput({
@@ -622,7 +626,7 @@ test("browser payload binds canonical authority and sponsor fee payment intents"
     }),
   );
   assert.notDeepEqual(sponsorPayload, authorityPayload);
-  assert.match(browserTransactionPayloadHashHex(sponsorPayload), /^[0-9a-f]{64}$/u);
+  assert.match(browserTransactionPayloadHashHex(sponsorPayload, 753), /^[0-9a-f]{64}$/u);
 
   expectCodecError(
     () => buildBrowserTransferPayload(sampleInput({ feePayment: undefined })),
@@ -729,6 +733,7 @@ test("browser snapshots Proxy data descriptors without invoking get traps", () =
 
   const { hashHex, signature } = signPayload(expectedPayload);
   const signable = {
+    networkPrefix: 753,
     networkId: NETWORK_ID,
     payloadBytes: expectedPayload,
     payloadHashHex: hashHex,
@@ -946,7 +951,7 @@ test("browser rejects lone surrogates while preserving scalar and noncharacter p
 test("browser numeric parsing rejects multi-megabyte decimal strings before conversion", () => {
   const huge = "9".repeat(2_000_000);
   for (const [field, code] of [
-    ["networkPrefix", "bounds_exceeded"],
+    ["networkPrefix", "invalid_input"],
     ["creationTimeMs", "bounds_exceeded"],
     ["ttlMs", "bounds_exceeded"],
     ["nonce", "bounds_exceeded"],
@@ -970,9 +975,10 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
   const nonCanonicalPayload = replaceTransferExecutable(canonicalPayload, {
     numericArchive: nonCanonicalNumeric,
   });
-  const nonCanonicalHash = browserTransactionPayloadHashHex(nonCanonicalPayload);
+  const nonCanonicalHash = browserTransactionPayloadHashHex(nonCanonicalPayload, 753);
   const nonCanonicalSignature = signPayload(nonCanonicalPayload).signature;
   const signable = {
+    networkPrefix: 753,
     networkId: NETWORK_ID,
     payloadBytes: nonCanonicalPayload,
     payloadHashHex: nonCanonicalHash,
@@ -997,9 +1003,10 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
   const canonicalSignature = signPayload(canonicalPayload).signature;
   const canonicalSigned = finalizeBrowserSignedTransaction(
     {
+      networkPrefix: 753,
       networkId: NETWORK_ID,
       payloadBytes: canonicalPayload,
-      payloadHashHex: browserTransactionPayloadHashHex(canonicalPayload),
+      payloadHashHex: browserTransactionPayloadHashHex(canonicalPayload, 753),
       authority: AUTHORITY,
       signingPublicKey: PUBLIC_KEY,
     },
@@ -1009,7 +1016,7 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
   expectCodecError(
     () =>
       browserSignedTransactionHashHex(
-        replaceSignedPayload(canonicalSigned, nonCanonicalPayload),
+        replaceSignedPayload(canonicalSigned, nonCanonicalPayload), 753,
       ),
     "malformed_signed_transaction",
   );
@@ -1036,6 +1043,7 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   const { hashHex, signature } = signPayload(payload);
   const baseline = finalizeBrowserSignedTransaction(
     {
+      networkPrefix: 753,
       networkId: NETWORK_ID,
       payloadBytes: payload,
       payloadHashHex: hashHex,
@@ -1088,7 +1096,7 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   ]) {
     const mutated = replaceSignedPayload(baseline, mutatedPayload);
     expectCodecError(
-      () => browserSignedTransactionHashHex(mutated),
+      () => browserSignedTransactionHashHex(mutated, 753),
       expectedCode,
       context,
     );
@@ -1101,6 +1109,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   const { hashHex, signature } = signPayload(payload);
   const expected = finalizeBrowserSignedTransaction(
     {
+      networkPrefix: 753,
       networkId: NETWORK_ID,
       payloadBytes: payload,
       payloadHashHex: hashHex,
@@ -1125,6 +1134,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   const reentrantFinalized = finalizeBrowserSignedTransaction(
     {
+      networkPrefix: 753,
       networkId: NETWORK_ID,
       payloadBytes: reentrantPayload,
       payloadHashHex: hashHex,
@@ -1150,6 +1160,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
 
   const finalized = finalizeBrowserSignedTransaction(
     {
+      networkPrefix: 753,
       networkId: NETWORK_ID,
       payloadBytes: sharedPayloadView,
       payloadHashHex: hashHex,
@@ -1165,17 +1176,17 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   sharedKeyView.fill(0);
   assert.deepEqual(finalized.signedTransaction, outputSnapshot);
   assert.equal(
-    browserTransactionPayloadHashHex(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.length)),
+    browserTransactionPayloadHashHex(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.length), 753),
     hashHex,
   );
 
   expectCodecError(
-    () => browserTransactionPayloadHashHex(new ArrayBuffer(1024 * 1024 + 1)),
+    () => browserTransactionPayloadHashHex(new ArrayBuffer(1024 * 1024 + 1), 753),
     "bounds_exceeded",
   );
   expectCodecError(
     () => finalizeBrowserSignedTransaction(
-      { networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
+      { networkPrefix: 753, networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
       new ArrayBuffer(65),
       PUBLIC_KEY,
     ),
@@ -1183,7 +1194,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   expectCodecError(
     () => finalizeBrowserSignedTransaction(
-      { networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
+      { networkPrefix: 753, networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
       signature,
       new ArrayBuffer(33),
     ),
@@ -1193,7 +1204,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
 
 test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cofactored verify", () => {
   const payload = buildBrowserTransferPayload(sampleInput());
-  const payloadHashHex = browserTransactionPayloadHashHex(payload);
+  const payloadHashHex = browserTransactionPayloadHashHex(payload, 753);
   const { publicKey, signature } = mixedTorsionSignature(
     Buffer.from(payloadHashHex, "hex"),
   );
@@ -1205,6 +1216,7 @@ test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cof
     "reviewer PoC must exercise noble's cofactored acceptance",
   );
   const signable = {
+    networkPrefix: 753,
     networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex,
@@ -1231,6 +1243,7 @@ test("browser finalizer fails closed on contradictory signer and payload state",
   const payload = buildBrowserTransferPayload(sampleInput());
   const { hashHex, signature } = signPayload(payload);
   const signable = {
+    networkPrefix: 753,
     networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex: hashHex,
@@ -1403,6 +1416,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
   const { hashHex, signature } = signPayload(payload);
   const finalized = finalizeBrowserSignedTransaction(
     {
+      networkPrefix: 753,
       networkId: NETWORK_ID,
       payloadBytes: payload,
       payloadHashHex: hashHex,
@@ -1415,26 +1429,26 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
   );
 
   expectCodecError(
-    () => browserSignedTransactionHashHex(Buffer.alloc(0)),
+    () => browserSignedTransactionHashHex(Buffer.alloc(0), 753),
     "malformed_signed_transaction",
   );
   const wrongVersion = Buffer.from(finalized.signedTransaction);
   wrongVersion[0] = 2;
   expectCodecError(
-    () => browserSignedTransactionHashHex(wrongVersion),
+    () => browserSignedTransactionHashHex(wrongVersion, 753),
     "malformed_signed_transaction",
   );
   expectCodecError(
     () =>
       browserSignedTransactionHashHex(
-        Buffer.concat([finalized.signedTransaction, Buffer.of(0)]),
+        Buffer.concat([finalized.signedTransaction, Buffer.of(0)]), 753,
       ),
     "malformed_payload",
   );
   expectCodecError(
     () =>
       browserSignedTransactionHashHex(
-        replaceSignedPayload(finalized.signedTransaction, Buffer.of(0)),
+        replaceSignedPayload(finalized.signedTransaction, Buffer.of(0)), 753,
       ),
     "malformed_signed_transaction",
   );
@@ -1448,7 +1462,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
     versioned.subarray(3),
   ]);
   expectCodecError(
-    () => browserSignedTransactionHashHex(overlong),
+    () => browserSignedTransactionHashHex(overlong, 753),
     "malformed_payload",
   );
 });

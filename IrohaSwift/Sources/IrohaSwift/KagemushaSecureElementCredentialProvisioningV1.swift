@@ -47,7 +47,7 @@ public struct KagemushaSecureElementCredentialConfigurationV1: Equatable, Sendab
       throw Self.invalid("displayName must contain 1...128 non-NUL UTF-8 bytes")
     }
     guard releaseID.count == 32, releaseID.contains(where: { $0 != 0 }) else {
-      throw Self.invalid("releaseID must contain exactly 32 non-zero bytes")
+      throw Self.invalid("releaseID must contain exactly 32 bytes and not all zero")
     }
     self.productConfigurationIdentifier = productConfigurationIdentifier
     self.instanceAID = instanceAID

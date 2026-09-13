@@ -1,3 +1,4 @@
+import { requireNetworkPrefix } from "./networkPrefix.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import {
   _createCryptoApi,
@@ -555,7 +556,8 @@ export function hashSignedTransactionPayload(signedTransaction, options = {}) {
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @returns {Record<string, unknown>}
  */
-export function decodeSignedTransaction(signedTransaction) {
+export function decodeSignedTransaction(signedTransaction, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
   const native = resolveNativeBinding(this);
   if (!native || typeof native.decodeSignedTransactionJson !== "function") {
     throw new Error(
@@ -563,7 +565,7 @@ export function decodeSignedTransaction(signedTransaction) {
     );
   }
   const decoded = JSON.parse(
-    native.decodeSignedTransactionJson(toBuffer(signedTransaction)),
+    native.decodeSignedTransactionJson(toBuffer(signedTransaction), networkPrefix),
   );
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
     throw new Error("decoded signed transaction must be an object");
@@ -578,7 +580,8 @@ export function decodeSignedTransaction(signedTransaction) {
  * @param {Record<string, unknown>} payload
  * @returns {Buffer}
  */
-export function encodeContractArgumentRecord(argumentSchema, payload) {
+export function encodeContractArgumentRecord(argumentSchema, payload, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
   const native = resolveNativeBinding(this);
   if (!native || typeof native.encodeContractArgumentRecordJson !== "function") {
     throw new Error(
@@ -597,7 +600,7 @@ export function encodeContractArgumentRecord(argumentSchema, payload) {
     throw new TypeError("contract argument schema and payload must be JSON values");
   }
   return Buffer.from(
-    native.encodeContractArgumentRecordJson(schemaJson, payloadJson),
+    native.encodeContractArgumentRecordJson(schemaJson, payloadJson, networkPrefix),
   );
 }
 
@@ -609,7 +612,8 @@ export function encodeContractArgumentRecord(argumentSchema, payload) {
  * @param {{ encoding?: BufferEncoding }} [options]
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
  */
-export function hashInstructionBatch(instructions, options = {}) {
+export function hashInstructionBatch(instructions, networkPrefix, options = {}) {
+  requireNetworkPrefix(networkPrefix);
   const native = resolveNativeBinding(this);
   if (!native || typeof native.hashInstructionBatch !== "function") {
     throw new Error("native binding 'hashInstructionBatch' is unavailable");
@@ -619,7 +623,7 @@ export function hashInstructionBatch(instructions, options = {}) {
     "instructions",
   );
   const hashBuffer = Buffer.from(
-    native.hashInstructionBatch(normalizedInstructions),
+    native.hashInstructionBatch(normalizedInstructions, networkPrefix),
   );
   if (options.encoding === "buffer") {
     return hashBuffer;
@@ -1798,7 +1802,7 @@ function assertIvmProofAttachmentBinding(attachment, expectedVkRef) {
   }
 }
 
-function assertRequiredOverlayTransfer(proved, requiredTransfer, context) {
+function assertRequiredOverlayTransfer(proved, requiredTransfer, context, networkPrefix) {
   if (requiredTransfer === undefined || requiredTransfer === null) {
     return null;
   }
@@ -1814,6 +1818,7 @@ function assertRequiredOverlayTransfer(proved, requiredTransfer, context) {
           this,
           instruction,
           `${context}.overlay[${instructionIndex}]`,
+          networkPrefix,
         ),
       ) === expectedCanonical,
   ).length;
@@ -1850,7 +1855,7 @@ function normalizeRequiredOverlayTransfer(requiredTransfer) {
   });
 }
 
-function decodeOverlayInstruction(value, context) {
+function decodeOverlayInstruction(value, context, networkPrefix) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value;
   }
@@ -1864,7 +1869,7 @@ function decodeOverlayInstruction(value, context) {
     throw new TypeError(`${context} must be exact standard base64`);
   }
   try {
-    return transactionContext(this).norito.noritoDecodeInstruction(bytes);
+    return transactionContext(this).norito.noritoDecodeInstruction(bytes, networkPrefix);
   } catch (error) {
     throw new Error(
       `${context} could not be decoded as a canonical Norito InstructionBox: ${error?.message ?? error}`,
@@ -1943,6 +1948,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   const authority = normalizeAuthority(record.authority);
   transactionNetworkIdBytes(record, "input");
   const networkId = record.networkId;
+  const networkPrefix = requireNetworkPrefix(record.networkPrefix, "input.networkPrefix");
   const expectedCodeHashHex = normalizeIvmCodeHashHex(
     readInputField(record, "expectedCodeHashHex", "input"),
     "input.expectedCodeHashHex",
@@ -2210,6 +2216,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     derived.proved,
     callerRequiredTransfer,
     "node-derived proved payload",
+    networkPrefix,
   );
 
   const proofJob = await client.proveIvmAndWait(
@@ -2240,6 +2247,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     proofJob.proved,
     callerRequiredTransfer,
     "proved payload",
+    networkPrefix,
   );
 
   throwIfSubmissionAborted(signal);

@@ -496,6 +496,7 @@ enum ClaimRlcRowModeV1 {
     EndB,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 enum ClaimRlcBusBindingV1<F: PrimeField> {
     Virtual(AssignedValue<F>),
@@ -503,6 +504,7 @@ enum ClaimRlcBusBindingV1<F: PrimeField> {
     PackLoad { carrier: usize, pack: usize },
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct ClaimRlcRawRowV1<F: PrimeField> {
     values: [F; CLAIM_RLC_COLUMNS],
@@ -522,6 +524,7 @@ enum ClaimRlcPhysicalMutationV1 {
     Fixed { half: usize, column: usize },
 }
 
+#[cfg(test)]
 fn claim_rlc_physical_values_v1<F: PrimeField>(
     row: &ClaimRlcRawRowV1<F>,
 ) -> [[F; CLAIM_RLC_PHYSICAL_COLUMNS]; CLAIM_RLC_ROWS_PER_LOGICAL_ROW] {
@@ -538,6 +541,7 @@ fn claim_rlc_physical_values_v1<F: PrimeField>(
     values
 }
 
+#[cfg(test)]
 fn claim_rlc_fixed_encoding_v1<F: PrimeField>(row: &ClaimRlcRawRowV1<F>) -> Result<[F; 3], String> {
     if row.store_pack && !matches!(row.mode, ClaimRlcRowModeV1::EvaluateB) {
         return Err("claim RLC store opcode is not on an evaluation-B row".to_owned());
@@ -654,10 +658,18 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
         self.validate_capacity(usable_rows)
             .map_err(|_| PlonkError::Synthesis)?;
         config.load_range_table(layouter)?;
-        let rows = self.build_rows().map_err(|_| PlonkError::Synthesis)?;
-        self.synthesize_rows(config, layouter, copy_manager, witness_gen_only, &rows)
+        rlc_streaming::synthesize_with_capacity(
+            self,
+            config,
+            layouter,
+            copy_manager,
+            witness_gen_only,
+            KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1,
+        )
     }
 
+    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
+    #[cfg(test)]
     fn synthesize_rows(
         &self,
         config: &KagemushaClaimCarrierRlcConfigV1,
@@ -761,10 +773,14 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
         )
     }
 
+    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
+    #[cfg(test)]
     fn build_rows(&self) -> Result<Vec<ClaimRlcRawRowV1<F>>, String> {
         self.build_rows_with_capacity(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_INSTANCE_COUNT_V1)
     }
 
+    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
+    #[cfg(test)]
     fn build_rows_with_capacity(
         &self,
         fixed_capacity: usize,
@@ -808,6 +824,8 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
         Ok(rows)
     }
 
+    // Frozen vector oracle retained for existing mutation tests and streaming regressions.
+    #[cfg(test)]
     fn build_carrier_rows(
         &self,
         rows: &mut Vec<ClaimRlcRawRowV1<F>>,
@@ -952,6 +970,7 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
     }
 }
 
+#[cfg(test)]
 fn claim_rlc_state_row_v1<F: KagemushaPoseidonFieldV1>(
     state: ClaimRlcStateV1,
     mode: ClaimRlcRowModeV1,
@@ -976,6 +995,8 @@ fn claim_rlc_state_row_v1<F: KagemushaPoseidonFieldV1>(
     }
 }
 
+// Frozen vector evaluation order; production uses the guarded streaming emitter.
+#[cfg(test)]
 fn claim_rlc_push_evaluation_rows_v1<F: KagemushaPoseidonFieldV1>(
     rows: &mut Vec<ClaimRlcRawRowV1<F>>,
     state: &mut ClaimRlcStateV1,
@@ -1050,6 +1071,7 @@ fn claim_rlc_non_modulus_inverse_v1<F: KagemushaPoseidonFieldV1>(
     .ok_or_else(|| "claim RLC remainder is not canonical".to_owned())
 }
 
+#[cfg(test)]
 fn claim_rlc_set_range_limbs_v1<F: KagemushaPoseidonFieldV1>(
     row: &mut ClaimRlcRawRowV1<F>,
     first: u128,
@@ -4858,8 +4880,12 @@ const _: () = {
     assert!(SHARD_TO_HISTORY_ZERO_ROUNDS_V1 == 4);
 };
 
+mod rlc_streaming;
+
 #[cfg(test)]
 mod tests {
+    include!("mint_hash_claim_fold/rlc_streaming_tests.rs");
+
     use super::super::deferred_parent::accumulator_limb_count;
     use super::*;
     use ff::Field;

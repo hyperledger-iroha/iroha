@@ -22,3 +22,5 @@ include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");
 include!("platform_jni/part_3.rs");
 include!("platform_jni/private_settlement.rs");
+
+include!("platform_jni/kagemusha_reserve_finality.rs");

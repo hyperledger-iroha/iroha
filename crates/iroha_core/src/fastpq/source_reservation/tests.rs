@@ -40,7 +40,7 @@ fn invariant(error: ReservationError, expected: ReservationInvariant) {
     assert_eq!(error, ReservationError::Invariant(expected));
 }
 
-fn assert_consistent(tx: &ReservationTransaction<'_>) {
+pub(super) fn assert_consistent(tx: &ReservationTransaction<'_>) {
     let mut block = SourceUsage::ZERO;
     let mut maxima = BTreeMap::new();
     let mut sum = [0_u128; 3];
@@ -52,7 +52,7 @@ fn assert_consistent(tx: &ReservationTransaction<'_>) {
         let mut local_sums = [0_u128; 3];
         let mut local_maxima = BTreeMap::new();
         for slot in owner.slots.values() {
-            local.transcripts += 1;
+            local.transcripts += slot.usage.transcripts;
             local.deltas += slot.usage.deltas;
             local_sums[0] += u128::from(slot.usage.input_bytes);
             local_sums[1] += u128::from(slot.usage.statement_bytes);

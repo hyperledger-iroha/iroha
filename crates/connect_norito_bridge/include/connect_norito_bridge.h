@@ -404,6 +404,38 @@ typedef enum ConnectNoritoKagemushaIpm1PayloadKindV1 {
   CONNECT_NORITO_KAGEMUSHA_IPM1_PAYLOAD_ACKNOWLEDGEMENT_V1 = 3
 } ConnectNoritoKagemushaIpm1PayloadKindV1;
 
+/** Validate canonical payer-signed bytes against the entire original canonical reviewed top-up.
+ * Signature, network, QueuePlanSynced, instruction count/type and payer must all match.
+ * Returns zero only on success. No value is released and no input is retained.
+ */
+int32_t connect_norito_kagemusha_top_up_signed_request_validate_v1(
+    const uint8_t *signed_transaction_ptr, unsigned long signed_transaction_len,
+    const uint8_t *expected_request_ptr, unsigned long expected_request_len);
+
+// Bounded non-authoritative coordinates from an operation response. Success returns
+// JSON null for pending/rejected, or {version:1, network_id:<hex>, block_height:<decimal
+// string>, height_context_id:<hex>}. These are lookup hints, never a trust source.
+// Outputs are cleared on failure; free successful buffers with connect_norito_free.
+int32_t connect_norito_kagemusha_reserve_finality_hint_v1(
+    const uint8_t* response_json, unsigned long response_json_len,
+    uint8_t** out_json, unsigned long* out_json_len);
+
+// Authenticate APPLIED finality for an independently retained exact canonical V1
+// request and independently trusted network/height/context. expected_kind is 0 for
+// top-up and 1 for redemption. Returns the existing canonical MintCreditV1 or
+// RedemptionVoucherV1, respectively. It never releases PENDING/REJECTED as value.
+// Core must still admit the exact release, hardware and proof before mint staging.
+// Persist original response and independent anchor provenance before retirement.
+// Outputs are cleared on failure; free successful buffers with connect_norito_free.
+int32_t connect_norito_kagemusha_reserve_finality_verify_v1(
+    const uint8_t* response_json, unsigned long response_json_len,
+    uint8_t expected_kind,
+    const uint8_t* expected_request, unsigned long expected_request_len,
+    const uint8_t* trusted_network_id, unsigned long trusted_network_id_len,
+    uint64_t trusted_block_height,
+    const uint8_t* trusted_context_id, unsigned long trusted_context_id_len,
+    uint8_t** out_payload, unsigned long* out_payload_len);
+
 int32_t connect_norito_kagemusha_v1_payment_request_validate(
     const uint8_t* request, unsigned long request_len);
 int32_t connect_norito_kagemusha_v1_payment_validate(
@@ -472,10 +504,11 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
 // returns the number of uint32_t words written (10) on success. It is an ABI
-// pin only and grants no monetary authority.
+// pin only and grants no monetary authority. Its word count is independent
+// of the eleven coordinator method codes below.
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORD_COUNT_V1 10
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_MAGIC_V1 "IKGMCOR1"
-#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C(1)
+#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C(2)
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELDS_V1 16
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1 65536
 #define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_MAX_REQUEST_BYTES_V1 262144
@@ -492,7 +525,8 @@ typedef enum ConnectNoritoKagemushaCoreCoordinatorMethodV1 {
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_ACCEPT_INSTALLED_TERMINAL_V1 = 7,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RECOVER_SENDER_V1 = 8,
   CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RECOVER_TERMINAL_ENVELOPE_V1 = 9,
-  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RELEASE_OUTBOX_V1 = 10
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_RELEASE_OUTBOX_V1 = 10,
+  CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_BEGIN_OBSERVATION_V1 = 11
 } ConnectNoritoKagemushaCoreCoordinatorMethodV1;
 
 int32_t connect_norito_kagemusha_core_coordinator_contract_v1(

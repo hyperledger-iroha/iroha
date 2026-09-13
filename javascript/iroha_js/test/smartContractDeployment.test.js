@@ -123,7 +123,7 @@ test("current smart-contract deployment instructions round-trip through Norito",
   ];
   for (const instruction of instructions) {
     assert.deepEqual(
-      noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
+      noritoDecodeInstruction(noritoEncodeInstruction(instruction, 753), 753),
       instruction,
     );
   }
@@ -245,7 +245,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
   const signable = validateBrowserInstructionTransactionSignable({
     networkId: NETWORK_ID,
     payloadBytes,
-    payloadHashHex: browserTransactionPayloadHashHex(payloadBytes),
+    payloadHashHex: browserTransactionPayloadHashHex(payloadBytes, 753),
     authority: AUTHORITY,
     signingPublicKey: PUBLIC_KEY,
     signatureAlgorithm: "0",
@@ -262,7 +262,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
   assert.equal(finalized.signedTransaction[0], 1);
   assert.match(finalized.hashHex, /^[0-9a-f]{63}[13579bdf]$/u);
   assert.equal(
-    browserSignedTransactionHashHex(finalized.signedTransaction),
+    browserSignedTransactionHashHex(finalized.signedTransaction, 753),
     finalized.hashHex,
   );
 

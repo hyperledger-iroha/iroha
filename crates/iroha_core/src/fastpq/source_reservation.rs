@@ -1,4 +1,9 @@
-//! Transaction-local reservations for exact, caller-measured FASTPQ source occurrences.
+//! Journaled reservations for exact FASTPQ source contributions.
+//!
+//! The complete-entry adapter keeps one whole ordered entry bundle in one replaceable
+//! contribution. Its M/S are one public frame; independently measured occurrence
+//! frames must never be summed for production entry accounting. The occurrence API
+//! remains a lower-level accounting test surface.
 //!
 //! This internal component supplies accounting and capability lifetime checks only.
 //! The State adapter must own logical entry creation, authenticated context/policy,
@@ -126,10 +131,12 @@ pub(crate) struct ReservationContext {
     pub(crate) scope_tag: u64,
 }
 
-/// Exact measurement of one nonempty complete occurrence or growing prefix.
-/// Its one statement contributes T=1 and M=S; it is not a measurement certificate.
+/// Exact replacement contribution, with one complete statement frame M=S.
+/// The occurrence constructor fixes T=1; the entry-bundle adapter measures its
+/// complete ordered occurrence slice. This is not a measurement certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OccurrenceUsage {
+    transcripts: u64,
     deltas: u64,
     input_bytes: u64,
     statement_bytes: u64,
@@ -151,6 +158,7 @@ impl OccurrenceUsage {
             ));
         }
         Ok(Self {
+            transcripts: 1,
             deltas,
             input_bytes,
             statement_bytes,
@@ -160,7 +168,7 @@ impl OccurrenceUsage {
     fn usage(self) -> SourceUsage {
         SourceUsage {
             executed_entries: 0,
-            transcripts: 1,
+            transcripts: self.transcripts,
             deltas: self.deltas,
             input_transcript_bytes: self.input_bytes,
             max_statement_bytes: self.statement_bytes,
@@ -188,6 +196,8 @@ pub(crate) enum ReservationInvariant {
     StaleCheckpoint,
     /// A nonempty occurrence must have positive delta and canonical frame counts.
     EmptyOccurrence,
+    /// A complete-entry measurement is inconsistent with its one-frame shape.
+    InvalidEntryBundleMeasurement,
     /// A sum cannot be represented in the fixed accounting integer.
     UsageOverflow {
         /// First overflowing E/T/D/I/M/S dimension.
@@ -586,7 +596,8 @@ impl ReservationTransaction<'_> {
         })
     }
 
-    /// Reserve one nonempty complete occurrence under an existing logical entry.
+    /// Reserve one measured statement contribution under an existing logical entry.
+    /// The complete-entry adapter may supply an empty contribution retaining E only.
     pub(crate) fn reserve(
         &mut self,
         owner: &EntryOwner,
@@ -600,7 +611,7 @@ impl ReservationTransaction<'_> {
         self.update_slot(owner, id, None, usage)
     }
 
-    /// Replace the complete prefix atomically; T stays one and M can decrease.
+    /// Replace the complete contribution atomically; T is measured and M can decrease.
     /// The old handle becomes stale only after a successful replacement.
     pub(crate) fn replace(
         &mut self,
@@ -793,3 +804,6 @@ impl Drop for ReservationTransaction<'_> {
 #[cfg(test)]
 #[path = "source_reservation/tests.rs"]
 mod tests;
+
+/// Exact complete-entry reservation adapter; occurrence accounting stays internal.
+pub(crate) mod entry_bundle;

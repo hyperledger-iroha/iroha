@@ -44,7 +44,7 @@ const CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`;
 const SECOND_CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${NEW_ACCOUNT_ID}`;
 const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
-const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID, 753);
 const CANONICAL_REQUEST_AUTH = Object.freeze({
   accountId: AUTHORITY_ID_RAW,
   privateKey: Buffer.alloc(32, 0x31),
@@ -224,7 +224,7 @@ test("hashInstructionBatch serializes instructions and delegates to native", () 
     },
     (transaction) => {
       assert.equal(
-        transaction.hashInstructionBatch([{ Log: { level: "INFO", msg: "bound" } }]),
+        transaction.hashInstructionBatch([{ Log: { level: "INFO", msg: "bound" } }], 753),
         fakeHash.toString("hex"),
       );
       assert.deepEqual(

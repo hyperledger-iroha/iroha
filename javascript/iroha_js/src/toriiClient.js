@@ -1489,9 +1489,9 @@ export class LocalSigningContext {
 
   /**
    * @param {import("./networkId.js").NetworkId} networkId Exact NetworkId expected in every draft.
-   * @param {number} [chainDiscriminant=753] Exact I105 deployment discriminant.
+   * @param {number} chainDiscriminant Exact I105 deployment discriminant.
    */
-  constructor(networkId, chainDiscriminant = 753) {
+  constructor(networkId, chainDiscriminant) {
     networkIdBytes(networkId, "LocalSigningContext.networkId");
     if (!Number.isInteger(chainDiscriminant)
       || chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
@@ -3048,6 +3048,7 @@ export class ToriiClient {
       "registerVerifyingKey response",
       {
         networkId: signingContext.networkId,
+        networkPrefix: signingContext.chainDiscriminant,
         operation: "register",
         request: normalizedPayload,
       },
@@ -3081,6 +3082,7 @@ export class ToriiClient {
       "updateVerifyingKey response",
       {
         networkId: signingContext.networkId,
+        networkPrefix: signingContext.chainDiscriminant,
         operation: "update",
         request: normalizedPayload,
       },
@@ -3358,6 +3360,7 @@ export class ToriiClient {
     qualifyingTransferCount,
     options,
   ) {
+    const signingContext = requireLocalDraftSigningContext(this._localSigningContext, "quoteValidationFeeHijiri");
     const {
       VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
       VALIDATION_FEE_HIJIRI_QUOTE_PATH,
@@ -3483,6 +3486,7 @@ export class ToriiClient {
     return verifyValidationFeeHijiriQuoteResponseV1(
       responseNorito,
       requestNorito,
+      signingContext.chainDiscriminant,
     );
   }
 
@@ -3498,6 +3502,7 @@ export class ToriiClient {
     checkpoint = null,
     options,
   ) {
+    const signingContext = requireLocalDraftSigningContext(this._localSigningContext, "getValidationFeeCurrentPolicyProofPage");
     const {
       VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
       VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
@@ -3553,6 +3558,7 @@ export class ToriiClient {
       proofNorito,
       normalizedBinding,
       normalizedCheckpoint,
+      signingContext.chainDiscriminant,
     );
     const promotedCheckpoint = Object.freeze({
       height: projection.evaluated_block_height,
@@ -9778,7 +9784,8 @@ export class ToriiClient {
     // Complete native request validation before consulting the off-wire trust
     // intent so malformed instruction archives fail before any network I/O.
     const { noritoEncodeMultisigProposeRequest } = await loadToriiOptionalModule();
-    const requestBody = noritoEncodeMultisigProposeRequest(payload);
+    requireLocalDraftSigningContext(this._localSigningContext, "proposeMultisig");
+    const requestBody = noritoEncodeMultisigProposeRequest(payload, this._localSigningContext.chainDiscriminant);
     const draftIntent = normalizeLocalTransactionDraftIntent(
       request,
       "proposeMultisig",
@@ -23435,6 +23442,7 @@ async function validateUnsignedResponsePayloadBinding(
       strictDecodeBase64(response.transaction_payload_b64),
       authority,
       expectedAdmissionIntent,
+      localSigningContext.chainDiscriminant,
     );
   } catch (error) {
     rejectType(`${context}.transaction_payload_b64 must contain one canonical transaction payload bound to the requested signer`, { cause: error });
