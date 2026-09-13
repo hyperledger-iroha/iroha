@@ -1642,10 +1642,10 @@ where
                             return Err(StoredLookupErrorV1::Context);
                         }
                         for row in 0..tile.len {
-                            values[0].0[row] *= values[2].0[row]
-                                + beta_value * sigma.fields.0[start + row]
-                                + gamma_value;
-                            values[1].0[row] *= values[2].0[row] + delta * beta_term + gamma_value;
+                            let value = values[2].0[row];
+                            values[0].0[row] *=
+                                value + beta_value * sigma.fields.0[start + row] + gamma_value;
+                            values[1].0[row] *= value + delta * beta_term + gamma_value;
                             beta_term *= omega;
                         }
                     }
