@@ -1,5 +1,5 @@
 #[test]
-fn transaction_height_expiry_is_exclusive_when_ttl_is_optional() {
+fn transaction_height_expiry_is_exclusive_when_height_expiry_is_optional() {
     use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
     use iroha_model_base::metadata::Metadata;
     use iroha_logger::Level;
@@ -42,12 +42,14 @@ fn transaction_height_expiry_is_exclusive_when_ttl_is_optional() {
         )
         .with_ingress_enforcement(false, false);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let time_source = TimeSource::new_fixed(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("stateless checks accept optional but present height expiry");
         let mut ivm_cache = IvmCache::new();

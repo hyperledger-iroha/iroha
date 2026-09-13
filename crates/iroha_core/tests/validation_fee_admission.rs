@@ -63,10 +63,10 @@ use iroha_executor_data_model::isi::multisig::MultisigPropose;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::topology::DataSpaceId;
-use iroha_primitives::{json::Json, numeric::NumericSpec};
+use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource};
 use mv::storage::StorageReadOnly;
 use sha2::{Digest as _, Sha256};
-use std::{num::NonZeroU64, sync::Arc};
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 7_202;
 const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
@@ -362,12 +362,15 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
         .max_clock_drift();
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
-    AcceptedTransaction::accept(
+    // Fee-policy fixtures must not age against the process-wide NTS clock.
+    let time_source = TimeSource::new_fixed(tx.creation_time());
+    AcceptedTransaction::accept_with_time_source(
         tx,
         state.network_id_ref(),
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
+        &time_source,
     )
     .expect("transaction admission should pass stateless checks")
 }
@@ -1342,12 +1345,15 @@ fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
         .max_clock_drift();
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
-    match AcceptedTransaction::accept(
+    // Keep signature failures independent of elapsed test time and NTS offsets.
+    let time_source = TimeSource::new_fixed(tx.creation_time());
+    match AcceptedTransaction::accept_with_time_source(
         tx,
         state.network_id_ref(),
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
+        &time_source,
     ) {
         Ok(_) => "ok".to_string(),
         Err(error) => format!("{error:?}"),
@@ -1358,6 +1364,36 @@ fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
         .assets()
         .get(asset_id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
+}
+#[test]
+fn stateless_admission_helpers_use_fixture_time() {
+    let (state, user, user_key_pair, recipient, _, fee_asset) = test_state();
+    let mut builder = TransactionBuilder::new(
+        *state.network_id_ref(),
+        user.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        AssetId::new(fee_asset, user),
+        1_u32,
+        recipient,
+    )]);
+    // This envelope has expired on any live clock, but is valid at fixture time.
+    builder.set_creation_time(Duration::from_millis(1));
+    builder.set_ttl(Duration::from_millis(1));
+    let tx = builder.clone().sign(user_key_pair.private_key());
+    assert_eq!(accept_transaction(&state, tx.clone()).hash(), tx.hash());
+    assert_eq!(accept_transaction_error(&state, tx.clone()), "ok");
+
+    builder.set_creation_time(Duration::from_millis(2));
+    let other_payload = builder.sign(user_key_pair.private_key());
+    let mut tampered = tx;
+    tampered.set_signature(other_payload.signature().clone());
+    let error = accept_transaction_error(&state, tampered);
+    assert!(
+        error.starts_with("SignatureVerification("),
+        "fixture admission must reach signature verification: {error}"
+    );
 }
 #[test]
 fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
