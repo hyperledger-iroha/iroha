@@ -318,7 +318,49 @@ pub(crate) fn verify_constructed_atomic_private_settlement_stark_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::proof_managed_note_stark::fixed_query_audit;
     use crate::private_settlement::sidecar_store::tests::sidecar_fixture;
+
+    fn with_fixed_query_adapter<R>(
+        run: impl FnOnce(&AtomicPrivateSettlementStarkAdapterV1<'_>) -> R,
+    ) -> R {
+        let fixture = sidecar_fixture();
+        let manifest = &fixture.sidecar.manifest;
+        let statement = &fixture.sidecar.payload.statement;
+        let internal = internal_statement_v1(manifest, statement).expect("internal statement");
+        let profile = relation_profile_v1(manifest, statement).expect("relation profile");
+        let adapter = AtomicPrivateSettlementStarkAdapterV1::new(
+            manifest,
+            statement,
+            &internal,
+            *manifest.network_id.as_genesis_hash().as_ref(),
+            manifest.authority_context_height,
+            profile,
+        );
+        run(&adapter)
+    }
+
+    #[test]
+    fn aps_fixed_queries_match_full_lde_at_all_fixture_queries_and_boundaries() {
+        with_fixed_query_adapter(|adapter| {
+            fixed_query_audit::assert_profile_matches_full_lde_v1(adapter);
+        });
+    }
+
+    #[test]
+    fn aps_malformed_wire_is_rejected_before_fixed_column_construction() {
+        with_fixed_query_adapter(|adapter| {
+            fixed_query_audit::assert_malformed_rejected_before_fixed_v1(adapter);
+        });
+    }
+
+    #[test]
+    #[ignore = "measurement: compares exact full-LDE and selected fixed evaluation; no proof generation"]
+    fn measure_aps_fixed_query_evaluation_eight_workers() {
+        with_fixed_query_adapter(|adapter| {
+            fixed_query_audit::measure_profile_eight_workers_v1(adapter, "aps");
+        });
+    }
 
     #[test]
     fn profile_is_closed_and_uses_distinct_wire_magic() {

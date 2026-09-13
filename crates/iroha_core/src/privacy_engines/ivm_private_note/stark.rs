@@ -961,6 +961,7 @@ pub(crate) fn verify_private_note_stark_v1(
 mod tests {
     use super::*;
     use crate::privacy_engines::ivm_private_note::tests::{fixture, three_output_fixture};
+    use crate::privacy_engines::proof_managed_note_stark::fixed_query_audit;
     use iroha_data_model::privacy::{
         PrivacyActionDigestV1, PrivacyEngineManifestDigestV1,
         PrivacyNativeConsensusBindingValidationErrorV1, PrivacyParameterDigestV1,
@@ -1161,6 +1162,22 @@ mod tests {
         );
     }
     #[test]
+    fn private_note_fixed_queries_match_full_lde_at_all_fixture_queries_and_boundaries() {
+        let value = fixture();
+        let (binding, limits) = consensus_material(&value.statement);
+        let adapter = PrivateNoteStarkAdapterV1::new(&value.statement, &binding, &limits);
+        fixed_query_audit::assert_profile_matches_full_lde_v1(&adapter);
+    }
+
+    #[test]
+    fn private_note_malformed_wire_is_rejected_before_fixed_column_construction() {
+        let value = fixture();
+        let (binding, limits) = consensus_material(&value.statement);
+        let adapter = PrivateNoteStarkAdapterV1::new(&value.statement, &binding, &limits);
+        fixed_query_audit::assert_malformed_rejected_before_fixed_v1(&adapter);
+    }
+
+    #[test]
     fn public_input_digest_commits_the_typed_consensus_binding_on_every_axis() {
         let value = fixture();
         let (binding, limits) = consensus_material(&value.statement);
@@ -1320,6 +1337,10 @@ mod tests {
         assert!(proof.len() <= PRIVATE_NOTE_PARAMETERS_V1.maximum_proof_bytes);
         super::super::verify_ivm_private_note_v1(&value.statement, &binding, &limits, &proof)
             .expect("full-domain private-note facade verification");
+        fixed_query_audit::assert_proof_queries_match_full_lde_v1(
+            &PrivateNoteStarkAdapterV1::new(&value.statement, &binding, &limits),
+            &proof,
+        );
         let mut rejected_draft_magic = proof.clone();
         rejected_draft_magic[..4].copy_from_slice(b"IPN2");
         assert!(

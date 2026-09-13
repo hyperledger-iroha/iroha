@@ -1373,6 +1373,30 @@ impl LifecycleLedgerRecordV1 {
         self.terminal = terminal.map(PersistedTerminalV1::from_schema);
         self
     }
+    /// Authenticate this exact terminal Validate's retired source and body frame.
+    /// The replay envelope stays ledger-owned and grants no executable authority.
+    pub(super) fn authenticates_retired_terminal_validate_source(
+        &self,
+        verified: &VerifiedHeightContext,
+        frontier: crate::sumeragi::v2::LeaderWireRecoveryAuthority,
+        store: &crate::sumeragi::v2_body_store::V2BodyStore,
+    ) -> bool {
+        if self.work_class() != Some(LifecycleWorkClass::Validate)
+            || self.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || self.continuation() != Some(DurableContinuation::AdvancedNoSuccessor)
+        {
+            return false;
+        }
+        let (Some(key), Some(stage), Some(payload)) =
+            (self.key(), self.stage(), self.durable_payload())
+        else {
+            return false;
+        };
+        self.replay_authority
+            .authenticates_retired_terminal_validate_source(
+                verified, key, stage, payload, frontier, store,
+            )
+    }
     /// Compare an ordinary body's execution generation without exposing its
     /// stored replay envelope. Authentication remains owned by the body census.
     pub(super) fn ordinary_body_is_obsolete_for_decision(

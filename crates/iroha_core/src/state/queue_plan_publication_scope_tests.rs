@@ -178,3 +178,384 @@ fn coordinator_publication_authentication_failure_cannot_change_durable_inventor
             .is_none()
     );
 }
+
+// QueuePlan publication controls use explicit handshakes, never sleep-based schedules.
+#[test]
+fn pending_queue_plan_busy_kura_releases_state_and_reclassifies_after_publication() {
+    for change_incarnation in [false, true] {
+        let (state, validators, _, parent) = configured_single_lane_queue_plan_state();
+        let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            )),
+            &validators,
+            parent.header().height().get(),
+            0x74,
+        );
+        let certificate_hash = Hash::new(&certificate);
+        let successor = empty_global_block_after(Some(&parent));
+        state
+            .kura
+            .store_block(Arc::new(successor.clone()))
+            .expect("durable successor precedes its State publication");
+        let state = Arc::new(state);
+        let canonical_writer = state.kura.canonical_publication_lease();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let writer_state = Arc::clone(&state);
+        let writer = std::thread::spawn(move || {
+            let observed = Arc::clone(&writer_state);
+            let calls = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+            let observed_calls = calls.clone();
+            let outcome = crate::torii_proxy::observe_queue_plan_authentication_for_test(
+                move || observed_calls.set(observed_calls.get() + 1),
+                || {
+                    queue_plan_publication_wait_observer::observe(
+                        move || {
+                            assert!(
+                                observed.state_commit_lock.try_lock().is_some(),
+                                "a busy Kura writer must not pin the State fence"
+                            );
+                            assert!(
+                                observed
+                                    .queue_plan_admission_persistence_lock
+                                    .try_lock()
+                                    .is_none(),
+                                "the admission mutation owner must survive the released interval"
+                            );
+                            waiting_tx
+                                .send(())
+                                .expect("announce the released State boundary");
+                            resume_rx
+                                .recv_timeout(Duration::from_secs(5))
+                                .expect("resume after the explicit State publication");
+                        },
+                        || {
+                            writer_state.persist_classified_queue_plan_admission(
+                                &certificate,
+                                QueuePlanAdmissionPersistenceScope::Admission,
+                            )
+                        },
+                    )
+                },
+            );
+            (outcome, calls.get())
+        });
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("admission reaches the released boundary behind the held Kura writer");
+        {
+            let _state_fence = state
+                .state_commit_lock
+                .try_lock()
+                .expect("publication is available while Kura remains exclusively owned");
+            // This mutates the block-hash journal that the old StateView owned.
+            // Reaching the resume handshake therefore requires its view to be dropped.
+            state.append_committed_block_header_for_tests(successor.header());
+            if change_incarnation {
+                let _ = state.set_lane_incarnation_for_test(
+                    LaneId::SINGLE,
+                    Hash::new(b"published-incarnation-during-kura-contention"),
+                );
+            }
+        }
+        drop(canonical_writer);
+        resume_tx
+            .send(())
+            .expect("release the observer after State publication");
+        let (outcome, calls) = writer.join().expect("join the owned admission writer");
+        let outcome = outcome.expect("reclassify at the newly published State frontier");
+        assert_eq!(calls, 1, "frontier retries reuse immutable authentication");
+        assert_eq!(
+            u64::try_from(state.committed_height()).expect("height fits u64"),
+            successor.header().height().get()
+        );
+        if change_incarnation {
+            assert!(
+                matches!(
+                    outcome,
+                    PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+                        disposition: PendingQueuePlanAdmissionDisposition::Stale,
+                        ..
+                    }
+                ),
+                "the old incarnation must not survive the released classification: {outcome:?}"
+            );
+            assert!(
+                state
+                    .kura
+                    .pending_queue_plan_admission_certificate(certificate_hash)
+                    .expect("inspect rejected stale sidecar")
+                    .is_none()
+            );
+        } else {
+            assert!(
+                matches!(outcome,
+                    PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                        certificate_hash: actual, inserted: true, ..
+                    } if actual == certificate_hash
+                ),
+                "unchanged authority becomes durable after exact frontier catch-up"
+            );
+        }
+    }
+}
+
+#[test]
+fn pending_queue_plan_frontier_mismatch_preserves_all_retirement_candidates() {
+    for durable_lead in [-1_i8, 1, 2] {
+        let (state, validators, _, parent) = configured_single_lane_queue_plan_state();
+        let (binding, first) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            )),
+            &validators,
+            parent.header().height().get(),
+            0x75,
+        );
+        let second = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+            &binding,
+            &validators,
+            &[2, 3],
+        );
+        let incoming = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+            &binding,
+            &validators,
+            &[0, 3],
+        );
+        assert_ne!(first, second);
+        assert_ne!(incoming, first);
+        assert_ne!(incoming, second);
+        // Seed two independently authenticated signer subsets in the raw storage fixture.
+        // Classification would retain one and retire the duplicate, but only after preflight.
+        for certificate in [&first, &second] {
+            state
+                .kura
+                .persist_pending_queue_plan_admission_certificate(certificate)
+                .expect("seed an exact retirement candidate");
+        }
+        let before = state
+            .kura
+            .pending_queue_plan_admission_certificates()
+            .expect("capture both exact sidecar owners");
+        let successor = empty_global_block_after(Some(&parent));
+        if durable_lead < 0 {
+            state.append_committed_block_header_for_tests(successor.header());
+        } else {
+            state
+                .kura
+                .store_block(Arc::new(successor.clone()))
+                .expect("advance the durable frontier alone");
+            if durable_lead > 1 {
+                let later = empty_global_block_after(Some(&successor));
+                state
+                    .kura
+                    .store_block(Arc::new(later))
+                    .expect("advance beyond the one-ahead reconciliation case");
+            }
+        }
+        let error = state
+            .persist_classified_queue_plan_admission(
+                &incoming,
+                QueuePlanAdmissionPersistenceScope::Admission,
+            )
+            .expect_err("every unmatched frontier must refuse retirement and publication");
+        assert!(matches!(
+            error,
+            MergeLedgerCommitError::Persistence(
+                crate::kura::Error::QueuePlanAdmissionDurableHeightMismatch { .. }
+            )
+        ));
+        assert_eq!(
+            state
+                .kura
+                .pending_queue_plan_admission_certificates()
+                .expect("read untouched retirement candidates"),
+            before
+        );
+        assert!(
+            state
+                .kura
+                .pending_queue_plan_admission_certificate(Hash::new(&incoming))
+                .expect("inspect the unpublished incoming certificate")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn pending_queue_plan_checked_publication_deduplicates_and_retires_alternate_subsets() {
+    let (state, validators, _, parent) = configured_single_lane_queue_plan_state();
+    let (binding, first) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        )),
+        &validators,
+        parent.header().height().get(),
+        0x76,
+    );
+    let second = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &binding,
+        &validators,
+        &[2, 3],
+    );
+    let incoming = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &binding,
+        &validators,
+        &[0, 3],
+    );
+    for certificate in [&first, &second] {
+        state
+            .kura
+            .persist_pending_queue_plan_admission_certificate(certificate)
+            .expect("seed alternate signer subsets");
+    }
+    let inventory = state
+        .kura
+        .pending_queue_plan_admission_certificates()
+        .expect("read deterministic inventory order");
+    let (expected_hash, expected_bytes) = inventory[0].clone();
+    let outcome = state
+        .persist_classified_queue_plan_admission(
+            &incoming,
+            QueuePlanAdmissionPersistenceScope::Admission,
+        )
+        .expect("reuse one exact logical owner after guarded retirement");
+    assert!(matches!(outcome,
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+            certificate_hash, certificate, inserted: false, ..
+        } if certificate_hash == expected_hash && certificate == expected_bytes
+    ));
+    assert_eq!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificates()
+            .expect("read deduplicated inventory"),
+        vec![(expected_hash, expected_bytes.clone())]
+    );
+    let repeated = state
+        .persist_classified_queue_plan_admission(
+            &expected_bytes,
+            QueuePlanAdmissionPersistenceScope::Admission,
+        )
+        .expect("exact-hash retry after deduplication");
+    assert!(matches!(repeated,
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+            certificate_hash, inserted: false, ..
+        } if certificate_hash == expected_hash
+    ));
+}
+
+#[test]
+fn pending_queue_plan_stale_short_circuit_never_waits_for_kura_publication() {
+    let (state, validators, _, parent) = configured_single_lane_queue_plan_state();
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        )),
+        &validators,
+        parent.header().height().get(),
+        0x77,
+    );
+    let _ = state.set_lane_incarnation_for_test(LaneId::SINGLE, Hash::new(b"stale-before-kura"));
+    let _canonical_writer = state.kura.canonical_publication_lease();
+    let outcome = queue_plan_publication_wait_observer::observe(
+        || panic!("stale classification must return before the Kura wait boundary"),
+        || {
+            state.persist_classified_queue_plan_admission(
+                &certificate,
+                QueuePlanAdmissionPersistenceScope::Admission,
+            )
+        },
+    )
+    .expect("return the stale disposition with Kura still exclusively owned");
+    assert!(matches!(
+        outcome,
+        PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+            disposition: PendingQueuePlanAdmissionDisposition::Stale,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn pending_queue_plan_height_mismatch_preserves_stale_conflicting_binding() {
+    let (state, validators, _, parent) = configured_single_lane_queue_plan_state();
+    let routing = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let entrypoint = queue_plan_entrypoint_for_state_test(&state, 0x78);
+    let (old_binding, old_certificate) = queue_plan_admission_certificate_for_entrypoint_state_test(
+        &state,
+        routing.clone(),
+        &validators,
+        parent.header().height().get(),
+        0x78,
+        &entrypoint,
+    );
+    let old_hash = state
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&old_certificate)
+        .expect("seed a certificate that the new State will classify as stale");
+    let successor = empty_global_block_after(Some(&parent));
+    state.append_committed_block_header_for_tests(successor.header());
+    let _ =
+        state.set_lane_incarnation_for_test(LaneId::SINGLE, Hash::new(b"replacement-authority"));
+    let (new_binding, incoming) = queue_plan_admission_certificate_for_entrypoint_state_test(
+        &state,
+        routing,
+        &validators,
+        successor.header().height().get(),
+        0x79,
+        &entrypoint,
+    );
+    assert_eq!(old_binding.entrypoint_hash, new_binding.entrypoint_hash);
+    assert_ne!(old_binding, new_binding);
+    let carrier_height = successor.header().height().get() + 1;
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&old_certificate, carrier_height)
+            .expect("classify retained old authority")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&incoming, carrier_height)
+            .expect("classify replacement authority")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    assert!(matches!(
+        state.persist_classified_queue_plan_admission(
+            &incoming,
+            QueuePlanAdmissionPersistenceScope::Admission,
+        ),
+        Err(MergeLedgerCommitError::Persistence(
+            crate::kura::Error::QueuePlanAdmissionDurableHeightMismatch { .. }
+        ))
+    ));
+    assert_eq!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificates()
+            .expect("inspect the unretired conflicting owner"),
+        vec![(old_hash, old_certificate)]
+    );
+    assert!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificate(Hash::new(&incoming))
+            .expect("inspect unpublished replacement")
+            .is_none()
+    );
+}

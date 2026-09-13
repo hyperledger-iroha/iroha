@@ -1908,29 +1908,35 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         ),
     ),
     (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "crates/iroha_core/src/state.rs",
         "fn",
         "persist_classified_queue_plan_admission",
         (
             "const FRONTIER_RECONCILIATION_TIMEOUT: Duration = Duration::from_millis(250);",
             "self.queue_plan_admission_persistence_lock.lock()",
-            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "self.authenticate_pending_queue_plan_admission(bytes)?",
             "pending_queue_plan_admission_certificate(incoming_hash)?",
             "pending_queue_plan_admission_certificates_bounded(",
             "self.kura.pending_queue_plan_admission_capacity()",
             "existing.registry_key != incoming.registry_key",
             "existing.certificate.binding == incoming.certificate.binding",
+            "loop {",
             "self.state_commit_lock.lock()",
             "Self::classify_pending_queue_plan_admission_in_view(",
             "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
             "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
             "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
-            "verify_pending_queue_plan_admission_durable_height(committed_height)",
             "another live QueuePlan binding already owns the same logical admission",
-            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "drop(state_view);",
+            "try_queue_plan_publication_at_height(committed_height)",
+            "Ok(None) => {",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "self.kura.wait_for_queue_plan_publication();",
+            "Ok(Some(publication)) =>",
+            "publication.retire(hash)?;",
+            "publication.persist(bytes)",
             "expected_durable_height != committed_height",
             "one_ahead != Some(actual_durable_height)",
-            "parking_lot::MutexGuard::unlock_fair(state_commit);",
             "Instant::now() >= *deadline",
             "std::thread::yield_now();",
             "Err(error) => return Err(error.into())",
@@ -1939,27 +1945,26 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     (
         "crates/iroha_core/src/kura.rs",
         "fn",
-        "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+        "try_queue_plan_publication_at_height",
         (
-            "self.ensure_canonical_storage_not_poisoned()?",
-            "self.canonical_chain_lock.lock()",
-            "self.block_store.lock().read_exact_durable_index_count()?",
+            "Result<Option<KuraQueuePlanPublicationGuard",
+            "self.ensure_canonical_storage_not_poisoned()?;",
+            "let Some(canonical_guard) = self.canonical_chain_lock.try_lock() else {",
+            "return Ok(None);",
+            "self.block_store.lock().read_exact_durable_index_count()?;",
             "actual_durable_height != expected_durable_height",
             "Error::QueuePlanAdmissionDurableHeightMismatch",
-            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+            "Ok(Some(KuraQueuePlanPublicationGuard {",
+            "kura: self,",
+            "_guard: canonical_guard,",
         ),
     ),
     (
         "crates/iroha_core/src/kura.rs",
         "fn",
-        "verify_pending_queue_plan_admission_durable_height",
+        "wait_for_queue_plan_publication",
         (
-            "self.ensure_canonical_storage_not_poisoned()?",
-            "self.canonical_chain_lock.lock()",
-            "self.block_store.lock().read_exact_durable_index_count()?",
-            "actual_durable_height != expected_durable_height",
-            "Error::QueuePlanAdmissionDurableHeightMismatch",
-            "Ok(())",
+            "parking_lot::MutexGuard::unlock_fair(self.canonical_chain_lock.lock());",
         ),
     ),
     (
@@ -2179,6 +2184,31 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "Some(reveal.signed_transaction().hash())",
             "collect::<BTreeSet<_>>()",
             "resolve_required_queue_plan_pending_obligations(required, committed_signed_identities)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "struct",
+        "KuraQueuePlanPublicationGuard",
+        (
+            "kura: &'a Kura,",
+            "_guard: parking_lot::MutexGuard<'a, ()>,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "KuraQueuePlanPublicationGuard<'_>::retire",
+        (
+            ".remove_pending_queue_plan_admission_certificate(hash)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "KuraQueuePlanPublicationGuard<'_>::persist",
+        (
+            ".persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
         ),
     ),
 )
@@ -2405,21 +2435,30 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         ),
     ),
     (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
+        "crates/iroha_core/src/state.rs",
         "fn",
         "persist_classified_queue_plan_admission",
         (
             "let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();",
+            "let incoming = self.authenticate_pending_queue_plan_admission(bytes)?;",
             "pending_queue_plan_admission_certificates_bounded(",
             "let state_commit = self.state_commit_lock.lock();",
             "let state_view = self.view();",
-            "let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(",
-            "let persistence_result =",
-            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "let disposition = Self::classify_pending_queue_plan_admission_in_view(",
+            "return Ok(PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission });",
+            "let existing_disposition = Self::classify_pending_queue_plan_admission_in_view(",
+            "drop(state_view);",
+            "let persistence_result = match self",
+            ".try_queue_plan_publication_at_height(committed_height)",
+            "Ok(None) => {",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);\n                    #[cfg(test)]",
+            "self.kura.wait_for_queue_plan_publication();\n                    continue;",
+            "Ok(Some(publication)) =>",
+            "publication.retire(hash)?;",
+            "publication.persist(bytes)",
             "match persistence_result {",
             "one_ahead != Some(actual_durable_height)",
-            "drop(state_view);",
-            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);\n                    let deadline =",
             ".get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT)",
             "Instant::now() >= *deadline",
             "std::thread::yield_now();",
@@ -2428,13 +2467,15 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/kura.rs",
         "fn",
-        "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+        "try_queue_plan_publication_at_height",
         (
-            "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "let Some(canonical_guard) = self.canonical_chain_lock.try_lock() else {",
+            "return Ok(None);",
             "let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;",
             "if actual_durable_height != expected_durable_height",
             "return Err(Error::QueuePlanAdmissionDurableHeightMismatch",
-            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)",
+            "Ok(Some(KuraQueuePlanPublicationGuard {",
+            "_guard: canonical_guard,",
         ),
     ),
     (
@@ -2500,12 +2541,14 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
     ),
     (
         "crates/iroha_core/src/kura/tests/03_preflight_and_merge_entry.rs",
-        "pending_queue_plan_admission_exact_height_rejects_frontier_drift_before_write",
+        "pending_queue_plan_publication_guard_checks_height_before_exposing_mutations",
         (
-            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(1, &bytes)",
+            "try_queue_plan_publication_at_height(1)",
             "!kura.pending_queue_plan_admission_dir().exists()",
-            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(0, &bytes)",
-            "verify_pending_queue_plan_admission_durable_height(1)",
+            "try_queue_plan_publication_at_height(0)",
+            "kura.canonical_chain_lock.try_lock().is_none()",
+            "publication.persist(&bytes)",
+            "publication.retire(hash)",
             "Some(bytes)",
         ),
     ),
@@ -2661,6 +2704,40 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
             "tombstoned_expired: 0",
             "assert_eq!(queue.queued_len(), 0);",
             "must not tombstone the sole payload source",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/queue_plan_publication_scope_tests.rs",
+        "pending_queue_plan_busy_kura_releases_state_and_reclassifies_after_publication",
+        (
+            "for change_incarnation in [false, true]",
+            "state.kura.canonical_publication_lease()",
+            "queue_plan_publication_wait_observer::observe(",
+            "state.append_committed_block_header_for_tests(successor.header())",
+            "state.set_lane_incarnation_for_test(",
+            "writer.join()",
+            "PendingQueuePlanAdmissionDisposition::Stale",
+            "frontier retries reuse immutable authentication",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/queue_plan_publication_scope_tests.rs",
+        "pending_queue_plan_frontier_mismatch_preserves_all_retirement_candidates",
+        (
+            "for durable_lead in [-1_i8, 1, 2]",
+            "QueuePlanAdmissionDurableHeightMismatch",
+            "read untouched retirement candidates",
+            "inspect the unpublished incoming certificate",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/state/queue_plan_publication_scope_tests.rs",
+        "pending_queue_plan_height_mismatch_preserves_stale_conflicting_binding",
+        (
+            "PendingQueuePlanAdmissionDisposition::Stale",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+            "QueuePlanAdmissionDurableHeightMismatch",
+            "inspect the unretired conflicting owner",
         ),
     ),
 )
@@ -4801,6 +4878,26 @@ def _validate_queue_plan_pending_membership_model_bindings(
     return True
 
 
+def _validate_queue_plan_publication_lock_items(
+    items: dict[tuple[str, str, str], str], errors: list[str]
+) -> None:
+    """Reject recursive canonical locking and authority leaking out of the wait seam."""
+    kura = "crates/iroha_core/src/kura.rs"
+    for symbol in (
+        "KuraQueuePlanPublicationGuard<'_>::retire",
+        "KuraQueuePlanPublicationGuard<'_>::persist",
+    ):
+        item = items.get((kura, "method", symbol), "")
+        if "canonical_chain_lock" in item:
+            errors.append(f"{symbol}: recursive canonical locking under the checked guard")
+    wait = items.get((kura, "fn", "wait_for_queue_plan_publication"), "")
+    if any(token in wait for token in (
+        "->", "state_commit_lock", "StateView", "block_store", "sidecar_lock",
+        "KuraQueuePlanPublicationGuard",
+    )):
+        errors.append("wait_for_queue_plan_publication: wait must carry no State/storage authority")
+
+
 def _validate_queue_plan_pending_membership_contract(
     root: Path, models: Any, errors: list[str]
 ) -> None:
@@ -4913,6 +5010,8 @@ def _validate_queue_plan_pending_membership_contract(
                     f"{root / relative}: QueuePlan pending route-membership "
                     f"item {symbol} is missing source-bound token {token!r}"
                 )
+
+    _validate_queue_plan_publication_lock_items(binding_items, errors)
 
     relative, symbol, tokens = QUEUE_PLAN_PENDING_QUEUE_OWNERSHIP_FREE_FN
     queue_ownership_item = None

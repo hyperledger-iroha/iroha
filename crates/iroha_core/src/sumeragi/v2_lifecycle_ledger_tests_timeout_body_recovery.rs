@@ -105,6 +105,49 @@ fn real_timeout_body_recovery_fixture(case: u8) {
         warm.current_tag(),
         EventTag::new(context.height, 1, Generation::INITIAL)
     );
+    if case == 0 {
+        let frontier = warm
+            .leader_wire_recovery_authority()
+            .expect("actual durable timeout frontier");
+        let terminal_directory = TempDir::new().expect("isolated terminal body directory");
+        let mut terminal_store = fixture.open_store(&terminal_directory);
+        let terminal = fixture.terminal_validate_record(&mut terminal_store, 0, 0x70, 1);
+        assert!(terminal.authenticates_retired_terminal_validate_source(
+            &fixture.verified,
+            frontier,
+            &terminal_store,
+        ));
+        let empty_directory = TempDir::new().expect("missing terminal body directory");
+        let empty_store = fixture.open_store(&empty_directory);
+        assert!(!terminal.authenticates_retired_terminal_validate_source(
+            &fixture.verified,
+            frontier,
+            &empty_store,
+        ));
+        let foreign = fixture.terminal_validate_record(&mut terminal_store, 0, 0x71, 2);
+        for mutation in 0..5 {
+            let mut changed = terminal.clone();
+            match mutation {
+                0 => changed = changed.with_work_class_for_test(LifecycleWorkClass::Fetch),
+                1 => changed = changed.with_terminal_for_test(None),
+                2 => {
+                    changed.continuation =
+                        PersistedDurableContinuationV1::from_schema(DurableContinuation::None);
+                }
+                3 => changed.stage_kind_code = u16::MAX,
+                4 => changed.payload_reference = foreign.payload_reference.clone(),
+                _ => unreachable!(),
+            }
+            assert!(
+                !changed.authenticates_retired_terminal_validate_source(
+                    &fixture.verified,
+                    frontier,
+                    &terminal_store,
+                ),
+                "retired terminal row mutation {mutation} must fail closed",
+            );
+        }
+    }
     drop(warm);
     let wal_before = fs::read(&wal_path).expect("read installed timeout WAL");
     let body_store = fixture.open_store(&body_directory);

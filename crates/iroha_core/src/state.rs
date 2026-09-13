@@ -11970,6 +11970,35 @@ fn record_tiered_snapshot_metrics(backend: &TieredStateBackend, telemetry: &Stat
         }
     }
 }
+/// Thread-local observation of the released QueuePlan publication boundary.
+#[cfg(test)]
+mod queue_plan_publication_wait_observer {
+    std::thread_local! {
+        static OBSERVER: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Invoke the test observer only after the State view and fence are released.
+    pub(super) fn notify() {
+        let observer = OBSERVER.with(|current| current.borrow().clone());
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
+
+    /// Scope one observer to this test thread, restoring it on unwind as well.
+    pub(super) fn observe<T>(observer: impl Fn() + 'static, action: impl FnOnce() -> T) -> T {
+        struct Restore(Option<std::rc::Rc<dyn Fn()>>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = OBSERVER.with(|current| current.replace(self.0.take()));
+            }
+        }
+        let _restore =
+            Restore(OBSERVER.with(|current| current.replace(Some(std::rc::Rc::new(observer)))));
+        action()
+    }
+}
 /// Background worker for tiered snapshot processing.
 struct TieredSnapshotWorker {
     inner: Arc<TieredSnapshotWorkerInner>,
@@ -36022,8 +36051,10 @@ impl State {
     /// or taking the publication fence. Only canonical history, route authority, registry and
     /// application state are rechecked under each fresh view; frontier retries reuse the same
     /// authenticated certificate without extending the lock with repeated signature verification.
-    /// State publication is excluded while classification runs, and Kura checks its exact durable
-    /// height while holding the same canonical-chain lock used by block publication. Admission
+    /// State publication is excluded while classification runs. The State view is dropped before
+    /// durable I/O; contention on Kura's canonical-chain lock fairly releases the State fence and
+    /// waits outside State ownership before a fresh classification. A successful Kura guard checks
+    /// its exact durable height before any retirement or publication. Admission
     /// therefore either linearizes before the next irreversible block write or observes frontier
     /// drift. An exact one-block Kura lead is retried for a bounded interval while fairly releasing
     /// the State fence so the corresponding State publication can finish; Kura-behind and larger
@@ -36143,18 +36174,12 @@ impl State {
                 | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
             }
 
-            let persistence_result = if let Some(certificate) = exact_existing.as_ref() {
-                self.kura
-                    .verify_pending_queue_plan_admission_durable_height(committed_height)
-                    .map(|()| PendingQueuePlanAdmissionPersistenceOutcome::Durable {
-                        admission,
-                        certificate_hash: incoming_hash,
-                        certificate: certificate.clone(),
-                        disposition,
-                        inserted: false,
-                    })
-            } else {
-                let mut retire = duplicate_same_binding.clone();
+            // Classify every retirement against the same immutable State frontier.
+            // No storage mutation is permitted until the exact Kura height has
+            // been checked under a successfully acquired publication guard.
+            let mut retire = Vec::new();
+            if exact_existing.is_none() {
+                retire.clone_from(&duplicate_same_binding);
                 for (hash, existing) in &conflicting_bindings {
                     let existing_disposition = Self::classify_pending_queue_plan_admission_in_view(
                         &state_view,
@@ -36176,27 +36201,51 @@ impl State {
                             .to_owned(),
                     ));
                 }
-                for hash in retire {
-                    self.kura
-                        .remove_pending_queue_plan_admission_certificate(hash)?;
+            }
+            drop(state_view);
+
+            let persistence_result = match self
+                .kura
+                .try_queue_plan_publication_at_height(committed_height)
+            {
+                Ok(None) => {
+                    // Never pin State while waiting behind an unrelated canonical
+                    // writer. The waited lock is released before this loop takes
+                    // State again; neither old classification nor old Kura authority
+                    // survives the released interval.
+                    parking_lot::MutexGuard::unlock_fair(state_commit);
+                    #[cfg(test)]
+                    queue_plan_publication_wait_observer::notify();
+                    self.kura.wait_for_queue_plan_publication();
+                    continue;
                 }
-                if let Some((certificate_hash, certificate, existing)) = same_binding.as_ref() {
-                    self.kura
-                        .verify_pending_queue_plan_admission_durable_height(committed_height)
-                        .map(|()| PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                Err(error) => Err(error),
+                Ok(Some(publication)) => (|| {
+                    // Our own durable sidecar I/O still holds the State fence.
+                    // The guard's methods never reacquire canonical_chain_lock.
+                    for hash in retire {
+                        publication.retire(hash)?;
+                    }
+                    if let Some(certificate) = exact_existing.as_ref() {
+                        Ok(PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                            admission,
+                            certificate_hash: incoming_hash,
+                            certificate: certificate.clone(),
+                            disposition,
+                            inserted: false,
+                        })
+                    } else if let Some((certificate_hash, certificate, existing)) =
+                        same_binding.as_ref()
+                    {
+                        Ok(PendingQueuePlanAdmissionPersistenceOutcome::Durable {
                             admission: existing.clone(),
                             certificate_hash: *certificate_hash,
                             certificate: certificate.clone(),
                             disposition,
                             inserted: false,
                         })
-                } else {
-                    self.kura
-                        .persist_pending_queue_plan_admission_certificate_at_exact_durable_height(
-                            committed_height,
-                            bytes,
-                        )
-                        .map(|certificate_hash| {
+                    } else {
+                        publication.persist(bytes).map(|certificate_hash| {
                             PendingQueuePlanAdmissionPersistenceOutcome::Durable {
                                 admission,
                                 certificate_hash,
@@ -36205,7 +36254,8 @@ impl State {
                                 inserted: true,
                             }
                         })
-                }
+                    }
+                })(),
             };
 
             match persistence_result {
@@ -36223,7 +36273,6 @@ impl State {
                         return Err(error.into());
                     }
 
-                    drop(state_view);
                     parking_lot::MutexGuard::unlock_fair(state_commit);
                     let deadline = reconciliation_deadline
                         .get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT);

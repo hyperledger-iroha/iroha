@@ -14014,23 +14014,29 @@
           "required_tokens": [
             "const FRONTIER_RECONCILIATION_TIMEOUT: Duration = Duration::from_millis(250);",
             "self.queue_plan_admission_persistence_lock.lock()",
-            "decode_and_validate_queue_plan_admission_certificate_v1(",
+            "self.authenticate_pending_queue_plan_admission(bytes)?",
             "pending_queue_plan_admission_certificate(incoming_hash)?",
             "pending_queue_plan_admission_certificates_bounded(",
             "self.kura.pending_queue_plan_admission_capacity()",
             "existing.registry_key != incoming.registry_key",
             "existing.certificate.binding == incoming.certificate.binding",
+            "loop {",
             "self.state_commit_lock.lock()",
             "Self::classify_pending_queue_plan_admission_in_view(",
             "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
             "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
             "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
-            "verify_pending_queue_plan_admission_durable_height(committed_height)",
             "another live QueuePlan binding already owns the same logical admission",
-            "persist_pending_queue_plan_admission_certificate_at_exact_durable_height(",
+            "drop(state_view);",
+            "try_queue_plan_publication_at_height(committed_height)",
+            "Ok(None) => {",
+            "parking_lot::MutexGuard::unlock_fair(state_commit);",
+            "self.kura.wait_for_queue_plan_publication();",
+            "Ok(Some(publication)) =>",
+            "publication.retire(hash)?;",
+            "publication.persist(bytes)",
             "expected_durable_height != committed_height",
             "one_ahead != Some(actual_durable_height)",
-            "parking_lot::MutexGuard::unlock_fair(state_commit);",
             "Instant::now() >= *deadline",
             "std::thread::yield_now();",
             "Err(error) => return Err(error.into())"
@@ -14039,27 +14045,26 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "persist_pending_queue_plan_admission_certificate_at_exact_durable_height",
+          "symbol": "try_queue_plan_publication_at_height",
           "required_tokens": [
-            "self.ensure_canonical_storage_not_poisoned()?",
-            "self.canonical_chain_lock.lock()",
-            "self.block_store.lock().read_exact_durable_index_count()?",
+            "Result<Option<KuraQueuePlanPublicationGuard",
+            "self.ensure_canonical_storage_not_poisoned()?;",
+            "let Some(canonical_guard) = self.canonical_chain_lock.try_lock() else {",
+            "return Ok(None);",
+            "self.block_store.lock().read_exact_durable_index_count()?;",
             "actual_durable_height != expected_durable_height",
             "Error::QueuePlanAdmissionDurableHeightMismatch",
-            "self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)"
+            "Ok(Some(KuraQueuePlanPublicationGuard {",
+            "kura: self,",
+            "_guard: canonical_guard,"
           ]
         },
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "verify_pending_queue_plan_admission_durable_height",
+          "symbol": "wait_for_queue_plan_publication",
           "required_tokens": [
-            "self.ensure_canonical_storage_not_poisoned()?",
-            "self.canonical_chain_lock.lock()",
-            "self.block_store.lock().read_exact_durable_index_count()?",
-            "actual_durable_height != expected_durable_height",
-            "Error::QueuePlanAdmissionDurableHeightMismatch",
-            "Ok(())"
+            "parking_lot::MutexGuard::unlock_fair(self.canonical_chain_lock.lock());"
           ]
         },
         {
@@ -14776,6 +14781,31 @@
             "Ok(None)",
             "decode_exact_queue_plan_admission_registry_marker",
             "Ok(Some(value))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "struct",
+          "symbol": "KuraQueuePlanPublicationGuard",
+          "required_tokens": [
+            "kura: &'a Kura,",
+            "_guard: parking_lot::MutexGuard<'a, ()>,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "method",
+          "symbol": "KuraQueuePlanPublicationGuard<'_>::retire",
+          "required_tokens": [
+            ".remove_pending_queue_plan_admission_certificate(hash)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "method",
+          "symbol": "KuraQueuePlanPublicationGuard<'_>::persist",
+          "required_tokens": [
+            ".persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)"
           ]
         }
       ]

@@ -947,6 +947,30 @@ pub struct Kura {
     /// Retains the temporary storage directory used by isolated Kura instances.
     _temp_store_dir: Option<tempfile::TempDir>,
 }
+/// Exclusive QueuePlan publication authority at one checked durable height.
+///
+/// Construction checks the exact block-store frontier under `canonical_chain_lock`.
+/// State callers retain their publication fence until this guard is dropped. Only
+/// the narrow sidecar methods below may mutate Kura while the guard is held; neither
+/// reacquires the canonical lock. The general read-only publication lease remains
+/// separate and never authorizes mutations.
+pub(crate) struct KuraQueuePlanPublicationGuard<'a> {
+    kura: &'a Kura,
+    _guard: parking_lot::MutexGuard<'a, ()>,
+}
+impl KuraQueuePlanPublicationGuard<'_> {
+    /// Retire an admission classified at this guard's checked State frontier.
+    pub(crate) fn retire(&self, hash: Hash) -> Result<()> {
+        self.kura
+            .remove_pending_queue_plan_admission_certificate(hash)
+    }
+
+    /// Publish exact authenticated bytes at this guard's checked State frontier.
+    pub(crate) fn persist(&self, canonical_certificate_bytes: &[u8]) -> Result<Hash> {
+        self.kura
+            .persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+    }
+}
 #[derive(Debug)]
 struct KuraInstanceIdentityMarker;
 /// Comparison-only identity for one exact live Kura instance.
@@ -11987,18 +12011,22 @@ impl Kura {
     ) -> Result<Hash> {
         self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
     }
-    /// Persist QueuePlan evidence only while the canonical block store is at one exact height.
+    /// Try to authorize QueuePlan publication at one exact durable frontier.
     ///
-    /// Holding `canonical_chain_lock` across the height check and sidecar publication makes this
-    /// operation linearizable with the first irreversible block write. The caller must derive
-    /// `expected_durable_height` from a coherent State view while excluding State publication.
-    pub(crate) fn persist_pending_queue_plan_admission_certificate_at_exact_durable_height(
+    /// Callers derive `expected_durable_height` while excluding State publication,
+    /// but must drop their StateView before this call. A busy canonical writer
+    /// returns `None` without waiting. The caller then releases its State fence,
+    /// waits outside State ownership, and classifies afresh before trying again.
+    /// No retirement or sidecar publication is exposed before the height check.
+    pub(crate) fn try_queue_plan_publication_at_height(
         &self,
         expected_durable_height: u64,
-        canonical_certificate_bytes: &[u8],
-    ) -> Result<Hash> {
+    ) -> Result<Option<KuraQueuePlanPublicationGuard<'_>>> {
         self.ensure_canonical_storage_not_poisoned()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let Some(canonical_guard) = self.canonical_chain_lock.try_lock() else {
+            return Ok(None);
+        };
+        self.ensure_canonical_storage_not_poisoned()?;
         let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
         if actual_durable_height != expected_durable_height {
             return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
@@ -12006,30 +12034,19 @@ impl Kura {
                 actual_durable_height,
             });
         }
-        self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+        Ok(Some(KuraQueuePlanPublicationGuard {
+            kura: self,
+            _guard: canonical_guard,
+        }))
     }
-    /// Verify the canonical block store is at one exact height without rewriting a durable
-    /// QueuePlan certificate.
+
+    /// Wait for a canonical writer outside every State publication fence/view.
     ///
-    /// This is the O(1) retry companion to
-    /// [`Self::persist_pending_queue_plan_admission_certificate_at_exact_durable_height`]. The
-    /// caller must already own the QueuePlan admission mutation lock, which keeps the previously
-    /// authenticated sidecar from being retired while this height check linearizes with block
-    /// publication.
-    pub(crate) fn verify_pending_queue_plan_admission_durable_height(
-        &self,
-        expected_durable_height: u64,
-    ) -> Result<()> {
-        self.ensure_canonical_storage_not_poisoned()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
-        if actual_durable_height != expected_durable_height {
-            return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
-                expected_durable_height,
-                actual_durable_height,
-            });
-        }
-        Ok(())
+    /// This only acquires and fairly releases the canonical lock: it returns no
+    /// authority that could be carried into a later State acquisition. Callers
+    /// must reclassify and try a fresh exact-height publication guard afterward.
+    pub(crate) fn wait_for_queue_plan_publication(&self) {
+        parking_lot::MutexGuard::unlock_fair(self.canonical_chain_lock.lock());
     }
     fn persist_pending_queue_plan_admission_certificate_inner(
         &self,

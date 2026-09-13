@@ -873,16 +873,11 @@ impl AuthenticatedLifecycleRecoveryCut {
                         };
                         ledger.records().iter().any(|record| {
                             claim.exactly_matches_ledger_record(record)
-                                && record
-                                    .replay_authority
-                                    .authenticates_retired_terminal_validate_source(
-                                        pipeline.verified(),
-                                        claim.key,
-                                        claim.stage,
-                                        claim.payload,
-                                        frontier,
-                                        body_store,
-                                    )
+                                && record.authenticates_retired_terminal_validate_source(
+                                    pipeline.verified(),
+                                    frontier,
+                                    body_store,
+                                )
                         })
                     })
             })
