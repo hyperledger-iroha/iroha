@@ -7,10 +7,11 @@
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     compiler_identity::{local_package, registry_release},
-    graph::{GraphErrorV1, collect_local_members},
-    lockfile::LockfileV1,
+    graph::{GraphErrorV1, collect_local_members, resolve_workspace_local},
+    lockfile::{LockContextV1, LockfileV1},
     manifest::{ConcreteDependency, DependencySpec, LocalTarget, PortablePath, parse_manifest},
     package::PackagePlan,
+    resolver::ResolveModeV1,
     workspace::{EffectiveDependency, Workspace, WorkspaceMember},
 };
 use iroha_data_model::musubi::{
@@ -19,7 +20,9 @@ use iroha_data_model::musubi::{
 };
 use ivm::{
     SyscallPolicy,
-    koto_test_driver::discover_declared_test_names_source_v1,
+    koto_test_driver::{
+        declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
+    },
     kotodama::{
         compiler::{CompilerMode, CompilerOptions},
         driver::{
@@ -128,9 +131,24 @@ impl RegistryCompilerSourceV1 for MusubiCache {
             .map_err(|error| CompilerBridgeErrorV1::Cache(error.to_string()))
     }
 }
-/// Execute one authenticated compiler operation for selected workspace packages.
+impl RegistryCompilerSourceV1 for Option<&MusubiCache> {
+    fn load(
+        &self,
+        node: &MusubiVerificationNodeV1,
+    ) -> Result<CachedCompilerPackageV1, CompilerBridgeErrorV1> {
+        self.ok_or_else(|| {
+            CompilerBridgeErrorV1::Cache(
+                "an immutable registry node requires an authenticated cache".to_owned(),
+            )
+        })?
+        .load(node)
+    }
+}
+/// Execute one compiler operation for selected workspace packages.
+///
+/// Local graphs need no registry cache. Every registry node requires an authenticated cache.
 pub fn execute_compiler_graph(
-    cache: &MusubiCache,
+    cache: Option<&MusubiCache>,
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
     lock: &LockfileV1,
@@ -139,7 +157,7 @@ pub fn execute_compiler_graph(
     chain_discriminant: u16,
 ) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
     execute_with_source(
-        cache,
+        &cache,
         workspace,
         selected,
         lock,
@@ -293,6 +311,7 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
     validate_packaged_test_targets(
         plan,
         &manifest.tests,
+        &manifest.contracts,
         &imports,
         &target_packages,
         chain_discriminant,
@@ -413,33 +432,55 @@ fn validate_packaged_contract_targets(
 fn validate_packaged_test_targets(
     plan: &PackagePlan,
     targets: &[LocalTarget],
+    contract_targets: &[LocalTarget],
     imports: &[ImportBinding],
     dependencies: &[SourcePackageUnit],
     chain_discriminant: u16,
 ) -> Result<(), CompilerBridgeErrorV1> {
     let graph = ModuleBuildGraph::default();
+    let mut contracts = BTreeMap::new();
+    for target in contract_targets {
+        for source in
+            packaged_target_source_units(plan, &target.path, PackagedTargetKindV1::Contract)?
+        {
+            contracts.insert(source.source_name.clone(), source);
+        }
+    }
     for target in targets {
         for root in packaged_target_source_units(plan, &target.path, PackagedTargetKindV1::Test)? {
             let source_name = root.source_name.clone();
-            discover_declared_test_names_source_v1(&root).map_err(|error| {
+            let declared_target =
+                declared_test_target_source_v1(&root).map_err(CompilerBridgeErrorV1::Package)?;
+            let contract = declared_target.as_ref().map(|name| {
+                contracts.get(name).ok_or_else(|| CompilerBridgeErrorV1::Package(format!(
+                    "packaged test source `{source_name}` targets `{name}`, which is not a packaged manifest-declared contract"
+                )))
+            }).transpose()?;
+            discover_declared_test_names_source_set_v1(&root, contract).map_err(|error| {
                 CompilerBridgeErrorV1::Package(format!(
-                    "packaged test target `{}` source `{source_name}` is not a direct V1 test root: {error}",
+                    "packaged test target `{}` source `{source_name}` is not a valid V1 test source set: {error}",
                     target.name
                 ))
             })?;
+            let (compile_root, test_sources) = match contract {
+                Some(contract) => (contract.clone(), vec![root]),
+                None => (root, Vec::new()),
+            };
+            let compile_source_name = compile_root.source_name.clone();
             graph
-                .build_test_project(
+                .build_test_project_with_sources(
                     SourceLinkRequest {
-                        root,
+                        root: compile_root,
                         imports: imports.to_vec(),
                         packages: dependencies.to_vec(),
                     },
+                    &test_sources,
                     CompilerOptions {
                         chain_discriminant,
                         mode: CompilerMode::Test,
                         ..CompilerOptions::default()
                     },
-                    &source_name,
+                    &compile_source_name,
                 )
                 .map_err(|diagnostics| {
                     CompilerBridgeErrorV1::Compiler(format!(
@@ -554,6 +595,20 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     }
     lock.validate()
         .map_err(|error| CompilerBridgeErrorV1::Lock(error.to_string()))?;
+    if matches!(&lock.context, LockContextV1::Local { .. }) {
+        let validated = resolve_workspace_local(
+            workspace,
+            selected,
+            Some(lock.clone()),
+            ResolveModeV1::Locked,
+        )
+        .map_err(|error| CompilerBridgeErrorV1::Lock(error.to_string()))?;
+        if validated.is_none() {
+            return Err(CompilerBridgeErrorV1::Lock(
+                "local lock cannot authorize a registry dependency".to_owned(),
+            ));
+        }
+    }
     let local_members =
         collect_local_members(workspace, selected).map_err(|error| graph_error(&error))?;
     let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
@@ -1073,13 +1128,16 @@ exports = ["value"]
         let workspace = load_workspace(temp.path()).expect("workspace");
         let selector: MusubiPackageSelectorV1 = "apps.sora/demo".parse().expect("selector");
         let lock = LockfileV1::new(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                .parse()
-                .expect("network id"),
-            MusubiRegistrySnapshotV1 {
-                finalized_height: 1,
-                finalized_block_hash: [2; 32],
-                index_revision: 1,
+            LockContextV1::Registry {
+                network_id:
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                        .parse()
+                        .expect("network id"),
+                snapshot: MusubiRegistrySnapshotV1 {
+                    finalized_height: 1,
+                    finalized_block_hash: [2; 32],
+                    index_revision: 1,
+                },
             },
             vec![LockedRootV1 {
                 package: selector.clone(),
@@ -1443,6 +1501,58 @@ exports = []
         let library_only = validate_packaged_with_source(&EmptyRegistry, &library_plan, &lock, 1)
             .expect("validate library-only package");
         assert_eq!(with_targets, library_only);
+    }
+    #[test]
+    fn packaged_standalone_tests_use_only_declared_immutable_contract_sources() {
+        let temp = TempDir::new().expect("temporary directory");
+        write_clean_library(temp.path());
+        fs::create_dir_all(temp.path().join("contracts")).expect("contract directory");
+        fs::create_dir_all(temp.path().join("tests")).expect("test directory");
+        fs::write(
+            temp.path().join("contracts/app.ko"),
+            "seiyaku App { fn reward() -> int { return 7; } }",
+        )
+        .expect("contract");
+        fs::write(temp.path().join("tests/unit.ko"), r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn correct() { test::assert(reward() == 7); } }"#).expect("standalone tests");
+        let manifest = r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "demo"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+source-dir = "src"
+exports = []
+[[contract]]
+name = "app"
+path = "contracts/app.ko"
+[[test]]
+name = "unit"
+path = "tests/unit.ko"
+"#;
+        let lock = clean_verification_lock();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.set_library("src");
+        layout.add_contract("contracts/app.ko");
+        layout.add_test("tests/unit.ko");
+        let plan = plan_package(&layout, manifest, &lock).expect("immutable package plan");
+        fs::write(
+            temp.path().join("contracts/app.ko"),
+            "invalid replacement contract",
+        )
+        .expect("mutate ambient target");
+        fs::write(
+            temp.path().join("tests/unit.ko"),
+            "invalid replacement test",
+        )
+        .expect("mutate ambient test");
+        validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 753)
+            .expect("validate exact captured standalone sources");
+        let parsed = parse_manifest(manifest).expect("manifest");
+        assert!(
+            matches!(validate_packaged_test_targets(&plan, &parsed.tests, &[], &[], &[], 753), Err(CompilerBridgeErrorV1::Package(reason)) if reason.contains("not a packaged manifest-declared contract"))
+        );
     }
     #[test]
     fn packaged_test_missing_a_normal_dependency_has_a_dev_boundary_diagnostic() {

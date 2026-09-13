@@ -120,6 +120,9 @@ pub const PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1: usize = 10 * 10
 /// Maximum canonical typed ZK-X509 statement archive accepted from a worker.
 pub const PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1: usize = 256 * 1024;
 /// Exact maximum X5S1 proof returned by the profile-owned worker.
+///
+/// Public proof bytes cross their own boundary and are not wallet-local secret
+/// bundles. The complete signed transaction is bounded separately.
 pub const PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1: usize = ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1;
 /// Parse the sole canonical public spelling of a transparent balance scope.
 ///
@@ -2887,7 +2890,7 @@ mod tests {
         }
     }
     #[test]
-    fn transport_caps_are_nonzero_and_strictly_nested() {
+    fn transport_caps_preserve_request_and_signed_transaction_bounds() {
         const {
             assert!(PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1 > 0);
             assert!(
@@ -2900,7 +2903,7 @@ mod tests {
             );
             assert!(
                 PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1
-                    < PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
+                    < PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1
             );
             assert!(
                 PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1
@@ -3058,6 +3061,15 @@ mod tests {
             .stage(),
             "authority-key-mismatch"
         );
+    }
+    #[test]
+    fn x509_public_proof_boundary_accepts_its_ceiling_beyond_secret_bundle_capacity() {
+        let bytes = vec![0xA5; PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1];
+        assert!(bytes.len() > PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1);
+        let proof = ZkX509CredentialProofBytesV1::try_new(bytes.clone())
+            .expect("public proof capacity is independent of the secret bundle boundary");
+        assert_eq!(proof.as_bytes(), bytes.as_slice());
+        assert_eq!(proof.into_bytes(), bytes);
         assert_eq!(
             ZkX509CredentialProofBytesV1::try_new(Vec::new())
                 .err()

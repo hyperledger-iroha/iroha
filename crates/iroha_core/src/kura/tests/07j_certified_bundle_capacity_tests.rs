@@ -517,6 +517,237 @@ fn certified_bundle_cold_restore_rejects_corrupt_or_missing_completed_history_wi
     }
 }
 
+// Cold startup authenticates every payload attempt against its signed lifecycle
+// record, in addition to the certified source and bundle being tested here.
+fn prepare_restartable_autonomous_certification_for_capacity_payload(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+    payload: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+) -> PreparedAutonomousCertification {
+    let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new(b"kura-certified-bundle-cold-restart-context"),
+    ));
+    let payload = lifecycle_terminal_bound_payload_for_test(payload, height_context_id, signer);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind certified-bundle restart peer");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(payload.network_id, &local_peer)
+        .expect("claim certified-bundle restart process generation");
+    let prepared = prepare_autonomous_certification_for_capacity_payload(
+        kura,
+        lane_config,
+        &payload,
+        signer,
+    );
+    let _ = install_live_lifecycle_cursor_for_terminal_test(
+        kura,
+        &generation,
+        &payload,
+        height_context_id,
+        signer,
+    );
+    prepared
+}
+
+#[test]
+fn sequential_autonomous_primary_certificates_survive_cold_restart() {
+    let temp_dir = TempDir::new().expect("sequential certificate temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let lane_id = LaneId::SINGLE;
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("sequential certificate lane");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("sequential certificate Kura");
+    // The primary lane is recovered by the production constructor before
+    // State restores any secondary-lane geometry.
+
+    let mut expected_sources = Vec::new();
+    for lane_block_height in 1..=2 {
+        let payload = autonomous_capacity_payload_at(
+            lane_id,
+            lane.dataspace_id,
+            lane_block_height,
+            lane_block_height,
+            &signer,
+        );
+        let prepared = prepare_restartable_autonomous_certification_for_capacity_payload(
+            &kura,
+            &lane_config,
+            &payload,
+            &signer,
+        );
+        let expected = prepared.source.clone();
+        kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
+            .expect("sequential certificate advances the durable frontier");
+
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id)
+                .expect("sequential frontier exists")
+                .proposal
+                .descriptor
+                .lane_block_height,
+            lane_block_height,
+        );
+        assert_eq!(
+            kura.durable_autonomous_lane_merge_source(
+                lane_id,
+                lane_block_height,
+                prepared.network_id,
+                prepared.epoch,
+            )
+            .expect("sequential certified bundle is durably readable"),
+            expected,
+        );
+        expected_sources.push((
+            lane_block_height,
+            prepared.network_id,
+            prepared.epoch,
+            expected,
+        ));
+        assert_eq!(
+            kura.certified_bundle_capacity_reserved_bytes()
+                .expect("completed sequential publication has no reservation"),
+            0,
+        );
+    }
+    let latest_frontier = kura
+        .latest_certified_lane_block_frontier(lane_id)
+        .expect("latest sequential frontier exists");
+    let (frontier_path, _) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, &kura.store_root);
+    let frontier_before =
+        fs::read(&frontier_path).expect("read sequential frontier before restart");
+    drop(kura);
+
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect(
+            "cold startup authenticates complete historical bundles without frontier admission",
+        );
+    for (height, network_id, epoch, expected) in expected_sources {
+        assert_eq!(
+            reopened
+                .durable_autonomous_lane_merge_source(lane_id, height, network_id, epoch)
+                .expect("historical certified bundle remains exact after cold restart"),
+            expected,
+        );
+    }
+    assert_eq!(
+        reopened.latest_certified_lane_block_frontier(lane_id),
+        Some(latest_frontier),
+    );
+    assert_eq!(
+        fs::read(&frontier_path).expect("read sequential frontier after restart"),
+        frontier_before,
+    );
+    assert_eq!(
+        reopened
+            .certified_bundle_capacity_reserved_bytes()
+            .expect("historical readback does not reserve publication capacity"),
+        0,
+    );
+    assert!(
+        reopened
+            .certified_bundle_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+
+    let next_payload = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 3, 3, &signer);
+    let next = prepare_restartable_autonomous_certification_for_capacity_payload(
+        &reopened,
+        &lane_config,
+        &next_payload,
+        &signer,
+    );
+    reopened
+        .persist_committed_lane_block_session(&next.session, &next.signer_pops)
+        .expect("future publication retains normal frontier capacity admission");
+    assert_eq!(
+        reopened
+            .latest_certified_lane_block_frontier(lane_id)
+            .expect("future frontier exists")
+            .proposal
+            .descriptor
+            .lane_block_height,
+        3,
+    );
+    assert_eq!(
+        reopened
+            .durable_autonomous_lane_merge_source(lane_id, 3, next.network_id, next.epoch)
+            .expect("future publication remains durably readable"),
+        next.source,
+    );
+    assert_eq!(
+        reopened
+            .certified_bundle_capacity_reserved_bytes()
+            .expect("future publication consumes its full reservation"),
+        0,
+    );
+}
+
+#[test]
+fn sequential_autonomous_restart_rejects_corrupted_historical_bundle() {
+    let temp_dir = TempDir::new().expect("historical bundle corruption temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let lane_id = LaneId::SINGLE;
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("historical corruption lane");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical corruption Kura");
+    for height in 1..=2 {
+        let payload =
+            autonomous_capacity_payload_at(lane_id, lane.dataspace_id, height, height, &signer);
+        let prepared = prepare_restartable_autonomous_certification_for_capacity_payload(
+            &kura,
+            &lane_config,
+            &payload,
+            &signer,
+        );
+        kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
+            .expect("persist complete sequential history before corruption");
+    }
+    let (frontier_path, _) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, &kura.store_root);
+    let frontier_before =
+        fs::read(&frontier_path).expect("read current frontier before corruption");
+    let (bundle_path, _) =
+        Kura::autonomous_lane_merge_bundle_paths_for_entry(lane, &kura.store_root);
+    let mut bundles = fs::read(&bundle_path).expect("read complete bundle history");
+    bundles[0] ^= 1;
+    fs::write(&bundle_path, bundles).expect("corrupt the older bundle's canonical frame");
+    let corrupted_tree = snapshot_regular_test_tree(temp_dir.path());
+    drop(kura);
+
+    let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+        Ok(_) => panic!("cold startup accepted a corrupted historical autonomous bundle"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidData
+                    && path == &bundle_path
+                    && source.to_string()
+                        == "autonomous merge bundle entry is not canonical framed Norito"
+        ),
+        "startup must reject the corrupted historical bundle, not an unrelated failure: {error}",
+    );
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), corrupted_tree);
+    assert_eq!(
+        fs::read(&frontier_path).expect("read current frontier after rejected restart"),
+        frontier_before,
+    );
+}
+
 fn certified_bundle_reserved_for(
     plan: &CertifiedBundleCapacityPlan,
     components: impl IntoIterator<Item = CertifiedBundleCapacityComponent>,

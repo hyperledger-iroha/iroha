@@ -705,9 +705,10 @@ async fn lifecycle() -> Result<()> {
         )
         .await?;
         common_commit(&clients).await?;
+        // Hash the canonical Json metadata frame used by the ledger record owner.
         eprintln!(
             "KAIGI_PRIVACY_FOUR_VALIDATOR_V1:{TEST_NAME}:passed canonical_record_hash={}",
-            iroha_crypto::Hash::new(norito::encode_canonical(&terminal)?)
+            iroha_crypto::Hash::new(norito::encode_canonical(&Json::try_new(&terminal)?)?)
         );
         Ok(())
     }

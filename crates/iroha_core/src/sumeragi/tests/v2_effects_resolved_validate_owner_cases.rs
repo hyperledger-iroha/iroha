@@ -146,7 +146,7 @@ fn reopen_body_owner_fixture(
     let expected_body = transport.body.clone();
     let expected_commitment = transport.canonical_commitment;
     let mut replayed = 0usize;
-    let mut owner = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+    let mut owner = SumeragiV2Adapter::reopen_body_owner_for_test(
         &wal_path,
         directory.path(),
         verified,
@@ -159,6 +159,7 @@ fn reopen_body_owner_fixture(
         },
         [0x63; 32],
         |body| {
+            assert_eq!(body.hash(), transport.subject.block_hash);
             assert_eq!(
                 body.encode_wire().expect("canonical replayed fixture body"),
                 expected_body,
@@ -244,7 +245,7 @@ fn assert_released_apply_owner_cold_reopens(
     drop(owner);
     drop(transport.executor);
     let mut replayed = 0usize;
-    let reopened = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+    let reopened = SumeragiV2Adapter::reopen_body_owner_for_test(
         &wal_path,
         directory.path(),
         verified,
@@ -533,31 +534,62 @@ fn resolved_validate_owner_retries_commit_fixture(
                 .is_empty()
         );
         let prior = fixture.transport.executor.current_tag();
-        install_timeout(
-            &mut fixture,
-            false,
-            &mut current_services,
-            now + Duration::from_millis(1),
-        );
-        // The split runtime step may first service an older deferred owner.
-        // Drive the already-enqueued TC through ordinary scheduling instead
-        // of treating any Advanced macro-step as its view installation.
-        let expected_view = prior.view().checked_add(1).expect("next fixture view");
+        let timeout = signed_timeout_certificate(&fixture, false);
+        let expected_timeout = timeout.as_ref();
+        let expected_view = timeout
+            .round
+            .view
+            .checked_add(1)
+            .expect("the fixture has a successor view");
+        fixture
+            .transport
+            .executor
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout.clone()),
+            ))
+            .expect("enqueue the current-view timeout after older owned ingress");
+        // This cut no longer races physical retirement. Service the actual FIFO
+        // through ordinary executor turns instead of assuming the TC is next.
         for turn in 0..32_u64 {
-            let executor = &mut fixture.transport.executor;
-            if executor.current_tag().view() == expected_view {
-                break;
-            }
-            executor
-                .step(now + Duration::from_millis(2 + turn), &mut current_services)
-                .expect("service the queued unprotected TC after older owners");
-            let _settlement = executor
+            fixture
+                .transport
+                .executor
+                .step(now + Duration::from_millis(1 + turn), &mut current_services)
+                .expect("service older ownership before the unprotected timeout");
+            let _settlement = fixture
+                .transport
+                .executor
                 .settle_pending_lifecycle_output_admissions(
                     &mut fixture.owner,
                     &mut current_services,
                 )
                 .expect("settle preceding control output before TC installation");
+            let installed = fixture
+                .transport
+                .executor
+                .runtime
+                .driver_mut_for_test()
+                .status()
+                .expect("observe the actual durable timeout")
+                .last_timeout_certificate;
+            if installed == Some(expected_timeout)
+                && fixture.transport.executor.current_tag().view() == expected_view
+            {
+                break;
+            }
         }
+        assert_eq!(
+            fixture
+                .transport
+                .executor
+                .runtime
+                .driver_mut_for_test()
+                .status()
+                .expect("observe the installed unprotected timeout")
+                .last_timeout_certificate,
+            Some(expected_timeout),
+            "older FIFO control must not substitute another timeout or same-view generation upgrade",
+        );
         assert_eq!(
             fixture.transport.executor.current_tag().view(),
             expected_view
@@ -600,12 +632,16 @@ fn resolved_validate_owner_retries_commit_fixture(
             executor
                 .step(now + Duration::from_millis(turn), &mut current_services)
                 .expect("reconstruct the current historical Prepare body");
-            let _settlement = executor
+            let output_summary = executor
                 .settle_pending_lifecycle_output_admissions(
                     &mut fixture.owner,
                     &mut current_services,
                 )
                 .expect("publish exact current Prepare/TC output");
+            // Fresh terminal publication ends this fixture turn; duplicates do not.
+            if output_summary.requires_outer_executor_yield() {
+                continue;
+            }
             executor
                 .settle_pending_durable_validate_admissions(
                     &mut fixture.owner,
@@ -695,9 +731,13 @@ fn resolved_validate_owner_retries_commit_fixture(
         executor
             .acknowledge_runner_decision_cleanup(executor.current_tag(), Some(key.1))
             .expect("acknowledge the empty process-local Decision handoff");
-        let _settlement = executor
+        let output_summary = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle unrelated exact TC/QC output ownership first");
+        // Fresh terminal publication ends this fixture turn; duplicates do not.
+        if output_summary.requires_outer_executor_yield() {
+            continue;
+        }
         executor
             .settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle real registry admission before the cached result publication");
@@ -752,7 +792,30 @@ fn resolved_validate_owner_retries_commit_fixture(
     );
     let expected_typed_applies = usize::from(!prepare_first);
     let applies = fixture.owner.apply_ordinals_for_retry_test();
-    assert_eq!(applies.len(), expected_typed_applies);
+    assert_eq!(
+        applies.len(),
+        expected_typed_applies,
+        "terminal Apply did not settle: published={}, prepare_first={prepare_first}, busy={busy}, tag={:?}, body={:?}, replay={}, deferred_apply={}, status={:?}",
+        origin == ValidateRetryOriginForTest::Published,
+        fixture.transport.executor.current_tag(),
+        fixture
+            .transport
+            .executor
+            .runtime
+            .driver()
+            .body_state_for_test(key.0, key.1),
+        fixture
+            .transport
+            .executor
+            .pending_resolved_validate_replay
+            .is_some(),
+        fixture
+            .transport
+            .executor
+            .pending_released_lifecycle_validate_apply
+            .is_some(),
+        fixture.transport.executor.status(),
+    );
     if prepare_first {
         // The repaired body is already Validated. The real reducer emits a
         // direct ordinary Apply with its current Decision owner, so no new
@@ -1057,10 +1120,11 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
         executor
             .step(now + Duration::from_millis(turn), &mut current_services)
             .expect("retry the exact protected body after its rejected terminal cut");
-        let settlement = executor
+        let output_summary = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle current Prepare/TC output ownership");
-        if settlement.requires_outer_executor_yield() {
+        // Fresh terminal publication ends this fixture turn; duplicates do not.
+        if output_summary.requires_outer_executor_yield() {
             continue;
         }
         executor

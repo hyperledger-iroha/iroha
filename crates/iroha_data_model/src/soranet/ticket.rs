@@ -36,17 +36,37 @@ pub enum TicketCommitmentError {
 }
 /// Errors raised during ticket signature verification.
 /// Detailed causes are owned out of line to keep the error compact on all targets.
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TicketSignatureError {
     /// The embedded ticket commitment does not match the body.
-    #[error(transparent)]
     Commitment(Box<TicketCommitmentError>),
     /// Ticket issuer account is not single-signatory, so the embedded signature has no verifier.
-    #[error("ticket issuer account has no single signatory")]
     MissingIssuerSignatory,
     /// The issuer signature is malformed or does not verify.
-    #[error("ticket signature verification failed: {0}")]
-    Signature(#[source] Box<iroha_crypto::Error>),
+    Signature(Box<iroha_crypto::Error>),
+}
+impl core::fmt::Display for TicketSignatureError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Commitment(error) => core::fmt::Display::fmt(error, formatter),
+            Self::MissingIssuerSignatory => {
+                formatter.write_str("ticket issuer account has no single signatory")
+            }
+            Self::Signature(error) => {
+                write!(formatter, "ticket signature verification failed: {error}")
+            }
+        }
+    }
+}
+impl std::error::Error for TicketSignatureError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Commitment(error) => std::error::Error::source(error.as_ref()),
+            Self::MissingIssuerSignatory => None,
+            // Expose the owned crypto cause, not the Box introduced for compact storage.
+            Self::Signature(error) => Some(error.as_ref()),
+        }
+    }
 }
 impl From<TicketCommitmentError> for TicketSignatureError {
     fn from(error: TicketCommitmentError) -> Self {

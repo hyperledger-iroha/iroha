@@ -7691,7 +7691,7 @@ class ContractDynamicAccessHint:
         )
         if bound_kind not in _KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS:
             raise TypeError(
-                "dynamic access hint.bound_kind must be exactly take or range"
+                "dynamic access hint.bound_kind must be exactly take or page"
             )
         return cls(
             base_key=base_key,

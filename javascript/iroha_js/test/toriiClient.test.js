@@ -1,3 +1,6 @@
+import { sorafsReplicationProjectionFixture, sorafsReplicationAttestationFixture } from "./helpers/sorafsReplicationProjection.js";
+import { sorafsPinDetailFixture, typedSorafsPinDetailFixture } from "./helpers/sorafsPinDetail.js";
+import { sorafsAliasProjectionFixture, sorafsAliasAttestationFixture } from "./helpers/sorafsAliasProjection.js";
 import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -137,7 +140,7 @@ const VK_SIGNING_NETWORK_ID = FocusNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
 const VK_LOCAL_SIGNING_CONTEXT = new FocusLocalSigningContext(
-  VK_SIGNING_NETWORK_ID,
+  VK_SIGNING_NETWORK_ID, 753,
 );
 const ISO_OPERATOR_SIGNING_CONTEXT =
   sumeragiDiagnosticsFocus?.operatorSigningContext
@@ -146,7 +149,7 @@ const DIST_VK_SIGNING_NETWORK_ID = DistNetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
 const DIST_LOCAL_SIGNING_CONTEXT = new DistLocalSigningContext(
-  DIST_VK_SIGNING_NETWORK_ID,
+  DIST_VK_SIGNING_NETWORK_ID, 753,
 );
 const DIST_OPERATOR_SIGNING_CONTEXT = new DistOperatorSigningContext(
   DIST_VK_SIGNING_NETWORK_ID,
@@ -1762,7 +1765,7 @@ test("ToriiClient constructor enforces option shapes", () => {
         fetchImpl,
         sorafsAliasPolicy: 7,
       }),
-    /sorafsAliasPolicy must be a plain object/,
+    /options\.sorafsAliasPolicy is not a public option/,
   );
   assert.throws(
     () =>
@@ -1770,7 +1773,7 @@ test("ToriiClient constructor enforces option shapes", () => {
         fetchImpl,
         onSorafsAliasWarning: "not-a-hook",
       }),
-    /onSorafsAliasWarning must be a function/,
+    /options\.onSorafsAliasWarning is not a public option/,
   );
 });
 
@@ -2919,139 +2922,114 @@ test("getIsoMessageStatus rejects unknown ISO status values and pacs002 codes", 
   );
 });
 
-test("getSorafsPinManifest enforces alias proof policy", async () => {
+// The native evaluator checks untrusted-signer proof integrity and freshness;
+// these results make no assertion about trusted council or manifest authority.
+test("native alias evaluator retains fresh proof classification and timestamps", () => {
   const native = requireSorafsNative();
   const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
+  const now = 1_750_000_000;
   const fixture = native.sorafsAliasProofFixture({
     manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
     generatedAtUnix: now - 60,
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
+  const result = native.sorafsEvaluateAliasProof(fixture.proofB64, policy, now);
+  assert.equal(result.state, "fresh");
+  assert.equal(result.statusLabel, "fresh");
+  assert.equal(result.servable, true);
+  assert.equal(result.ageSeconds, 60);
+  assert.equal(result.generatedAtUnix, now - 60);
+  assert.equal(result.expiresAtUnix, now + 600);
+  assert.equal(result.expiresInSeconds, 600);
+  assert.equal(result.rotationDue, 60 >= policy.rotationMaxAgeSecs);
+});
 
-  let called = 0;
-  const fetchImpl = async () => {
-    called += 1;
-    return createResponse({
-      status: 200,
-      jsonData: { digest_hex: "deadbeef" },
-      headers: {
-        "content-type": "application/json",
-        "sora-proof": proof,
-        "sora-name": fixture.alias,
-        "sora-proof-status": evaluation.status_label,
-      },
+test("native alias evaluator rejects stale and hard-expired proof freshness", () => {
+  const native = requireSorafsNative();
+  const policy = native.sorafsAliasPolicyDefaults();
+  const now = 1_750_000_000;
+  for (const [age, expiry, state, label] of [
+    [policy.positiveTtlSecs, now + 600, "expired", "expired"],
+    [policy.hardExpirySecs, now + 600, "hard_expired", "hard-expired"],
+    [10_000, now - 1, "hard_expired", "hard-expired"],
+  ]) {
+    const fixture = native.sorafsAliasProofFixture({
+      manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
+      generatedAtUnix: now - age,
+      expiresAtUnix: expiry,
     });
-  };
-
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl,
-    sorafsAliasPolicy: policy,
-  });
-  const result = await client.getSorafsPinManifest("deadbeef");
-  assert.equal(called, 1);
-  assert.deepEqual(result, { digest_hex: "deadbeef" });
+    const result = native.sorafsEvaluateAliasProof(fixture.proofB64, policy, now);
+    assert.equal(result.state, state);
+    assert.equal(result.statusLabel, label);
+    assert.equal(result.servable, false);
+    assert.equal(result.ageSeconds, age);
+    assert.equal(result.generatedAtUnix, now - age);
+    assert.equal(result.expiresAtUnix, expiry);
+    assert.equal(result.expiresInSeconds ?? null, expiry < now ? null : 600);
+    assert.equal(result.rotationDue, age >= policy.rotationMaxAgeSecs);
+  }
 });
 
-test("getSorafsPinManifest rejects stale alias proof", async () => {
+test("native alias evaluator retains refresh-window and rotation classification", () => {
   const native = requireSorafsNative();
   const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
+  const now = 1_750_000_000;
+  const age = policy.positiveTtlSecs - policy.refreshWindowSecs + 10;
   const fixture = native.sorafsAliasProofFixture({
     manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
-    generatedAtUnix: now - 10_000,
-    expiresAtUnix: now - 1,
-  });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
-
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {},
-        headers: {
-          "content-type": "application/json",
-          "sora-proof": proof,
-          "sora-name": fixture.alias,
-          "sora-proof-status": evaluation.status_label,
-        },
-      }),
-    sorafsAliasPolicy: policy,
-  });
-
-  await assert.rejects(
-    () => client.getSorafsPinManifest("deadbeef"),
-    /alias proof/i,
-  );
-});
-
-test("getSorafsPinManifest invokes warning hook for refresh-window proofs", async () => {
-  const native = requireSorafsNative();
-  const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
-  const refreshStart = policy.positiveTtlSecs - policy.refreshWindowSecs;
-  const fixture = native.sorafsAliasProofFixture({
-    manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
-    generatedAtUnix: now - (refreshStart + 10),
+    generatedAtUnix: now - age,
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
-  assert.equal(evaluation.state, "refresh_window");
+  const result = native.sorafsEvaluateAliasProof(fixture.proofB64, policy, now);
+  assert.equal(result.state, "refresh_window");
+  assert.equal(result.servable, true);
+  assert.equal(result.ageSeconds, age);
+  assert.equal(result.generatedAtUnix, now - age);
+  assert.equal(result.expiresAtUnix, now + 600);
+  assert.equal(result.expiresInSeconds, 600);
+  assert.equal(result.rotationDue, age >= policy.rotationMaxAgeSecs);
+  const rotation = native.sorafsEvaluateAliasProof(fixture.proofB64, {
+    ...policy, rotationMaxAgeSecs: age,
+  }, now);
+  assert.equal(rotation.state, "refresh_window");
+  assert.equal(rotation.statusLabel, "refresh-rotate");
+  assert.equal(rotation.rotationDue, true);
+  assert.equal(rotation.servable, true);
+});
 
-  let warning = null;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { digest_hex: "deadbeef" },
-        headers: {
-          "content-type": "application/json",
-          "sora-proof": proof,
-          "sora-name": fixture.alias,
-          "sora-proof-status": evaluation.status_label,
-        },
-      }),
-    sorafsAliasPolicy: policy,
-    onSorafsAliasWarning: (payload) => {
-      warning = payload;
+test("getSorafsPinManifest returns null and cancels unread 404 bodies", async () => {
+  let cancelled = 0, reads = 0;
+  const response = {
+    status: 404, headers: new Headers({ "content-type": "application/json" }),
+    body: {
+      cancel() { cancelled++; },
+      getReader() { reads++; throw new Error("404 body must stay unread"); },
     },
-  });
-
-  const result = await client.getSorafsPinManifest("deadbeef");
-  assert.deepEqual(result, { digest_hex: "deadbeef" });
-  assert.ok(warning, "warning hook not invoked");
-  assert.equal(warning?.alias, fixture.alias);
-  assert.equal(warning?.evaluation?.state, "refresh_window");
+    json() { reads++; throw new Error("404 body must stay unread"); },
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => response });
+  assert.equal(await client.getSorafsPinManifest("deadbeef".repeat(8)), null);
+  assert.equal(cancelled, 1);
+  assert.equal(reads, 0);
 });
 
-test("getSorafsPinManifest returns null when Torii responds with 404", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 404,
-      headers: { "content-type": "application/json" },
-      jsonData: { code: "ERR_NOT_FOUND" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSorafsPinManifest("deadbeef".repeat(4));
-  assert.equal(result, null);
-});
-
-test("getSorafsPinManifestTyped rejects when Torii responds with 404", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 404,
-      headers: { "content-type": "application/json" },
-      jsonData: { code: "ERR_NOT_FOUND" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+test("getSorafsPinManifestTyped rejects and cancels unread 404 bodies", async () => {
+  let cancelled = 0, reads = 0;
+  const response = {
+    status: 404, headers: new Headers({ "content-type": "application/json" }),
+    body: {
+      cancel() { cancelled++; },
+      getReader() { reads++; throw new Error("404 body must stay unread"); },
+    },
+    json() { reads++; throw new Error("404 body must stay unread"); },
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => response });
   await assert.rejects(
-    () => client.getSorafsPinManifestTyped("deadbeef".repeat(4)),
+    () => client.getSorafsPinManifestTyped("deadbeef".repeat(8)),
     /sorafs pin manifest endpoint returned 404/,
   );
+  assert.equal(cancelled, 1);
+  assert.equal(reads, 0);
 });
 
 test("registerSorafsPinManifest posts only an exact canonical V1 transaction", async () => {
@@ -3202,195 +3180,113 @@ test("registerSorafsPinManifestTyped rejects pre-finality fee or custody claims"
   );
 });
 
-test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async () => {
-  const native = requireSorafsNative();
-  const policy = native.sorafsAliasPolicyDefaults();
-  const now = Math.floor(Date.now() / 1000);
-  const fixture = native.sorafsAliasProofFixture({
-    manifestCidHex: CANONICAL_ALIAS_MANIFEST_CID_HEX,
-    generatedAtUnix: now - 120,
-    expiresAtUnix: now + 600,
-  });
-  const proof = fixture.proofB64;
-  const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
-
-  const manifestHex = "e".repeat(64);
-  const parentHex = "f".repeat(64);
-  const councilHex = "1".repeat(64);
-  const aliasProof = Buffer.from("pin-alias").toString("base64");
-  const manifestRecord = {
-    digest_hex: manifestHex,
-    chunker: {
-      profile_id: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihash_code: 0,
-    },
-    chunk_digest_sha3_256_hex: "2".repeat(64),
-    pin_policy: { min_replicas: 3 },
-    submitted_by: FIXTURE_CAROL_ID,
-    submitted_epoch: 42,
-    status: { state: "approved", epoch: 45 },
-    metadata: { note: "demo" },
-    alias: { namespace: "docs", name: "main", proof_b64: aliasProof },
-    successor_of_hex: parentHex,
-    status_timestamp_unix: 123,
-    governance_refs: [
-      {
-        cid: "cid-1",
-        kind: "AliasRotate",
-        effective_at: "2025-01-01T00:00:00Z",
-        effective_at_unix: 1_700_000_000,
-        targets: { alias: "docs/main", pin_digest_hex: manifestHex },
-        signers: [FIXTURE_CAROL_ID],
-      },
-    ],
-    council_envelope_digest_hex: councilHex,
-    lineage: {
-      successor_of_hex: parentHex,
-      head_hex: manifestHex,
-      depth_to_head: 0,
-      is_head: true,
-      superseded_by: null,
-      immediate_successor: null,
-      anomalies: [],
-    },
-  };
-  const aliasRecord = {
-    alias: "sora/docs",
-    namespace: "sora",
-    name: "docs",
-    manifest_digest_hex: manifestHex,
-    bound_by: FIXTURE_ALICE_ID,
-    bound_epoch: 10,
-    expiry_epoch: 99,
-    proof_b64: Buffer.from("proof").toString("base64"),
-    cache_state: "fresh",
-    cache_rotation_due: false,
-    cache_age_seconds: 12,
-    cache_decision: "serve",
-    cache_reasons: ["ttl_ok"],
-    cache_evaluation: { decision: "serve" },
-    lineage: { head_hex: manifestHex },
-  };
-  const providerHex = "d".repeat(64);
-  const orderRecord = {
-    order_id_hex: "c".repeat(64),
-    manifest_digest_hex: manifestHex,
-    issued_by: FIXTURE_BOB_ID,
-    issued_epoch: 50,
-    deadline_epoch: 80,
-    status: { state: "pending" },
-    canonical_order_b64: Buffer.from("order").toString("base64"),
-    order: { order_id_hex: "c".repeat(64), policy_hash_hex: manifestHex },
-    receipts: [
-      {
-        provider_hex: providerHex,
-        status: "pending",
-        timestamp: 123,
-        por_sample_digest_hex: null,
-      },
-    ],
-    providers: [providerHex],
-  };
-
+test("getSorafsPinManifestTyped returns the exact finalized native record", async () => {
+  const payload = sorafsPinDetailFixture(FIXTURE_CAROL_ID);
+  payload.manifest.pin_fee_payment = { paid_by: FIXTURE_ALICE_ID, fee_asset_id: FIXTURE_ASSET_ID_A, treasury_account_id: FIXTURE_BOB_ID, amount: "12.5" };
+  payload.manifest.metadata = { note: "demo", fractional: 1.25, nested: [{ score: 1.5 }] };
+  const requests = [];
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          attestation: { block_height: 1 },
-          manifest: manifestRecord,
-          aliases: [aliasRecord],
-          replication_orders: [orderRecord],
-        },
-        headers: {
-          "content-type": "application/json",
-          "sora-proof": proof,
-          "sora-name": fixture.alias,
-          "sora-proof-status": evaluation.status_label,
-        },
-      }),
-    sorafsAliasPolicy: policy,
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return createResponse({ status: 200, jsonData: payload });
+    },
   });
-
-  const detail = await client.getSorafsPinManifestTyped(manifestHex);
-  assert.equal(detail.manifest.digest_hex, manifestHex);
-  assert.equal(detail.aliases.length, 1);
-  assert.equal(detail.replication_orders.length, 1);
-  assert.equal(detail.replication_orders[0].providers[0], providerHex);
-  assert.equal(detail.attestation?.block_height, 1);
+  const options = { expectedFinalizedHeight: 51n, expectedFinalizedBlockHashHex: "42".repeat(32), headers: { "X-Read": "detail" } };
+  const detail = await client.getSorafsPinManifestTyped("ee".repeat(32), options);
+  assert.deepEqual(detail, typedSorafsPinDetailFixture(payload));
+  const url = new URL(requests[0].url);
+  assert.equal(url.pathname, "/v1/sorafs/pin/" + "ee".repeat(32));
+  assert.deepEqual(Object.fromEntries(url.searchParams), { expected_finalized_height: "51", expected_finalized_block_hash_hex: "42".repeat(32) });
+  assert.equal(requests[0].init.headers["X-Read"], "detail");
+  const raw = await client.getSorafsPinManifest("ee".repeat(32));
+  assert.equal(JSON.stringify(raw), JSON.stringify(payload));
+  assert.ok(Array.isArray(raw.manifest.digest));
 });
 
-test("getSorafsPinManifestTyped rejects non-integer status timestamps", async () => {
-  const manifestHex = "e".repeat(64);
-  const manifestRecord = {
-    digest_hex: manifestHex,
-    chunker: {
-      profile_id: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihash_code: 0,
-    },
-    chunk_digest_sha3_256_hex: "2".repeat(64),
-    pin_policy: { min_replicas: 3 },
-    submitted_by: FIXTURE_CAROL_ID,
-    submitted_epoch: 42,
-    status: { state: "approved", epoch: 45 },
-    metadata: {},
-    status_timestamp_unix: 123.5,
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          attestation: null,
-          manifest: manifestRecord,
-          aliases: [],
-          replication_orders: [],
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.getSorafsPinManifestTyped(manifestHex),
-    (error) => {
-      assert(error instanceof RangeError);
-      assert.match(error.message, /status_timestamp_unix/);
-      return true;
-    },
-  );
+test("getSorafsPinManifest preserves full-u64 numeric tokens and finalized request height", async () => {
+  const maximum = (1n << 64n) - 1n;
+  const payload = sorafsPinDetailFixture(FIXTURE_CAROL_ID);
+  payload.finalized_cursor.height = maximum;
+  payload.manifest.content_length = maximum;
+  const textBody = JSON.stringify(payload, (_, item) => typeof item === "bigint" ? "__u64__" : item).replaceAll('"__u64__"', String(maximum));
+  let request;
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (url) => {
+    request = new URL(url);
+    return createResponse({ status: 200, textBody, headers: { "content-type": "application/json" } });
+  } });
+  const detail = await client.getSorafsPinManifestTyped("ee".repeat(32), { expectedFinalizedHeight: maximum, expectedFinalizedBlockHashHex: "42".repeat(32) });
+  assert.deepEqual(detail, typedSorafsPinDetailFixture(payload));
+  assert.equal(request.searchParams.get("expected_finalized_height"), String(maximum));
+});
+
+test("getSorafsPinManifest rejects malformed native records and lexical numeric aliases", async () => {
+  const canonical = JSON.stringify(sorafsPinDetailFixture(FIXTURE_CAROL_ID));
+  for (const textBody of [
+    canonical.replace('"height":51', '"height":51,"height":51'),
+    canonical.replace('"height":51', '"height":51,"\\u0068eight":51'),
+    canonical.replace('"height":51', '"height":51.0'),
+    canonical.replace('"value":45', '"value":4.5e1'),
+    canonical.replace('"submitted_epoch":42', '"submitted_epoch":42.5'),
+    canonical.replace('"submitted_epoch":42', '"submitted_epoch":"42"'),
+    canonical.replace('"content_length":4096', '"content_length":18446744073709551616'),
+    canonical.replace('"manifest":{', '"aliases":[],"manifest":{'),
+  ]) {
+    const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200, textBody, headers: { "content-type": "application/json" } }) });
+    await assert.rejects(() => client.getSorafsPinManifestTyped("ee".repeat(32)), /duplicate|required|unknown|integer|bound|canonical/);
+  }
+});
+
+test("getSorafsPinManifest rejects digest and cursor mismatches in both public readers", async () => {
+  for (const method of ["getSorafsPinManifest", "getSorafsPinManifestTyped"]) {
+    for (const [digest, options] of [["ff".repeat(32), {}], ["ee".repeat(32), { expectedFinalizedHeight: 52, expectedFinalizedBlockHashHex: "42".repeat(32) }], ["ee".repeat(32), { expectedFinalizedHeight: 51, expectedFinalizedBlockHashHex: "43".repeat(32) }]]) {
+      const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200, jsonData: sorafsPinDetailFixture(FIXTURE_CAROL_ID) }) });
+      await assert.rejects(() => client[method](digest, options), /differs/);
+    }
+  }
+});
+
+test("getSorafsPinManifest rejects unbounded, non-JSON, and invalid UTF-8 transport", async () => {
+  const payload = sorafsPinDetailFixture(FIXTURE_CAROL_ID);
+  for (const response of [
+    createResponse({ status: 200, jsonData: payload, headers: { "content-type": "text/plain" } }),
+    createResponse({ status: 200, jsonData: payload, headers: { "content-type": "application/json", "content-length": String(64 * 1024 * 1024 + 1) } }),
+    createResponse({ status: 200, arrayData: new Uint8Array([0xff]), headers: { "content-type": "application/json" } }),
+  ]) {
+    const client = new ToriiClient(BASE_URL, { fetchImpl: async () => response });
+    await assert.rejects(() => client.getSorafsPinManifest("ee".repeat(32)), /media type|limit|exceed|UTF-8/);
+  }
+});
+
+test("ToriiClient rejects retired alias-header policy options for every value", () => {
+  for (const field of ["sorafsAliasPolicy", "onSorafsAliasWarning"]) {
+    for (const value of [undefined, null, {}, () => {}]) {
+      assert.throws(() => new ToriiClient(BASE_URL, { fetchImpl: async () => {}, [field]: value }), /is not a public option/);
+    }
+  }
+});
+
+test("getSorafsPinManifest rejects noncanonical request inputs before transport", async () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => { calls++; throw new Error("unexpected transport"); } });
+  for (const digest of ["deadbeef", "00".repeat(32), "EE".repeat(32), "0x" + "ee".repeat(32)]) await assert.rejects(() => client.getSorafsPinManifest(digest));
+  for (const options of [
+    { expectedFinalizedHeight: 51 }, { expectedFinalizedBlockHashHex: "42".repeat(32) }, { extra: true },
+    ...[0, -0, -1, null, "51", 51.5, Number.MAX_SAFE_INTEGER + 1, 1n << 64n].map(expectedFinalizedHeight => ({ expectedFinalizedHeight, expectedFinalizedBlockHashHex: "42".repeat(32) })),
+    ...[null, "00".repeat(32), "AB".repeat(32), "abcd"].map(expectedFinalizedBlockHashHex => ({ expectedFinalizedHeight: 51, expectedFinalizedBlockHashHex })),
+  ]) await assert.rejects(() => client.getSorafsPinManifest("ee".repeat(32), options));
+  assert.equal(calls, 0);
 });
 
 test("listSorafsAliases signs, normalizes response, and applies filters", async () => {
   let captured;
   const manifestHex = "a".repeat(64);
-  const aliasRecord = {
-    alias: "sora/docs",
-    namespace: "sora",
-    name: "docs",
-    manifest_digest_hex: manifestHex,
-    bound_by: FIXTURE_ALICE_ID,
-    bound_epoch: 10,
-    expiry_epoch: 99,
-    proof_b64: Buffer.from("proof").toString("base64"),
-    cache_state: "fresh",
-    cache_rotation_due: false,
-    cache_age_seconds: 12,
-    cache_decision: "serve",
-    cache_reasons: ["ttl_ok"],
-    cache_evaluation: { decision: "serve" },
-    lineage: { head_hex: manifestHex },
-  };
+  const aliasRecord = sorafsAliasProjectionFixture(FIXTURE_ALICE_ID, manifestHex);
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: { block_height: 1 },
+        attestation: sorafsAliasAttestationFixture(),
         total_count: 1,
         returned_count: 1,
         offset: 0,
@@ -3432,6 +3328,7 @@ test("listSorafsPinManifests enforces the finalized bounded keyset contract", as
     digest: manifestDigest,
     submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
+    approved_epoch: 45,
     content_length: 4096,
     retention_epoch: 900,
     status: { status: "Approved", value: 45 },
@@ -3481,6 +3378,7 @@ test("listSorafsPinManifests enforces the finalized bounded keyset contract", as
   assert.equal(result.manifests.length, 1);
   const manifest = result.manifests[0];
   assert.deepEqual([...manifest.digest], manifestDigest);
+  assert.equal(manifest.approved_epoch, 45);
   assert.deepEqual(manifest.status, { status: "Approved", value: 45 });
   assert.deepEqual([...manifest.successor_of], parentDigest);
   assert.equal("alias" in manifest, false);
@@ -3526,6 +3424,7 @@ test("listSorafsPinManifests rejects retired shapes and forged page cursors", as
         digest,
         submitted_by: FIXTURE_CAROL_ID,
         submitted_epoch: 1,
+        approved_epoch: null,
         content_length: 7,
         retention_epoch: 10,
         status: { status: "Pending", value: null },
@@ -3582,36 +3481,76 @@ test("listSorafsPinManifests rejects retired shapes and forged page cursors", as
   );
 });
 
+test("pin-list readback preserves full-u64 epochs and resource counters", async () => {
+  const maximum = (1n << 64n) - 1n;
+  const page = {
+    finalized_cursor: { height: maximum, block_hash: Array(32).fill(0x42) },
+    charged_usage: { manifest_count: maximum, content_bytes: maximum },
+    manifests: [{ digest: Array(32).fill(0x44), submitted_by: FIXTURE_CAROL_ID,
+      submitted_epoch: maximum - 2n, approved_epoch: maximum - 1n,
+      content_length: maximum, retention_epoch: maximum,
+      status: { status: "Approved", value: maximum - 1n }, successor_of: null }],
+    has_more: false, next_after_digest: null,
+  };
+  let url;
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (request) => {
+    url = new URL(request);
+    return createResponse({ status: 200, textBody: stringifyStrictLosslessIntegerJson(page, "pin page"), headers: { "content-type": "application/json" } });
+  } });
+  const result = await client.listSorafsPinManifests({ expectedFinalizedHeight: maximum, expectedFinalizedBlockHashHex: "42".repeat(32) });
+  assert.equal(url.searchParams.get("expected_finalized_height"), String(maximum));
+  assert.equal(result.finalized_cursor.height, maximum);
+  assert.deepEqual(result.charged_usage, page.charged_usage);
+  assert.deepEqual(result.manifests[0], { ...page.manifests[0], digest: Uint8Array.from(page.manifests[0].digest) });
+});
+
+test("pin-list typed fields reject numeric token aliases and omitted required nullable fields", async () => {
+  const page = {
+    finalized_cursor: { height: 51, block_hash: Array(32).fill(0x42) },
+    charged_usage: { manifest_count: 1, content_bytes: 10 },
+    manifests: [{ digest: Array(32).fill(0x44), submitted_by: FIXTURE_CAROL_ID,
+      submitted_epoch: 1, approved_epoch: 2, content_length: 10, retention_epoch: 20,
+      status: { status: "Approved", value: 2 }, successor_of: null }],
+    has_more: false, next_after_digest: null,
+  };
+  const paths = [["finalized_cursor", "height"], ["charged_usage", "manifest_count"], ["charged_usage", "content_bytes"],
+    ...["submitted_epoch", "approved_epoch", "content_length", "retention_epoch"].map(key => ["manifests", 0, key]), ["manifests", 0, "status", "value"]];
+  const read = async (textBody) => {
+    const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200, textBody, headers: { "content-type": "application/json" } }) });
+    return client.listSorafsPinManifests();
+  };
+  for (const path of paths) {
+    for (const token of ["1.0", "1e0", "-0", '"1"', "18446744073709551616"]) {
+      const value = structuredClone(page);
+      const parent = path.slice(0, -1).reduce((node, key) => node[key], value);
+      parent[path.at(-1)] = "__token__";
+      await assert.rejects(() => read(JSON.stringify(value).replace('"__token__"', token)), /integer|bound|canonical/);
+    }
+  }
+  for (const [container, field] of [[page, "next_after_digest"], [page.manifests[0], "approved_epoch"], [page.manifests[0], "successor_of"]]) {
+    const saved = container[field]; delete container[field];
+    await assert.rejects(() => read(JSON.stringify(page)), /required field/);
+    container[field] = saved;
+  }
+  await assert.rejects(() => read(JSON.stringify(page).replace('"height":51', '"height":51,"height":51')), /duplicate/);
+  await assert.rejects(() => read(JSON.stringify({ ...page, manifests: [{ ...page.manifests[0], submitted_by: ` ${FIXTURE_CAROL_ID} ` }] })), /canonical|account|identity/);
+  const overDefaultLimit = { ...page, charged_usage: { manifest_count: 51, content_bytes: 510 },
+    manifests: Array.from({ length: 51 }, (_, index) => ({ ...page.manifests[0], digest: Array(32).fill(index + 1) })) };
+  await assert.rejects(() => read(JSON.stringify(overDefaultLimit)), /requested limit/);
+});
+
 test("listSorafsReplicationOrders signs, normalizes response, and validates status filter", async () => {
   let captured;
-  const manifestHex = "b".repeat(64);
-  const orderHex = "c".repeat(64);
-  const providerHex = "d".repeat(64);
-  const orderRecord = {
-    order_id_hex: orderHex,
-    manifest_digest_hex: manifestHex,
-    issued_by: FIXTURE_BOB_ID,
-    issued_epoch: 50,
-    deadline_epoch: 80,
-    status: { state: "pending" },
-    canonical_order_b64: Buffer.from("order").toString("base64"),
-    order: { order_id_hex: orderHex, policy_hash_hex: manifestHex },
-    receipts: [
-      {
-        provider_hex: providerHex,
-        status: "pending",
-        timestamp: 123,
-        por_sample_digest_hex: null,
-      },
-    ],
-    providers: [providerHex],
-  };
+  const orderRecord = sorafsReplicationProjectionFixture(FIXTURE_BOB_ID);
+  const manifestHex = orderRecord.manifest_digest_hex;
+  const orderHex = orderRecord.order_id_hex;
+  const providerHex = orderRecord.providers[0];
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: null,
+        attestation: sorafsReplicationAttestationFixture(),
         total_count: 1,
         returned_count: 1,
         offset: 0,
@@ -3623,7 +3562,7 @@ test("listSorafsReplicationOrders signs, normalizes response, and validates stat
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.listSorafsReplicationOrders({
-    status: "Pending",
+    status: "pending",
     manifestDigestHex: manifestHex,
     limit: 20,
     canonicalAuth: SORAFS_CANONICAL_AUTH,
@@ -3636,7 +3575,8 @@ test("listSorafsReplicationOrders signs, normalizes response, and validates stat
   assert.equal(parsed.searchParams.get("manifest_digest"), manifestHex);
   assert.equal(parsed.searchParams.get("limit"), "20");
   assert.equal(result.replication_orders[0].order_id_hex, orderHex);
-  assert.equal(result.replication_orders[0].receipts[0].provider_hex, providerHex);
+  assert.equal(result.replication_orders[0].provider_completions[0].provider_hex, providerHex);
+  assert.deepEqual(result.replication_orders[0], orderRecord);
   await assert.rejects(
     () => client.listSorafsReplicationOrders({
       status: "finished",
@@ -3650,6 +3590,23 @@ test("listSorafsReplicationOrders signs, normalizes response, and validates stat
       return true;
     },
   );
+});
+
+test("replication request filters retain exact cancelled spelling and native query bounds", async () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (url) => {
+    calls++;
+    assert.equal(new URL(url).searchParams.get("status"), "cancelled");
+    const row = sorafsReplicationProjectionFixture(FIXTURE_BOB_ID);
+    row.status = { state: "cancelled", epoch: row.issued_epoch + 20 };
+    return createResponse({ status: 200, jsonData: { attestation: sorafsReplicationAttestationFixture(), total_count: 1, returned_count: 1, offset: 0, limit: 500, replication_orders: [row] } });
+  } });
+  const page = await client.listSorafsReplicationOrders({ status: "cancelled", limit: 500, canonicalAuth: SORAFS_CANONICAL_AUTH });
+  assert.equal(page.replication_orders[0].status.state, "cancelled");
+  for (const options of [{ status: "Cancelled" }, { status: " cancelled " }, { status: null }, { limit: 501 }, { limit: "5" }, { offset: 2 ** 32 }, { offset: "1" }, { manifestDigestHex: "00".repeat(32) }, { manifestDigestHex: "AA".repeat(32) }]) {
+    await assert.rejects(() => client.listSorafsReplicationOrders({ ...options, canonicalAuth: SORAFS_CANONICAL_AUTH }));
+  }
+  assert.equal(calls, 1);
 });
 
 test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
@@ -5465,33 +5422,6 @@ test("space-directory mutation drafts reject inline private-key fields", async (
 });
 
 test("iterateSorafsAliases paginates alias listings", async () => {
-  const baseAliasRecord = {
-    alias: "sora/docs",
-    namespace: "sora",
-    name: "docs",
-    manifest_digest_hex: "0".repeat(64),
-    bound_by: FIXTURE_ALICE_ID,
-    bound_epoch: 10,
-    expiry_epoch: 99,
-    proof_b64: Buffer.from("proof").toString("base64"),
-    cache_state: "fresh",
-    status_label: "ok",
-    cache_rotation_due: false,
-    cache_age_seconds: 12,
-    proof_generated_at_unix: 1,
-    proof_expires_at_unix: 2,
-    proof_expires_in_seconds: 1,
-    policy_positive_ttl_secs: 60,
-    policy_refresh_window_secs: 30,
-    policy_hard_expiry_secs: 120,
-    policy_rotation_max_age_secs: 600,
-    policy_successor_grace_secs: 10,
-    policy_governance_grace_secs: 5,
-    cache_decision: "serve",
-    cache_reasons: ["ttl_ok"],
-    cache_evaluation: { decision: "serve" },
-    lineage: { head_hex: "0".repeat(64) },
-  };
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     const offset = Number(parsed.searchParams.get("offset") ?? "0");
@@ -5500,7 +5430,7 @@ test("iterateSorafsAliases paginates alias listings", async () => {
       return createResponse({
         status: 200,
         jsonData: {
-          attestation: null,
+          attestation: sorafsAliasAttestationFixture(),
           total_count: 2,
           returned_count: 0,
           offset,
@@ -5510,16 +5440,13 @@ test("iterateSorafsAliases paginates alias listings", async () => {
         headers: { "content-type": "application/json" },
       });
     }
-    const record = {
-      ...JSON.parse(JSON.stringify(baseAliasRecord)),
-      alias: `sora/docs-${offset}`,
-      name: `docs-${offset}`,
-      manifest_digest_hex: `${offset}`.repeat(64),
-    };
+    const record = sorafsAliasProjectionFixture(
+      FIXTURE_ALICE_ID, `${offset}`.repeat(64), `docs-${offset}`,
+    );
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: null,
+        attestation: sorafsAliasAttestationFixture(),
         total_count: 2,
         returned_count: 1,
         offset,
@@ -5547,6 +5474,7 @@ test("iterateSorafsPinManifests locks the first finalized anchor and advances ke
     digest: Array(32).fill(byte),
     submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
+    approved_epoch: 45,
     content_length: 100,
     retention_epoch: 900,
     status: { status: "Approved", value: 45 },
@@ -5603,25 +5531,7 @@ test("iterateSorafsPinManifests locks the first finalized anchor and advances ke
 });
 
 test("iterateSorafsReplicationOrders paginates results", async () => {
-  const baseOrder = {
-    order_id_hex: "c".repeat(64),
-    manifest_digest_hex: "b".repeat(64),
-    issued_by: FIXTURE_BOB_ID,
-    issued_epoch: 50,
-    deadline_epoch: 80,
-    status: { state: "pending", epoch: null },
-    canonical_order_b64: Buffer.from("order").toString("base64"),
-    order: { order_id_hex: "c".repeat(64) },
-    receipts: [
-      {
-        provider_hex: "d".repeat(64),
-        status: "pending",
-        timestamp: 123,
-        por_sample_digest_hex: null,
-      },
-    ],
-    providers: ["d".repeat(64)],
-  };
+  const baseOrder = sorafsReplicationProjectionFixture(FIXTURE_BOB_ID);
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     const offset = Number(parsed.searchParams.get("offset") ?? "0");
@@ -5630,7 +5540,7 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
       return createResponse({
         status: 200,
         jsonData: {
-          attestation: null,
+          attestation: sorafsReplicationAttestationFixture(),
           total_count: 2,
           returned_count: 0,
           offset,
@@ -5642,12 +5552,13 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
     }
     const record = {
       ...JSON.parse(JSON.stringify(baseOrder)),
-      order_id_hex: `${offset}`.repeat(64),
+      order_id_hex: `${offset + 1}`.repeat(64),
+      order: { ...baseOrder.order, order_id_hex: `${offset + 1}`.repeat(64) },
     };
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: null,
+        attestation: sorafsReplicationAttestationFixture(),
         total_count: 2,
         returned_count: 1,
         offset,
@@ -5666,7 +5577,7 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
   })) {
     ids.push(order.order_id_hex);
   }
-  assert.deepEqual(ids, ["0".repeat(64), "1".repeat(64)]);
+  assert.deepEqual(ids, ["1".repeat(64), "2".repeat(64)]);
 });
 
 test("SoraFS iterators reject unsupported options", () => {
@@ -7353,7 +7264,7 @@ test("SoraFS registry helpers reject non-object options", async () => {
     /listSorafsReplicationOrders options must be an object/,
   );
   await assert.rejects(
-    () => client.getSorafsPinManifest("deadbeef", "invalid"),
+    () => client.getSorafsPinManifest("deadbeef".repeat(8), "invalid"),
     /getSorafsPinManifest options must be an object/,
   );
 });
@@ -22049,7 +21960,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
   };
   const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const result = await client.prepareContractCall({
     authority: FIXTURE_ALICE_ID,
@@ -22155,7 +22066,7 @@ test("prepareContractCall rejects submitted and unmarked response state", async 
     });
   const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const prepare = () => client.prepareContractCall({
     authority: FIXTURE_ALICE_ID,
@@ -22202,7 +22113,7 @@ test("callContract response requires operation_receipt", async () => {
     });
   const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
 
   await assert.rejects(
@@ -22297,7 +22208,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
           jsonData: payload,
           headers: { "content-type": "application/json" },
         }),
-      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
     });
     await assert.rejects(
       () =>
@@ -22366,6 +22277,19 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
     draftIntent,
   };
   const cases = [
+    ...[0, 2].map((admissionIntent) => [
+      `rehashed admission intent ${admissionIntent}`,
+      (value) => {
+        const replacement = Buffer.alloc(4);
+        replacement.writeUInt32LE(admissionIntent);
+        Object.assign(value, draftWithReplacedTransactionField(draft, 7, replacement));
+      },
+      (error) => {
+        assert.match(error.message, /one canonical transaction payload/);
+        assert.match(error.cause?.message ?? "", /TransactionAdmissionIntent::QueuePlanSynced/);
+        return true;
+      },
+    ]),
     [
       "colluding Ordinary admission",
       (value) => {
@@ -22450,7 +22374,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
         jsonData: responsePayload,
         headers: { "content-type": "application/json" },
       }),
-      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
     });
     await assert.rejects(
       () => client.prepareContractCall(request),
@@ -22469,7 +22393,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
       jsonData: aliasResponse,
       headers: { "content-type": "application/json" },
     }),
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const { contractAddress: _address, ...aliasRequest } = request;
   await assert.rejects(
@@ -22494,7 +22418,7 @@ test("prepareContractCall validates caller-trusted payload intent before fetch",
       fetchCalls += 1;
       throw new Error("fetch must not run for mismatched caller intent");
     },
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   await assert.rejects(
     () => client.prepareContractCall({
@@ -22525,7 +22449,7 @@ test("prepareContractCall rejects a zero explicit creation time before fetch", a
       fetchCalls += 1;
       throw new Error("fetch must not run for an invalid creation time");
     },
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   await assert.rejects(
     () => client.prepareContractCall({
@@ -22659,7 +22583,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const result = await client.proposeMultisig({
     multisigAccountAlias: "cbdc@banka",
@@ -22739,7 +22663,7 @@ test("proposeMultisig binds every unsigned payload to local caller intent", asyn
         jsonData: responseFor(draft),
         headers: { "content-type": "application/json" },
       }),
-      localSigningContext: new LocalSigningContext(networkId),
+      localSigningContext: new LocalSigningContext(networkId, 753),
     });
 
   await assert.rejects(
@@ -22968,7 +22892,7 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   );
   await assert.rejects(
     () => client.proposeMultisig({ ...request, instructions: [Buffer.from("NRT0")] }),
-    /overran payload/,
+    { message: "failed to fill whole buffer" },
   );
   await assert.rejects(
     () => client.proposeMultisig(request, { retry: true }),
@@ -23059,7 +22983,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
           jsonData,
           headers: { "content-type": "application/json" },
         }),
-      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+      localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
     });
   const validDraft = {
     ...bindingDraft,
@@ -23243,7 +23167,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
+    localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID, 753),
   });
   const result = await client.proposeMultisigContractCall({
     multisigAccountAlias: "cbdc@banka",

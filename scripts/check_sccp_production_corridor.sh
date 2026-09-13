@@ -1870,7 +1870,7 @@ phase_contract_smoke() {
     scripts/tests/ton_sccp_builder_test.py
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m py_compile \
     scripts/contract_artifact_corridor.py
-  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_soljson_runner.js
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_native_solc.js
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_tvm_receipts.mjs
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check scripts/contract_tvm_smoke.mjs
   run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/tests/contract_tvm_receipts_test.mjs
@@ -1895,8 +1895,7 @@ phase_tvm_contract_smoke() {
   artifact_dir="$work_dir/artifacts"
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/contract_artifact_corridor.py build \
     --repo-root . \
-    --output-dir "$artifact_dir" \
-    --node "$SCCP_CORRIDOR_NODE_BIN"
+    --output-dir "$artifact_dir"
   run_cmd bash scripts/contract_tvm_runner.sh \
     --manifest "$artifact_dir/sccp-contract-artifacts-v1.json"
   if [[ "$DRY_RUN" -eq 0 ]]; then

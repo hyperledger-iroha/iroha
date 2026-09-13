@@ -2,9 +2,9 @@
 /**
  * Minimal Nexus App Facade transfer recipe.
  *
- * The fake Connect/Torii dependencies keep the recipe runnable without a live
- * wallet. In an app, configure NexusAppClient with its built-in browser Connect
- * path and Fetch-backed Torii client instead.
+ * Run in Node with the SDK's verified native binding installed. The fake
+ * Connect/Torii dependencies avoid live wallet or network requests; canonical
+ * account validation and transaction encoding still use the native codec.
  */
 import { NexusAppClient } from "@iroha/iroha-js/nexus-app";
 import { NetworkId } from "@iroha/iroha-js";
@@ -53,7 +53,7 @@ const toriiClient = {
   async submitTransaction(signedTransaction) {
     return {
       accepted: true,
-      hashHex: browserSignedTransactionHashHex(signedTransaction),
+      hashHex: browserSignedTransactionHashHex(signedTransaction, accountChainDiscriminant),
     };
   },
   async waitForTransactionStatus(hashHex) {

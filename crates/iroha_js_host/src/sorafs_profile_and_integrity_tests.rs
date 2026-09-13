@@ -1,6 +1,5 @@
 #[test]
 fn da_manifest_chunker_handle_binding_resolves_profile() {
-    ensure_packed_struct_disabled();
     let fixture = build_da_manifest_fixture();
     let handle = da_manifest_chunker_handle(Buffer::from(fixture.manifest_bytes.clone()).into())
         .expect("chunker handle");

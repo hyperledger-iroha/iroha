@@ -41,6 +41,7 @@ export interface NftInventoryV1 {
   items: NftInventoryItemV1[];
 }
 export interface OwnedNftTransferV1 {
+  networkPrefix: number;
   ownerAccountId: string;
   nftId: string;
   destinationAccountId: string;
@@ -52,9 +53,10 @@ export function buildBrowserOwnedNftTransferPayloadV1(input: Omit<BrowserExecuta
   nftId: string;
   destinationAccountId: string;
 }): Uint8Array;
-export function normalizeNftInventoryItemV1(value: unknown): NftInventoryItemV1;
+export function normalizeNftInventoryItemV1(value: unknown, networkPrefix: number): NftInventoryItemV1;
 export function readOwnedNftInventoryV1(client: Pick<ToriiBrowserClient, "listExplorerNfts">, options: {
   ownerAccountId: string;
+  networkPrefix: number;
   domain?: string;
   limit?: number;
   maxItems?: number;

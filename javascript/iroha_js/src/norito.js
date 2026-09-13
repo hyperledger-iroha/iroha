@@ -1,3 +1,5 @@
+import { SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1 } from "./sorafsReplicationProfiles.js";
+import { requireNetworkPrefix } from "./networkPrefix.js";
 import { createNoritoReplicationOrderValidator } from "./noritoReplicationOrderValidator.js";
 import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
@@ -259,10 +261,6 @@ const REPLICATION_ORDER_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "sorafs_manifest::capacity::ReplicationOrderV1",
 );
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
-const SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1 = /* @__PURE__ */ new Set([
-  "sorafs.sf1@1.0.0",
-  "sorafs.sf2@1.0.0",
-]);
 
 const MULTISIG_PROPOSE_DTO_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "iroha_torii::routing::MultisigProposeDto",
@@ -677,12 +675,12 @@ function rejectRetiredGenericZkInstruction(instruction) {
   }
 }
 
-function encodeNormalizedInstruction(normalized, nativeRuntime) {
+function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
   validateInstructionObjectNumbers(normalized);
   const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-  return toBuffer(native.noritoEncodeInstruction(JSON.stringify(normalized)));
+  return toBuffer(native.noritoEncodeInstruction(JSON.stringify(normalized), networkPrefix));
 }
 
 function validateInstructionObjectNumbers(value) {
@@ -702,13 +700,16 @@ function validateInstructionObjectNumbers(value) {
 }
 
 /**
- * Encode an instruction JSON payload to canonical Norito bytes.
+ * Encode instruction JSON, an exact standard-base64 frame, or a lowercase
+ * 0x-prefixed hex frame to canonical Norito bytes.
  * @param {object | string | ArrayBufferView | ArrayBuffer | Buffer} instruction
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {Buffer}
  */
-function encodeInstruction(instruction, nativeRuntime) {
+function encodeInstruction(instruction, networkPrefix, nativeRuntime) {
+  requireNetworkPrefix(networkPrefix);
   if (isBinaryLike(instruction)) {
-    return canonicalInstructionFrame(instruction, nativeRuntime);
+    return canonicalInstructionFrame(instruction, networkPrefix, nativeRuntime);
   }
   if (typeof instruction === JS_TYPE_STRING) {
     const trimmed = instruction.trim();
@@ -719,12 +720,18 @@ function encodeInstruction(instruction, nativeRuntime) {
       if (!(error instanceof SyntaxError)) {
         throw error;
       }
-      const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
-      if (decoded) {
-        return canonicalInstructionFrame(decoded, nativeRuntime);
+      // Encoded frames have explicit representations. A 0x-prefixed hex frame
+      // can also be lexically valid base64, so decoder probing is ambiguous.
+      let frame;
+      if (instruction.startsWith("0x")) {
+        if (!/^0x(?:[0-9a-f]{2})+$/u.test(instruction)) {
+          rejectType("instruction frame must be exact lowercase 0x-prefixed hex");
+        }
+        frame = Buffer.from(instruction.slice(2), HEX_ENCODING);
+      } else {
+        frame = decodeExactStandardBase64(instruction, "instruction frame");
       }
-      const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-      return toBuffer(native.noritoEncodeInstruction(instruction));
+      return canonicalInstructionFrame(frame, networkPrefix, nativeRuntime);
     }
     const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
       ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
@@ -734,26 +741,26 @@ function encodeInstruction(instruction, nativeRuntime) {
     rejectRetiredGenericZkInstruction(exactParsed);
     validateGovernanceInstructionBoundary(exactParsed);
     const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-    return toBuffer(native.noritoEncodeInstruction(instruction));
+    return toBuffer(native.noritoEncodeInstruction(instruction, networkPrefix));
   }
   const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-  return encodeNormalizedInstruction(normalized, nativeRuntime);
+  return encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime);
 }
 
-function canonicalInstructionFrame(bytes, nativeRuntime) {
+function canonicalInstructionFrame(bytes, networkPrefix, nativeRuntime) {
   const frame = toBuffer(bytes);
   const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
-  const json = native.noritoDecodeInstruction(frame);
+  const json = native.noritoDecodeInstruction(frame, networkPrefix);
   const encoder = resolveNative("noritoEncodeInstruction", nativeRuntime);
-  const canonical = toBuffer(encoder.noritoEncodeInstruction(json));
+  const canonical = toBuffer(encoder.noritoEncodeInstruction(json, networkPrefix));
   if (!frame.equals(canonical)) {
     rejectError("instruction frame is not canonical Norito");
   }
   return canonical;
 }
 
-export function noritoEncodeInstruction(instruction) {
-  return encodeInstruction(instruction, defaultNativeRuntime);
+export function noritoEncodeInstruction(instruction, networkPrefix) {
+  return encodeInstruction(instruction, networkPrefix, defaultNativeRuntime);
 }
 
 /**
@@ -1052,9 +1059,11 @@ function rejectInlinePrivateKeyFields(request, context) {
  * InstructionBox values embedded in the DTO, not base64 strings inside JSON.
  *
  * @param {object} request
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {Buffer}
  */
-function encodeMultisigProposeRequest(request, nativeRuntime) {
+function encodeMultisigProposeRequest(request, networkPrefix, nativeRuntime) {
+  requireNetworkPrefix(networkPrefix);
   if (!isPlainObject(request)) {
     rejectType(("MultisigProposeDto request" + TEXT_MUST_BE_AN_OBJECT_2));
   }
@@ -1062,6 +1071,12 @@ function encodeMultisigProposeRequest(request, nativeRuntime) {
     rejectType((TEXT_MULTISIG_PROPOSE_DTO + "instructions" + TEXT_MUST_BE + "an array"));
   }
   rejectInlinePrivateKeyFields(request, "MultisigProposeDto");
+  for (const [_field, value] of [
+    ["signer_account_id", request.signer_account_id ?? request.signerAccountId],
+    ["multisig_account_id", request.multisig_account_id ?? request.multisigAccountId],
+  ]) {
+    if (value !== undefined && value !== null) AccountAddress.parseEncoded(value, networkPrefix);
+  }
   const validationFeeMetadata = normalizeMultisigProposeValidationFeeMetadata(request);
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
@@ -1128,7 +1143,7 @@ function encodeMultisigProposeRequest(request, nativeRuntime) {
         ),
       ],
       [
-        encodeMultisigInstructions(request.instructions, nativeRuntime),
+        encodeMultisigInstructions(request.instructions, networkPrefix, nativeRuntime),
       ],
       [
         encodeOptionValue(
@@ -1149,8 +1164,8 @@ function encodeMultisigProposeRequest(request, nativeRuntime) {
   return frameNoritoPayload(payload, MULTISIG_PROPOSE_DTO_SCHEMA_HASH, COMPACT_LEN_FLAG);
 }
 
-export function noritoEncodeMultisigProposeRequest(request) {
-  return encodeMultisigProposeRequest(request, defaultNativeRuntime);
+export function noritoEncodeMultisigProposeRequest(request, networkPrefix) {
+  return encodeMultisigProposeRequest(request, networkPrefix, defaultNativeRuntime);
 }
 
 function normalizeMultisigProposeValidationFeeMetadata(request) {
@@ -1446,11 +1461,11 @@ function encodeMultisigAccountSelectorFields(request, context) {
   ];
 }
 
-function encodeMultisigInstructions(instructions, nativeRuntime) {
+function encodeMultisigInstructions(instructions, networkPrefix, nativeRuntime) {
   // The enclosing DTO owns vector lengths; each element is the exact bare
   // InstructionBox archive supplied by Rust, including its inner frame.
   return encodeNoritoVec(instructions, (instruction) =>
-    encodeInstructionBoxArchive(instruction, nativeRuntime));
+    encodeInstructionBoxArchive(instruction, networkPrefix, nativeRuntime));
 }
 
 /**
@@ -1459,16 +1474,16 @@ function encodeMultisigInstructions(instructions, nativeRuntime) {
  * both its outer schema and its inner instruction schema are verified before
  * the archive crosses the signing boundary.
  */
-function encodeInstructionBoxArchive(instruction, nativeRuntime) {
-  const frame = encodeInstruction(instruction, nativeRuntime);
+function encodeInstructionBoxArchive(instruction, networkPrefix, nativeRuntime) {
+  const frame = encodeInstruction(instruction, networkPrefix, nativeRuntime);
   const decoder = resolveNative("noritoDecodeInstruction", nativeRuntime);
-  const json = decoder.noritoDecodeInstruction(frame);
+  const json = decoder.noritoDecodeInstruction(frame, networkPrefix);
   const encoder = resolveNative("noritoEncodeInstructionBoxArchive", nativeRuntime);
-  return toBuffer(encoder.noritoEncodeInstructionBoxArchive(json));
+  return toBuffer(encoder.noritoEncodeInstructionBoxArchive(json, networkPrefix));
 }
 
-export function noritoEncodeInstructionBoxArchive(instruction) {
-  return encodeInstructionBoxArchive(instruction, defaultNativeRuntime);
+export function noritoEncodeInstructionBoxArchive(instruction, networkPrefix) {
+  return encodeInstructionBoxArchive(instruction, networkPrefix, defaultNativeRuntime);
 }
 
 /**
@@ -1482,15 +1497,17 @@ export function noritoEncodeInstructionBoxArchive(instruction) {
  * signing boundaries.
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {unknown}
  */
-export function noritoDecodeInstructionBoxArchive(bytes) {
-  return decodeInstructionBoxArchive(bytes, defaultNativeRuntime);
+export function noritoDecodeInstructionBoxArchive(bytes, networkPrefix) {
+  return decodeInstructionBoxArchive(bytes, networkPrefix, defaultNativeRuntime);
 }
 
-function decodeInstructionBoxArchive(bytes, nativeRuntime) {
+function decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime) {
+  requireNetworkPrefix(networkPrefix);
   const native = resolveNative("noritoDecodeInstructionBoxArchive", nativeRuntime);
-  const decoded = JSON.parse(native.noritoDecodeInstructionBoxArchive(toBuffer(bytes)));
+  const decoded = JSON.parse(native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix));
   validateInstructionObjectNumbers(decoded);
   validateDecodedInstructionProofAttachments(decoded);
   return decoded;
@@ -1503,13 +1520,15 @@ function decodeInstructionBoxArchive(bytes, nativeRuntime) {
  * Otherwise the raw JSON string returned by the native binding is emitted.
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @param {{ parseJson?: boolean }} [options]
  * @returns {string | unknown}
  */
-function decodeInstruction(bytes, options, nativeRuntime) {
+function decodeInstruction(bytes, networkPrefix, options, nativeRuntime) {
+  requireNetworkPrefix(networkPrefix);
   const buffer = toBuffer(bytes);
   const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
-  const json = native.noritoDecodeInstruction(buffer);
+  const json = native.noritoDecodeInstruction(buffer, networkPrefix);
   const decoded = JSON.parse(json);
   validateDecodedInstructionProofAttachments(decoded);
   // Raw mode preserves the owner's exact numeric tokens. Parsed mode must
@@ -1518,8 +1537,8 @@ function decodeInstruction(bytes, options, nativeRuntime) {
   return options.parseJson === false ? json : decoded;
 }
 
-export function noritoDecodeInstruction(bytes, options = {}) {
-  return decodeInstruction(bytes, options, defaultNativeRuntime);
+export function noritoDecodeInstruction(bytes, networkPrefix, options = {}) {
+  return decodeInstruction(bytes, networkPrefix, options, defaultNativeRuntime);
 }
 
 function validateDecodedInstructionProofAttachments(instruction) {
@@ -1554,9 +1573,11 @@ function validateDecodedInstructionProofAttachments(instruction) {
  * account, subscription, trigger id, and charge time.
  *
  * @param {string} encodedAction
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {object}
  */
-function inspectTriggerAction(encodedAction, nativeRuntime) {
+function inspectTriggerAction(encodedAction, networkPrefix, nativeRuntime) {
+  requireNetworkPrefix(networkPrefix);
   if (
     typeof encodedAction !== JS_TYPE_STRING ||
     encodedAction.length === 0 ||
@@ -1568,7 +1589,7 @@ function inspectTriggerAction(encodedAction, nativeRuntime) {
     "inspectSubscriptionTriggerAction",
     nativeRuntime,
   );
-  const payload = native.inspectSubscriptionTriggerAction(encodedAction);
+  const payload = native.inspectSubscriptionTriggerAction(encodedAction, networkPrefix);
   try {
     return JSON.parse(payload);
   } catch (error) {
@@ -1578,28 +1599,28 @@ function inspectTriggerAction(encodedAction, nativeRuntime) {
   }
 }
 
-export function inspectSubscriptionTriggerAction(encodedAction) {
-  return inspectTriggerAction(encodedAction, defaultNativeRuntime);
+export function inspectSubscriptionTriggerAction(encodedAction, networkPrefix) {
+  return inspectTriggerAction(encodedAction, networkPrefix, defaultNativeRuntime);
 }
 
 /** @internal Source-level test facade; intentionally absent from package exports. */
 export function _createNoritoInstructionApi(nativeRuntime) {
   return Object.freeze({
     _instructionWireSchemaBindings: () => INSTRUCTION_WIRE_SCHEMA_BINDINGS,
-    _encodeMultisigInstructions: (instructions) => withNoritoCompactLengths(() =>
-      encodeMultisigInstructions(instructions, nativeRuntime)),
-    inspectSubscriptionTriggerAction: (encodedAction) =>
-      inspectTriggerAction(encodedAction, nativeRuntime),
-    noritoDecodeInstruction: (bytes, options = {}) =>
-      decodeInstruction(bytes, options, nativeRuntime),
-    noritoDecodeInstructionBoxArchive: (bytes) =>
-      decodeInstructionBoxArchive(bytes, nativeRuntime),
-    noritoEncodeInstruction: (instruction) =>
-      encodeInstruction(instruction, nativeRuntime),
-    noritoEncodeInstructionBoxArchive: (instruction) =>
-      encodeInstructionBoxArchive(instruction, nativeRuntime),
-    noritoEncodeMultisigProposeRequest: (request) =>
-      encodeMultisigProposeRequest(request, nativeRuntime),
+    _encodeMultisigInstructions: (instructions, networkPrefix) => withNoritoCompactLengths(() =>
+      encodeMultisigInstructions(instructions, requireNetworkPrefix(networkPrefix), nativeRuntime)),
+    inspectSubscriptionTriggerAction: (encodedAction, networkPrefix) =>
+      inspectTriggerAction(encodedAction, networkPrefix, nativeRuntime),
+    noritoDecodeInstruction: (bytes, networkPrefix, options = {}) =>
+      decodeInstruction(bytes, networkPrefix, options, nativeRuntime),
+    noritoDecodeInstructionBoxArchive: (bytes, networkPrefix) =>
+      decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime),
+    noritoEncodeInstruction: (instruction, networkPrefix) =>
+      encodeInstruction(instruction, networkPrefix, nativeRuntime),
+    noritoEncodeInstructionBoxArchive: (instruction, networkPrefix) =>
+      encodeInstructionBoxArchive(instruction, networkPrefix, nativeRuntime),
+    noritoEncodeMultisigProposeRequest: (request, networkPrefix) =>
+      encodeMultisigProposeRequest(request, networkPrefix, nativeRuntime),
   });
 }
 
@@ -3667,11 +3688,13 @@ function normalizeCanonicalLanePrivacyProofValue(value, context) {
   }
   assertExactObjectKeys(value, ["commitment_id", "witness"], context);
   if (
-    !Number.isInteger(value.commitment_id) ||
-    value.commitment_id < 0 ||
-    value.commitment_id > 0xffff
+    !Array.isArray(value.commitment_id) ||
+    value.commitment_id.length !== 1 ||
+    !Number.isInteger(value.commitment_id[0]) ||
+    value.commitment_id[0] < 0 ||
+    value.commitment_id[0] > 0xffff
   ) {
-    rejectRange(`${context}.commitment_id must fit within a u16`);
+    rejectRange(`${context}.commitment_id must be an exact one-element u16 tuple`);
   }
   return {
     commitment_id: value.commitment_id,
@@ -3722,19 +3745,15 @@ function normalizeCanonicalLanePrivacyWitnessValue(value, context) {
       rejectType(`${context}.payload.proof.audit_path[${index}]${TEXT_MUST_CONTAIN}a sibling`);
     }
     const siblingContext = `${context}.payload.proof.audit_path[${index}]`;
+    if (typeof entry !== JS_TYPE_STRING) {
+      rejectType(`${siblingContext}${TEXT_MUST_BE_A}canonical HashOf literal`);
+    }
     const siblingBytes = encodeHashLiteralBytes(entry, siblingContext);
-    if (typeof entry === JS_TYPE_STRING) {
-      const canonical = decodeHashLiteral(siblingBytes, siblingContext);
-      if (entry !== canonical) {
-        rejectType(`${siblingContext}${TEXT_MUST_BE_A}canonical HashOf literal`);
-      }
-      return canonical;
+    const canonical = decodeHashLiteral(siblingBytes, siblingContext);
+    if (entry !== canonical) {
+      rejectType(`${siblingContext}${TEXT_MUST_BE_A}canonical HashOf literal`);
     }
-    const sibling = Array.from(siblingBytes);
-    if ((sibling[31] & 1) === 0) {
-      rejectType(`${siblingContext} is not a${TEXT_CANONICAL}prehashed HashOf`);
-    }
-    return sibling;
+    return canonical;
   });
   return {
     kind: "merkle",
@@ -4640,18 +4659,3 @@ function tryDecodeBase64(value) {
   }
 }
 
-function tryDecodeHex(value) {
-  if (!value) {
-    return null;
-  }
-  const compact = value.replace(/^0x/i, "");
-  if (compact.length === 0 || compact.length % 2 !== 0 || /[^0-9A-Fa-f]/.test(compact)) {
-    return null;
-  }
-  try {
-    const decoded = Buffer.from(compact, HEX_ENCODING);
-    return decoded.length > 0 ? decoded : null;
-  } catch {
-    return null;
-  }
-}

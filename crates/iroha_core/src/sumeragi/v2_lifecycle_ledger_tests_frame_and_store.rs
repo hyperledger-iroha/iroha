@@ -1,34 +1,74 @@
 /// Decode and validate a retained incident frame without opening or mutating its store.
 #[test]
-#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME pointing to a retained diagnostic frame"]
+#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME and IROHA_LIFECYCLE_INCIDENT_ORDINAL"]
 fn inspect_retained_lifecycle_ledger_frame() {
     let path = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_FRAME")
         .expect("provide the retained lifecycle frame path");
-    let bytes = std::fs::read(path).expect("read retained frame");
-    let ledger = decode_frame(
-        &bytes,
-        u64::try_from(bytes.len()).expect("frame length fits"),
-    )
-    .expect("retained frame has a valid checksum and canonical Norito encoding");
+    let ordinal = std::env::var("IROHA_LIFECYCLE_INCIDENT_ORDINAL")
+        .expect("provide the exact retained lifecycle ordinal")
+        .parse::<u128>()
+        .expect("the retained lifecycle ordinal is an unsigned integer");
+    let mut bytes = Vec::new();
+    File::open(path)
+        .expect("open retained frame read-only")
+        .take(MAX_LEDGER_FRAME_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .expect("read bounded retained frame");
+    let ledger = decode_frame(&bytes, MAX_LEDGER_FRAME_BYTES)
+        .expect("retained frame has a valid checksum and canonical Norito encoding");
     ledger
         .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
         .expect("retained frame satisfies the lifecycle invariants");
     println!(
-        "context={:?} high_water={} records={}",
-        ledger.context(),
+        "context={} height={} high_water={} records={}",
+        hex::encode(ledger.context().id().as_bytes()),
+        ledger.context().height(),
         ledger.high_water(),
         ledger.records().len()
     );
-    for record in ledger.records() {
+    let selected = ledger
+        .records()
+        .iter()
+        .find(|record| record.ordinal() == ordinal)
+        .expect("the retained ledger contains the requested ordinal");
+    for record in ledger.records().iter().filter(|record| {
+        record.owner() == selected.owner()
+            || record
+                .continuation()
+                .and_then(DurableContinuation::successor_parts)
+                .is_some_and(|(_, successor)| successor == ordinal)
+            || record.ordinal() == ordinal.saturating_add(1)
+    }) {
+        let key = record.key().expect("validated record has a lifecycle key");
         println!(
-            "ordinal={} class={:?} stage={:?} terminal={:?} continuation={:?} payload={:?}",
+            "ordinal={} owner_first={} root={} round={:?} proposal_round={:?} subject={} class={:?} stage={:?} terminal={:?} continuation={:?}",
             record.ordinal(),
+            record.owner().first_admission_ordinal(),
+            hex::encode(record.owner().causal_root().digest().as_bytes()),
+            key.round(),
+            key.proposal_round(),
+            key.subject().map_or_else(
+                || "none".to_owned(),
+                |subject| hex::encode(subject.as_bytes())
+            ),
             record.work_class(),
             record.stage(),
             record.terminal(),
             record.continuation(),
-            record.durable_payload(),
         );
+        println!(
+            "{}",
+            record.replay_authority.public_incident_metadata_for_test()
+        );
+    }
+    if let Some(wal_path) = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_WAL") {
+        for summary in crate::sumeragi::v2::retained_wal_incident_metadata_for_test(
+            Path::new(&wal_path),
+            *ledger.context().id().as_bytes(),
+            ledger.context().height(),
+        ) {
+            println!("{summary}");
+        }
     }
 }
 
@@ -1249,7 +1289,9 @@ fn combined_pair_classifier_requires_exact_fresh_owner_histories() {
         standalone_pair.parent(),
         RecoveredLifecycleSignedBroadcastAndSignParentV1::StandalonePrepare
     );
-    assert!(!standalone_pair.exactly_matches_ledger(&committed_prepare_broadcast_and_sign_ledger()));
+    assert!(
+        !standalone_pair.exactly_matches_ledger(&committed_prepare_broadcast_and_sign_ledger())
+    );
     let mut extra_parent_history = committed_prepare_broadcast_and_sign_ledger();
     let parent_owner = extra_parent_history.records[0].owner();
     let later = extra_parent_history

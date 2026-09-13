@@ -3,22 +3,16 @@ const fs = require("fs");
 const path = require("path");
 
 const REPO = path.join(__dirname, "..", "..", "..", "..");
-const solc = require(path.join(
-  REPO,
-  "scripts",
-  "contract_tooling",
-  "authenticated-solc",
-));
-const { createHardhatProvider } = require(path.join(
+const { compileNativeSolidity } = require(path.join(REPO, "scripts/contract_native_solc.js"));
+const { createNativeEdrProvider } = require(path.join(
   REPO,
   "scripts",
   "contract_tooling",
   "evm-runtime",
-  "hardhat-provider.js",
+  "edr-provider.js",
 ));
 const { ethers } = require("ethers");
 
-const SOLC_BUILD = "0.7.4+commit.3f05b770.Emscripten.clang";
 const MAGIC = ethers.toUtf8Bytes("SCCP-REPLAY-SMT-V1");
 const DEPTH = 248;
 const WITNESS_TYPE =
@@ -110,7 +104,6 @@ function source(file) {
 }
 
 function compile() {
-  assert.equal(solc.version(), SOLC_BUILD, "replay smoke used an unauthenticated compiler");
   const compilerLock = JSON.parse(
     fs.readFileSync(path.join(REPO, "scripts", "contract_tooling", "compiler-lock.json")),
   );
@@ -120,11 +113,11 @@ function compile() {
     "contracts/evm/sccp/SccpSha256ReplayForest.sol",
   ])];
   const sources = Object.fromEntries(files.map((file) => [file, source(file)]));
-  const output = JSON.parse(solc.compile(JSON.stringify({
+  const output = compileNativeSolidity(JSON.stringify({
     language: "Solidity",
     sources,
     settings: compilerLock.settings,
-  })));
+  }));
   const rejected = (output.errors || []).filter(
     (entry) => entry.severity === "error" || entry.severity === "warning",
   );
@@ -185,9 +178,9 @@ async function rejectsWith(promise, marker) {
 
 async function main() {
   const artifact = compile();
-  const providerHandle = createHardhatProvider({ chainId: 56, blockGasLimit: 20_000_000 });
+  const providerHandle = createNativeEdrProvider({ chainId: 56, blockGasLimit: 20_000_000 });
   try {
-    const provider = new ethers.BrowserProvider(providerHandle);
+    const provider = new ethers.BrowserProvider(providerHandle, undefined, { cacheTimeout: -1 });
     const signer = await provider.getSigner();
     const factory = new ethers.ContractFactory(
       artifact.abi,

@@ -1478,7 +1478,7 @@ fn empty_successor_owner_for_complete_tip(
         kura_binding: Some(RecoveredLifecycleOwnerKuraBindingV1::for_test(kura, None)),
         apply_service: None,
         adapter_startup: Some(ProductionLifecycleAdapterStartupV1::fixture_for_test()),
-        timeout_supersession_successor: None,
+        owner_open_successor: None,
     }
 }
 
@@ -3494,8 +3494,8 @@ fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() 
         .persist_exact_successor(&frozen, &post)
         .expect("publish exact simulated owner-open successor");
     let mut exact_owner = open_post_owner();
-    exact_owner.timeout_supersession_successor = Some(
-        AuthenticatedRecoveredTimeoutSupersessionSuccessorV1::for_exact_store_successor_test(
+    exact_owner.owner_open_successor = Some(
+        AuthenticatedRecoveredOwnerOpenSuccessorV1::for_exact_store_successor_test(
             &successor_store,
             &frozen,
             &post,
@@ -3567,8 +3567,8 @@ fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() 
         .persist_exact_successor(&foreign_empty, &post)
         .expect("copy post frame to foreign witness target");
     let mut foreign_owner = open_post_owner();
-    foreign_owner.timeout_supersession_successor = Some(
-        AuthenticatedRecoveredTimeoutSupersessionSuccessorV1::for_exact_store_successor_test(
+    foreign_owner.owner_open_successor = Some(
+        AuthenticatedRecoveredOwnerOpenSuccessorV1::for_exact_store_successor_test(
             &foreign_store,
             &frozen,
             &post,
@@ -3589,8 +3589,8 @@ fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() 
         .persist_exact_successor(&frozen, &post)
         .expect("republish post frame for foreign-context rejection");
     let mut context_owner = open_post_owner();
-    context_owner.timeout_supersession_successor = Some(
-        AuthenticatedRecoveredTimeoutSupersessionSuccessorV1::for_exact_store_successor_test(
+    context_owner.owner_open_successor = Some(
+        AuthenticatedRecoveredOwnerOpenSuccessorV1::for_exact_store_successor_test(
             &successor_store,
             &frozen,
             &post,
@@ -3615,8 +3615,8 @@ fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() 
         .persist_exact_successor(&frozen, &post)
         .expect("republish exact witnessed post frame");
     let mut drift_owner = open_post_owner();
-    drift_owner.timeout_supersession_successor = Some(
-        AuthenticatedRecoveredTimeoutSupersessionSuccessorV1::for_exact_store_successor_test(
+    drift_owner.owner_open_successor = Some(
+        AuthenticatedRecoveredOwnerOpenSuccessorV1::for_exact_store_successor_test(
             &successor_store,
             &frozen,
             &post,
@@ -3961,5 +3961,200 @@ fn complete_tip_terminal_apply_store_join_is_not_an_all_row_retirement() {
             )
             .is_ok(),
         "this prerequisite must not masquerade as exhaustive retirement"
+    );
+}
+
+#[test]
+fn complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain() {
+    let result = crate::sumeragi::sumeragi_thread_builder("complete-tip-decision-owner-open")
+        .spawn(|| {
+            let _guard = crate::sumeragi::status::rbc_status_test_guard();
+            for validated_body in [false, true] {
+                let fixture = RecoveryFixture::new("complete-tip-decision-factory", 0x71);
+                let (_, mut parent) = terminal_decision_chain_fixture(&fixture);
+                // The retained parent is cryptographically valid so the actual
+                // successor adapter can authenticate its parent and Decision.
+                let vote = wire::Vote {
+                    round: parent.certificate.round,
+                    proposal_round: parent.certificate.proposal_round,
+                    phase: wire::GlobalPhase::Commit,
+                    subject: parent.certificate.subject,
+                    execution_commitment: parent.certificate.execution_commitment,
+                    signer: 0, signature: Vec::new(),
+                };
+                parent.certificate.signers = vec![0, 1, 2];
+                let signatures = fixture.keys.iter().take(3)
+                    .map(|key| Signature::new(key.private_key(), &vote.signature_preimage())
+                        .payload().to_vec()).collect::<Vec<_>>();
+                parent.certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                    &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                ).expect("sign real retained CompleteTip parent QC");
+                let artifact = wire::finality::V2FinalityArtifact::new(
+                    fixture.verified.context().clone(), parent.subject,
+                    parent.certificate.clone(), fixture.verified.proofs_of_possession().to_vec(),
+                );
+                artifact.verify().expect("verify retained parent finality cryptographically");
+                let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
+                let successor = complete_tip_successor_fixture(&fixture, &parent);
+                let verified = VerifiedHeightContext::successor(
+                    successor.context().clone(), successor.proofs_of_possession().to_vec(),
+                    &artifact, &receipt, fixture.verified.proofs_of_possession(),
+                ).expect("verify actual CompleteTip successor context");
+                let kura = Kura::blank_kura_for_testing();
+                let root = kura.sumeragi_v2_storage_root().join("lifecycle-v1");
+                let predecessor_root = root.join(hex::encode(fixture.verified.context().id().0.as_ref()));
+                let (predecessor_store, predecessor) = LifecycleLedgerStoreV1::open(
+                    &predecessor_root, fixture.lifecycle_context(),
+                ).expect("open physical empty genesis predecessor");
+                predecessor_store.persist_exact_successor(&predecessor, &predecessor)
+                    .expect("fsync physical empty genesis predecessor");
+                let successor_root = root.join(hex::encode(verified.context().id().0.as_ref()));
+                let successor_context = projection::lifecycle_context(verified.context());
+                let (seed_store, empty) = LifecycleLedgerStoreV1::open(&successor_root, successor_context)
+                    .expect("open CompleteTip successor seed store");
+                let owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xA9; 32])), 1);
+                let frozen = LifecycleLedgerV1::new(
+                    successor_context, 1,
+                    vec![unrelated_terminal_record(successor_context, owner, 1, 0xA9)],
+                    BTreeMap::new(),
+                ).expect("retain nonempty successor history before Decision repair");
+                seed_store.persist_exact_successor(&empty, &frozen)
+                    .expect("fsync nonempty successor history");
+                let retire = || complete_tip_for_terminal_decision_on_kura_with_policy(
+                    &fixture, &parent, kura.as_ref(),
+                    BlockSignaturePolicy::GenesisAuthority(fixture.keys[0].public_key().clone()),
+                )
+                    .into_canonical_predecessor_storage(&fixture.keys[0])
+                    .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+                    .expect("retire parent and freeze the exact successor before factory open");
+                let retirement = retire();
+                assert_eq!(retirement.successor_ledger, frozen);
+                let safety = TempDir::new().expect("CompleteTip successor safety WAL");
+                let wal_path = safety.path().join("decision.wal");
+                let open = || {
+                    let mut owner = crate::sumeragi::v2::SumeragiV2Adapter::open_complete_tip_decision_owner_for_test(
+                        &wal_path, &successor_root, &kura.sumeragi_v2_storage_root().join("bodies"),
+                        verified.clone(), &fixture.keys, validated_body,
+                    );
+                    owner.kura_binding = Some(RecoveredLifecycleOwnerKuraBindingV1::for_test(kura.as_ref(), None));
+                    owner
+                };
+                let owner = open();
+                assert!(owner.owner_open_successor.is_some(), "actual factory repair retains its CAS chain");
+                let published = owner.coordinator.ledger_store.as_ref().unwrap().load().unwrap();
+                assert_ne!(published, frozen);
+                let mut bound = retirement.bind_successor_owner(owner)
+                    .expect("the first repaired startup must bind without another process restart");
+                assert!(bound.remains_exact_for_test());
+                assert!(bound.owner.owner_open_successor.is_none(), "binding consumes the publication proof");
+                drop(bound);
+                let bytes = fs::read(successor_root.join(LEDGER_FILE)).unwrap();
+                let retirement = retire();
+                let owner = open();
+                assert!(owner.owner_open_successor.is_none(), "unchanged cold recovery needs no new publication");
+                let mut bound = retirement.bind_successor_owner(owner)
+                    .expect("already-published Decision recovery stutters exactly");
+                assert!(bound.remains_exact_for_test());
+                assert_eq!(fs::read(successor_root.join(LEDGER_FILE)).unwrap(), bytes);
+            }
+        }).expect("production consensus test stack").join();
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+}
+
+#[test]
+fn owner_open_publication_chain_requires_every_exact_cas_and_is_consumed_once() {
+    let fixture = RecoveryFixture::new("owner-open-publication-chain", 0x79);
+    let directory = TempDir::new().expect("owner-open publication store");
+    let context = fixture.lifecycle_context();
+    let (store, empty) = LifecycleLedgerStoreV1::open(directory.path(), context).unwrap();
+    let ledger = |count: u8| {
+        LifecycleLedgerV1::new(
+            context,
+            u128::from(count),
+            (1..=count)
+                .map(|ordinal| {
+                    let owner = OwnerId::new(
+                        CausalRoot::new(LifecycleDigest::new([ordinal; 32])),
+                        u128::from(ordinal),
+                    );
+                    unrelated_terminal_record(context, owner, u128::from(ordinal), ordinal)
+                })
+                .collect(),
+            BTreeMap::new(),
+        )
+        .unwrap()
+    };
+    let first = ledger(1);
+    let second = ledger(2);
+    store.persist_exact_successor(&empty, &first).unwrap();
+    let same_owner_handle = store.clone();
+    same_owner_handle
+        .persist_exact_successor(&first, &second)
+        .unwrap();
+    let receipt = store
+        .take_owner_open_successor()
+        .expect("compose both exact publications");
+    assert!(receipt.authorizes_complete_tip_owner_join(
+        &store,
+        &same_owner_handle,
+        &empty,
+        &second,
+        &second,
+    ));
+    assert!(
+        same_owner_handle.take_owner_open_successor().is_none(),
+        "store clones cannot duplicate the receipt"
+    );
+    let third = ledger(3);
+    store.persist_exact_successor(&second, &third).unwrap();
+    assert!(
+        store.take_owner_open_successor().is_none(),
+        "live publications cannot revive consumed startup authority"
+    );
+    assert!(
+        !receipt.authorizes_complete_tip_owner_join(
+            &store,
+            &same_owner_handle,
+            &empty,
+            &second,
+            &second,
+        ),
+        "post-capture storage drift invalidates the retained receipt"
+    );
+
+    let (omitted_prefix, _) = LifecycleLedgerStoreV1::open(directory.path(), context).unwrap();
+    let (other_opener, _) = LifecycleLedgerStoreV1::open(directory.path(), context).unwrap();
+    let fourth = ledger(4);
+    let fifth = ledger(5);
+    other_opener
+        .persist_exact_successor(&third, &fourth)
+        .unwrap();
+    omitted_prefix
+        .persist_exact_successor(&fourth, &fifth)
+        .unwrap();
+    let sixth = ledger(6);
+    omitted_prefix
+        .persist_exact_successor(&fifth, &sixth)
+        .unwrap();
+    assert!(
+        omitted_prefix.take_owner_open_successor().is_none(),
+        "a separate opener's missing prefix permanently breaks the chain"
+    );
+    let (unchanged, _) = LifecycleLedgerStoreV1::open(directory.path(), context).unwrap();
+    unchanged.persist_exact_successor(&sixth, &sixth).unwrap();
+    assert!(
+        unchanged.take_owner_open_successor().is_none(),
+        "an exact cold stutter mints no publication"
+    );
+    let mut failing = LifecycleLedgerStoreV1::open(directory.path(), context)
+        .unwrap()
+        .0;
+    failing.fail_persistence_for_test = true;
+    assert!(failing.persist_exact_successor(&sixth, &ledger(7)).is_err());
+    assert!(
+        failing.take_owner_open_successor().is_none(),
+        "failed persistence cannot attest a successor"
     );
 }

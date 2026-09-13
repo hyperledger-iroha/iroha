@@ -14,10 +14,11 @@ mod certified_body_fence_supersession {
     };
 
     impl V2EffectExecutor<crate::sumeragi::v2_runtime::SerializedV2Runtime> {
-        /// Observe cold Decision protection before and after the first Apply publication.
-        pub(in crate::sumeragi) fn assert_cold_decision_protection_for_test(
+        /// Check Decision reconciliation and Apply publication as separate transitions.
+        pub(in crate::sumeragi) fn assert_decision_protection_for_test(
             &self,
             subject: wire::BlockSubject,
+            decision_reconciled: bool,
             apply_published: bool,
         ) {
             let decision = self
@@ -27,7 +28,11 @@ mod certified_body_fence_supersession {
                 .expect("the fixture has an authenticated durable Decision");
             assert_eq!(decision.2, subject);
             assert!(self.pending_runner_decision_cleanup.is_none());
-            assert_eq!(self.protected_decision, apply_published.then_some(decision));
+            assert!(!apply_published || decision_reconciled);
+            assert_eq!(
+                self.protected_decision,
+                decision_reconciled.then_some(decision)
+            );
             assert_eq!(self.decision_body_drained, apply_published);
             assert_eq!(
                 self.live_lifecycle_decision_apply.is_some(),
@@ -619,7 +624,7 @@ mod certified_body_fence_supersession {
         drop(services);
         drop(owner);
         drop(transport.executor);
-        let mut recovered = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+        let mut recovered = SumeragiV2Adapter::reopen_body_owner_for_test(
             &wal_path,
             directory.path(),
             verified,

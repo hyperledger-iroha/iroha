@@ -149,7 +149,9 @@ impl ConsensusOutputGuard {
     }
     /// Permanently close admission without blocking for an in-flight drain.
     ///
-    /// Panic guards use this before their stack can release nested permits.
+    /// Nested failure callbacks and destructors use this before their caller
+    /// can release its permits. A worker being joined by that caller must use
+    /// this boundary as well, rather than waiting on the joiner's permit.
     /// A later non-panicking permit/acquire path finalizes the internal state.
     #[track_caller]
     pub(crate) fn close_admission_for_restart(&self) {

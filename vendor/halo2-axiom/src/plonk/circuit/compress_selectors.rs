@@ -17,6 +17,27 @@ pub struct SelectorDescription {
     pub max_degree: usize,
 }
 
+/// Borrowed selector coordinates for planning without copying activation rows.
+pub(super) struct SelectorDescriptionRef<'a> {
+    /// Original selector index.
+    pub(super) selector: usize,
+    /// Original activation rows; this view owns no row allocation.
+    pub(super) activations: &'a [bool],
+    /// Original maximum gate degree for this selector.
+    pub(super) max_degree: usize,
+}
+
+fn borrowed_descriptions(selectors: &[SelectorDescription]) -> Vec<SelectorDescriptionRef<'_>> {
+    selectors
+        .iter()
+        .map(|selector| SelectorDescriptionRef {
+            selector: selector.selector,
+            activations: &selector.activations,
+            max_degree: selector.max_degree,
+        })
+        .collect()
+}
+
 /// This describes the assigned combination of a particular selector as well as
 /// the expression it should be substituted with.
 #[derive(Debug, Clone)]
@@ -33,7 +54,7 @@ pub struct SelectorAssignment<F> {
 
 /// Computes the exact deterministic selector-combination plan without materializing any field
 /// polynomials. Each inner vector contains indices into `selectors`.
-fn plan(selectors: &[SelectorDescription], max_degree: usize) -> Vec<Vec<usize>> {
+fn plan(selectors: &[SelectorDescriptionRef<'_>], max_degree: usize) -> Vec<Vec<usize>> {
     if selectors.is_empty() {
         return vec![];
     }
@@ -121,11 +142,11 @@ fn plan(selectors: &[SelectorDescription], max_degree: usize) -> Vec<Vec<usize>>
 
 /// Returns the exact number of fixed columns that [`process`] will materialize.
 ///
-/// Unlike [`process`], this retains selector assignments in their bit-packed representation and
-/// therefore lets callers enforce resource limits before allocating degree-sized field vectors.
+/// Unlike [`process`], this only borrows boolean activation rows and does not allocate
+/// degree-sized field vectors. The existing `Vec<bool>` rows are not bit-packed.
 #[cfg(test)]
 pub fn combination_count(selectors: &[SelectorDescription], max_degree: usize) -> usize {
-    plan(selectors, max_degree).len()
+    plan(&borrowed_descriptions(selectors), max_degree).len()
 }
 
 /// Classifies the exact fixed columns produced by the existing selector plan.
@@ -142,7 +163,7 @@ pub(super) fn combination_modes<F: Field>(
         .first()
         .map_or(0, |selector| selector.activations.len());
     let mut modes = FixedColumnModeCounts::default();
-    for combination in plan(selectors, max_degree) {
+    for combination in plan(&borrowed_descriptions(selectors), max_degree) {
         let mut column = FixedColumnModeAccumulator::new();
         let mut covered = 0;
         let mut assigned_root = F::ONE;
@@ -164,6 +185,68 @@ pub(super) fn combination_modes<F: Field>(
         modes.add(column.finish());
     }
     modes
+}
+
+/// Append the original expressions in combination/member/root order.
+///
+/// The field-assignment work belongs to the caller. Both dense key generation and
+/// metadata-only VK reconstruction share these exact expression and root operations.
+fn append_assignments<F: Field>(
+    selectors: &[SelectorDescriptionRef<'_>],
+    combination: &[usize],
+    combination_index: usize,
+    query: Expression<F>,
+    assignments: &mut Vec<SelectorAssignment<F>>,
+    mut assign_activations: impl FnMut(&[bool], F),
+) {
+    let mut assigned_root = F::ONE;
+    for &selector_index in combination {
+        let selector = &selectors[selector_index];
+        // q * Prod[root != assigned_root](root - q), preserving the original field order.
+        let mut expression = query.clone();
+        let mut root = F::ONE;
+        for _ in 0..combination.len() {
+            if root != assigned_root {
+                expression = expression * (Expression::Constant(root) - query.clone());
+            }
+            root += F::ONE;
+        }
+        assign_activations(selector.activations, assigned_root);
+        assigned_root += F::ONE;
+        assignments.push(SelectorAssignment {
+            selector: selector.selector,
+            combination_index,
+            expression,
+        });
+    }
+}
+
+/// Build the original selector expressions without materializing any field assignment column.
+///
+/// Activation rows are borrowed. The original combination plan and fixed-column allocation
+/// order are shared with [`process`]; only its n-field output allocations are omitted.
+pub(super) fn process_without_polynomials<F: Field, E>(
+    selectors: &[SelectorDescriptionRef<'_>],
+    max_degree: usize,
+    mut allocate_fixed_column: E,
+) -> Vec<SelectorAssignment<F>>
+where
+    E: FnMut() -> Expression<F>,
+{
+    let combinations = plan(selectors, max_degree);
+    let mut assignments = vec![];
+    for (combination_index, combination) in combinations.into_iter().enumerate() {
+        let query = allocate_fixed_column();
+        append_assignments(
+            selectors,
+            &combination,
+            combination_index,
+            query,
+            &mut assignments,
+            |_, _| {},
+        );
+    }
+    assignments
 }
 
 /// This function takes a vector that defines each selector as well as a closure
@@ -191,7 +274,8 @@ pub fn process<F: Field, E>(
 where
     E: FnMut() -> Expression<F>,
 {
-    let combinations = plan(&selectors, max_degree);
+    let borrowed = borrowed_descriptions(&selectors);
+    let combinations = plan(&borrowed, max_degree);
     let n = selectors
         .first()
         .map_or(0, |selector| selector.activations.len());
@@ -200,49 +284,23 @@ where
     for combination in combinations {
         // Now, compute the selector and combination assignments.
         let mut combination_assignment = vec![F::ZERO; n];
-        let combination_len = combination.len();
         let combination_index = combination_assignments.len();
         let query = allocate_fixed_column();
-
-        let mut assigned_root = F::ONE;
-        selector_assignments.extend(combination.into_iter().map(|selector_index| {
-            let selector = &selectors[selector_index];
-            // Compute the expression for substitution. This produces an expression of the
-            // form
-            //     q * Prod[i = 1..=combination_len, i != assigned_root](i - q)
-            //
-            // which is non-zero only on rows where `combination_assignment` is set to
-            // `assigned_root`. In particular, rows set to 0 correspond to all selectors
-            // being disabled.
-            let mut expression = query.clone();
-            let mut root = F::ONE;
-            for _ in 0..combination_len {
-                if root != assigned_root {
-                    expression = expression * (Expression::Constant(root) - query.clone());
+        append_assignments(
+            &borrowed,
+            &combination,
+            combination_index,
+            query,
+            &mut selector_assignments,
+            |activations, assigned_root| {
+                for (value, active) in combination_assignment.iter_mut().zip(activations) {
+                    // Members are disjoint under the original plan.
+                    if *active {
+                        *value = assigned_root;
+                    }
                 }
-                root += F::ONE;
-            }
-
-            // Update the combination assignment
-            for (combination, selector) in combination_assignment
-                .iter_mut()
-                .zip(selector.activations.iter())
-            {
-                // This will not overwrite another selector's activations because
-                // we have ensured that selectors are disjoint.
-                if *selector {
-                    *combination = assigned_root;
-                }
-            }
-
-            assigned_root += F::ONE;
-
-            SelectorAssignment {
-                selector: selector.selector,
-                combination_index,
-                expression,
-            }
-        }));
+            },
+        );
         combination_assignments.push(combination_assignment);
     }
 

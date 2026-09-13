@@ -2746,9 +2746,12 @@ fn merge_execution_canonical_order_key(
 }
 /// Charge the same signed runtime bounds and deterministic native instruction meter as Queue.
 /// This is reservation accounting, not an estimate from a previous execution's gas usage.
-pub(crate) fn merge_execution_proposal_gas<'a>(
-    entrypoints: impl IntoIterator<Item = &'a TransactionEntrypoint>,
-) -> Result<u64, MergeLedgerCommitError> {
+pub(crate) fn merge_execution_proposal_gas<'a, I>(
+    entrypoints: I,
+) -> Result<u64, MergeLedgerCommitError>
+where
+    I: IntoIterator<Item = &'a TransactionEntrypoint>,
+{
     entrypoints.into_iter().try_fold(0u64, |total, entrypoint| {
         let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
             std::borrow::Cow::Borrowed(entrypoint),
@@ -24724,6 +24727,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.accounts.insert(account_id, account_value)
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Remove a provider-owner binding to isolate registry predicates in test fixtures.
+    ///
+    /// This bypasses registry lifecycle invariants and is unavailable in production builds.
+    pub fn remove_provider_owner_for_testing(&mut self, provider: ProviderId) -> Option<AccountId> {
+        self.provider_owners.remove(provider)
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
@@ -43569,22 +43579,36 @@ impl State {
                     .zip(&execution.native_amx_receipts)
             {
                 let canonical_entrypoint_hash = entrypoint.hash();
-                let registry_match = if validate_live_authority {
-                    queue_plan_admission_registry_match(
-                        &authority,
-                        reservation.entrypoint_hash.clone(),
-                        reservation.queue_plan_admission_binding_hash,
-                    )
-                } else {
-                    Self::queue_plan_admission_registry_match_in_view(
-                        &authority,
-                        reservation.entrypoint_hash.clone(),
-                        reservation.queue_plan_admission_binding_hash,
-                    )
-                };
+                // Startup validates durable carriers before replaying their earlier
+                // admission blocks. Only future carriers may defer the WSV lookup;
+                // restored history must retain its exact immutable binding, and
+                // ordered application always requires the live pending admission.
+                if validate_live_authority
+                    || batch.application_block_header.height().get()
+                        <= u64::try_from(authority.height()).unwrap_or(u64::MAX)
+                {
+                    let registry_match = if validate_live_authority {
+                        queue_plan_admission_registry_match(
+                            &authority,
+                            reservation.entrypoint_hash.clone(),
+                            reservation.queue_plan_admission_binding_hash,
+                        )
+                    } else {
+                        Self::queue_plan_admission_registry_match_in_view(
+                            &authority,
+                            reservation.entrypoint_hash.clone(),
+                            reservation.queue_plan_admission_binding_hash,
+                        )
+                    };
+                    if !matches!(registry_match, Ok(QueuePlanAdmissionRegistryMatch::Exact)) {
+                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                            "embedded reservation key lacks its exact QueuePlan admission registry binding"
+                                .to_owned(),
+                        ));
+                    }
+                }
                 if reservation.entrypoint_hash != canonical_entrypoint_hash
                     || Hash::from(reservation.entrypoint_hash) != *expected_hash
-                    || !matches!(registry_match, Ok(QueuePlanAdmissionRegistryMatch::Exact))
                     || reservation.routing_plan_digest != routing_plan.digest()
                     || reservation.coordinator_leg != routing_plan.coordinator_leg()
                     || reservation.lane_id != descriptor.lane_id

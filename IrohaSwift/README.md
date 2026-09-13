@@ -95,11 +95,23 @@ The adapter supplies no software monetary backend. See [the source contract](../
 
 Online top-up is payer-signed. Build a transaction containing exactly one
 `KagemushaNoritoV1.topUpInstructionFrame(_:)` result with `QueuePlanSynced`
-admission, sign it with the embedded payer, then call
-`submitKagemushaTopUp(_:operationID:)` with the resulting
-`SignedTransactionEnvelope` and the same nonzero 32-byte operation ID. The
-client sends the canonical versioned transaction unchanged; Torii never signs
-or rebuilds it.
+admission and sign it with the embedded payer. Construct
+`KagemushaPreparedTopUpSubmissionV1(signedTransaction:expectedRequest:)` from the
+canonical versioned signed transaction and the exact reviewed request. This
+requires the linked native verifier to validate the signature, network, queue
+admission, sole instruction, payer and complete canonical request equality.
+Persist those exact bytes with the original durable operation and wallet identity
+before calling `submitKagemushaTopUp(_:withCurrentOwner:)`. The required MainActor
+owner wrapper must invoke the supplied synchronous action exactly once. It holds
+the caller's nonblocking state lease only while the bounded network task resumes;
+zero or repeated invocation fails and cancels the task. The SDK also rechecks the
+owner before returning a result or error. A resumed operation reconstructs the
+prepared value through the same native verifier and captures a fresh authenticated
+attempt without changing its original monetary intent. The client takes its body
+and operation ID only from that prepared value; Torii never signs or rebuilds it.
+Pending, ambiguous and unverified applied responses do not authorize intent
+cleanup, credit issuance or retirement. Native artifact qualification, retained
+hardware ownership and trusted finality checkpoints remain caller prerequisites.
 
 The monetary sequence is epoch-local. When it reaches its `u128` maximum, the wallet
 requires a hardware-authorized KAGEMUSHA epoch rotation, resets the new epoch's sequence
@@ -899,8 +911,10 @@ let finality = try await torii.waitForDetachedContractCallFinality(
 contract, ABI, entrypoint, argument-record, metadata, gas, sponsor, payload,
 time, and TTL bindings. Unsigned preparation fails closed without the independent
 `ToriiContractCallDraftIntent`; response fields are never accepted as their own
-proof of intent. Submit
-accepts only the public key and detached signature; it fails closed unless the
+proof of intent. The payload must already use `QueuePlanSynced` before signing;
+an `Ordinary` downgrade is rejected even with a matching recomputed payload
+hash. Detached finalization preserves those exact verified payload bytes.
+Submit accepts only the public key and detached signature; it fails closed unless the
 returned receipt and queued pipeline status match the draft exactly.
 `waitForDetachedContractCallFinality` then uses the canonical `scope=global`
 pipeline lookup and returns only an applied, globally scoped, state-resolved

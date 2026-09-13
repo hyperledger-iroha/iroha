@@ -123,3 +123,23 @@ test("production native runtimes snapshot and cache the verified loader result",
   assert.notEqual(isolated, first);
   assert.equal(isolated.operation(), "isolated");
 });
+
+
+test("browser unavailability is cached and cannot be replaced by a later binding", () => {
+  const unavailable = Object.assign(new Error("native codec unavailable in browsers"), {
+    code: "ERR_IROHA_NATIVE_BINDING",
+    nativeStatus: "browser_unavailable",
+  });
+  const runtime = createNativeRuntime();
+  let calls = 0;
+  const load = () => {
+    calls += 1;
+    if (calls === 1) throw unavailable;
+    return { operation() {} };
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.throws(() => resolveOptionalNativeRuntimeBinding(runtime, load),
+      (error) => error === unavailable);
+  }
+  assert.equal(calls, 1);
+});

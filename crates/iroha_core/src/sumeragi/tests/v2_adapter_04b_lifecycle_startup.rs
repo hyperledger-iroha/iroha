@@ -1040,6 +1040,10 @@ fn exercise_pending_kura_production_lifecycle(
     expected: super::super::v2_recovery::PendingKuraApply,
     safety_wal_path: std::path::PathBuf,
     finalize: bool,
+    retained_incident: Option<(
+        super::super::v2_lifecycle_coordinator::LifecycleLedgerV1,
+        wire::Vote,
+    )>,
 ) {
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context
@@ -1083,6 +1087,23 @@ fn exercise_pending_kura_production_lifecycle(
     );
     let (exact_output_handoff_owner, transport_owner) =
         super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+    let remote_peers = context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .filter(|peer| peer != &local_peer)
+        .collect::<std::collections::BTreeSet<_>>();
+    let (network, mut actor_admissions) = if retained_incident.is_some() {
+        assert_eq!(remote_peers.len(), 3);
+        let (network, actor_admissions) = crate::IrohaNetwork::actor_admission_for_tests(
+            local_peer.clone(),
+            remote_peers.iter().cloned().collect(),
+            std::num::NonZeroUsize::new(3).expect("one exact Prepare slot per remote voter"),
+        );
+        (network, Some(actor_admissions))
+    } else {
+        (crate::IrohaNetwork::closed_for_tests(), None)
+    };
     let launch_inputs =
         super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
             launched_at,
@@ -1092,7 +1113,7 @@ fn exercise_pending_kura_production_lifecycle(
             local_peer.clone(),
             Some(local_validator),
             local_signer.clone(),
-            crate::IrohaNetwork::closed_for_tests(),
+            network,
             Arc::clone(&state),
             Arc::clone(&kura),
             None,
@@ -1119,6 +1140,9 @@ fn exercise_pending_kura_production_lifecycle(
         .unwrap_or_else(|error| panic!("install exact pending Kura replay: {error}"));
     pending
         .with_runner_setup(&mut setup_runner, |executor, services| {
+            if let Some((_, prepare_vote)) = retained_incident.as_ref() {
+                services.assert_pending_kura_prepare_actor_admission_for_test(prepare_vote);
+            }
             super::super::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
                 executor, services,
             )
@@ -1131,6 +1155,34 @@ fn exercise_pending_kura_production_lifecycle(
             >(())
         })
         .expect("mirror production pending Kura pre-activation reconciliation");
+    if let Some((_, prepare_vote)) = retained_incident.as_ref() {
+        let expected_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(prepare_vote.clone()),
+        );
+        let actor = actor_admissions
+            .as_mut()
+            .expect("incident launch retains its live actor receiver owner");
+        let mut accepted = std::collections::BTreeSet::new();
+        assert_eq!(
+            actor.drain_posts(|post| {
+                let crate::NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+                    panic!("incident actor admission changed the Prepare envelope");
+                };
+                let BlockMessage::V2(actual) = envelope.as_message() else {
+                    panic!("incident actor admission changed the consensus message kind");
+                };
+                assert_eq!(actual, &expected_message);
+                assert!(accepted.insert(post.peer_id.clone()));
+            }),
+            3,
+            "launch must admit the exact signed Prepare once per remote voter",
+        );
+        assert_eq!(accepted, remote_peers);
+        assert_eq!(
+            actor.drain_posts(|_| panic!("unexpected extra actor post")),
+            0
+        );
+    }
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
     assert!(crate::sumeragi::status::v2_status().is_none());
@@ -1251,6 +1303,20 @@ fn exercise_pending_kura_production_lifecycle(
         assert!(services.matches_installed_pending_kura_tip(expected));
         assert!(services.matches_lifecycle_lane_work(lane_work));
     });
+    if let Some((before, _)) = retained_incident {
+        assert_eq!(
+            activated
+                .settle_recovered_lifecycle_output_for_no_clock_recovery(&mut active_runner)
+                .expect("settle the incident output through the actual no-clock corridor"),
+            super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty,
+            "launch already transferred the sole Prepare output into exact service custody",
+        );
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::assert_pending_kura_incident_settled_for_test(
+            &before,
+            &kura.sumeragi_v2_storage_root().join("lifecycle-v1")
+                .join(hex::encode(context.id().0.as_ref())),
+        );
+    }
 
     if !finalize {
         activated
@@ -1350,6 +1416,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         (0xB4_u8, true, false, true, None),
         (0xB5_u8, true, false, false, Some(false)),
         (0xB6_u8, true, false, false, Some(true)),
+        (0xB7_u8, true, false, false, Some(true)),
     ] {
         let kura = Kura::blank_kura_for_testing();
         let storage_root = kura.sumeragi_v2_storage_root();
@@ -1550,29 +1617,158 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let wal_path = storage_root
                 .join("wal")
                 .join(format!("{:020}.wal", recovered_context.height));
-            let authenticated = write_and_reopen_authenticated_wal_startup_at_path(
-                wal_path.clone(),
-                &recovered_context,
-                &proofs,
-                0,
-                [marker; 32],
-                vec![WalRecordV2::Decision(decision.clone())],
-            )
-            .bind_pending_kura_apply(expected)
-            .unwrap_or_else(|(error, _startup)| panic!("bind exact pending Kura startup: {error}"))
-            .authenticate_final_wal_startup_authority()
-            .unwrap_or_else(|error| panic!("authenticate pending Kura WAL replay: {error}"));
             let verified =
                 VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
                     .expect("verify pending Kura lifecycle context");
+            let mut retained_prepare = None;
+            let (local_validator, retained_proposal, wal_records) = if marker == 0xB7 {
+                // The real crash cut retains a live Proposal output after the
+                // same-view Decision and Kura write, without any installed TC.
+                let proposer = recovered_context.leader(round.view);
+                let mut proposal = wire::Proposal {
+                    round,
+                    proposer,
+                    subject,
+                    manifest: manifest.clone(),
+                    justification: wire::ProposalJustification::ParentCommit(
+                        wire::ParentCommitJustification { certificate: None },
+                    ),
+                    signature: Vec::new(),
+                };
+                let unsigned = proposal.clone();
+                proposal.signature = Signature::new(
+                    keys[usize::try_from(proposer).expect("pending Kura proposer")].private_key(),
+                    &proposal.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                let prepare_vote = wire::Vote {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Prepare,
+                    subject,
+                    execution_commitment: semantic_commitment,
+                    signer: proposer,
+                    signature: Vec::new(),
+                };
+                let mut prepare = decision.clone();
+                prepare.phase = wire::GlobalPhase::Prepare;
+                authenticate_qc(&mut prepare, &keys);
+                let mut commit_vote = prepare_vote.clone();
+                commit_vote.phase = wire::GlobalPhase::Commit;
+                let mut signed_prepare = prepare_vote.clone();
+                signed_prepare.signature = Signature::new(
+                    keys[usize::try_from(proposer).expect("pending Kura Prepare signer")]
+                        .private_key(),
+                    &signed_prepare.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                retained_prepare = Some(signed_prepare.clone());
+                let mut signed_commit = commit_vote.clone();
+                signed_commit.signature = Signature::new(
+                    keys[usize::try_from(proposer).expect("pending Kura Commit signer")]
+                        .private_key(),
+                    &signed_commit.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                let ledger = super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::persist_pending_kura_incident_outputs_for_test(
+                    &verified,
+                    proposal,
+                    &durable,
+                    signed_prepare,
+                    prepare.clone(),
+                    signed_commit,
+                    decision.clone(),
+                    &storage_root.join("lifecycle-v1").join(hex::encode(recovered_context.id().0.as_ref())),
+                );
+                (
+                    proposer,
+                    Some(ledger),
+                    vec![
+                        WalRecordV2::ProposalIntent(unsigned),
+                        WalRecordV2::PrepareIntent(prepare_vote),
+                        WalRecordV2::LockAndCommit {
+                            prepare,
+                            vote: commit_vote,
+                        },
+                        WalRecordV2::Decision(decision.clone()),
+                    ],
+                )
+            } else {
+                (0, None, vec![WalRecordV2::Decision(decision.clone())])
+            };
+            if marker == 0xB7 {
+                for prefix_len in 1..wal_records.len() {
+                    let prefix = TempDir::new().expect("pending Kura undecided WAL prefix");
+                    let startup = write_and_reopen_authenticated_wal_startup_at_path(
+                        prefix.path().join("undecided.wal"),
+                        &recovered_context,
+                        &proofs,
+                        local_validator,
+                        [marker; 32],
+                        wal_records[..prefix_len].to_vec(),
+                    );
+                    let directive = startup
+                        .adapter
+                        .local_proposal_directive()
+                        .expect("read the undecided WAL prefix directive");
+                    assert!(directive.decided_subject().is_none());
+                    let attempted = RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+                        &startup.adapter,
+                    )
+                    .expect("authenticate the undecided ProposalIntent")
+                    .expect("Prepare and Lock cannot discard local Proposal non-equivocation ownership");
+                    assert!(attempted.exactly_matches_directive(directive));
+                }
+            }
+            let startup = write_and_reopen_authenticated_wal_startup_at_path(
+                wal_path.clone(),
+                &recovered_context,
+                &proofs,
+                local_validator,
+                [marker; 32],
+                wal_records,
+            );
+            if marker == 0xB7 {
+                let durable = startup.adapter.reducer.durable_state();
+                assert!(durable.decision().is_some());
+                assert!(
+                    durable
+                        .proposal_intent(reducer::Round::new(round.height, round.view))
+                        .is_some(),
+                    "Decision suppression preserves the durable ProposalIntent history"
+                );
+                assert!(
+                    RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+                        &startup.adapter,
+                    )
+                    .expect("authenticate the decided local Proposal projection")
+                    .is_none(),
+                    "a durable Decision owns the height; no local Proposal attempt may survive into pending Kura"
+                );
+            }
+            let authenticated = startup
+                .bind_pending_kura_apply(expected)
+                .unwrap_or_else(|(error, _startup)| {
+                    panic!("bind exact pending Kura startup: {error}")
+                })
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|error| panic!("authenticate pending Kura WAL replay: {error}"));
             let storage = RecoveredLifecycleStorageAuthorityV1::for_test(
                 kura.as_ref(),
                 &verified,
                 signature_policy.clone(),
                 genesis_account.clone(),
             );
-            let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
-                .expect("deterministic pending Kura Serve signer");
+            let local_signer = if retained_proposal.is_some() {
+                keys[usize::try_from(local_validator).expect("pending Kura local validator")]
+                    .clone()
+            } else {
+                KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+                    .expect("deterministic pending Kura Serve signer")
+            };
             let factory_inputs = authenticated
                 .bind_production_lifecycle_owner_factory_inputs_v1(
                     super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
@@ -1588,7 +1784,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     events_sender.clone(),
                 )
                 .unwrap_or_else(|error| panic!("bind pending Kura lifecycle inputs: {error}"));
-            let owner = authenticated
+            let mut owner = authenticated
                 .open_production_lifecycle_owner_v1(
                     &lifecycle_owner_config(),
                     4,
@@ -1596,6 +1792,23 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     recovered_body_store,
                 )
                 .unwrap_or_else(|error| panic!("open pending Kura lifecycle owner: {error}"));
+            if let Some(before) = retained_proposal.as_ref() {
+                assert_eq!(owner.recovered_lifecycle_output_count(), 2);
+                let output_calls = std::cell::Cell::new(0);
+                assert_eq!(
+                    owner
+                        .settle_next_recovered_lifecycle_output(|_| {
+                            output_calls.set(output_calls.get() + 1);
+                            Err::<super::super::v2_lifecycle_coordinator::LifecycleOutputServiceDispositionV1, _>(
+                                "a decided Proposal cannot enter the output service",
+                            )
+                        })
+                        .expect("cancel retained Proposal from the actual Decision WAL"),
+                    super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed,
+                );
+                assert_eq!(output_calls.get(), 0);
+                owner.assert_pending_kura_proposal_cancelled_for_test(before);
+            }
             exercise_pending_kura_production_lifecycle(
                 owner,
                 verified,
@@ -1607,6 +1820,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 expected,
                 wal_path,
                 finalize,
+                retained_proposal.zip(retained_prepare),
             );
             continue;
         }
@@ -2352,31 +2566,64 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
+            let batch_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
             let mut batch_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            let producer_claim = super::super::v2_runner::drain_lifecycle_v2_ingress(
-                &mut activated,
-                &mut batch_runner,
-                &leader_wire_ingress,
-                &mut lane_work,
-                kura.as_ref(),
-                &local_signer,
-                &mut block_sync_server,
-                &mut block_sync,
-                &mut block_sync_request,
-                &mut npos_beacon,
-                1,
-                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
-                None,
-            )
-            .expect("drain one exact lifecycle-owned ordinary batch");
-            assert!(!producer_claim.requires_yield());
-            settle_terminal_fixture_runner_handoff(
-                &mut activated,
-                &mut batch_runner,
-                &mut lane_work,
-                output_guard.as_ref(),
-            );
+            let mut producer_claim =
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial();
+            let batch_deadline = Instant::now() + Duration::from_secs(5);
+            for turn in 0..64 {
+                let disposition = super::super::v2_runner::drain_lifecycle_v2_ingress(
+                    &mut activated,
+                    &mut batch_runner,
+                    &leader_wire_ingress,
+                    &mut lane_work,
+                    kura.as_ref(),
+                    &local_signer,
+                    &mut block_sync_server,
+                    &mut block_sync,
+                    &mut block_sync_request,
+                    &mut npos_beacon,
+                    1,
+                    producer_claim,
+                    None,
+                )
+                .expect("drain one exact lifecycle-owned ordinary batch");
+                producer_claim = disposition.producer_claim();
+                settle_terminal_fixture_runner_handoff(
+                    &mut activated,
+                    &mut batch_runner,
+                    &mut lane_work,
+                    output_guard.as_ref(),
+                );
+                assert!(!output_guard.restart_required(), "{disposition:?}");
+                let retained_ordinals = leader_wire_ingress
+                    .state
+                    .lock()
+                    .lanes
+                    .values()
+                    .flat_map(|lane| lane.entries.iter().map(|entry| entry.admission_ordinal))
+                    .collect::<Vec<_>>();
+                if retained_ordinals.is_empty() {
+                    assert!(!disposition.requires_yield(), "{disposition:?}");
+                    break;
+                }
+                assert_eq!(retained_ordinals, vec![batch_ordinal], "{disposition:?}");
+                // A settled Completion or Runtime output can stop before
+                // Ingress without requiring a yield before Producer planning.
+                // Preserve that typed stop and its claim for the next real turn.
+                assert!(
+                    disposition.advance_executor_yield().is_some()
+                        || disposition.terminal_settlement_stops_runtime(),
+                    "batch ordinal {batch_ordinal} survived without a pre-Ingress stop: {disposition:?}",
+                );
+                assert!(
+                    turn < 63 && Instant::now() < batch_deadline,
+                    "batch ordinal {batch_ordinal} did not drain after {} turns: {disposition:?}",
+                    turn + 1,
+                );
+                std::thread::yield_now();
+            }
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
             let (rejected_serve, admitted_serve) =

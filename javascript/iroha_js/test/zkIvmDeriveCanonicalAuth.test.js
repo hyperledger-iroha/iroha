@@ -32,7 +32,7 @@ const PROVED = Object.freeze({
 function client(fetchImpl, options = {}) {
   return new ToriiClient("https://torii.example", {
     fetchImpl,
-    localSigningContext: new LocalSigningContext(NETWORK_ID),
+    localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
     maxRetries: 8,
     ...options,
   });

@@ -1,15 +1,13 @@
 //! Native execution proof driver; privacy proofs use their separate implementation.
-//! Shared aggregate wide Poseidon2/Goldilocks STARK commitment and opening core.
+//! Shared aggregate six-lane Goldilocks Poseidon-x7 STARK commitment and opening core.
 //!
 //! Relation modules supply their exact transcript suite, profile digest,
 //! public-input digest, trace columns, constraint-composition values, and an
 //! [`AggregateOpenedRowEvaluatorV1`]. This module owns the canonical ordered
-//! trace-group layout, exact proof codec, wide Poseidon2 vector-row commitments,
+//! trace-group layout, exact proof codec, six-lane Goldilocks Poseidon-x7 vector-row commitments,
 //! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
-#[cfg(test)]
-use super::super::poseidon2::LastFieldStream as GoldilocksDigest384LastFieldStreamV1;
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
     GoldilocksFp4V1 as E, GoldilocksMerkleTreeV1, TransparentStarkDigestContextV1,
@@ -25,6 +23,8 @@ use super::transparent_stark::{
     masked_trace_coefficients_on_coset_v1, masked_trace_coefficients_with_mask_v1,
     sample_trace_mask_v1,
 };
+#[cfg(test)]
+use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
 use fastpq_isi::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
 use rand::TryRngCore;
 use rayon::prelude::*;
@@ -1609,7 +1609,7 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
 /// Column-at-a-time vector-row commitment builder.
 ///
 /// This is the bounded-memory replacement for retaining every LDE column.
-/// Each row owns one incremental wide Poseidon2 state while columns are supplied in
+/// Each row owns one incremental six-lane Goldilocks digest stream while columns are supplied in
 /// canonical order. The final leaf digests are immediately consumed by
 /// [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels are
 /// retained. A second deterministic pass after Fiat–Shamir query derivation

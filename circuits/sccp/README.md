@@ -6,8 +6,9 @@ one message circuit and one epoch-anchor-update circuit, with an independent
 key domain and circuit-specific Phase-2 ceremony.
 
 The module is intentionally outside the Cargo workspace. It uses Go 1.25.7,
-pins gnark v0.16.3 in `go.mod` and `go.sum`, and carries the complete `vendor/`
-tree. It does not add a Rust dependency and must not update any `Cargo.lock`.
+pins gnark v0.16.3 in `go.mod` and `go.sum`, and carries the vendored native
+dependency tree. It does not add a Rust dependency and must not update any
+`Cargo.lock`.
 
 ## Security boundary
 
@@ -99,6 +100,38 @@ Run the builder twice from the same signed clean commit and compare both
 `sccp-circuits.sha256` files. The canonical signed production corridor
 additionally requires the complete independently authenticated source,
 toolchain, ceremony, key, KAT, verifier, prover, and audit inventory.
+
+The checked-in vendor tree is native-only. After any `go mod vendor` refresh,
+remove `golang.org/x/sys/cpu/cpu_wasm.go`, remove the `wasm` build alternative
+from that package's `endian_little.go`, and remove the `js` and `wasip1` build
+alternatives from `github.com/mattn/go-isatty/isatty_others.go`. Keep the native
+build alternatives and implementations. Then regenerate the inventory through
+its Go owner from this module directory; the output path must be new:
+
+```sh
+GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go run -mod=vendor ./tools/metadata \
+  inventory --root vendor --output vendor-inventory-final-v1.next.json
+mv vendor-inventory-final-v1.next.json vendor-inventory-final-v1.json
+GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -mod=vendor ./tools/metadata
+```
+
+Review the exact file changes before replacing the inventory. Its bytes are
+part of the circuit definition-source closure, so this regeneration also
+invalidates the manifest's R1CS freshness claims until the affected profiles
+are measured again against the new closure. The manifest records fresh native
+measurements individually and lists any profiles still requiring measurement;
+constraint counts for pending profiles are retained prior measurements.
+
+On 2026-09-13, all eight profiles were measured against definition closure
+`1cad4ed63aaa1d19c7fc158195078261287e28354a9bc4821028b22e330ce76e`
+with the official native darwin/arm64 Go 1.25.7 toolchain and regenerated
+1524-file vendor inventory. Each successful run compiled and hashed the actual
+R1CS serialization. The four message runs took 120–130 seconds and 32.3–33.2 GiB
+peak RSS; the four sequential epoch runs took 381–395 seconds and 88.0–90.0 GiB
+peak RSS, with no swaps. All eight identities are current for this source
+closure; `production_admissible` remains false. Native package, metadata and
+source-closure tests are separate checks. The pinned Linux builder, ceremonies,
+proofs, independent audits and deployments remain unqualified.
 
 ## Ceremony policy
 

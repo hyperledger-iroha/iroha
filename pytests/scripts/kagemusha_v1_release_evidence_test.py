@@ -1702,6 +1702,57 @@ def test_observation_must_be_signed_and_match_its_transcript(tmp_path: Path) -> 
     assert "invalid approval" in failed.stderr
 
 
+def _rename_kat_report_input(fixture: EvidenceFixture, replacement: str) -> None:
+    """Re-sign the exact file argv after changing only the synthetic KAT path."""
+    original = fixture.manifest["global_reports"]["kat"]
+    payload = fixture.path(original).read_bytes()
+    report = json.loads(payload)
+    command = next(row for row in fixture.commands if row["id"] == report["verification_id"])
+    fixture.write(replacement, payload, fixture.kinds.pop(original))
+    fixture.path(original).unlink()
+    fixture.manifest["global_reports"]["kat"] = replacement
+    command["arguments"] = [
+        {"file": replacement} if argument == {"file": original} else argument
+        for argument in command["arguments"]
+    ]
+    fixture.resign_command(command["id"])
+    fixture.refresh_files()
+
+
+@pytest.mark.parametrize("replacement", ["--help", "-h", "--", "-reports/kat.json"])
+def test_signed_file_arguments_cannot_be_interpreted_as_options(
+    tmp_path: Path, replacement: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    _rename_kat_report_input(fixture, replacement)
+    # The changed observation has a valid fixture-authority signature. Its
+    # typed file still must obey the collector's exact relative-argv contract.
+    with pytest.raises(VERIFIER.KagemushaEvidenceError, match="must not begin with '-' when passed as an argument"):
+        _verify_direct(fixture)
+
+
+@pytest.mark.parametrize("replacement", ["reports/--help", "reports/-leading/kat.json"])
+def test_signed_file_arguments_allow_dashes_after_the_first_component(
+    tmp_path: Path, replacement: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    _rename_kat_report_input(fixture, replacement)
+    _verify_direct(fixture)
+
+
+def test_shipped_cli_interprets_help_as_an_option_without_reading_report_inputs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Exercise the actual parser without executing a verifier or claiming that
+    # the synthetic signed KAT verifier is this shipped CLI.
+    with pytest.raises(SystemExit) as stopped:
+        VERIFIER._parser().parse_args(["--help"])
+    assert stopped.value.code == 0
+    captured = capsys.readouterr()
+    assert "--manifest" in captured.out
+    assert captured.err == ""
+
+
 def test_direct_relation_rejects_inner_state_verifying_key(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     relation_row = fixture.manifest["profiles"][0]["relations"][-1]

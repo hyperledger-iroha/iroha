@@ -28,7 +28,7 @@ use super::{
         AuthenticatedRecoveredLifecycleOutputV1,
         AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
         AuthenticatedRecoveredWalDecisionFetchProjection,
-        AuthenticatedRecoveredWalValidateLedgerParent, LifecycleContext,
+        AuthenticatedRecoveredWalValidateLedgerParent, LifecycleContext, LifecycleKey,
         RecoveredDecisionApplyReplayLineageV1, TerminalValidateNoSuccessorClaim,
     },
     v2_transport::AuthenticatedCertifiedBodyResponse,
@@ -930,6 +930,13 @@ pub(super) struct RecoveredTerminalValidateOutcomeCatalogCut<'store> {
     /// Claims and executable reports may share one immutable rejection, but
     /// a second report cannot acquire that same selected outcome.
     selected_terminal_rejections: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
+    /// Distinct immutable terminal claims may share an outcome, never a claim.
+    selected_terminal_claims: BTreeMap<LifecycleKey, TerminalValidateNoSuccessorClaim>,
+    /// One executable released-Apply reservation excludes every same-body retry.
+    released_success: Option<(
+        (wire::ConsensusRound, wire::BlockSubject),
+        TerminalValidateNoSuccessorClaim,
+    )>,
     selected_report_outcomes: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
     retained_terminal: BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
@@ -945,20 +952,24 @@ pub(super) enum RecoveredTerminalValidateOutcomeCatalogError {
     AmbiguousOutcome,
 }
 impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
-    /// Select exactly one unselected outcome authenticated by the ledger claim.
+    /// Authenticate a distinct inert terminal claim against one exact outcome.
     ///
-    /// Zero or multiple matches fail without consuming any candidate. Already
-    /// selected outcomes are not eligible for a second claim.
+    /// Several historical current-view keys can refer to the same immutable
+    /// proposal body. They share its semantic result, while each claim is
+    /// selected once and only one origin may later own executable retry.
     pub(super) fn select_exact_terminal_validate(
         &mut self,
         claim: &TerminalValidateNoSuccessorClaim,
     ) -> bool {
+        if self.selected_terminal_claims.contains_key(&claim.key()) {
+            return false;
+        }
         enum ExactMatch {
             Validated((wire::ConsensusRound, wire::BlockSubject)),
             Rejected((wire::ConsensusRound, wire::BlockSubject)),
         }
         let mut exact_match = None;
-        for (key, validated) in &self.validated {
+        for (key, validated) in self.validated.iter().chain(self.selected_validated.iter()) {
             let outcome = DurableBodyValidationOutcome(
                 DurableBodyValidationOutcomeBody::Validated(validated.clone()),
             );
@@ -968,7 +979,7 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
                 return false;
             }
         }
-        for (key, rejected) in &self.rejected {
+        for (key, rejected) in self.rejected.iter().chain(self.selected_rejected.iter()) {
             let outcome = rejected.sealed_outcome();
             if claim.matches_outcome(&outcome)
                 && exact_match.replace(ExactMatch::Rejected(*key)).is_some()
@@ -978,24 +989,21 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         }
         match exact_match {
             Some(ExactMatch::Validated(key)) => {
-                let validated = self
-                    .validated
-                    .remove(&key)
-                    .expect("an exact catalog match remains unselected");
-                let displaced = self.selected_validated.insert(key, validated);
-                debug_assert!(displaced.is_none());
+                if let Some(validated) = self.validated.remove(&key) {
+                    let displaced = self.selected_validated.insert(key, validated);
+                    debug_assert!(displaced.is_none());
+                }
             }
             Some(ExactMatch::Rejected(key)) => {
-                let rejected = self
-                    .rejected
-                    .remove(&key)
-                    .expect("an exact catalog match remains unselected");
-                let displaced = self.selected_rejected.insert(key, rejected);
-                debug_assert!(displaced.is_none());
-                assert!(self.selected_terminal_rejections.insert(key));
+                if let Some(rejected) = self.rejected.remove(&key) {
+                    let displaced = self.selected_rejected.insert(key, rejected);
+                    debug_assert!(displaced.is_none());
+                }
+                self.selected_terminal_rejections.insert(key);
             }
             None => return false,
         }
+        self.selected_terminal_claims.insert(claim.key(), *claim);
         true
     }
 
@@ -1008,6 +1016,11 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         &mut self,
         claim: &TerminalValidateNoSuccessorClaim,
     ) -> bool {
+        if self.released_success.is_some()
+            || self.selected_terminal_claims.contains_key(&claim.key())
+        {
+            return false;
+        }
         let mut exact_key = None;
         for (key, validated) in &self.validated {
             if claim.matches_validated_receipt(validated) && exact_key.replace(*key).is_some() {
@@ -1023,6 +1036,8 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
             .expect("an exact successful catalog match remains unselected");
         let displaced = self.selected_validated.insert(key, validated);
         debug_assert!(displaced.is_none());
+        self.selected_terminal_claims.insert(claim.key(), *claim);
+        self.released_success = Some((key, *claim));
         true
     }
 
@@ -1077,8 +1092,15 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         if !self.retained_terminal.is_empty() || !self.store.recovered_terminal_results.is_empty() {
             return false;
         }
-        let mut retained = BTreeMap::new();
+        let mut retained = BTreeMap::<
+            (wire::ConsensusRound, wire::BlockSubject),
+            Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+        >::new();
+        let mut retry_rounds = BTreeSet::new();
         for claim in claims {
+            if self.selected_terminal_claims.get(&claim.key()) != Some(&claim) {
+                return false;
+            }
             let mut selected = None;
             for validated in self.selected_validated.values() {
                 let outcome = DurableBodyValidationOutcome(
@@ -1098,11 +1120,32 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
                 return false;
             };
             let Some(authority) = super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1::from_cold_claim(claim, outcome) else { return false; };
-            if retained
-                .insert(authority.key(), Arc::new(authority))
-                .is_some()
+            if self
+                .released_success
+                .as_ref()
+                .is_some_and(|(key, _)| *key == authority.key())
             {
+                continue;
+            }
+            if !retry_rounds.insert((authority.key(), authority.terminal_key().round())) {
+                // Same-round distinct logical Validate sources are ambiguous;
+                // immutable ordinals cannot choose an executable phase authority.
                 return false;
+            }
+            match retained.entry(authority.key()) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(Arc::new(authority));
+                }
+                std::collections::btree_map::Entry::Occupied(mut slot) => {
+                    // Every historical claim already crossed the exact semantic
+                    // join. The newest immutable ordinal alone owns future retry.
+                    if slot.get().ordinal() == authority.ordinal() {
+                        return false;
+                    }
+                    if slot.get().ordinal() < authority.ordinal() {
+                        slot.insert(Arc::new(authority));
+                    }
+                }
             }
         }
         self.retained_terminal = retained;
@@ -1137,6 +1180,9 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
             }
         }
         let key = exact_key?;
+        if self.released_success != Some((key, claim)) {
+            return None;
+        }
         let validated = self.selected_validated.get(&key)?.clone();
         let authority =
             AuthenticatedRecoveredReleasedValidateNoSuccessorV1::from_consumed_body_store_success(
@@ -2204,6 +2250,9 @@ pub(crate) struct V2BodyStore {
     /// rejected pre-intent body into Proposal authority.
     retired_revalidation:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), QuarantinedValidationOutcome>,
+    /// Comparison-only keys excluded by the authenticated initial WAL frontier.
+    /// Later sidecar deferral cannot enroll itself into historical retirement.
+    retired_terminal_frontier: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
     validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     /// Semantically revalidated deterministic rejections retained for the
     /// body-store-instance-bound terminal Validate recovery join. The raw
@@ -2615,6 +2664,7 @@ impl V2BodyStore {
         if !self.validated.is_empty()
             || !self.rejected.is_empty()
             || !self.retired_revalidation.is_empty()
+            || !self.retired_terminal_frontier.is_empty()
         {
             return Err(V2BodyStoreError::RecoveredMarkersAlreadyPromoted);
         }
@@ -2890,6 +2940,7 @@ impl V2BodyStore {
             manifests: BTreeMap::new(),
             pending_revalidation: BTreeMap::new(),
             retired_revalidation: BTreeMap::new(),
+            retired_terminal_frontier: BTreeSet::new(),
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
@@ -3087,6 +3138,7 @@ impl V2BodyStore {
             manifests: BTreeMap::new(),
             pending_revalidation: BTreeMap::new(),
             retired_revalidation: BTreeMap::new(),
+            retired_terminal_frontier: BTreeSet::new(),
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
@@ -3122,6 +3174,7 @@ impl V2BodyStore {
             manifests: BTreeMap::new(),
             pending_revalidation: BTreeMap::new(),
             retired_revalidation: BTreeMap::new(),
+            retired_terminal_frontier: BTreeSet::new(),
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
@@ -3328,6 +3381,12 @@ impl V2BodyStore {
         self.retain_pending_revalidation(|(round, subject)| {
             authority.authorizes(*round, *subject)
         })?;
+        self.retired_terminal_frontier = self
+            .retired_revalidation
+            .keys()
+            .filter(|(_, subject)| !authority.authorizes_subject(*subject))
+            .copied()
+            .collect();
         self.validated
             .retain(|(round, subject), _| authority.authorizes(*round, *subject));
         self.rejected
@@ -3401,6 +3460,45 @@ impl V2BodyStore {
             .iter()
             .map(|(key, rejected)| (*key, rejected.durable.clone()))
             .collect()
+    }
+    /// Compare a retired marker with one exact immutable terminal claim.
+    ///
+    /// This does not reproduce a semantic outcome or restore retry authority.
+    /// The caller must independently prove the original authenticated source
+    /// and the replayed frontier that closed this terminal's execution.
+    pub(in crate::sumeragi) fn retired_terminal_claim_matches(
+        &self,
+        claim: &TerminalValidateNoSuccessorClaim,
+    ) -> bool {
+        let mut matches = 0;
+        for (key, retired) in &self.retired_revalidation {
+            if !self.retired_terminal_frontier.contains(key) {
+                continue;
+            }
+            let commitment = match retired.outcome {
+                ValidationOutcomeMarkerKind::Validated(commitment) => Some(commitment),
+                ValidationOutcomeMarkerKind::Rejected(code)
+                    if BodyValidationRejectionIdentity::from_canonical_code(code)
+                        == Some(BodyValidationRejectionIdentity::Rejected) =>
+                {
+                    None
+                }
+                _ => return false,
+            };
+            if !claim.matches_retired_body_marker(&retired.durable, commitment) {
+                continue;
+            }
+            if self.entries.get(key) != Some(&retired.durable)
+                || self.pending_revalidation.contains_key(key)
+                || self.validated.contains_key(key)
+                || self.rejected.contains_key(key)
+                || self.load(&retired.durable).is_err()
+            {
+                return false;
+            }
+            matches += 1;
+        }
+        matches == 1
     }
     /// Snapshot retired rejection receipts as comparison-only local-producer
     /// denial. These receipts have not crossed semantic replay in this process
@@ -3538,6 +3636,8 @@ impl V2BodyStore {
             selected_rejected: BTreeMap::new(),
             retained_terminal: BTreeMap::new(),
             selected_terminal_rejections: BTreeSet::new(),
+            selected_terminal_claims: BTreeMap::new(),
+            released_success: None,
             selected_report_outcomes: BTreeSet::new(),
         })
     }

@@ -402,13 +402,13 @@ fn print_usage() {
         "    Validate Metal/CUDA benchmark bundles, enforce latency/speedup thresholds, and emit a (optionally signed) manifest with BLAKE3/SHA-256 digests for release gating."
     );
     eprintln!(
-        "  cargo xtask fastpq-stage-profile [--rows <count>] [--warmups <count>] [--iterations <count>] [--out-dir <path>] [--trace] [--trace-dir <path>] [--trace-template <template>] [--trace-seconds <seconds>] [--stage <fft|ifft|lde|poseidon>] [--debug] [--no-gpu-probe]"
+        "  cargo xtask fastpq-stage-profile [--rows <count>] [--warmups <count>] [--iterations <count>] [--out-dir <path>] [--trace] [--trace-dir <path>] [--trace-template <template>] [--trace-seconds <seconds>] [--stage <fft|ifft|lde|digest384_trace_columns|digest384_merkle_pairs|bn254_poseidon_words>] [--debug] [--no-gpu-probe]"
     );
     eprintln!(
         "    Run the Metal bench across selected stages, capture optional traces, and emit per-stage summaries for local profiling."
     );
     eprintln!(
-        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--operation <fft|ifft|lde|poseidon_hash_columns|poseidon_merkle_pairs|bn254_poseidon_words|all>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
+        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--operation <fft|ifft|lde|digest384_trace_columns|digest384_merkle_pairs|bn254_poseidon_words|all>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
     );
     eprintln!(
         "    Drive the CUDA bench harness, optionally wrap/sign the bundle with row-usage/acceleration-state metadata, and record a plan JSON so GPU runners produce reproducible Stage7 evidence. Filtered runs only enforce wrap thresholds for the selected operation."

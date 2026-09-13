@@ -2,16 +2,44 @@
   "schema": "iroha.sccp.contract-compiler-lock.v1",
   "compilers": {
     "evm": {
-      "identity": "solc-evm-0.7.4+commit.3f05b770",
-      "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
-      "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
-      "url": "https://binaries.soliditylang.org/wasm/soljson-v0.7.4+commit.3f05b770.js"
+      "identity": "solc-evm-0.7.6+commit.7338295f",
+      "reported_version": "0.7.6+commit.7338295f",
+      "artifacts": {
+        "linux-amd64": {
+          "url": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/linux-amd64/solc-linux-amd64-v0.7.6+commit.7338295f",
+          "sha256": "bd69ea85427bf2f4da74cb426ad951dd78db9dfdd01d791208eccc2d4958a6bb",
+          "executable_sha256": "bd69ea85427bf2f4da74cb426ad951dd78db9dfdd01d791208eccc2d4958a6bb",
+          "archive_member": null,
+          "reported_version": "0.7.6+commit.7338295f.Linux.g++"
+        },
+        "macosx-amd64": {
+          "url": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/macosx-amd64/solc-macosx-amd64-v0.7.6+commit.7338295f",
+          "sha256": "a6a8f9f9388c5fcd9222474e00270242c832e936b0f5257c20374d27ee5bd1ab",
+          "executable_sha256": "a6a8f9f9388c5fcd9222474e00270242c832e936b0f5257c20374d27ee5bd1ab",
+          "archive_member": null,
+          "reported_version": "0.7.6+commit.7338295f.Darwin.appleclang"
+        }
+      }
     },
     "tron": {
-      "identity": "tron-solc-tvm-0.7.4+commit.3f05b770",
-      "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
-      "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
-      "url": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/bin/soljson-v0.7.4+commit.3f05b770.js"
+      "identity": "tron-solc-tvm-0.7.6+commit.d1802f25",
+      "reported_version": "0.7.6+commit.d1802f25",
+      "artifacts": {
+        "linux-amd64": {
+          "url": "https://raw.githubusercontent.com/tronprotocol/solc-bin/main/linux-amd64/solc-linux-amd64-v0.7.6+commit.d1802f25.zip",
+          "sha256": "fa912688ea66c416c30faee5cfb4d7d8c690d5a79881ec2a14e37a6304f6d5fb",
+          "executable_sha256": "b40a70a4dd5ff965a701f98d278784e78a3c2a074ba4d03e5ecb1425ed548089",
+          "archive_member": "solc-static-linux",
+          "reported_version": "0.7.6+commit.d1802f25.Linux.g++"
+        },
+        "macosx-amd64": {
+          "url": "https://raw.githubusercontent.com/tronprotocol/solc-bin/main/macosx-amd64/solc-macosx-amd64-v0.7.6+commit.d1802f25.zip",
+          "sha256": "ad888faa33091a14c664427e1eb87e93002cb4ad4b0154cfa957a485ed3e3e5a",
+          "executable_sha256": "4cf11581f837425482191985db0dea76e5a76b33e0c571544f932addaaeef7ac",
+          "archive_member": "solc",
+          "reported_version": "0.7.6+commit.d1802f25.Darwin.appleclang"
+        }
+      }
     }
   },
   "settings": {

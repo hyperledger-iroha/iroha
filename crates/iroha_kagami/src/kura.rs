@@ -1,3 +1,6 @@
+// TODO: wire the independently retained launcher inputs into a CLI command before
+// including this currently test-owned scaling evidence adapter in production.
+#[cfg(test)]
 mod scaling_evidence;
 
 use crate::{Outcome, RunArgs, tui};

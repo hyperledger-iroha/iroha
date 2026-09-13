@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+try:
+    from .benchmark_operations import CANONICAL_OPERATIONS, require_filter
+    from .wrap_benchmark import normalize_report, producer_schema_for_payload, validate_report_header, summarize_operations
+except ImportError:  # Direct script invocation.
+    from benchmark_operations import CANONICAL_OPERATIONS, require_filter
+    from wrap_benchmark import normalize_report, producer_schema_for_payload, validate_report_header, summarize_operations
+
 
 @dataclass
 class StageSample:
@@ -24,14 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("reports", nargs="+", help="Paths to fastpq_metal_bench JSON reports")
     parser.add_argument(
         "--operation",
-        choices=[
-            "fft",
-            "ifft",
-            "lde",
-            "poseidon_hash_columns",
-            "poseidon_merkle_pairs",
-            "bn254_poseidon_words",
-        ],
+        choices=sorted(CANONICAL_OPERATIONS),
         default=None,
         help="Filter by operation (default: include all operations)",
     )
@@ -42,7 +42,11 @@ def load_samples(paths: Iterable[str], operation_filter: Optional[str]) -> List[
     samples: List[StageSample] = []
     for raw_path in paths:
         path = Path(raw_path)
-        data = normalize_report(json.loads(path.read_text()))
+        payload = json.loads(path.read_text())
+        data = normalize_report(payload)
+        schema = producer_schema_for_payload(payload)
+        validate_report_header(data, schema)
+        summarize_operations(data, schema)
         bundle_filter = format_operation_filter(data)
         operations = data.get("operations") or []
         for op in operations:
@@ -65,32 +69,9 @@ def load_samples(paths: Iterable[str], operation_filter: Optional[str]) -> List[
     return samples
 
 
-def normalize_report(payload: dict) -> dict:
-    nested = payload.get("report")
-    if not isinstance(nested, dict):
-        return payload
-    report = dict(nested)
-    benchmarks = payload.get("benchmarks")
-    if isinstance(benchmarks, dict):
-        if report.get("operation_filter") is None and benchmarks.get("operation_filter") is not None:
-            report["operation_filter"] = benchmarks.get("operation_filter")
-        if "operations" not in report and benchmarks.get("operations") is not None:
-            report["operations"] = benchmarks.get("operations")
-    return report
-
-
 def format_operation_filter(report: dict) -> str:
-    raw = report.get("operation_filter")
-    if isinstance(raw, str) and raw.strip():
-        return raw
-    operations = report.get("operations")
-    if isinstance(operations, list) and len(operations) == 1:
-        operation = operations[0].get("operation")
-        if isinstance(operation, str) and operation:
-            return operation
-    if isinstance(operations, list) and operations:
-        return "all"
-    return "—"
+    """Read the required canonical filter without inferring an old report shape."""
+    return require_filter(report.get("operation_filter"))
 
 
 def render_table(samples: List[StageSample]) -> str:

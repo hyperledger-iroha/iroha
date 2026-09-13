@@ -1932,7 +1932,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         fetchCalls += 1;
         throw new Error("foreign-network ballot reached fetch");
       },
-      localSigningContext: new LocalSigningContext(foreignNetworkId),
+      localSigningContext: new LocalSigningContext(foreignNetworkId, 753),
     });
     await assert.rejects(
       () =>

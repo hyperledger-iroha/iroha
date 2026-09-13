@@ -168,6 +168,23 @@ these runtime quotas. TODO: supply authenticated intrinsic/block ceilings,
 transaction/savepoint ownership, mandatory fee/penalty/time-work reservations and
 deterministic proposal-packing behavior before wiring admission there. Existing
 test-only occurrence/prefix helpers do not authorize fragment sums for M or S.
+The test-only complete-entry reservation adapter now replaces one contribution
+from the complete borrowed, finalized transcript bundle. Reopening an entry hash
+across physical fee fragments retains E=1. Its journal restores both accounting
+and new identity bindings on rollback; an owner whose E must survive business
+rejection must be retained separately before that business scope. These helpers
+still require production State ownership and policy integration.
+
+Independent-batch transcript preparation now returns errors to the whole batch
+before the next movement and allocates transcript storage only for accepted
+legs. Its declared entry-count bound is not an execution quota. Ignoring a
+preparation error prevents transcript publication; rollback of earlier movements
+still belongs to the enclosing State transaction. The compiled source passes
+13 preparation, 30 reservation and 17 canonical measurement tests, including
+real balance rollback and exact fee-fragment accounting. The
+[scoped execution record](../docs/history/2026-09-12/fastpq-execution-and-six-lane.md)
+retains source/artifact identity and separates these 60 checks from release
+qualification.
 
 Full-domain quantity preparation supports the ledger's nonnegative 512-bit
 mantissa and scales 0 through 28 using 19 little-endian `u32` limbs. Canonical

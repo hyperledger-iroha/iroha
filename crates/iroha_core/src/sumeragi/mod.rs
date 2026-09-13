@@ -1934,24 +1934,49 @@ pub(crate) struct FairV2IngressOwnershipEvidence {
     attempts: Vec<FairV2IngressReplyAttempt>,
     attempts_hash: CryptoHash,
 }
+/// Canonical peer encodings retained only while validating one frozen queue cut.
+///
+/// This memoizes bytes, never ownership verdicts. `PeerId` equality covers its
+/// sole encoded field, the public key; each miss still uses canonical Norito.
+#[derive(Default)]
+struct FairV2IngressPeerIdentityEncodings {
+    encoded_peers: BTreeMap<PeerId, Vec<u8>>,
+}
+impl FairV2IngressPeerIdentityEncodings {
+    fn append_identity(&mut self, projection: &mut Vec<u8>, peer: &PeerId) {
+        if let Some(encoded) = self.encoded_peers.get(peer) {
+            fair_v2_ingress_append_encoded_peer_identity(projection, encoded);
+            return;
+        }
+        let encoded = peer.encode();
+        fair_v2_ingress_append_encoded_peer_identity(projection, &encoded);
+        self.encoded_peers.insert(peer.clone(), encoded);
+    }
+}
 fn fair_v2_ingress_append_peer_identity(projection: &mut Vec<u8>, peer: &PeerId) {
-    let encoded = peer.encode();
+    fair_v2_ingress_append_encoded_peer_identity(projection, &peer.encode());
+}
+fn fair_v2_ingress_append_encoded_peer_identity(projection: &mut Vec<u8>, encoded: &[u8]) {
     projection.extend_from_slice(
         &u64::try_from(encoded.len())
             .expect("canonical peer identity length fits u64")
             .to_le_bytes(),
     );
-    projection.extend_from_slice(&encoded);
+    projection.extend_from_slice(encoded);
 }
-fn fair_v2_ingress_append_source_identity(projection: &mut Vec<u8>, source: &FairV2IngressSource) {
+fn fair_v2_ingress_append_source_identity(
+    projection: &mut Vec<u8>,
+    source: &FairV2IngressSource,
+    append_peer: &mut impl FnMut(&mut Vec<u8>, &PeerId),
+) {
     match source {
         FairV2IngressSource::Validator(peer) => {
             projection.push(0);
-            fair_v2_ingress_append_peer_identity(projection, peer);
+            append_peer(projection, peer);
         }
         FairV2IngressSource::Authenticated(peer) => {
             projection.push(1);
-            fair_v2_ingress_append_peer_identity(projection, peer);
+            append_peer(projection, peer);
         }
     }
 }
@@ -2275,6 +2300,20 @@ impl FairV2IngressOwnershipEvidence {
     /// consensus, and two independent network actors must not alias merely
     /// because their wire bytes and counters match.
     pub(crate) fn process_local_projection_hash(&self) -> CryptoHash {
+        self.process_local_projection_hash_with_peer_encoder(fair_v2_ingress_append_peer_identity)
+    }
+    fn process_local_projection_hash_with_peer_encodings(
+        &self,
+        peer_encodings: &mut FairV2IngressPeerIdentityEncodings,
+    ) -> CryptoHash {
+        self.process_local_projection_hash_with_peer_encoder(|projection, peer| {
+            peer_encodings.append_identity(projection, peer);
+        })
+    }
+    fn process_local_projection_hash_with_peer_encoder(
+        &self,
+        mut append_peer: impl FnMut(&mut Vec<u8>, &PeerId),
+    ) -> CryptoHash {
         let mut projection = Vec::new();
         projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-owner:v12");
         for occurrence in [&self.first, &self.latest] {
@@ -2287,18 +2326,20 @@ impl FairV2IngressOwnershipEvidence {
                     projection.extend_from_slice(&ordinal.to_le_bytes());
                 }
             }
-            fair_v2_ingress_append_peer_identity(&mut projection, &occurrence.semantic_origin);
-            fair_v2_ingress_append_peer_identity(&mut projection, &occurrence.authenticated_via);
+            append_peer(&mut projection, &occurrence.semantic_origin);
+            append_peer(&mut projection, &occurrence.authenticated_via);
             projection.push(u8::from(occurrence.authenticated_via_is_validator));
             fair_v2_ingress_append_source_identity(
                 &mut projection,
                 &occurrence.authenticated_source,
+                &mut append_peer,
             );
             fair_v2_ingress_append_source_identity(
                 &mut projection,
                 &occurrence.semantic_owner_source,
+                &mut append_peer,
             );
-            fair_v2_ingress_append_peer_identity(&mut projection, &occurrence.wire_key.origin);
+            append_peer(&mut projection, &occurrence.wire_key.origin);
             projection.extend_from_slice(occurrence.wire_key.hash.as_ref());
             projection.push(occurrence.message_kind.projection_code());
             projection.push(match occurrence.class {
@@ -8455,6 +8496,16 @@ mod authoritative_runtime_gate_tests {
             "process-local scheduler projections must bind semantic origin"
         );
         let first_projection = first.process_local_projection_hash();
+        let mut peer_encodings = super::FairV2IngressPeerIdentityEncodings::default();
+        assert_eq!(
+            first.process_local_projection_hash_with_peer_encodings(&mut peer_encodings),
+            first_projection
+        );
+        assert_eq!(
+            second.process_local_projection_hash_with_peer_encodings(&mut peer_encodings),
+            second.process_local_projection_hash()
+        );
+        assert_eq!(peer_encodings.encoded_peers.len(), 3);
         let mut widened_capacity = first;
         widened_capacity.first.resource_before.message_capacity = widened_capacity
             .first
@@ -8489,6 +8540,12 @@ mod authoritative_runtime_gate_tests {
             widened_capacity.process_local_projection_hash(),
             "the process-local cut must bind complete occurrence resource geometry"
         );
+        assert_eq!(
+            widened_capacity.process_local_projection_hash_with_peer_encodings(&mut peer_encodings),
+            widened_capacity.process_local_projection_hash(),
+            "reusing canonical peer bytes cannot retain a stale ownership digest"
+        );
+        assert_eq!(peer_encodings.encoded_peers.len(), 3);
     }
     include!("tests/mod_authoritative_runtime_gate_06_source_isolation.rs");
     macro_rules! assert_push {

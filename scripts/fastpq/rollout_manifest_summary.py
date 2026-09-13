@@ -13,7 +13,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 # The authenticated release runner preloads this exact captured dependency
 # graph; this helper deliberately never places the repository on ``sys.path``.
-from scripts.fastpq import wrap_benchmark
+from scripts.fastpq.benchmark_operations import reject_retired_fields, require_filter, require_operation
+from scripts.fastpq.report_projection import (
+    project_bundle, project_report, render_evidence, require_matching_report_claims, validate_projection,
+)
 
 
 def _now_iso() -> str:
@@ -71,24 +74,6 @@ def resolve_bench_path(
     return None
 
 
-def summarize_poseidon_microbench(entry: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Keep only the reviewer-facing Poseidon microbench fields."""
-
-    if not isinstance(entry, dict):
-        return None
-    default = entry.get("default") or {}
-    scalar = entry.get("scalar_lane") or {}
-    summary = {
-        "speedup_vs_scalar": entry.get("speedup_vs_scalar"),
-        "default_mean_ms": default.get("mean_ms"),
-        "scalar_mean_ms": scalar.get("mean_ms"),
-        "columns": default.get("columns") or scalar.get("columns"),
-    }
-    if all(value is None for value in summary.values()):
-        return None
-    return summary
-
-
 def summarize_bench_entry(
     entry: dict[str, Any],
     *,
@@ -97,46 +82,36 @@ def summarize_bench_entry(
 ) -> dict[str, Any]:
     """Summarize one bench entry from a signed FASTPQ rollout manifest."""
 
+    reject_retired_fields(entry)
+    require_filter(entry.get("operation_filter"))
+    matrix_filters = entry.get("matrix_operation_filters")
+    if matrix_filters is not None:
+        if not isinstance(matrix_filters, list):
+            raise ValueError("matrix_operation_filters must be an array")
+        for value in matrix_filters:
+            require_filter(value)
+    manifest_evidence = project_report(entry, flattened=True, producer_schema=entry.get("producer_schema")) if "operations" in entry else None
     manifest_path_value = entry.get("path")
     resolved_path = resolve_bench_path(manifest_path_value, bundle_dir=bundle_dir, repo_root=repo_root)
     bench_blob: dict[str, Any] | None = None
-    normalized_report: dict[str, Any] | None = None
+    operation_evidence = manifest_evidence
     if resolved_path is not None:
         bench_blob = json.loads(resolved_path.read_text(encoding="utf-8"))
-        normalized_report = wrap_benchmark.normalize_report(bench_blob)
+        operation_evidence = project_bundle(bench_blob)
+        if manifest_evidence is not None and manifest_evidence != operation_evidence:
+            raise ValueError("manifest operation evidence disagrees with the captured benchmark")
+        require_matching_report_claims(entry, operation_evidence)
 
     bundle_metadata = bench_blob.get("metadata") if isinstance(bench_blob, dict) else {}
     labels = bundle_metadata.get("labels") if isinstance(bundle_metadata, dict) else {}
     if not isinstance(labels, dict):
         labels = {}
-    benchmarks = bench_blob.get("benchmarks") if isinstance(bench_blob, dict) else {}
-    if not isinstance(benchmarks, dict):
-        benchmarks = {}
-
-    report_operations = (
-        normalized_report.get("operations")
-        if isinstance(normalized_report, dict)
-        else None
-    )
-    benchmark_operations = benchmarks.get("operations")
-    operations = report_operations if isinstance(report_operations, list) else benchmark_operations
+    measured = operation_evidence["report"] if operation_evidence is not None else {}
     available_operations = sorted(
-        {
-            operation.get("operation")
-            for operation in operations or []
-            if isinstance(operation, dict) and isinstance(operation.get("operation"), str)
-        }
+        require_operation(operation.get("operation"))
+        for operation in measured.get("operations", [])
     )
-
-    column_count = None
-    if isinstance(normalized_report, dict):
-        raw_column_count = normalized_report.get("column_count")
-        if isinstance(raw_column_count, int):
-            column_count = raw_column_count
-    if column_count is None:
-        raw_column_count = benchmarks.get("column_count")
-        if isinstance(raw_column_count, int):
-            column_count = raw_column_count
+    column_count = measured.get("column_count")
 
     manifest_metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
     source_command = None
@@ -151,16 +126,17 @@ def summarize_bench_entry(
         "resolved_bench_path": (
             relative_path(resolved_path, bundle_dir) if resolved_path is not None else None
         ),
-        "rows": entry.get("rows"),
-        "padded_rows": entry.get("padded_rows"),
-        "iterations": entry.get("iterations"),
-        "warmups": entry.get("warmups"),
-        "gpu_backend": entry.get("gpu_backend"),
-        "gpu_available": entry.get("gpu_available"),
+        "rows": measured.get("rows", entry.get("rows")),
+        "padded_rows": measured.get("padded_rows", entry.get("padded_rows")),
+        "iterations": measured.get("iterations", entry.get("iterations")),
+        "warmups": measured.get("warmups", entry.get("warmups")),
+        "gpu_backend": measured.get("gpu_backend", entry.get("gpu_backend")),
+        "gpu_available": measured.get("gpu_available", entry.get("gpu_available")),
         "operation_filter": entry.get("operation_filter"),
         "matrix_operation_filters": entry.get("matrix_operation_filters"),
         "available_operations": available_operations,
         "column_count": column_count,
+        "producer_schema": operation_evidence["producer_schema"] if operation_evidence is not None else entry.get("producer_schema"),
         "device_class": labels.get("device_class"),
         "gpu_kind": labels.get("gpu_kind"),
         "chip_type": labels.get("chip_type"),
@@ -169,7 +145,7 @@ def summarize_bench_entry(
         "platform": manifest_metadata.get("platform"),
         "machine": manifest_metadata.get("machine"),
         "source_command": source_command,
-        "poseidon_microbench": summarize_poseidon_microbench(entry.get("poseidon_microbench")),
+        "operation_evidence": operation_evidence,
     }
     if resolved_path is None:
         summary["load_warning"] = "bench file could not be resolved from the archived bundle"
@@ -187,6 +163,9 @@ def build_rollout_summary(
     bundle_root = bundle_dir.resolve() if bundle_dir is not None else manifest_path.parent.resolve()
     repo = repo_root.resolve() if repo_root is not None else REPO_ROOT.resolve()
     signed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    reject_retired_fields(signed)
+    if not isinstance(signed, dict):
+        raise ValueError("signed manifest must be an object")
     payload = signed.get("payload")
     if not isinstance(payload, dict):
         raise ValueError(f"manifest missing payload: {manifest_path}")
@@ -194,14 +173,22 @@ def build_rollout_summary(
     if not isinstance(benches, list):
         raise ValueError(f"manifest missing benches: {manifest_path}")
 
+    if any(not isinstance(entry, dict) for entry in benches):
+        raise ValueError("manifest bench entry must be an object")
     summarized_benches = [
         summarize_bench_entry(entry, bundle_dir=bundle_root, repo_root=repo)
         for entry in benches
-        if isinstance(entry, dict)
     ]
     constraints = payload.get("constraints")
     if not isinstance(constraints, dict):
         constraints = {}
+    for field in ("max_operation_ms", "min_operation_speedup"):
+        entries = constraints.get(field)
+        if entries is not None:
+            if not isinstance(entries, dict):
+                raise ValueError(f"{field} must be an operation map")
+            for name in entries:
+                require_operation(name)
 
     return {
         "generated_at": _now_iso(),
@@ -222,6 +209,7 @@ def build_rollout_summary(
 def render_constraints(constraints: dict[str, Any]) -> list[str]:
     """Render the manifest constraints into Markdown bullets."""
 
+    reject_retired_fields(constraints)
     lines: list[str] = []
     require_rows = constraints.get("require_rows")
     if isinstance(require_rows, int):
@@ -229,12 +217,12 @@ def render_constraints(constraints: dict[str, Any]) -> list[str]:
 
     max_ops = constraints.get("max_operation_ms")
     if isinstance(max_ops, dict) and max_ops:
-        rendered = ", ".join(f"`{name}` <= {limit}" for name, limit in sorted(max_ops.items()))
+        rendered = ", ".join(f"`{require_operation(name)}` <= {limit}" for name, limit in sorted(max_ops.items()))
         lines.append(f"- Max operation ms: {rendered}")
 
     min_speed = constraints.get("min_operation_speedup")
     if isinstance(min_speed, dict) and min_speed:
-        rendered = ", ".join(f"`{name}` >= {limit}" for name, limit in sorted(min_speed.items()))
+        rendered = ", ".join(f"`{require_operation(name)}` >= {limit}" for name, limit in sorted(min_speed.items()))
         lines.append(f"- Min operation speedup: {rendered}")
     return lines
 
@@ -242,6 +230,7 @@ def render_constraints(constraints: dict[str, Any]) -> list[str]:
 def render_markdown(summary: dict[str, Any]) -> str:
     """Render a compact Markdown view of a rollout manifest summary."""
 
+    reject_retired_fields(summary)
     lines = ["# FASTPQ Rollout Summary", ""]
     lines.append(f"- Manifest: `{summary.get('manifest', 'fastpq_bench_manifest.json')}`")
     signature = "present" if summary.get("signature_present") else "absent"
@@ -276,17 +265,17 @@ def render_markdown(summary: dict[str, Any]) -> str:
         if isinstance(rows, int):
             padded_suffix = f", padded **{padded:,}**" if isinstance(padded, int) else ""
             lines.append(f"- Rows: **{rows:,}**{padded_suffix}")
-        operation_filter = bench.get("operation_filter")
+        operation_filter = require_filter(bench.get("operation_filter"))
         if isinstance(operation_filter, str) and operation_filter:
             suffix = " (focused capture)" if operation_filter != "all" else ""
             lines.append(f"- Operation filter: `{operation_filter}`{suffix}")
         matrix_filters = bench.get("matrix_operation_filters")
         if isinstance(matrix_filters, list) and matrix_filters:
-            rendered = ", ".join(f"`{item}`" for item in matrix_filters if isinstance(item, str))
+            rendered = ", ".join(f"`{require_filter(item)}`" for item in matrix_filters)
             lines.append(f"- Matrix filters: {rendered}")
         operations = bench.get("available_operations")
         if isinstance(operations, list) and operations:
-            rendered = ", ".join(f"`{item}`" for item in operations if isinstance(item, str))
+            rendered = ", ".join(f"`{require_operation(item)}`" for item in operations)
             lines.append(f"- Operations present: {rendered}")
         column_count = bench.get("column_count")
         if isinstance(column_count, int):
@@ -297,20 +286,15 @@ def render_markdown(summary: dict[str, Any]) -> str:
         source_command = bench.get("source_command")
         if isinstance(source_command, str) and source_command:
             lines.append(f"- Command: `{source_command}`")
-        poseidon = bench.get("poseidon_microbench")
-        if isinstance(poseidon, dict):
-            speedup = poseidon.get("speedup_vs_scalar")
-            default_mean = poseidon.get("default_mean_ms")
-            scalar_mean = poseidon.get("scalar_mean_ms")
-            fragments: list[str] = []
-            if isinstance(default_mean, (int, float)):
-                fragments.append(f"default {default_mean:.3f} ms")
-            if isinstance(scalar_mean, (int, float)):
-                fragments.append(f"scalar {scalar_mean:.3f} ms")
-            if isinstance(speedup, (int, float)):
-                fragments.append(f"speedup x{speedup:.3f}")
-            if fragments:
-                lines.append("- Poseidon microbench: " + ", ".join(fragments))
+        evidence = bench.get("operation_evidence")
+        if evidence is not None:
+            require_matching_report_claims(bench, evidence)
+            measured = validate_projection(evidence)["report"]
+            if sorted(item["operation"] for item in measured["operations"]) != bench.get("available_operations"):
+                raise ValueError("summary operations disagree with retained measurement evidence")
+            if measured["operation_filter"] != operation_filter:
+                raise ValueError("summary filter disagrees with retained measurement evidence")
+            lines.extend(["", "Measured operation evidence:", "", render_evidence(evidence)])
         warning = bench.get("load_warning")
         if isinstance(warning, str) and warning:
             lines.append(f"- Note: {warning}")
@@ -320,8 +304,10 @@ def render_markdown(summary: dict[str, Any]) -> str:
 def write_summary(summary: dict[str, Any], *, json_out: Path, markdown_out: Path) -> None:
     """Write JSON and Markdown rollout summaries."""
 
-    json_out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    markdown_out.write_text(render_markdown(summary), encoding="utf-8")
+    markdown = render_markdown(summary)
+    encoded = json.dumps(summary, indent=2) + "\n"
+    json_out.write_text(encoded, encoding="utf-8")
+    markdown_out.write_text(markdown, encoding="utf-8")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

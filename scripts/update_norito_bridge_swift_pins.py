@@ -93,7 +93,15 @@ def _canonical_root(path: Path) -> Path:
     return path
 
 
-def _canonical_external_directory(path: Path, root: Path, label: str) -> Path:
+def _canonical_external_directory(
+    path: Path, root: Path, label: str, *, local_integration: bool = False, role: str = "artifact",
+) -> Path:
+    if local_integration:
+        policy = _load_module(root / "scripts/norito_bridge_local_integration.py", "local_apple_pin_policy")
+        try:
+            return policy.directory(root, path, role)
+        except (OSError, ValueError, policy.subprocess.CalledProcessError) as error:
+            raise PinOwnerError(str(error)) from error
     if not path.is_absolute() or path != Path(os.path.abspath(path)):
         raise PinOwnerError(f"{label} must be an absolute canonical directory")
     try:
@@ -222,6 +230,7 @@ def _project(
     *,
     lockfile_path: Path,
     allow_dirty_source: bool = False,
+    local_integration: bool = False,
 ) -> bytes:
     validator = _load_module(
         root / "scripts/validate_norito_bridge_xcframework.py",
@@ -241,6 +250,7 @@ def _project(
             swift_loader=None,
             verify_repository_provenance=True,
             allow_dirty_source=allow_dirty_source,
+            **({"local_integration": True} if local_integration else {}),
         )
     except (OSError, validator.ValidationError) as error:
         raise PinOwnerError(str(error)) from error
@@ -265,10 +275,11 @@ def _project(
     return projected
 
 
-def _write_new_file(path: Path, contents: bytes, mode: int, root: Path) -> None:
+def _write_new_file(path: Path, contents: bytes, mode: int, root: Path, *, local_integration: bool = False) -> None:
     if not path.is_absolute() or path != Path(os.path.abspath(path)):
         raise PinOwnerError("generated output path must be absolute and canonical")
-    parent = _canonical_external_directory(path.parent, root, "generated output parent")
+    parent = _canonical_external_directory(path.parent, root, "generated output parent",
+                                           local_integration=local_integration, role="projection")
     if path.name in {"", ".", ".."}:
         raise PinOwnerError("generated output path must name one regular file")
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -409,6 +420,7 @@ def main() -> int:
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--lockfile-path", required=True, type=Path)
     parser.add_argument("--artifact-dir", required=True, type=Path)
+    parser.add_argument("--local-integration", action="store_true", help="use the fixed ignored checkout-local lane; never release evidence")
     parser.add_argument(
         "--allow-dirty-source",
         action="store_true",
@@ -436,6 +448,7 @@ def main() -> int:
             arguments.artifact_dir,
             root,
             "--artifact-dir",
+            local_integration=arguments.local_integration,
         )
         source_seal = _load_module(
             root / "scripts/norito_bridge_source_seal.py",
@@ -463,6 +476,7 @@ def main() -> int:
                 preimage,
                 lockfile_path=selected_lock,
                 allow_dirty_source=arguments.allow_dirty_source,
+                local_integration=arguments.local_integration,
             )
             artifact_lock.assert_held()
             if source_seal.lockfile_identity(selected_lock) != lock_identity:
@@ -478,6 +492,7 @@ def main() -> int:
                     projected,
                     stat.S_IMODE(metadata.st_mode),
                     root,
+                    local_integration=arguments.local_integration,
                 )
             artifact_lock.assert_held()
     except (OSError, UnicodeError, PinOwnerError) as error:

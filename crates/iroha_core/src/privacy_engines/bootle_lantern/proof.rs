@@ -1411,11 +1411,6 @@ impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
     }
 }
 impl BootleLanternPreparedPresentationPrivacyActionV1 {
-    /// Borrow the final revalidated payload for the isolated native release runner.
-    #[cfg(feature = "privacy-release-evidence")]
-    pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
-        &self.payload
-    }
     /// Exact state effect certified by the prepared presentation.
     #[must_use]
     pub const fn effect(&self) -> BootleLanternPresentationPrivacyActionEffectV1 {

@@ -1,4 +1,4 @@
-//! Fixed-coset ledger for the compact SMT program's semantic constraints.
+//! Fixed-polynomial ledger for the compact SMT program's semantic constraints.
 //!
 //! This module adds no BLAKE2b equations. It binds exact node-domain and input
 //! ports, public leaves/roots, and all carried SMT state around 512-row hashes.
@@ -9,8 +9,10 @@
 //! Every combined mask is interpolated directly, or formed by linear sums of
 //! fixed polynomials. No two selectors are multiplied. Each fixed polynomial
 //! has degree <N, and every residue is linear in the trace cells times a fixed
-//! coefficient: numerator degree <=2N-2 and quotient degree <N after division
-//! by X^N-1. The separate hash ledger still needs its conservative <2N bound.
+//! coefficient. For unmasked columns of degree <N this gives numerator degree
+//! <=2N-2 and quotient degree <N after exact division by X^N-1. Explicit masked
+//! degree bounds are instead propagated through these same equations; the
+//! unmasked bounds do not qualify masked polynomials.
 //!
 //! There are 49 sparse fixed columns at exactly 704 positions, plus 512 periodic
 //! phases. Sparse field payload is 275,968 bytes; verifier storage/work depends
@@ -19,16 +21,28 @@
 //! without constructing a trace or performing an FFT. Calling that public-table
 //! evaluator separately for every prover LDE point would be needlessly costly.
 //!
-//! TODO: Bind this schema, full authenticated public claims, profile, and public
-//! inputs before challenges; combine it with the reviewed hash ledger, trace
-//! commitments and joint degree proof. Fixed-value constructors are not proof
-//! authentication. This module does not change admission or remove replay.
+//! The complete transfer AIR combines these slots with the hash ledger and binds
+//! its public claims/context. This owner evaluates supplied fixed polynomials at
+//! the full base or extension point. It does not establish source authentication,
+//! polynomial-opening validity, witness masking or production qualification.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use super::GOLDILOCKS_MODULUS;
+#[cfg(test)]
 use super::{
-    GOLDILOCKS_MODULUS, fixed_schedule::PeriodicSelectors, public_table::PublicTablePolynomial,
+    air_degree::{PolynomialDegree, evaluate_node_degrees},
+    air_expression::{Builder, Expression, Node},
 };
+use super::{
+    fixed_schedule::PeriodicSelectors, polynomial_field::PolynomialField,
+    public_table::PublicTablePolynomial,
+};
+#[cfg(test)]
+use crate::gadgets::{compact_smt_air::COLUMN_COUNT, compact_trace_columns::smt_row_from_cells};
 use crate::{
     Error, Result,
     gadgets::{
@@ -168,6 +182,29 @@ impl CompactSmtFixedColumns {
         })
     }
 
+    /// Interpret the same SMT equations with explicit trace and fixed degrees.
+    ///
+    /// Every periodic selector has degree N-N/512. Each already-combined sparse
+    /// public column has degree at most N-1, independently of its support size.
+    /// No selector products or subgroup-interpolated residues are substituted.
+    #[cfg(test)]
+    pub(super) fn numerator_degree_bounds(
+        &self,
+        columns: &[PolynomialDegree; COLUMN_COUNT],
+    ) -> Result<[PolynomialDegree; RESIDUE_COUNT]> {
+        let periodic = PolynomialDegree::from_inclusive(
+            PHYSICAL_ROW_COUNT - PHYSICAL_ROW_COUNT / PHYSICAL_HASH_ROWS,
+        )?;
+        let sparse = core::array::from_fn(|column| {
+            if self.rows.iter().all(|row| row[column] == 0) {
+                PolynomialDegree::ZERO
+            } else {
+                PolynomialDegree::from_exclusive(PHYSICAL_ROW_COUNT)
+            }
+        });
+        numerator_degrees(&self.statement, columns, periodic, &sparse)
+    }
+
     /// Exact ordered subgroup positions for optional prover-side fixed-column FFTs.
     pub(super) fn positions(&self) -> &[usize] {
         &self.positions
@@ -179,27 +216,22 @@ impl CompactSmtFixedColumns {
 }
 
 /// Separately cacheable fixed values at one canonical evaluation point.
-pub(super) struct CompactSmtFixedValues {
-    phases: [u64; PHYSICAL_HASH_ROWS],
-    sparse: [u64; FIXED_COLUMN_COUNT],
+pub(super) struct CompactSmtFixedValues<F> {
+    phases: [F; PHYSICAL_HASH_ROWS],
+    sparse: [F; FIXED_COLUMN_COUNT],
 }
 
-impl CompactSmtFixedValues {
+impl<F: PolynomialField> CompactSmtFixedValues<F> {
     /// Check field encoding of trusted fixed evaluations, not proof-supplied masks.
     ///
     /// A prover may call this after evaluating the declared fixed columns by FFT.
     /// A verifier must derive these values itself using `evaluate_fixed`.
     pub(super) fn new(
-        phases: [u64; PHYSICAL_HASH_ROWS],
-        sparse: [u64; FIXED_COLUMN_COUNT],
+        phases: [F; PHYSICAL_HASH_ROWS],
+        sparse: [F; FIXED_COLUMN_COUNT],
     ) -> Result<Self> {
         for (column, value) in phases.iter().chain(sparse.iter()).copied().enumerate() {
-            if value >= GOLDILOCKS_MODULUS {
-                return Err(Error::NonCanonicalGoldilocksElement {
-                    context: "compact_smt_fixed_evaluation",
-                    indices: vec![column],
-                });
-            }
+            value.validate("compact_smt_fixed_evaluation", &[column])?;
         }
         Ok(Self { phases, sparse })
     }
@@ -233,7 +265,10 @@ impl<'a> CompactSmtQuotient<'a> {
     }
 
     /// Evaluate known coefficients with O(704×49+512+log N) public field work.
-    pub(super) fn evaluate_fixed(&self, point: u64) -> Result<CompactSmtFixedValues> {
+    pub(super) fn evaluate_fixed<F: PolynomialField>(
+        &self,
+        point: F,
+    ) -> Result<CompactSmtFixedValues<F>> {
         let phases = self
             .selectors
             .evaluate(point)?
@@ -255,13 +290,13 @@ impl<'a> CompactSmtQuotient<'a> {
     /// point. Every untrusted trace cell must already have canonical field encoding.
     pub(super) fn residues<F: IntegerAirField>(
         &self,
-        values: &CompactSmtFixedValues,
+        values: &CompactSmtFixedValues<F>,
         current: &SmtRow<F>,
         next: &SmtRow<F>,
     ) -> [F; RESIDUE_COUNT] {
         numerators(
-            &values.phases.map(lift_base),
-            &values.sparse.map(lift_base),
+            &values.phases,
+            &values.sparse,
             current,
             next,
             &self.fixed.statement,
@@ -269,9 +304,44 @@ impl<'a> CompactSmtQuotient<'a> {
     }
 }
 
-fn lift_base<F: IntegerAirField>(value: u64) -> F {
-    let two32 = F::from_u32(65_536).mul(F::from_u32(65_536));
-    F::from_u32(value as u32).add(F::from_u32((value >> 32) as u32).mul(two32))
+// Compile the existing generic equations, then interpret their graph. The
+// caller owns the fixed degrees; the public owner above derives them from the
+// actual fixed schema and recognizes identically zero public columns.
+#[cfg(test)]
+fn numerator_degrees(
+    statement: &PublicStatement,
+    columns: &[PolynomialDegree; COLUMN_COUNT],
+    periodic: PolynomialDegree,
+    sparse_bounds: &[PolynomialDegree; FIXED_COLUMN_COUNT],
+) -> Result<[PolynomialDegree; RESIDUE_COUNT]> {
+    const PHASE_START: usize = 2 * COLUMN_COUNT;
+    const SPARSE_START: usize = PHASE_START + PHYSICAL_HASH_ROWS;
+    const INPUT_COUNT: usize = SPARSE_START + FIXED_COLUMN_COUNT;
+    let arena = RefCell::new(Builder::default());
+    let inputs: [Expression<'_>; INPUT_COUNT] = core::array::from_fn(|index| {
+        let node = arena.borrow_mut().intern(Node::Input(index));
+        Expression::Node(&arena, node)
+    });
+    let current = smt_row_from_cells(&core::array::from_fn(|column| inputs[column]));
+    let next = smt_row_from_cells(&core::array::from_fn(|column| {
+        inputs[COLUMN_COUNT + column]
+    }));
+    let phases = core::array::from_fn(|phase| inputs[PHASE_START + phase]);
+    let sparse = core::array::from_fn(|column| inputs[SPARSE_START + column]);
+    let outputs = numerators(&phases, &sparse, &current, &next, statement)
+        .map(|expression| expression.id(&arena));
+    let graph = arena.into_inner();
+    let bounds: [PolynomialDegree; INPUT_COUNT] = core::array::from_fn(|index| {
+        if index < PHASE_START {
+            columns[index % COLUMN_COUNT]
+        } else if index < SPARSE_START {
+            periodic
+        } else {
+            sparse_bounds[index - SPARSE_START]
+        }
+    });
+    let values = evaluate_node_degrees(&graph.nodes, &bounds)?;
+    Ok(outputs.map(|node| values[node]))
 }
 
 fn input_bit<F: Copy>(row: &SmtRow<F>, byte: usize, bit: usize) -> F {
@@ -412,7 +482,7 @@ mod tests {
         }
     }
 
-    fn fixed_at_row(fixed: &CompactSmtFixedColumns, index: usize) -> CompactSmtFixedValues {
+    fn fixed_at_row(fixed: &CompactSmtFixedColumns, index: usize) -> CompactSmtFixedValues<u64> {
         let mut phases = [0; PHYSICAL_HASH_ROWS];
         phases[index % PHYSICAL_HASH_ROWS] = 1;
         let mut sparse = [0; FIXED_COLUMN_COUNT];
@@ -646,8 +716,14 @@ mod tests {
             GoldilocksFp4V1::new([i as u64 + 1, i as u64 + 2, 3, GOLDILOCKS_MODULUS - 1]).unwrap()
         }));
         for index in [0, 1, 2, 3, 407, 408, 511, 1023, 32767, 32768, 65431, 65535] {
+            let values = fixed_at_row(&fixed, index);
+            let values = CompactSmtFixedValues::new(
+                values.phases.map(GoldilocksFp4V1::embed_base),
+                values.sparse.map(GoldilocksFp4V1::embed_base),
+            )
+            .unwrap();
             assert_eq!(
-                ledger.residues(&fixed_at_row(&fixed, index), &extension, &extension),
+                ledger.residues(&values, &extension, &extension),
                 reference(index, &extension, &extension, &public)
             );
         }
@@ -658,13 +734,15 @@ mod tests {
         assert_eq!(
             ledger.residues(&values, &current, &next).map(embed),
             ledger.residues(
-                &values,
+                &ledger
+                    .evaluate_fixed(embed(FASTPQ_FINAL_V1.omega_coset))
+                    .unwrap(),
                 &smt_row_from_cells(&smt_row_cells(&current).map(embed)),
                 &smt_row_from_cells(&smt_row_cells(&next).map(embed))
             )
         );
         for base in [0, 1, 1 << 32, GOLDILOCKS_MODULUS - 1] {
-            assert_eq!(lift_base::<GoldilocksFp4V1>(base), embed(base));
+            assert_eq!(GoldilocksFp4V1::embed_base(base), embed(base));
         }
     }
 
@@ -715,7 +793,7 @@ mod tests {
         assert_eq!(degree, 2 * PHYSICAL_ROW_COUNT - 2);
         assert!(degree - PHYSICAL_ROW_COUNT < PHYSICAL_ROW_COUNT);
         assert_eq!(RESIDUE_COUNT, SIBLING_CARRY_SLOT + 8);
-        assert!(core::mem::size_of::<CompactSmtFixedValues>() < 5 * 1024);
+        assert!(core::mem::size_of::<CompactSmtFixedValues<u64>>() < 5 * 1024);
     }
 
     #[test]
@@ -746,5 +824,116 @@ mod tests {
             selected[7] &= !(1 << 24);
             assert!(CompactSmtFixedColumns::new(&public).is_err());
         }
+    }
+
+    #[test]
+    fn extension_points_match_physical_smt_reference_with_sparse_corrections() {
+        use super::super::polynomial_reference as polynomial;
+        type F = GoldilocksFp4V1;
+        let public = statement();
+        let fixed = CompactSmtFixedColumns::new(&public).unwrap();
+        let ledger = CompactSmtQuotient::new(&FASTPQ_FINAL_V1, &fixed).unwrap();
+        let current = smt_row_from_cells(&core::array::from_fn(|column| {
+            F::new([column as u64 + 1, 3, 5, 7]).unwrap()
+        }));
+        let next = smt_row_from_cells(&core::array::from_fn(|column| {
+            F::new([column as u64 + 11, 13, 17, 19]).unwrap()
+        }));
+        // Constant current/next cells leave a polynomial in the fixed selectors.
+        // A physical reference row for each phase is the periodic baseline;
+        // every nonperiodic difference is supported by the exact sparse table.
+        let baseline: Vec<_> = (0..PHYSICAL_HASH_ROWS)
+            .map(|phase| reference(2 * PHYSICAL_HASH_ROWS + phase, &current, &next, &public))
+            .collect();
+        for point in polynomial::points().into_iter().skip(5) {
+            let mut expected = [F::ZERO; RESIDUE_COUNT];
+            for (phase, residues) in baseline.iter().enumerate() {
+                let weight =
+                    polynomial::periodic(PHYSICAL_ROW_COUNT, PHYSICAL_HASH_ROWS, phase, point);
+                for (value, &residue) in expected.iter_mut().zip(residues) {
+                    *value = value.add(residue.mul(weight));
+                }
+            }
+            let sparse_weights: Vec<_> = fixed
+                .positions()
+                .iter()
+                .map(|&row| polynomial::lagrange(PHYSICAL_ROW_COUNT, row, point))
+                .collect();
+            for (&row, &weight) in fixed.positions().iter().zip(&sparse_weights) {
+                let residues = reference(row, &current, &next, &public);
+                for slot in 0..RESIDUE_COUNT {
+                    expected[slot] = expected[slot].add(
+                        residues[slot]
+                            .sub(baseline[row % PHYSICAL_HASH_ROWS][slot])
+                            .mul(weight),
+                    );
+                }
+            }
+            let values = ledger.evaluate_fixed(point).unwrap();
+            let actual = ledger.residues(&values, &current, &next);
+            assert_eq!(actual, expected);
+
+            for column in 0..FIXED_COLUMN_COUNT {
+                let expected = sparse_weights
+                    .iter()
+                    .zip(fixed.rows())
+                    .fold(F::ZERO, |sum, (&weight, cells)| {
+                        sum.add(weight.mul_base(cells[column]))
+                    });
+                assert_eq!(values.sparse[column], expected);
+            }
+        }
+    }
+    #[test]
+    fn symbolic_smt_degree_bounds_cover_all_243_actual_equations() {
+        use super::super::air_degree::reference as polynomial;
+        let statement = statement();
+        let columns =
+            core::array::from_fn(|column| PolynomialDegree::from_exclusive(1 + column % 4));
+        let bounds = numerator_degrees(
+            &statement,
+            &columns,
+            PolynomialDegree::from_exclusive(3),
+            &[PolynomialDegree::from_exclusive(5); FIXED_COLUMN_COUNT],
+        )
+        .unwrap();
+        let evaluate = |point| {
+            let current = smt_row_from_cells(&core::array::from_fn(|column| {
+                polynomial::polynomial(1 + column % 4, column + 11, point)
+            }));
+            let next = smt_row_from_cells(&core::array::from_fn(|column| {
+                polynomial::polynomial(1 + column % 4, column + 11, polynomial::mul(3, point))
+            }));
+            let phases =
+                core::array::from_fn(|phase| polynomial::polynomial(3, phase + 1301, point));
+            let sparse =
+                core::array::from_fn(|column| polynomial::polynomial(5, column + 701, point));
+            numerators(&phases, &sparse, &current, &next, &statement).to_vec()
+        };
+        // Independent degree premise: each SMT term is linear in degree<=3
+        // trace cells and degree<=4 fixed coefficients. Twelve samples exceed
+        // the maximum eight required coefficients, regardless of the candidate.
+        let samples: Vec<_> = (0..12).map(evaluate).collect();
+        let coefficients = polynomial::interpolate_columns(&samples);
+        let held_out = evaluate(19);
+        assert_eq!(coefficients.len(), RESIDUE_COUNT);
+        for (slot, ((coefficients, bound), expected)) in
+            coefficients.iter().zip(bounds).zip(held_out).enumerate()
+        {
+            assert!(
+                polynomial::degree_bound(coefficients) <= bound.exclusive(),
+                "SMT slot {slot}"
+            );
+            assert_eq!(
+                polynomial::horner(coefficients, 19),
+                expected,
+                "SMT slot {slot}"
+            );
+        }
+        assert!(
+            coefficients
+                .iter()
+                .any(|column| polynomial::degree_bound(column) > 4)
+        );
     }
 }

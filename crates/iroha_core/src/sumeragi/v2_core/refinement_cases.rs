@@ -1890,6 +1890,61 @@ fn recovered_successor_kernel_keeps_complete_tip_and_snapshot_authority_disjoint
         )
     );
 }
+
+#[test]
+fn recovered_decided_successor_kernel_keeps_canonical_parent_and_commit_frontier_distinct() {
+    let predecessor = durable_predecessor(0x41);
+    let mut successor = successor_snapshot(predecessor.height, 0x51);
+    successor.last_committed_height = successor.height;
+    let trace = ProductionRecoveredSuccessorTraceProjection {
+        authority_kind: SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP,
+        predecessor,
+        snapshot_record_hash: CanonicalIdentityProjection::zero(),
+        snapshot_height: 0,
+        snapshot_block_hash: CanonicalIdentityProjection::zero(),
+        authority_context_id: successor.expected_context_id,
+        published_status_height_before: 0,
+        successor,
+    };
+    assert!(check_production_recovered_successor_transition(trace).is_some());
+    for authority_kind in [
+        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
+        SUCCESSOR_AUTHORITY_APPLIED,
+        SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+    ] {
+        assert!(
+            check_production_recovered_successor_transition(
+                ProductionRecoveredSuccessorTraceProjection {
+                    authority_kind,
+                    ..trace
+                }
+            )
+            .is_none()
+        );
+    }
+    let mut wrong_parent = trace;
+    wrong_parent.predecessor.height += 1;
+    assert!(check_production_recovered_successor_transition(wrong_parent).is_none());
+    let mut wrong_frontier = trace;
+    wrong_frontier.successor.last_committed_height = predecessor.height;
+    assert!(check_production_recovered_successor_transition(wrong_frontier).is_none());
+    let mut foreign_context = trace;
+    foreign_context.successor.published_context_id = successor_identity(
+        IDENTITY_DOMAIN_CONTEXT,
+        IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+        0x61,
+    );
+    assert!(check_production_recovered_successor_transition(foreign_context).is_none());
+    let mut occupied = trace;
+    occupied.published_status_height_before = predecessor.height;
+    assert!(check_production_recovered_successor_transition(occupied).is_none());
+    let mut maximal = trace;
+    maximal.predecessor.height = u64::MAX - 1;
+    maximal.successor.height = u64::MAX;
+    maximal.successor.last_committed_height = u64::MAX;
+    maximal.successor.marker_height = u64::MAX;
+    assert!(check_production_recovered_successor_transition(maximal).is_some());
+}
 #[test]
 fn successor_startup_lifecycle_preserves_running_on_failure_and_separates_restart_sources() {
     let begin = ProductionSuccessorStartupLifecycleProjection {

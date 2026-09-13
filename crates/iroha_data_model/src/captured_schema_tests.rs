@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 const CAPTURE_REPORT_SHA256: &str =
     "be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd";
-const FIXTURE_SHA256: &str = "c3f906db5a33eb93734473891950a5c91ce1dee103448a2181345d5fd4bdbd62";
+const FIXTURE_SHA256: &str = "c8d1e6731e5d1303414c43452b2f392e4ffc814f60da5326ed953811f2a5f27d";
 
 fn fixture() -> &'static BTreeMap<String, Value> {
     static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
@@ -36,7 +36,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
             .get("rows")
             .and_then(Value::as_array)
             .expect("captured rows");
-        assert_eq!(rows.len(), 1_771);
+        assert_eq!(rows.len(), 1_770);
         let mut names = BTreeMap::new();
         let mut direction_counts = [0, 0, 0];
         for row in rows {
@@ -80,7 +80,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
                 "capture names must be unique"
             );
         }
-        assert_eq!(direction_counts, [1_696, 68, 7]);
+        assert_eq!(direction_counts, [1_695, 68, 7]);
         names
     })
 }
@@ -194,5 +194,5 @@ impl Case {
 
 #[test]
 fn captured_codec_fixture_is_complete() {
-    assert_eq!(fixture().len(), 1_771);
+    assert_eq!(fixture().len(), 1_770);
 }

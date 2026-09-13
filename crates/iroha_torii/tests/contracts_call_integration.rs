@@ -472,13 +472,17 @@ async fn prepare_contract_execution(
     assert!(
         response
             .get("pipeline_status")
-            .is_none_or(json::Value::is_null)
+            .is_some_and(json::Value::is_null)
     );
-    assert!(response.get("tx_hash_hex").is_none_or(json::Value::is_null));
+    assert!(
+        response
+            .get("tx_hash_hex")
+            .is_some_and(json::Value::is_null)
+    );
     assert!(
         response
             .get("entrypoint_hash_hex")
-            .is_none_or(json::Value::is_null)
+            .is_some_and(json::Value::is_null)
     );
     assert!(response.get("transaction_scaffold_b64").is_none());
     assert!(response.get("signed_transaction_b64").is_none());
@@ -760,6 +764,13 @@ async fn contracts_call_prepares_exact_payload_and_requires_certified_admission(
         .unwrap();
     let missing_limit_resp = app.request(missing_limit_req).await;
     assert_eq!(missing_limit_resp.status(), http::StatusCode::BAD_REQUEST);
+    let missing_limit_bytes = missing_limit_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(String::from_utf8_lossy(&missing_limit_bytes).contains("fee_payment"));
     let zero_limit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         contract_address.as_str(),
@@ -777,6 +788,15 @@ async fn contracts_call_prepares_exact_payload_and_requires_certified_admission(
         .unwrap();
     let zero_limit_resp = app.request(zero_limit_req).await;
     assert_eq!(zero_limit_resp.status(), http::StatusCode::BAD_REQUEST);
+    let zero_limit_bytes = zero_limit_resp
+        .into_body()
+        .collect()
+        .await
+        .expect("zero-limit response body")
+        .to_bytes();
+    assert!(
+        String::from_utf8_lossy(&zero_limit_bytes).contains("fee_payment.gas_limit is required")
+    );
     let mut forbidden: json::Value =
         json::from_str(&iroha_torii::test_utils::contract_call_request_json(
             &creds.account,
@@ -805,6 +825,13 @@ async fn contracts_call_prepares_exact_payload_and_requires_certified_admission(
         )
         .await;
     assert_eq!(forbidden_response.status(), http::StatusCode::BAD_REQUEST);
+    let forbidden_bytes = forbidden_response
+        .into_body()
+        .collect()
+        .await
+        .expect("forbidden-field response body")
+        .to_bytes();
+    assert!(String::from_utf8_lossy(&forbidden_bytes).contains("private_key"));
     assert_eq!(queue.active_len(), 0);
     let transaction_ttl_ms = 900_000_u64;
     let call_payload = iroha_torii::json_object(vec![
@@ -882,11 +909,11 @@ async fn contracts_call_prepares_exact_payload_and_requires_certified_admission(
             .map(str::len),
         Some(64)
     );
-    assert!(receipt.get("tx_hash_hex").is_none_or(json::Value::is_null));
+    assert!(receipt.get("tx_hash_hex").is_some_and(json::Value::is_null));
     assert!(
         receipt
             .get("entrypoint_hash_hex")
-            .is_none_or(json::Value::is_null)
+            .is_some_and(json::Value::is_null)
     );
     execute_prepared_contract_in_test_overlay(&state, &prepared, 2);
 

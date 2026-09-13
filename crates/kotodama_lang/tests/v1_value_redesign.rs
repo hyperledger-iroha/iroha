@@ -175,3 +175,44 @@ fn fused_rounding_folds_once_and_lowers_to_one_fused_instruction() {
         .count();
     assert_eq!(fused, 1);
 }
+
+#[test]
+fn exact_rejection_requires_expected_while_catch_all_stays_explicit() {
+    let program = |call: &str| {
+        parser::parse(&format!(
+            "seiyaku Demo {{ \
+             kotoage fn run(int count) -> int authorize(\"Run\") {{ return count; }} \
+             #[test] fn rejection() {{ {call}; }} \
+             }}"
+        ))
+        .expect("rejection helper source must parse before semantic validation")
+    };
+    let missing_expected = program(
+        r#"test::expect_reject_as(actor: "issuer", kotoage: "run", arguments: json { count: 7 })"#,
+    );
+    let error = semantic::SemanticContext::with_capabilities(false, true)
+        .analyze(&missing_expected)
+        .expect_err("exact rejection must never imply a catch-all expectation");
+    assert_eq!(error.code(), "E_MISSING_NAMED_ARGUMENT");
+    assert_eq!(
+        error.message(),
+        "call `test::expect_reject_as` is missing required argument `expected`"
+    );
+
+    let positional = program(r#"test::expect_reject_as("issuer", "run", json { count: 7 })"#);
+    let error = semantic::SemanticContext::with_capabilities(false, true)
+        .analyze(&positional)
+        .expect_err("the retired positional form must not restore implicit rejection matching");
+    assert_eq!(error.code(), "E_NAMED_ARGUMENTS_REQUIRED");
+    assert_eq!(
+        error.message(),
+        "parameter `actor` of `test::expect_reject_as` requires its declared name"
+    );
+
+    let catch_all = program(
+        r#"test::expect_any_reject_as(actor: "issuer", kotoage: "run", arguments: json { count: 7 })"#,
+    );
+    semantic::SemanticContext::with_capabilities(false, true)
+        .analyze(&catch_all)
+        .expect("the explicitly named catch-all helper accepts three labeled arguments");
+}

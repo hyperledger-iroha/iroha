@@ -12,4 +12,6 @@ pub mod receipt;
 pub mod release_evidence;
 pub mod state_observation;
 pub mod stream_token;
+/// Governed native StreamToken role control, excluding per-token operations.
+pub mod stream_token_custody_control;
 pub mod stream_token_evidence;

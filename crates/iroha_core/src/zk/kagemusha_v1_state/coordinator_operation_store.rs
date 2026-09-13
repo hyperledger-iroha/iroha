@@ -641,7 +641,7 @@ where
         Ok(retired)
     }
 
-    fn reconcile_coordinator_operations(
+    pub(super) fn reconcile_coordinator_operations(
         &self,
         store: &KagemushaCoordinatorOperationStoreV1,
     ) -> Result<()> {

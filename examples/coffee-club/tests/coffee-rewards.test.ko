@@ -1,0 +1,25 @@
+module CoffeeRewardsTests {
+    koto_test {
+        target: "../contracts/coffee-club.ko"
+    }
+
+    #[test]
+    fn zero_coffees_earn_zero_points() {
+        test::assert(points(coffees: 0) == 0);
+    }
+
+    #[test]
+    fn one_coffee_earns_ten_points() {
+        test::assert(points(coffees: 1) == 10);
+    }
+
+    #[test]
+    fn three_coffees_earn_thirty_points() {
+        test::assert(points(coffees: 3) == 30);
+    }
+
+    #[test]
+    fn negative_coffees_earn_zero_points() {
+        test::assert(points(coffees: -1) == 0);
+    }
+}

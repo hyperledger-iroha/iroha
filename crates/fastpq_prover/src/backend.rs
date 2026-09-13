@@ -29,8 +29,33 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
+#[cfg(test)]
+#[path = "backend/air_degree.rs"]
+mod air_degree;
+#[path = "backend/air_expression.rs"]
+mod air_expression;
 #[path = "backend/air_quotient.rs"]
 mod air_quotient;
+#[cfg(test)]
+#[path = "backend/coefficient_masking.rs"]
+mod coefficient_masking;
+#[cfg(test)]
+#[path = "backend/masked_quotient.rs"]
+mod masked_quotient;
+#[cfg(test)]
+#[path = "backend/polynomial_division.rs"]
+mod polynomial_division;
+#[path = "backend/polynomial_field.rs"]
+mod polynomial_field;
+#[cfg(test)]
+#[path = "backend/polynomial_reference.rs"]
+mod polynomial_reference;
+#[cfg(test)]
+#[path = "backend/polynomial_transform.rs"]
+mod polynomial_transform;
+#[cfg(test)]
+#[path = "backend/secret_polynomial.rs"]
+mod secret_polynomial;
 pub(crate) use air_quotient::{AirQuotientDomain, AirQuotientWeights};
 #[path = "backend/joint_fri.rs"]
 mod joint_fri;

@@ -161,7 +161,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
     });
 
     const health = await client.getHealth();
@@ -291,7 +291,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
     });
     const snapshot = await client.getStatusSnapshot();
     assert.ok(snapshot, "status snapshot response must be present");
@@ -1496,7 +1496,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
     });
     const canonicalAuth = { accountId: AUTHORITY_ACCOUNT_ID, privateKey: Buffer.from(PRIVATE_KEY_HEX, "hex") };
     const attachmentPayload = Buffer.from(
@@ -2210,7 +2210,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
       canonicalRequestAuth: { accountId: authority, privateKey: decodePrivateKeyHex(PRIVATE_KEY_HEX) },
     });
 
@@ -2327,7 +2327,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
     });
     const canonicalAuth = {
       accountId: AUTHORITY_ACCOUNT_ID,
@@ -2748,7 +2748,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
     });
     try {
       const revokeReason = `js-integration revoke ${new Date().toISOString()}`;
@@ -3565,7 +3565,7 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
-      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      localSigningContext: new LocalSigningContext(NETWORK_ID, 753),
     });
 
     let response;

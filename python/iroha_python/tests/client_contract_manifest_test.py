@@ -592,8 +592,13 @@ def test_manifest_rejects_noncanonical_dynamic_key_types(forged: str) -> None:
         ("base_key", " state:Balances", "exact non-empty string"),
         ("base_key", "state:Balances ", "exact non-empty string"),
         ("bound_kind", "", "exact non-empty string"),
-        ("bound_kind", "Take", "exactly take or range"),
-        ("bound_kind", "prefix", "exactly take or range"),
+        ("bound_kind", "Take", "exactly take or page"),
+        ("bound_kind", "prefix", "exactly take or page"),
+        (
+            "bound_kind",
+            "range",
+            r"^dynamic access hint\.bound_kind must be exactly take or page$",
+        ),
         ("bound_kind", "range ", "exact non-empty string"),
     ],
 )

@@ -496,10 +496,14 @@ impl KagemushaRecursiveVerifierProfileV1 {
 /// Construction authenticates every key byte, validates the circuit profile, recompiles all
 /// protocols, and checks the state protocol identities recorded by the release. Verification
 /// then supplies the exact Guard protocol identities derived from the authenticated Guard keys.
-/// State/payment/terminal acceptance remains unavailable until the actual recursive credential
-/// relation binds its provider-policy root to governed authority. Raw proof diagnostics and the
-/// independent consensus-backed mint-finality verifier do not establish device authority.
+/// State/payment/terminal acceptance requires explicit admission of the independently authenticated
+/// release matching the provider-policy root fixed in the loaded recursive credential circuits.
+/// Raw proof diagnostics and the independent consensus-backed mint-finality verifier do not
+/// establish device authority. Loading artifacts alone leaves monetary acceptance unavailable.
 pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
+    monetary_release:
+        Option<std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>>,
+    native_profile_digest: [u8; 32],
     eq_parameters: halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
     ep_parameters: halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
     inner_eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
@@ -881,6 +885,8 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ));
         }
         let verifier = Self {
+            monetary_release: None,
+            native_profile_digest: artifacts.native_profile_digest(),
             eq_parameters,
             ep_parameters,
             inner_eq_state_protocol,
@@ -922,6 +928,58 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             commit_wrapper_ep_binding: recursion.commit_wrapper_verifying_key_ep,
         };
         Ok(verifier)
+    }
+
+    /// Admit monetary verification under the exact independently authenticated deployment release.
+    ///
+    /// Loading keys alone remains nonauthorizing. The caller must authenticate this release
+    /// against its independently pinned authority policy, never a policy read from wallet storage.
+    /// Every compiled role, provider registry root and native layout must match the loaded keys.
+    /// Repeating the same admission is harmless; changing the admitted release requires a new
+    /// verifier and the protocol's separately authorized rotation flow.
+    pub fn authorize_monetary_release(
+        &mut self,
+        release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+    ) -> Result<(), String> {
+        let expected = super::KagemushaRecursionArtifactsV1::from_authenticated_release(
+            &release,
+            self.state_checkpoint_artifacts
+                .canonical_empty_effect_digest,
+        );
+        expected.validate().map_err(|error| error.to_string())?;
+        if expected != self.state_checkpoint_artifacts
+            || release.provider_policy_root() != self.provider_policy_root
+            || release.native_profile_digest() != self.native_profile_digest
+            || release.vk_set_digest() != self.vk_set_digest
+            || release
+                .enabled_profiles()
+                .iter()
+                .any(|profile| profile.suite_id != self.suite_id)
+            || release.provider_policy().is_empty()
+            || release.approved_signers().is_empty()
+        {
+            return Err("Kagemusha monetary release differs from loaded artifacts".to_owned());
+        }
+        if let Some(current) = &self.monetary_release {
+            if current.attestation_digest() != release.attestation_digest()
+                || current.authority_policy_digest() != release.authority_policy_digest()
+            {
+                return Err("Kagemusha monetary authority is already installed".to_owned());
+            }
+        }
+        self.monetary_release = Some(release);
+        Ok(())
+    }
+
+    pub(super) fn monetary_release(
+        &self,
+    ) -> Result<std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, String>
+    {
+        require_monetary_release_v1(self.monetary_release.as_ref()).cloned()
+    }
+
+    fn require_authenticated_provider_policy_authority_v1(&self) -> Result<(), String> {
+        self.monetary_release().map(|_| ())
     }
 
     /// Borrow only immutable, release-authenticated material for private State restoration.
@@ -1060,7 +1118,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         authorization: &KagemushaMintAuthorizationV1,
     ) -> Result<(), String> {
-        require_authenticated_provider_policy_authority_v1()?;
+        self.require_authenticated_provider_policy_authority_v1()?;
         authorization
             .validate_shape()
             .map_err(|error| error.to_string())?;
@@ -1217,7 +1275,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         request: &KagemushaPaymentRequestV1,
         payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
-        require_authenticated_provider_policy_authority_v1()?;
+        self.require_authenticated_provider_policy_authority_v1()?;
         payment
             .validate_shape_against(request)
             .map_err(|error| error.to_string())?;
@@ -1276,7 +1334,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         request: &KagemushaParityVerificationRequestV1<'_>,
     ) -> Result<(), String> {
-        require_authenticated_provider_policy_authority_v1()?;
+        self.require_authenticated_provider_policy_authority_v1()?;
         if request.public_output.lifecycle.release_id != self.release_id
             || request.public_output.lifecycle.suite_id != self.suite_id
             || request.public_output.lifecycle.vk_digest != self.vk_set_digest
@@ -1343,7 +1401,7 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
         &self,
         request: &KagemushaStateProofVerificationRequestV1<'_>,
     ) -> Result<(), String> {
-        require_authenticated_provider_policy_authority_v1()?;
+        self.require_authenticated_provider_policy_authority_v1()?;
         if request.public_inputs.commit_wrapper_eq_protocol_digest
             != self.commit_wrapper_eq_protocol_digest
             || request.public_inputs.commit_wrapper_ep_protocol_digest
@@ -1454,11 +1512,12 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
     }
 }
 
-/// A host-selected root cannot repair an unanchored private recursive credential relation.
-fn require_authenticated_provider_policy_authority_v1() -> Result<(), String> {
-    // TODO: Remove this gate only after the authenticated provider-policy root is constrained in
-    // the actual credential/Guard/State/terminal proof chain and checked by the native verifier.
-    Err(super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string())
+fn require_monetary_release_v1(
+    release: Option<&std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>>,
+) -> Result<&std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, String> {
+    release.ok_or_else(|| {
+        super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string()
+    })
 }
 
 fn append_base_params(bytes: &mut Vec<u8>, params: &BaseCircuitParams) -> Result<(), String> {
@@ -1794,16 +1853,15 @@ mod checked_loader_tests {
                 .1;
             assert!(
                 body.trim_start()
-                    .starts_with("require_authenticated_provider_policy_authority_v1()?;")
+                    .starts_with("self.require_authenticated_provider_policy_authority_v1()?;")
             );
         }
         // Even well-shaped, nonzero canonical scalar/root choices never become gate inputs.
         for scalar in [Fp::from(1), Fp::from(2), Fp::from(3)] {
             assert_ne!(crate::zk::kagemusha_v1_poseidon::encode(scalar), [0; 32]);
-            assert_eq!(
-                require_authenticated_provider_policy_authority_v1(),
-                Err(super::super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string())
-            );
+            assert_eq!(require_monetary_release_v1(None).err(), Some(
+                super::super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string()
+            ));
         }
     }
 

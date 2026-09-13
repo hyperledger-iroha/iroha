@@ -133,7 +133,11 @@ must return a non-empty, non-zero detached signature no larger than the V1
 - Notes: Proof filter paths validated end-to-end; documentation updated under `specs/zk_app_api.md`.
 
 #### Contract lifecycle (`/v1/contracts/*`) — Covered
-- Handlers: `handle_post_contract_call`,
+- Call handler: `handler_post_contract_call` delegates to pure `prepare_contract_call_request`;
+  signed QueuePlanSynced calls use `submit_signed_transaction_for_ingress` through
+  `submit_prepared_contract_call`. Only accepted (202) ingress produces the normal
+  HTTP 200 submitted contract receipt; rejection and ambiguity responses are preserved.
+- Remaining handlers:
   `handle_post_contract_call_multisig_propose`,
   `handle_post_contract_call_multisig_approve`,
   `handle_post_contract_view`,

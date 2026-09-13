@@ -116,23 +116,11 @@ that binary-only state. Remove that unverified leftover and rerun
 The registry tarball intentionally contains no platform-specific `.node`
 binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
-inside a clean registry installation. Browser account admission and the four
-instruction frame/archive APIs use the packaged Rust Wasm owner. Call
-`await initializeBrowserCodec()` from `@iroha/iroha-js/browser-codec` before
-using these synchronous APIs. Concurrent initialization shares one attempt;
-failed initialization can be retried. Early calls throw
-`ERR_IROHA_CODEC_NOT_READY` without permanently poisoning the runtime.
-Initialization accepts no custom binding or URL. It downloads the package-owned
-Wasm asset without credentials, with a 30-second timeout and a 64 MiB artifact
-download budget. This budget does not change transaction or account limits.
-Instruction JSON text reaches Rust unchanged, including exact large integer
-tokens. Object inputs and parsed decoder results reject unsafe integer or
-non-finite JavaScript numbers; use exact JSON text and frame decoding with
-`parseJson: false` when those values are needed. Finite fractional `Custom`
-JSON remains supported. Object `bigint` values require exact JSON text.
-Only public account data and instruction payloads enter this codec; signing
-keys remain with the application's local signing implementation. Node
-applications that use native APIs must
+inside a clean registry installation. Canonical account admission and instruction
+frame/archive APIs require the native Rust codec in Node.js and are unavailable
+in browsers. Browser HTTP clients, local cryptography, and portable data helpers
+remain available where they do not require native account or instruction admission.
+Node applications that use native APIs must
 provide a separately built and checksum-verified host through
 `IROHA_JS_NATIVE_DIR` before the first native-dependent call. The verified host
 surface is then captured as an immutable runtime dependency; later environment
@@ -144,12 +132,10 @@ two portable, offline examples: `recipes/iso_bridge_builder.mjs` and
 source repository where its native and live-service prerequisites are
 available.
 
-`build:dist` can copy JavaScript sources without a Wasm build for ordinary
-development. When generated Wasm assets exist, it copies the complete pair
-atomically. `prepack` and `test:pack-install` require the real generated module
-and glue and verify initialization with all six owner methods. Browser release
-qualification additionally exercises the actual served asset and application
-callers; source-only distribution checks do not establish browser readiness.
+`build:dist` publishes the JavaScript source tree. `prepack` builds that tree,
+and `test:pack-install` verifies exact source/distribution parity and the package's
+portable public imports. Native codec qualification separately requires a built
+and verified Rust host.
 
 When publishing or testing the packaged layout, build the ESM dist tree:
 
@@ -438,12 +424,16 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
+Every instruction codec operation and local signing context requires the deployment’s
+explicit `networkPrefix` (an integer in `0..65535`, `369` for Taira). Obtain it
+from the selected deployment alongside its exact `NetworkId`; there is no
+implicit network default. Decoders take `(bytes, networkPrefix, options)`.
+
 ### External transaction signing
 
 Use `@iroha/iroha-js/transaction-codec` in a Node runtime with the verified
 native account owner to build and finalize canonical transparent transfers.
-The browser bundle exposes the same API after `initializeBrowserCodec()`
-completes. This surface supports one
+Account admission for this surface is unavailable in browsers. It supports one
 `Transfer::Asset` instruction, single-key Ed25519 I105 authorities, canonical
 asset identifiers, and accounts sharing one network prefix/chain discriminant.
 Every ordinary transaction carries a nominal `NetworkId`: the exact marked
@@ -477,7 +467,7 @@ const payloadBytes = buildBrowserTransferPayload({
 });
 
 // Sign the exact 32-byte Iroha prehash, not the payload bytes or hex text.
-const payloadHashHex = browserTransactionPayloadHashHex(payloadBytes);
+const payloadHashHex = browserTransactionPayloadHashHex(payloadBytes, networkPrefix);
 const payloadHash = Uint8Array.from(
   payloadHashHex.match(/../g),
   (octet) => Number.parseInt(octet, 16),
@@ -673,8 +663,8 @@ aliases must be exact lowercase 64-character hex and must match the returned
 payload bytes. Finalization must return canonical version-1, single-signature
 `Transfer::Asset` bytes plus the exact compact-entrypoint hash. Before any
 submission, the facade independently finalizes and hashes those bytes with the
-browser codec, rejects conflicting byte/hash aliases, and rechecks the signable
-payload prehash. Torii response hash aliases are likewise conflict-checked
+transaction codec with native account admission, rejects conflicting byte/hash
+aliases, and rechecks the signable payload prehash. Torii response hash aliases are likewise conflict-checked
 before status polling or receipt construction.
 
  Kotodama V1 uses the Rust compiler as its only implementation. Node loads it
@@ -879,8 +869,8 @@ exposes no helper that derives a trusted anchor from `proofs`: copying those
 fields is circular evidence, not authentication. `verification.valid` means
 only that the response is consistent with the independently authenticated
 anchor supplied by the caller; it is not a finality verdict. Browser callers
-therefore need an application-provided native/WASM or otherwise authenticated
-finality bridge before calling this helper. Application Merkle leaves and
+therefore need an independently authenticated finality anchor obtained outside
+the browser before calling this helper. Application Merkle leaves and
 internal nodes use
 distinct `iroha:merkle:leaf:v1\0` and `iroha:merkle:internal:v1\0` hash domains;
 the raw transaction/result hash is passed as the proof leaf and the verifier
@@ -947,7 +937,7 @@ You can also use namespaced exports when you prefer grouped imports:
 import { Torii, Norito, Crypto } from "@iroha/iroha-js";
 
 const torii = new Torii.ToriiClient("https://torii.example");
-const encoded = Norito.noritoEncodeInstruction({ Register: { Domain: { id: "wonderland" } } });
+const encoded = Norito.noritoEncodeInstruction({ Register: { Domain: { id: "wonderland" } } }, networkPrefix);
 const keys = Crypto.generateKeyPair();
 ```
 
@@ -1221,7 +1211,7 @@ console.log(confidential.nkHex); // cb7149cc...
 const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
 const canonicalAuth = { accountId: authority, privateKey };
 const torii = new ToriiClient("https://localhost:8080", {
-  localSigningContext: new LocalSigningContext(networkId),
+  localSigningContext: new LocalSigningContext(networkId, networkPrefix),
 });
 const meta = await torii.uploadAttachment(Buffer.from("{}"), {
   contentType: "application/json",
@@ -1243,8 +1233,8 @@ const instruction = buildRegisterDomainInstruction({
   domainId: "wonderland",
   metadata: { key: "value" },
 });
-const encoded = noritoEncodeInstruction(instruction);
-const decoded = noritoDecodeInstruction(encoded);
+const encoded = noritoEncodeInstruction(instruction, networkPrefix);
+const decoded = noritoDecodeInstruction(encoded, networkPrefix);
 console.log(decoded.Register.Domain.id); // "wonderland"
 // `noritoDecodeInstruction` throws on malformed bytes and when neither the
 // portable codec nor the native runtime owns a wire ID, so handle decode errors.
@@ -1253,7 +1243,7 @@ const registerAccountInstruction = buildRegisterAccountInstruction({
   accountId: newAccountId,
   metadata: { nickname: "alice" },
 });
-console.log(noritoDecodeInstruction(registerAccountInstruction).Register.Account.id);
+console.log(noritoDecodeInstruction(registerAccountInstruction, networkPrefix).Register.Account.id);
 
 const { signedTransaction } = buildTransaction({
   networkId,
@@ -1411,7 +1401,7 @@ Rust goldens.
 
 ```js
 const registerDomain = noritoEncodeInstruction(
-  buildRegisterDomainInstruction({ domainId: "wonderland" }),
+  buildRegisterDomainInstruction({ domainId: "wonderland" }), networkPrefix,
 );
 const registerAccount = buildRegisterAccountInstruction({
   accountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
@@ -1429,7 +1419,7 @@ const transferTx = buildTransaction({
   feePayment,
   privateKey,
 });
-console.log(noritoDecodeInstruction(registerDomain).Register.Domain.id);
+console.log(noritoDecodeInstruction(registerDomain, networkPrefix).Register.Domain.id);
 console.log(transferTx.signedTransaction.length); // deterministic Norito bytes
 ```
 
@@ -1764,7 +1754,7 @@ const payload = noritoEncodeInstruction(
   buildRegisterDomainInstruction({
     domainId: "wonderland",
     metadata: {},
-  }),
+  }), networkPrefix,
 );
 
 // Returns the raw Norito bytes Torii responds with (Uint8Array).
@@ -1934,7 +1924,7 @@ now mirrors the Python helper coverage:
 ```js
 const torii = new ToriiClient("http://localhost:8080", {
   config: { torii: { apiTokens: ["bridge-token"] } },
-  localSigningContext: new LocalSigningContext(networkId),
+  localSigningContext: new LocalSigningContext(networkId, networkPrefix),
 });
 
 const resolved = await torii.resolveAlias("GB82 WEST 1234 5698 7654 32");
@@ -2514,7 +2504,7 @@ for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
   break;
 }
 // LocalSigningContext must carry the deployment's exact NetworkId and I105
-// chain discriminant (369 for Taira; the constructor default is 753/Sora).
+// network prefix explicitly (369 for Taira); no prefix is inferred or defaulted.
 const orderResult =
   await torii.submitSorafsOrderbookOrder(signedSubmitOrderTransaction, {
     expectedReceiptSigner: toriiReceiptPublicKey,
@@ -2557,15 +2547,20 @@ The pin-list route is a first-release hard cut: it uses an exclusive digest
 cursor bound to one finalized height/hash and accepts no `offset`. `status` is
 exactly lowercase, `limit` is `1..=256`, and `maxBytes` is
 `1024..=262144`. Each page contains bounded summaries plus the consensus-kept
-O(1) charged count/byte totals; alias proofs, metadata, council envelopes, fee
-details, and lineage expansion are available only from the bounded per-digest
+O(1) charged count/byte totals and the required retained `approved_epoch`; alias proofs, metadata, council envelopes,
+and fee details are available only from the bounded per-digest
 detail route. The async iterator locks the first page's finalized anchor for
 every subsequent request.
 
 Replication status is also a closed first-release union: `pending` carries only
 `state`, while `completed`, `expired`, and `cancelled` carry an exact `epoch`.
-Each order exposes the canonical decoded `order`, `assignment_revision`, and
-`provider_completions`.
+Each order exposes the native `order` projection, `assignment_revision`, and
+`provider_completions`, including provider-owner signer policy and finalized
+anchor. Inventory responses retain full-width integer tokens as `bigint` and
+reject duplicate keys, unknown fields and alternate numeric spellings. The
+canonical order bytes remain an opaque bounded base64 field in this readback;
+use the native codec for independent Norito validation. Replication filters use
+exact lowercase status names, `limit` is `1..=500`, and `offset` is a u32.
 
 `getSorafsPinManifest(digestHex)` returns the exact finalized native shape
 `{ finalized_cursor, manifest }`, validates the record's native byte arrays and
@@ -2573,7 +2568,12 @@ retained approval lifecycle, and returns `null` for `404 Not Found`. Pin detail
 contains only the finalized cursor and native manifest; query aliases and
 replication orders through their dedicated endpoints. Callers may bind the read
 to `expectedFinalizedHeight` and
-`expectedFinalizedBlockHashHex`, which must be supplied together.
+`expectedFinalizedBlockHashHex`, which must be supplied together. Heights accept
+safe integer numbers or full-width `bigint` values. The raw method retains JSON
+byte arrays; `getSorafsPinManifestTyped` returns `Uint8Array` byte fields. Both
+preserve integer tokens above the safe-number range as `bigint`, reject duplicate
+keys and non-integer numeric spellings outside `manifest.metadata`, and permit
+finite fractional JSON values inside that metadata object.
 
 PoR automation helpers surface the first-release production endpoints so SDK
 callers can submit authenticated Norito-encoded provider proofs and auditor
@@ -2678,7 +2678,7 @@ import { contractPayloadDigestHex } from "@iroha/iroha-js/contract-payload";
 const authority = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
 const canonicalAuth = { accountId: authority, privateKey: runtimePrivateKey };
 const torii = new ToriiClient(toriiUrl, {
-  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId)),
+  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId), networkPrefix),
 });
 
 const manifest = JSON.parse(
@@ -3172,12 +3172,13 @@ unsigned transaction draft. The request contains the authority,
 `contract_address` or `contract_alias`, the explicit entrypoint, optional
 payload and metadata, typed `feePayment`, and an off-wire `draftIntent` built
 from the locally verified contract artifact. Private signing material and the
-intent are never sent to Torii. Contract drafts require `QueuePlanSynced`
-admission and canonical account HTTP authentication. The client rejects the
-returned draft unless its exact network, authority, executable, metadata, quoted fee, creation time,
-TTL, admission mode, nonce, and attachments match caller-trusted state. Sign
-only after that validation succeeds, then submit the finalized transaction
-through the normal transaction route.
+intent are never sent to Torii. Contract drafts require the signature-bound
+`QueuePlanSynced` admission intent and canonical account HTTP authentication.
+The client rejects the returned draft unless its exact network, authority,
+executable, metadata, quoted fee, creation time, TTL, admission intent, nonce,
+and attachments match caller-trusted state. Sign only after that validation
+succeeds, then submit the exact finalized transaction through the normal
+transaction route.
 
 ```js
 import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
@@ -3186,7 +3187,7 @@ const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
   canonicalRequestAuth: { accountId: AUTHORITY_ACCOUNT_ID, privateKey: runtimePrivateKey },
   authToken: process.env.IROHA_TORII_AUTH_TOKEN,
   localSigningContext: new LocalSigningContext(
-    NetworkId.parse(EXACT_NETWORK_ID_LITERAL),
+    NetworkId.parse(EXACT_NETWORK_ID_LITERAL), networkPrefix,
   ),
 });
 
@@ -3572,7 +3573,7 @@ const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
 
 const torii = new ToriiClient("http://localhost:8080", {
   // Immutable local-signing context. Read-only clients may omit this.
-  localSigningContext: new LocalSigningContext(networkId),
+  localSigningContext: new LocalSigningContext(networkId, networkPrefix),
 });
 const list = await torii.listVerifyingKeys({ backend: "halo2/ipa", status: "Active" });
 console.log(list[0]?.record?.commitment_hex);
@@ -4244,7 +4245,7 @@ const canonicalAuth = {
 };
 
 const torii = new ToriiClient("https://torii.example", {
-  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId)),
+  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId), networkPrefix),
   config: {
     toriiClient: {
       timeoutMs: 10_000,
@@ -4871,7 +4872,7 @@ rejected.
 - Attach `retryTelemetryHook` to capture deterministic per-attempt telemetry for dashboards and SLO drills; events include phase (`response`/`network`/`timeout`), attempt numbers, method/URL, status or error metadata, backoffMs, profile name when set, durationMs for the attempt, and timestampMs so logs can be correlated with Torii-side traces.
 - Authentication headers can be supplied via `authToken` (maps to `Authorization: Bearer ...`) or `apiToken` (maps to `X-API-Token`). Requests that carry auth headers, `canonicalAuth`, or raw `private_key*` JSON fields pin to the client's base scheme/host; cross-host overrides are rejected, insecure `http`/`ws` requires `allowInsecure: true` (dev-only), and `insecureTransportTelemetryHook` captures any downgraded transports. Cross-host requests without sensitive material require `allowAbsoluteUrl: true`.
 - Runtime defaults can be pulled from `iroha_config` JSON/TOML by passing a camelCase config object (map `torii.api_tokens` to `torii.apiTokens`) to `new ToriiClient(url, { config })`. The helper `resolveToriiClientConfig({ config })` returns the merged settings if you need to inspect them directly.
-- SoraFS/DA hooks accept explicit overrides: pass `sorafsGatewayFetch` (multi-source orchestrator) or `generateDaProofSummary` (checksum helper) to the `ToriiClient` constructor when testing; both are validated as functions, and `sorafsAliasPolicy` must be a plain object when provided (invalid shapes throw before any network call).
+- SoraFS and DA integrations use the native SDK owners. Torii constructor options reject private test hooks and retired alias-header policy overrides.
 - Developer-friendly environment overrides are supported for local workflows: `IROHA_TORII_TIMEOUT_MS`, `IROHA_TORII_MAX_RETRIES`, `IROHA_TORII_BACKOFF_INITIAL_MS`, `IROHA_TORII_BACKOFF_MULTIPLIER`, `IROHA_TORII_MAX_BACKOFF_MS`, `IROHA_TORII_RETRY_STATUSES`, `IROHA_TORII_RETRY_METHODS`, `IROHA_TORII_API_TOKEN`, and `IROHA_TORII_AUTH_TOKEN`.
 - Retryable status codes default to `{429, 502, 503, 504}`; methods default to `GET`, `HEAD`, and `OPTIONS`. Override them when your workflow needs different semantics.
 - See `recipes/configured-client.mjs` for a script that loads an `iroha_config` JSON document, applies environment overrides, and instantiates `ToriiClient` with the merged settings.

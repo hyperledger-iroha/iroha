@@ -1,4 +1,21 @@
-export * from "./game-resources.js";
+export type * from "./game-resources.js";
+export {
+  GAME_RESOURCE_VALUE_NAMES_V1,
+  GAME_MAX_RESOURCES_PER_PARTICIPANT_V1,
+  GAME_MAX_RESOURCE_PARTICIPANTS_V1,
+  GAME_MAX_RESOURCE_RECORDS_V1,
+  GAME_RESOURCE_MAX_NFT_ID_BYTES_V1,
+  GAME_RESOURCE_MAX_ACCOUNT_ID_BYTES_V1,
+  GAME_RESOURCE_MAX_CLAUSE_BYTES_V1,
+  GAME_RESOURCE_MAX_SET_BYTES_V1,
+  encodeGameResourceValueV1,
+  decodeGameResourceValueV1,
+  validateGameResourceClausesV1,
+  validateGameResourceRequirementsV1,
+  matchGameResourceRequirementsV1,
+  validateGameResourceReservationSetV1,
+  validateGameResourceRecordsV1,
+} from "./game-resources.js";
 import type { GameResourceReservationClauseV1, GameResourceReturnPolicyV1, GameResourceReservationRecordV1 } from "./game-resources.js";
 import type { NetworkId } from './index.js';
 export type GameInstructionNameV1 = 'OpenGameSessionV1' | 'JoinGameSessionV1' | 'StartGameSessionV1' | 'CommitGameCheckpointV1' | 'ChallengeGameSessionV1' | 'CommitGameInputsV1' | 'RevealGameInputsV1' | 'AdvanceGameDeadlineV1' | 'SettleGameSessionV1' | 'ExpireGameSessionV1' | 'ClaimGamePayoutV1' | 'StakeGameItemV1' | 'RegisterExecutionProofProfileV1' | 'VerifyExecutionProofV1';

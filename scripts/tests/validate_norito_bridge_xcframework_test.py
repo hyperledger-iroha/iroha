@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import plistlib
 import re
+import shutil
 import sys
 import tempfile
 import types
@@ -17,6 +18,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = ROOT
 SCRIPT = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SPEC = importlib.util.spec_from_file_location("validate_norito_bridge_xcframework", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
@@ -28,6 +30,35 @@ SPEC.loader.exec_module(validator)
 class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
+        # Model the reviewed source independently of the host checkout. The
+        # selected external graph and artifacts remain siblings even when tests
+        # run under checkout-local TMPDIR; no release path guard is mocked.
+        source_root = Path(self.temporary.name).resolve() / "reviewed-source"
+        for relative in (
+            "scripts/norito_bridge_source_seal.py",
+            "scripts/run_mobile_hermetic_command.py",
+            "scripts/build_norito_xcframework.sh",
+            "scripts/check_mobile_sdk_artifacts.sh",
+            "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+            "crates/connect_norito_bridge/include/NoritoBridge.h",
+            "crates/connect_norito_bridge/module.modulemap.template",
+            "crates/connect_norito_bridge/src/lib.rs",
+            "crates/iroha_data_model/src/privacy/protocol.rs",
+        ):
+            destination = source_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPOSITORY_ROOT / relative, destination)
+        graph = b'version = 4\n\n[[package]]\nname = "validator-fixture"\nversion = "0.0.0"\n'
+        (source_root / "Cargo.lock").write_bytes(graph)
+        graph_owner = source_root / "ci/privacy_sdk_cargo_lockfile.sh"
+        graph_owner.parent.mkdir()
+        graph_owner.write_text(
+            'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n"'
+            + hashlib.sha256(graph).hexdigest() + '"\n', encoding="utf-8",
+        )
+        source_context = mock.patch.object(sys.modules[__name__], "ROOT", source_root)
+        source_context.start()
+        self.addCleanup(source_context.stop)
         self.artifact_root = Path(self.temporary.name).resolve() / "artifact"
         self.xcframework = self.artifact_root / "NoritoBridge.xcframework"
         self.xcframework.mkdir(parents=True)
@@ -193,7 +224,9 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def validate(self, lockfile: Path = ROOT / "Cargo.lock") -> None:
+    def validate(self, lockfile: Path | None = None) -> None:
+        if lockfile is None:
+            lockfile = ROOT / "Cargo.lock"
         validator.validate(
             root=ROOT,
             lockfile_path=lockfile,
@@ -298,6 +331,27 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self.write_manifest()
         with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
             self.validate()
+
+    def test_rejects_manifest_missing_top_up_request_binding(self) -> None:
+        self.payload["required_symbols"] = [symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+            if symbol != "connect_norito_kagemusha_top_up_signed_request_validate_v1"]
+        self.write_manifest()
+        with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+            self.validate()
+
+    def test_rejects_manifests_missing_either_reserve_finality_export(self) -> None:
+        for missing in (
+            "connect_norito_kagemusha_reserve_finality_hint_v1",
+            "connect_norito_kagemusha_reserve_finality_verify_v1",
+        ):
+            with self.subTest(missing=missing):
+                self.payload["required_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                    if symbol != missing
+                ]
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                    self.validate()
 
     def test_repository_provenance_rejects_dirty_source_without_allowance(self) -> None:
         self.payload["source_tree_dirty"] = True

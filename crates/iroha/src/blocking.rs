@@ -108,7 +108,12 @@ struct RuntimeOwner {
 
 impl RuntimeOwner {
     fn new() -> crate::Result<Self> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        // Shared async clients can reuse HTTP connections opened by this facade
+        // from another runtime. Their I/O drivers must keep running between
+        // block_on calls; a current-thread runtime parks those drivers.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("iroha-sdk-blocking")
             .enable_all()
             .build()
             .map_err(|error| crate::Error::BlockingRuntimeConstruction {
@@ -123,7 +128,7 @@ impl RuntimeOwner {
 
     fn block_on<F: Future>(&self, future: F) -> std::result::Result<F::Output, BlockingCallError> {
         reject_inside_async_runtime()?;
-        // Tokio supports concurrent current-thread Runtime::block_on calls.
+        // Tokio supports concurrent Runtime::block_on calls.
         // A pending stream must not hold a lock over unrelated operations. This
         // borrow keeps the owner alive; only exclusive Drop takes the runtime.
         let runtime = self
@@ -148,6 +153,10 @@ impl Drop for RuntimeOwner {
 }
 
 /// Blocking client context backed by one reusable owned Tokio runtime.
+///
+/// One worker continues driving connections and tasks between blocking calls,
+/// including connections reused by the borrowed asynchronous client. This does
+/// not drive connections previously opened on another caller-owned runtime.
 #[derive(Clone, Debug)]
 pub struct Client {
     inner: AsyncClient,
@@ -821,6 +830,171 @@ mod tests {
             3,
             "one capability probe, one submission, and one status poll expected"
         );
+    }
+
+    #[test]
+    fn borrowed_async_client_reuses_keepalive_connection_between_blocking_calls() {
+        use std::{
+            io::{self, Read, Write},
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let mut config = config_factory();
+        config.torii_api_url = format!(
+            "http://{}/",
+            listener.local_addr().expect("listener address")
+        )
+        .parse()
+        .expect("loopback URL");
+        config.torii_request_timeout = Duration::from_secs(2);
+        let client = Client::new(config).expect("blocking client");
+        let external = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("external async runtime");
+        let server = std::thread::spawn(move || -> io::Result<usize> {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Err(io::ErrorKind::TimedOut.into());
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            stream.set_nonblocking(true)?;
+            let mut requests = 0;
+            for _ in 0..2 {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    if Instant::now() >= deadline {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    let mut byte = [0_u8; 1];
+                    match stream.read(&mut byte) {
+                        Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                        Ok(_) => headers.push(byte[0]),
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    if headers.len() > 16 * 1024 {
+                        return Err(io::ErrorKind::InvalidData.into());
+                    }
+                }
+                assert!(headers.starts_with(b"GET /v1/node/capabilities HTTP/1.1\r\n"));
+                requests += 1;
+                stream.set_nonblocking(false)?;
+                stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+                // A complete non-success response keeps compatibility uncached
+                // while allowing the drained connection to return to the pool.
+                stream.write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n",
+                )?;
+                stream.set_nonblocking(true)?;
+            }
+            Ok(requests)
+        });
+
+        let blocking_result = client.refresh_capabilities();
+        let async_result = external.block_on(client.client().refresh_capabilities());
+        let requests = server.join().expect("loopback server joined");
+        for response in [blocking_result, async_result] {
+            let error = response.expect_err("server returns a deliberate HTTP rejection");
+            let probe = error
+                .downcast_ref::<crate::client::CapabilityProbeError>()
+                .expect("typed capability probe error");
+            assert!(
+                probe.details().contains("503 Service Unavailable"),
+                "request must receive the server response, not a transport timeout: {probe}"
+            );
+        }
+        assert_eq!(
+            requests.expect("both requests reach the original connection"),
+            2,
+            "the borrowed async client must reuse the live pooled connection"
+        );
+    }
+
+    #[test]
+    fn background_tasks_progress_with_a_clone_and_cancel_after_final_owner_drop() {
+        use std::{sync::mpsc, time::Duration};
+
+        struct NotifyDrop(mpsc::Sender<()>);
+        impl Drop for NotifyDrop {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+
+        let (client, _, _) = accepting_client();
+        let clone = client.clone();
+        assert!(Arc::ptr_eq(&client.runtime, &clone.runtime));
+        let owner = Arc::downgrade(&client.runtime);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let task = client
+            .runtime
+            .block_on(async move {
+                let task = tokio::spawn(async move {
+                    let _notify_drop = NotifyDrop(dropped_tx);
+                    started_tx.send(()).expect("report task started");
+                    release_rx.await.expect("release background task");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    progress_tx.send(()).expect("report background progress");
+                    std::future::pending::<()>().await;
+                });
+                started_rx.await.expect("background task started");
+                task
+            })
+            .expect("start on the owned runtime");
+        drop(client);
+        assert!(owner.upgrade().is_some(), "clone retains the same runtime");
+        release_tx.send(()).expect("release after block_on returns");
+        progress_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the owned worker must drive tasks and timers between calls");
+        assert!(matches!(
+            dropped_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        let external = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("external async runtime");
+        let completion = external.block_on(async {
+            // Final-owner drop must also remain safe inside another runtime.
+            drop(clone);
+            tokio::time::timeout(Duration::from_secs(2), task).await
+        });
+        assert!(
+            owner.upgrade().is_none(),
+            "the final runtime owner was released"
+        );
+        assert!(
+            completion
+                .expect("shutdown cancels the background task promptly")
+                .expect_err("pending task must be cancelled")
+                .is_cancelled()
+        );
+        dropped_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("shutdown drops the pending task and releases its resources");
     }
 
     #[tokio::test]

@@ -104,6 +104,34 @@ def test_ast_reader_authenticates_the_same_inventory_as_checker_bootstrap() -> N
     assert manifest == checker_bootstrap()["_REVIEWED_RUST_INCLUDE_MANIFESTS"]
 
 
+@pytest.mark.parametrize(
+    "owner",
+    [
+        "crates/iroha_core/src/block.rs",
+        "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+    ],
+)
+def test_inventory_matches_live_reviewed_rust_closure(
+    owner: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merged includes in reviewed ledger owners must remain inventoried."""
+    monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
+    module = reader()
+    assert module._CANONICAL_REVIEWED_RUST_INCLUDE_MANIFEST_ERRORS == []
+    errors: list[str] = []
+    closure = module._resolve_reviewed_rust_source(
+        ROOT, owner, "live reviewed ledger owner", errors
+    )
+    assert errors == []
+    assert closure is not None
+    parent = Path(owner)
+    assert tuple(
+        edge.provider.relative_to(parent.parent).as_posix()
+        for edge in closure.provenance
+        if edge.parent == parent
+    ) == module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+
+
 def test_inventory_bootstrap_rejects_missing_or_symlinked_owner(tmp_path: Path) -> None:
     """The existing regular-file loader remains the only execution path."""
     checker = tmp_path / CHECKER.name

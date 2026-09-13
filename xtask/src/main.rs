@@ -5919,7 +5919,7 @@ where
                         } else {
                             Some(fastpq::StageKind::from_str(&value).ok_or_else(|| {
                                 format!(
-                                    "invalid --operation `{value}`: expected fft, ifft, lde, poseidon_hash_columns, poseidon_merkle_pairs, bn254_poseidon_words, or all"
+                                    "invalid --operation `{value}`: expected fft, ifft, lde, digest384_trace_columns, digest384_merkle_pairs, bn254_poseidon_words, or all"
                                 )
                             })?)
                         };
@@ -5955,13 +5955,14 @@ where
                             format!("invalid --require-lde-mean-ms `{value}`: {err}")
                         })?;
                     }
-                    "--require-poseidon-mean-ms" => {
+                    "--require-digest384-mean-ms" => {
                         let Some(value) = pending.next() else {
-                            return Err("expected value after --require-poseidon-mean-ms".into());
+                            return Err("expected value after --require-digest384-mean-ms".into());
                         };
-                        options.require_poseidon_mean_ms = value.parse::<f64>().map_err(|err| {
-                            format!("invalid --require-poseidon-mean-ms `{value}`: {err}")
-                        })?;
+                        options.require_digest384_mean_ms =
+                            value.parse::<f64>().map_err(|err| {
+                                format!("invalid --require-digest384-mean-ms `{value}`: {err}")
+                            })?;
                     }
                     "--label" => {
                         let Some(spec) = pending.next() else {

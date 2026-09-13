@@ -163,6 +163,7 @@ struct FakeRuntime {
     reserved_body_available: Option<BodyAvailableReservation>,
     decided_body: Option<DurableDecision>,
     durable_body_authority_certificate: Option<wire::QuorumCertificate>,
+    current_prepare_authority_certificate: Option<wire::QuorumCertificate>,
     decision_on_next_step: Option<DurableDecision>,
     round_tag: Option<EventTag>,
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
@@ -598,6 +599,11 @@ impl EffectRuntime for FakeRuntime {
         &self,
     ) -> Result<Option<wire::QuorumCertificate>, String> {
         Ok(self.durable_body_authority_certificate.clone())
+    }
+    fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        Ok(self.current_prepare_authority_certificate.clone())
     }
     fn reserve_body_available(
         &mut self,

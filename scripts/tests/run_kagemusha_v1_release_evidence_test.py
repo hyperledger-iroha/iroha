@@ -898,6 +898,190 @@ class KagemushaReleaseEvidenceRunnerTests(unittest.TestCase):
         finally:
             os.close(descriptor)
 
+    def test_command_deadline_rechecks_wait4_before_success_admission(self) -> None:
+        cases = [
+            (0.999, 0, True),
+            (0.999, 17, True),
+            (1.0, 0, True),
+            (2.0, 0, True),
+            (2.0, 17, True),
+            (1.0, None, False),
+        ]
+        for index, (observed_at, child_code, completed) in enumerate(cases):
+            with self.subTest(observed_at=observed_at, child_code=child_code):
+                clock = [0.0]
+                polls = [0]
+                process = types.SimpleNamespace(pid=500, returncode=None)
+                usage = types.SimpleNamespace(ru_utime=0.01, ru_stime=0.01, ru_maxrss=4096)
+
+                def launch(*_args: object, **kwargs: object) -> object:
+                    os.write(kwargs["stdout"], b"actual observed stdout\n")
+                    os.write(kwargs["stderr"], b"actual observed stderr\n")
+                    return process
+
+                def wait4(pid: int, flags: int) -> tuple[object, ...]:
+                    self.assertEqual((pid, flags), (process.pid, os.WNOHANG))
+                    polls[0] += 1
+                    if polls[0] == 1:
+                        return (0, 0, None)
+                    # Even the completion observation itself can cross the
+                    # deadline; checking only a preceding loop time is stale.
+                    clock[0] = observed_at
+                    if completed:
+                        return (process.pid, child_code << 8, usage)
+                    return (0, 0, None)
+
+                def terminate(child: object) -> None:
+                    self.assertIs(child, process)
+                    self.assertFalse(completed, "a reaped child must not be terminated or waited again")
+                    process.returncode = -RUNNER.signal.SIGTERM
+                    process._kagemusha_usage = usage
+
+                stdout_path = self.temp / f"deadline-{index}.stdout"
+                stderr_path = self.temp / f"deadline-{index}.stderr"
+                with (
+                    mock.patch.object(RUNNER.subprocess, "Popen", side_effect=launch),
+                    mock.patch.object(RUNNER.os, "wait4", side_effect=wait4),
+                    mock.patch.object(RUNNER.time, "monotonic", side_effect=lambda: clock[0]),
+                    mock.patch.object(RUNNER.time, "sleep"),
+                    mock.patch.object(RUNNER, "_terminate_process_group", side_effect=terminate) as stop,
+                    mock.patch.object(RUNNER, "_quiesce_process_group") as quiesce,
+                    mock.patch.object(RUNNER.os, "kill", side_effect=AssertionError("no real signal")),
+                    mock.patch.object(RUNNER.os, "killpg", side_effect=AssertionError("no real signal")),
+                ):
+                    def run() -> object:
+                        return RUNNER._run_process(
+                            RUNNER.RESOLVED_PYTHON,
+                            [],
+                            cwd=self.temp,
+                            stdout_path=stdout_path,
+                            stderr_path=stderr_path,
+                            timeout_ms=1_000,
+                            transcript_limit=1024,
+                            require_nonempty_streams=True,
+                        )
+
+                    if observed_at >= 1.0:
+                        with self.assertRaisesRegex(RUNNER.KagemushaRunnerError, "exceeded its timeout"):
+                            run()
+                    else:
+                        result = run()
+                        self.assertEqual(result.exit_code, child_code)
+                        self.assertEqual(result.duration_ms, 999)
+                        self.assertEqual(result.stdout, RUNNER.stable_hash_path(stdout_path))
+                        self.assertEqual(result.stderr, RUNNER.stable_hash_path(stderr_path))
+                    self.assertEqual(polls[0], 2)
+                    self.assertEqual(stop.call_count, int(not completed))
+                    quiesce.assert_called_once_with(process.pid)
+
+    def test_command_deadline_includes_quiescence_and_final_transcript_capture(self) -> None:
+        stages = (
+            "quiesce",
+            "stdout_fsync",
+            "stderr_fsync",
+            "stdout_capture",
+            "stderr_capture",
+            "final_clock",
+        )
+        for stage_index, stage in enumerate(stages):
+            for time_index, observed_at in enumerate((0.999, 1.0, 2.0)):
+                for child_code in (0, 17):
+                    with self.subTest(stage=stage, observed_at=observed_at, child_code=child_code):
+                        clock = [0.0]
+                        captured = [False]
+                        descriptors: dict[str, int] = {}
+                        process = types.SimpleNamespace(pid=500, returncode=None)
+                        usage = types.SimpleNamespace(ru_utime=0.01, ru_stime=0.01, ru_maxrss=4096)
+                        suffix = f"{stage_index}-{time_index}-{child_code}"
+                        stdout_path = self.temp / f"capture-deadline-{suffix}.stdout"
+                        stderr_path = self.temp / f"capture-deadline-{suffix}.stderr"
+                        stable_capture = RUNNER._stable_transcript_from_fd
+                        real_fsync = RUNNER.os.fsync
+
+                        def launch(*_args: object, **kwargs: object) -> object:
+                            for stream in ("stdout", "stderr"):
+                                descriptors[stream] = kwargs[stream]
+                                os.write(descriptors[stream], f"actual {stream}\n".encode())
+                            return process
+
+                        def wait4(pid: int, flags: int) -> tuple[object, ...]:
+                            self.assertEqual((pid, flags), (process.pid, os.WNOHANG))
+                            clock[0] = 0.5
+                            return (process.pid, child_code << 8, usage)
+
+                        def quiesce(group: int) -> None:
+                            self.assertEqual(group, process.pid)
+                            if stage == "quiesce":
+                                clock[0] = observed_at
+
+                        def sync(descriptor: int) -> None:
+                            real_fsync(descriptor)
+                            for stream, output_fd in descriptors.items():
+                                if descriptor == output_fd and stage == f"{stream}_fsync":
+                                    clock[0] = observed_at
+
+                        def capture(descriptor: int, path: Path, **kwargs: object) -> object:
+                            result = stable_capture(descriptor, path, **kwargs)
+                            stream = "stdout" if path == stdout_path else "stderr"
+                            if stage == f"{stream}_capture":
+                                clock[0] = observed_at
+                            if stream == "stderr":
+                                captured[0] = True
+                            return result
+
+                        def monotonic() -> float:
+                            if stage == "final_clock" and captured[0]:
+                                clock[0] = observed_at
+                            return clock[0]
+
+                        with (
+                            mock.patch.object(RUNNER.subprocess, "Popen", side_effect=launch),
+                            mock.patch.object(RUNNER.os, "wait4", side_effect=wait4) as wait,
+                            mock.patch.object(RUNNER.time, "monotonic", side_effect=monotonic),
+                            mock.patch.object(RUNNER.time, "sleep"),
+                            mock.patch.object(RUNNER, "_quiesce_process_group", side_effect=quiesce) as drain,
+                            mock.patch.object(RUNNER.os, "fsync", side_effect=sync),
+                            mock.patch.object(RUNNER, "_stable_transcript_from_fd", side_effect=capture),
+                            mock.patch.object(RUNNER, "_terminate_process_group", side_effect=AssertionError("no live child")),
+                            mock.patch.object(RUNNER.os, "kill", side_effect=AssertionError("no real signal")),
+                            mock.patch.object(RUNNER.os, "killpg", side_effect=AssertionError("no real signal")),
+                        ):
+                            def run() -> object:
+                                return RUNNER._run_process(
+                                    RUNNER.RESOLVED_PYTHON,
+                                    [],
+                                    cwd=self.temp,
+                                    stdout_path=stdout_path,
+                                    stderr_path=stderr_path,
+                                    timeout_ms=1_000,
+                                    transcript_limit=1024,
+                                    require_nonempty_streams=True,
+                                )
+
+                            if observed_at >= 1.0:
+                                with self.assertRaisesRegex(RUNNER.KagemushaRunnerError, "exceeded its timeout"):
+                                    run()
+                            else:
+                                result = run()
+                                self.assertEqual(result.exit_code, child_code)
+                                self.assertEqual(result.duration_ms, 999)
+                                self.assertEqual(result.stdout, RUNNER.stable_hash_path(stdout_path))
+                                self.assertEqual(result.stderr, RUNNER.stable_hash_path(stderr_path))
+                            wait.assert_called_once_with(process.pid, os.WNOHANG)
+                            drain.assert_called_once_with(process.pid)
+                            self.assertTrue(captured[0])
+
+    def test_quiescing_an_empty_group_never_sends_termination_signals(self) -> None:
+        calls: list[tuple[int, int]] = []
+
+        def absent_group(group: int, number: int) -> None:
+            calls.append((group, number))
+            raise ProcessLookupError()
+
+        with mock.patch.object(RUNNER.os, "killpg", side_effect=absent_group):
+            RUNNER._quiesce_process_group(500)
+        self.assertEqual(calls, [(500, 0)])
+
     @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX process groups")
     def test_real_process_capture_stops_background_descendants(self) -> None:
         marker = self.temp / "escaped-child.marker"

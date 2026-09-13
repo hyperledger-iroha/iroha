@@ -4,9 +4,9 @@ This source-checkout directory hosts JavaScript snippets that illustrate common
 `@iroha/iroha-js` workflows. Each example favours deterministic Norito payloads
 and mirrors the validation logic exported by the SDK. The portable registry
 tarball includes only `iso_bridge_builder.mjs` and `nexus_app_transfer.mjs`;
-examples that require the Cargo workspace, verified native host, credentials,
-or a live Torii endpoint remain source-checkout tools and declare those
-prerequisites below.
+examples that require a source checkout, credentials, or a live Torii endpoint
+are identified below. The Nexus recipe requires the verified native host even
+when installed from that tarball.
 
 ## batching.mjs
 
@@ -31,21 +31,24 @@ transactions on a live network.
 
 ## nexus_app_transfer.mjs
 
-- Runs the Nexus App facade from approval through canonical browser-codec
+- Runs the Nexus App facade from approval through canonical native-codec
   finalization, Torii submission, and exact state-resolved Applied finality.
-- Uses deterministic fake Connect and Torii dependencies so the installed
-  recipe is runnable offline while still checking the canonical payload and
-  signed-transaction hashes.
+- Requires Node and the SDK's verified native binding for account validation
+  and canonical transaction encoding. Missing bindings reject the operation
+  before wallet signing or submission.
+- Uses deterministic fake Connect and Torii dependencies to check the exact
+  payload and signed-transaction hashes without network requests.
 
-Run with:
+From a source checkout, run:
 
 ```bash
 npm install
+npm run build:native
 node ./recipes/nexus_app_transfer.mjs
 ```
 
-Browser applications can omit the fakes and configure `NexusAppClient` with a
-Connect base URL and Torii base URL to use its built-in browser paths.
+For an installed package, install its matching verified platform binding before
+running this recipe. The portable tarball alone does not supply native codecs.
 
 ## nft_account_iteration.mjs
 

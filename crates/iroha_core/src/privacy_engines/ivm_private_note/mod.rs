@@ -7,7 +7,7 @@
 //! - membership in the ledger's exact depth-32 proof-managed SHA-256 tree;
 //! - checked 128-bit value conservation;
 //! - deterministic program execution; and
-//! - a transparent Goldilocks STARK with SHA-256 Merkle commitments and binary
+//! - a transparent Goldilocks STARK with six-lane Poseidon-x7 Merkle commitments and binary
 //!   FRI whose public-input transcript commits the canonical statement and the
 //!   exact typed chain, genesis, action, and governed-artifact consensus
 //!   binding.

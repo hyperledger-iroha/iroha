@@ -133,7 +133,6 @@ pub fn default_manifest() -> ComputeManifest {
             .expect("default compute namespace"),
         abi_version: ComputeManifest::ABI_VERSION,
         sandbox: ComputeSandboxRules {
-            mode: compute_defaults::sandbox_rules().mode,
             randomness: compute_defaults::sandbox_rules().randomness,
             storage: compute_defaults::sandbox_rules().storage,
             deny_nondeterministic_syscalls: true,

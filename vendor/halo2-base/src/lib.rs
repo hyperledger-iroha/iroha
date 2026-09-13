@@ -366,9 +366,7 @@ static PACKED_BITS_TRUE: bool = true;
 /// preventing those logarithmic growth buffers from accumulating.
 pub(crate) fn release_large_vec_reallocation_slack<T>(old_capacity: usize, new_capacity: usize) {
     if new_capacity > old_capacity
-        && old_capacity
-            .checked_mul(std::mem::size_of::<T>())
-            .unwrap_or(usize::MAX)
+        && old_capacity.saturating_mul(std::mem::size_of::<T>())
             >= LARGE_VEC_REALLOCATION_RELIEF_BYTES
     {
         #[cfg(all(feature = "halo2-axiom", not(feature = "cuda")))]
@@ -398,19 +396,10 @@ fn compact_advice_zero_mask_len(advice_len: usize) -> usize {
 /// the sequence never relocates previously written bits. Logical ordering and
 /// the `len`, `get`, `set`, `resize`, indexing, and iteration behavior used by
 /// halo2-base selectors match a `Vec<bool>`.
-#[derive(Eq, PartialEq)]
+#[derive(Default, Eq, PartialEq)]
 pub struct SegmentedBits {
     segments: Vec<Vec<u8>>,
     len: usize,
-}
-
-impl Default for SegmentedBits {
-    fn default() -> Self {
-        Self {
-            segments: Vec::new(),
-            len: 0,
-        }
-    }
 }
 
 impl Clone for SegmentedBits {
@@ -747,123 +736,14 @@ impl<'a> Iterator for SegmentedBitsIter<'a> {
 impl ExactSizeIterator for SegmentedBitsIter<'_> {}
 impl std::iter::FusedIterator for SegmentedBitsIter<'_> {}
 
-/// Fixed-capacity numerator segments that never relocate earlier field values.
-///
-/// A single exponentially growing `Vec<F>` must relocate its entire initialized
-/// prefix when its capacity doubles. Keeping every segment at 65,536 entries
-/// bounds each allocation to 2 MiB for the reviewed 32-byte Pasta fields while
-/// retaining checked constant-time indexing and exact insertion order.
-struct SegmentedNumerators<F: ScalarField> {
-    segments: Vec<Vec<F>>,
-    len: usize,
-}
-
-impl<F: ScalarField> Default for SegmentedNumerators<F> {
-    fn default() -> Self {
-        Self {
-            segments: Vec::new(),
-            len: 0,
-        }
-    }
-}
-
-impl<F: ScalarField> Clone for SegmentedNumerators<F> {
-    fn clone(&self) -> Self {
-        let mut segments = Vec::with_capacity(self.segments.len());
-        for source in &self.segments {
-            let mut segment = Vec::with_capacity(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN);
-            segment.extend_from_slice(source);
-            segments.push(segment);
-        }
-        Self {
-            segments,
-            len: self.len,
-        }
-    }
-}
-
-impl<F: ScalarField> SegmentedNumerators<F> {
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn location(index: usize) -> (usize, usize) {
-        (
-            index / COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN,
-            index % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN,
-        )
-    }
-
-    /// Allocates the next fixed segment, when needed, without changing the
-    /// logical sequence. The caller can therefore finish every other reserve
-    /// before committing a multi-vector advice push.
-    fn prepare_push(&mut self) -> Option<Vec<F>> {
-        if self.len % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN != 0 {
-            return None;
-        }
-        self.segments.reserve(1);
-        Some(Vec::with_capacity(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN))
-    }
-
-    fn push_prepared(&mut self, value: F, prepared: Option<Vec<F>>) {
-        let new_len = self
-            .len
-            .checked_add(1)
-            .expect("SegmentedNumerators length overflow");
-        if let Some(mut segment) = prepared {
-            debug_assert_eq!(self.len % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, 0);
-            debug_assert_eq!(segment.len(), 0);
-            debug_assert!(segment.capacity() >= COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN);
-            segment.push(value);
-            self.segments.push(segment);
-        } else {
-            debug_assert_ne!(self.len % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, 0);
-            let segment = self
-                .segments
-                .last_mut()
-                .expect("SegmentedNumerators lost its live tail segment");
-            debug_assert!(segment.len() < COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN);
-            segment.push(value);
-        }
-        self.len = new_len;
-    }
-
-    fn get(&self, index: usize) -> Option<&F> {
-        if index >= self.len {
-            return None;
-        }
-        let (segment, offset) = Self::location(index);
-        self.segments.get(segment)?.get(offset)
-    }
-
-    fn get_mut(&mut self, index: usize) -> Option<&mut F> {
-        if index >= self.len {
-            return None;
-        }
-        let (segment, offset) = Self::location(index);
-        self.segments.get_mut(segment)?.get_mut(offset)
-    }
-
-    fn checked_capacity(&self) -> Option<usize> {
-        self.segments.iter().try_fold(0_usize, |total, segment| {
-            total.checked_add(segment.capacity())
-        })
-    }
-
-    fn segment_count(&self) -> usize {
-        self.segments.len()
-    }
-
-    fn wipe(&mut self) {
-        for segment in &mut self.segments {
-            segment.fill(F::ZERO);
-        }
-    }
-}
+mod compact_advice_numerators;
+pub use compact_advice_numerators::AdviceNumeratorStorage;
+use compact_advice_numerators::{SegmentedNumerators, SegmentedNumeratorsIter};
 
 /// Memory-dense storage for the exact [`Assigned`] values in a [`Context`].
 ///
-/// Numerators and trivial values share fixed-capacity field segments. `Zero`
+/// Numerators and trivial values share fixed logical segments, with zero/one
+/// numerator compression in completed segments and one dense active tail. `Zero`
 /// variants are marked in a packed bit mask, while sorted sparse positions pair
 /// exactly with rational denominators; an unmarked position is `Trivial`.
 /// Random reconstruction is O(log R), where R is the number of rational values,
@@ -961,7 +841,7 @@ impl<F: ScalarField> CompactAdvice<F> {
     }
 
     fn get(&self, index: usize) -> Option<Assigned<F>> {
-        let numerator = *self.numerators.get(index)?;
+        let numerator = self.numerators.get(index)?;
         let position = compact_advice_position(index);
         let is_zero = self.is_zero(index);
         if is_zero {
@@ -998,6 +878,7 @@ impl<F: ScalarField> CompactAdvice<F> {
     fn iter(&self) -> CompactAdviceIter<'_, F> {
         CompactAdviceIter {
             advice: self,
+            numerators: self.numerators.iter(),
             position: 0,
             rational_index: 0,
         }
@@ -1047,6 +928,9 @@ impl<F: ScalarField> CompactAdvice<F> {
             "advice replacement offset is out of bounds"
         );
         let position = compact_advice_position(index);
+        // A tagged numerator may need a dense expansion. Finish that allocation
+        // while exact rational positions and denominators are still untouched.
+        self.numerators.prepare_replacement(index);
         if let Ok(rational_index) = self.rational_positions.binary_search(&position) {
             let old_len = self.denominators.len();
             debug_assert_eq!(old_len, self.rational_positions.len());
@@ -1056,10 +940,7 @@ impl<F: ScalarField> CompactAdvice<F> {
             let _ = self.denominators.pop();
             self.rational_positions.remove(rational_index);
         }
-        *self
-            .numerators
-            .get_mut(index)
-            .expect("validated advice replacement offset must exist") = value;
+        self.numerators.replace_prepared(index, value);
         self.set_zero(index, false);
     }
 
@@ -1076,6 +957,7 @@ impl<F: ScalarField> CompactAdvice<F> {
 /// Sequential exact decoder for [`CompactAdvice`].
 struct CompactAdviceIter<'a, F: ScalarField> {
     advice: &'a CompactAdvice<F>,
+    numerators: SegmentedNumeratorsIter<'a, F>,
     position: usize,
     rational_index: usize,
 }
@@ -1084,7 +966,7 @@ impl<F: ScalarField> Iterator for CompactAdviceIter<'_, F> {
     type Item = Assigned<F>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let Some(&numerator) = self.advice.numerators.get(self.position) else {
+        let Some(numerator) = self.numerators.next() else {
             assert_eq!(
                 self.rational_index,
                 self.advice.rational_positions.len(),
@@ -1138,9 +1020,9 @@ impl<F: ScalarField> std::iter::FusedIterator for CompactAdviceIter<'_, F> {}
 #[cfg(test)]
 mod compact_advice_tests {
     use super::{
-        compact_advice_position, compact_advice_zero_mask_len, AssignedValue, CompactAdvice,
-        Context, SegmentedBits, COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, FIRST_PHASE_CELL_TYPE_ID,
-        PACKED_BITS_SEGMENT_LEN,
+        AssignedValue, COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, CompactAdvice, Context,
+        FIRST_PHASE_CELL_TYPE_ID, PACKED_BITS_SEGMENT_LEN, SegmentedBits, compact_advice_position,
+        compact_advice_zero_mask_len,
     };
     use crate::ff::Field as _;
     use crate::gates::flex_gate::threads::SinglePhaseCoreManager;
@@ -1635,9 +1517,11 @@ mod compact_advice_tests {
         let prepared = bits.prepare_push();
         assert_eq!(bits.len(), 0);
         assert!(bits.segments.is_empty());
-        assert!(prepared
-            .as_ref()
-            .is_some_and(|segment| segment.capacity() >= super::PACKED_BITS_SEGMENT_BYTES));
+        assert!(
+            prepared
+                .as_ref()
+                .is_some_and(|segment| segment.capacity() >= super::PACKED_BITS_SEGMENT_BYTES)
+        );
         bits.push_prepared(true, prepared);
         assert_eq!(bits.len(), 1);
         assert!(bits[0]);
@@ -1856,13 +1740,21 @@ impl<F: ScalarField> Context<F> {
         self.advice.rational_position_slots_len()
     }
 
-    /// Returns capacities for numerator entries, zero-mask bytes, rational
-    /// positions, and rational denominators, in that order.
+    /// Returns capacities for retained numerator field slots, zero-mask bytes,
+    /// rational positions, and rational denominators, in that order.
+    ///
+    /// Implicit zero/one numerators are not retained field slots. Tags, rank
+    /// checkpoints and segment headers are reported by `advice_numerator_storage`.
     pub fn advice_storage_capacities(&self) -> [usize; 4] {
         self.advice.capacities()
     }
 
-    /// Returns the number of fixed-capacity numerator segments.
+    /// Returns exact numerator slot, metadata and transition allocation counts.
+    pub fn advice_numerator_storage(&self) -> AdviceNumeratorStorage {
+        self.advice.numerators.storage()
+    }
+
+    /// Returns the number of fixed-logical-length numerator segments.
     pub fn advice_numerator_segment_count(&self) -> usize {
         self.advice.numerator_segment_count()
     }

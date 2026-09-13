@@ -351,9 +351,8 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
             "producer_claim.permits_decided_lane_recovery_ingress()",
         ],
     );
-    // Validate-sidecar recovery has a distinct earlier, typed drain. Check the
-    // Apply-owned path inside its own permit branch rather than matching that
-    // other drain's first occurrence in the whole Completion barrier.
+    // The Validate-sidecar pacemaker branch has its own decided recovery permit
+    // and drain. Apply ordering must be checked within the Apply-owned branch.
     let apply_recovery = source_region(
         barrier,
         "if producer_claim.permits_decided_lane_recovery_ingress() {",
@@ -362,9 +361,10 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
     assert_source_tokens_in_order(
         apply_recovery,
         &[
+            ".decided_lane_recovery_permit()",
             "settle_apply_barrier_runner_decision_handoff(",
             "reconcile_terminal_lane_output_handoffs(",
-            "producer_claim.permits_open_decided_lane_recovery_ingress()",
+            "if producer_claim.permits_open_decided_lane_recovery_ingress() {",
             "drain_decided_lane_recovery_ingress(",
         ],
     );

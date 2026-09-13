@@ -53,9 +53,10 @@ new patches follow the same default gates.
 - `make check-todo-guard` (or `ci/check_todo_guard.sh`) fails when TODO markers
   disappear without accompanying docs/tests changes. Add or update coverage
   when resolving a TODO, or set `TODO_GUARD_ALLOW=1` for intentional removals.
-- `make check-std-only` (or `ci/check_std_only.sh`) blocks `no_std`/`wasm32`
-  cfgs so the workspace stays `std`-only. Set `STD_ONLY_GUARD_ALLOW=1` only for
-  sanctioned CI experiments.
+- `make check-std-only` (or `ci/check_std_only.sh`) checks the complete current
+  source tree, including unstaged and nonignored new files, for Wasm/WASI
+  build/runtime support, WebAssembly artifacts, and `no_std` crate attributes.
+  IVM is the only Iroha VM. This gate has no environment override.
 - `make check-status-sync` (or `ci/check_status_sync.sh`) keeps the roadmap open
   section free of completed items and requires `roadmap.md`/`status.md` to
   change together so plan/status stay aligned; set

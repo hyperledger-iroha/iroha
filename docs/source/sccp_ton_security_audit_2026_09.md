@@ -48,11 +48,17 @@ and [`ShardIdent::pack/unpack`](https://github.com/ton-blockchain/ton/blob/maste
 - Final combined run of the six original builder/golden/release/corridor files,
   the wire-inventory guard and contract-artifact suite: **459 passed, zero skips**,
   with `SCCP_RELEASE_RUST_VALIDATOR` selecting the freshly built normal executable.
-- `scripts/sccp_evm_contract_smoke.sh` passes with authenticated, pinned Solidity
-  0.7.4 EVM/TRON compiler artifacts and the refreshed artifact lock. The EVM
-  runtime verifies canonical Rust transfer vectors and rejects retired payload,
-  codec and TRON-domain aliases. TRON compilation/static checks and the separate
-  EVM compatibility harness pass; this run does not execute a TRON node.
+- The native compiler correction supersedes the earlier Solidity 0.7.4
+  compiler/artifact evidence: those target labels referred to one Ethereum
+  compiler, so they did not establish a distinct TRON build. The current policy
+  admits native Ethereum `0.7.6+commit.7338295f` and native TRON
+  `0.7.6+commit.d1802f25` separately. Both native macOS compilers executed
+  successfully through Rosetta on arm64; the refreshed production manifest,
+  complete EVM/native-TRON-static smoke, replay smoke, **112 Python checks**,
+  **5 native EDR checks**, **18 TVM receipt checks**, and both low-severity npm
+  audits pass. TRON alone accepts the `msg.tokenvalue` semantic probe. Linux
+  compiler downloads and executable digests were verified, but Linux execution
+  and actual TRE deployment remain unqualified by this run.
 - The release-corridor, cross-language wire-inventory and contract-artifact
   Python guard suites pass **81 tests**. The wire guard is included in the
   corridor's `evidence-scripts` phase.
@@ -78,13 +84,18 @@ and [`ShardIdent::pack/unpack`](https://github.com/ton-blockchain/ton/blob/maste
   all-package compile/test run. The source-closure guard detects modified,
   added, or symlinked definition inputs, and the actual vendor inventory was
   recomputed and compared successfully.
-- All **8 circuit profiles** have fresh constraint counts, canonical R1CS byte
-  lengths and SHA-256 identities after the wire fix. The source closure remained
+- Historical evidence before native-only vendor pruning: all **8 circuit
+  profiles** had measured constraint counts, canonical R1CS byte lengths and
+  SHA-256 identities after the wire fix. The source closure remained
   `2926b916e2e905126ad16157b907ac045280b75ded21d0050d5d5f7f36973318`
-  throughout the measurements. The manifest marks all identities current with
-  no pending profiles; final source-closure and inventory checks pass. All four
+  throughout those measurements. That manifest marked all identities current
+  with no pending profiles; its source-closure and inventory checks passed. All four
   message identities and the TRON epoch identity changed. The other three epoch
-  identities were recompiled and independently confirmed unchanged.
+  identities were recompiled and independently confirmed unchanged. The native-only
+  source closure is now `1cad4ed63aaa1d19c7fc158195078261287e28354a9bc4821028b22e330ce76e`;
+  all four message profiles were remeasured, and all four epoch profiles remain
+  explicitly pending in the checked-in constraint-count manifest. The historical
+  measurements do not establish current qualification.
 - Rustfmt checks for the native/parser and breaker-model files, Acton format
   checks, scoped whitespace checks, and `scripts/check_no_legacy_codec.sh`
   pass.

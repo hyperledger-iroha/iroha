@@ -31,7 +31,6 @@ import {
   LANE_PRIVACY_MERKLE_MAX_DEPTH,
   PROOF_BOX_MAX_ENCODED_BYTES,
   canonicalBase64DecodedLength,
-  canonicalizePrehashedBytes,
   isPortableVerifyingKeyIdField,
   laneMerkleLeafIndexFitsDepth,
   proofBoxFitsEncodedBudget,
@@ -142,13 +141,15 @@ const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
   "private_key_algorithm",
   "privateKeyAlgorithm",
 ]);
+// Match the native Norito JSON map's lexicographic key order so the embedded
+// public-input text is unchanged by canonical instruction encode/decode.
 const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
-  "root_hint",
-  "owner",
   "amount",
-  "duration_blocks",
   "direction",
+  "duration_blocks",
   "nullifier",
+  "owner",
+  "root_hint",
 ]);
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
@@ -1418,7 +1419,7 @@ function normalizeProofAttachment(value, name) {
           `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath[${index}]`,
         );
       }
-      return canonicalizePrehashedBytes(
+      return canonicalHashLiteral(
         normalizeFixedBytes(
           entry,
           `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath[${index}]`,
@@ -1433,8 +1434,9 @@ function normalizeProofAttachment(value, name) {
         `${name}${TEXT_LANE_PRIVACY_MERKLE}leafIndex`,
       );
     }
+    // Match the native LaneCommitmentId tuple and HashOf JSON literal owners.
     payload.lane_privacy = {
-      commitment_id: commitmentId,
+      commitment_id: [commitmentId],
       witness: {
         kind: "merkle",
         payload: {
@@ -3770,8 +3772,8 @@ export function buildExecuteTriggerInstruction(triggerOrOptions, args) {
  * @param {any} [args]
  * @returns {Buffer}
  */
-export function buildExecuteTriggerNorito(triggerOrOptions, args) {
-  return noritoEncodeInstruction(buildExecuteTriggerInstruction(triggerOrOptions, args));
+export function buildExecuteTriggerNorito(triggerOrOptions, networkPrefix, args) {
+  return noritoEncodeInstruction(buildExecuteTriggerInstruction(triggerOrOptions, args), networkPrefix);
 }
 
 /**
@@ -3880,8 +3882,8 @@ export function buildMultisigExecuteTriggerInstruction(options) {
  * @param {{ trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, signerAccountId?: string, multisigSpec?: MultisigSpec | object, spec?: MultisigSpec | object, strictSignerCheck?: boolean }} options
  * @returns {Buffer}
  */
-export function buildMultisigExecuteTriggerNorito(options) {
-  return noritoEncodeInstruction(buildMultisigExecuteTriggerInstruction(options));
+export function buildMultisigExecuteTriggerNorito(options, networkPrefix) {
+  return noritoEncodeInstruction(buildMultisigExecuteTriggerInstruction(options), networkPrefix);
 }
 
 /**
@@ -3984,8 +3986,8 @@ export function buildProposeMultisigExecuteTriggerInstruction(options) {
  * @param {{ accountId: string, trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, spec: MultisigSpec | object, signerAccountId?: string, strictSignerCheck?: boolean, transactionTtlMs?: number | null }} options
  * @returns {Buffer}
  */
-export function buildProposeMultisigExecuteTriggerNorito(options) {
-  return noritoEncodeInstruction(buildProposeMultisigExecuteTriggerInstruction(options));
+export function buildProposeMultisigExecuteTriggerNorito(options, networkPrefix) {
+  return noritoEncodeInstruction(buildProposeMultisigExecuteTriggerInstruction(options), networkPrefix);
 }
 
 function normalizeMultisigProposeInstructionInput(value, context) {

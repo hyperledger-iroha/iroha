@@ -32,10 +32,21 @@ fn ticket_signature_errors_preserve_owned_details_and_source() {
         source,
         &iroha_crypto::Error::Other("owned ticket verification detail".to_owned())
     );
+    let TicketSignatureError::Signature(owned) = &signature else {
+        panic!("signature error retains its owned crypto cause");
+    };
+    assert!(std::ptr::eq(source, owned.as_ref()));
+
+    let missing_signatory = TicketSignatureError::MissingIssuerSignatory;
+    assert_eq!(
+        missing_signatory.to_string(),
+        "ticket issuer account has no single signatory"
+    );
+    assert!(std::error::Error::source(&missing_signatory).is_none());
 }
 #[test]
 fn ticket_signature_error_fits_two_pointer_words() {
-    // Both error payloads remain out of line on 32-bit Wasm and native
+    // Both error payloads remain out of line on 32-bit and 64-bit native
     // targets, so either failure carries only a tag and an owned pointer.
     assert!(core::mem::size_of::<TicketSignatureError>() <= 2 * core::mem::size_of::<usize>());
 }

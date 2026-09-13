@@ -1212,6 +1212,11 @@ def _semantic_transition(data: Mapping[str, Any]) -> tuple[Any, ...]:
     return tuple(data[field] for field in TRANSITION_FIELDS if field not in {"latency_ms", "rss_bytes", "energy_millijoules"})
 
 
+def _durable_record(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Compare durable inbox/outbox identity without per-attempt resource samples."""
+    return {field: value for field, value in data.items() if field not in {"latency_ms", "rss_bytes"}}
+
+
 def _derive_checks(
     document: Mapping[str, Any],
     run: Mapping[str, Any],
@@ -1244,6 +1249,7 @@ def _derive_checks(
     if len(power_begins) != 3 or len(power_ends) != 3:
         _fail("commit, inbox, and outbox recovery each require one power-loss control cycle")
     boot_id = start["boot_id"]
+    seen_boot_ids = {boot_id}
     control_ids: set[str] = set()
     for label, begins, ends in (
         ("restart", restart_begins, restart_ends),
@@ -1259,8 +1265,12 @@ def _derive_checks(
                 or end["prior_boot_id"] != boot_id
             ):
                 _fail(f"{label} control cycle is replayed or not bound to the active hardware boot")
+            # Immediate continuity alone permits a cycle back to an earlier signed boot.
+            if end["new_boot_id"] in seen_boot_ids:
+                _fail(f"{label} control cycle must observe a fresh hardware boot identifier")
             control_ids.add(begin["control_id"])
             boot_id = end["new_boot_id"]
+            seen_boot_ids.add(boot_id)
 
     for original_kind, recovered_kind in (
         ("prepare", "recover_prepare"),
@@ -1348,9 +1358,9 @@ def _derive_checks(
     inbox_recovered = by_kind["inbox_recover"][0]["data"]
     outbox = by_kind["outbox_install"][0]["data"]
     outbox_recovered = by_kind["outbox_recover"][0]["data"]
-    if inbox != inbox_recovered:
+    if _durable_record(inbox) != _durable_record(inbox_recovered):
         _fail("inbox recovery is not byte-identical and durable")
-    if outbox != outbox_recovered:
+    if _durable_record(outbox) != _durable_record(outbox_recovered):
         _fail("outbox recovery is not byte-identical and durable")
     if (
         outbox["operation_id"] != commit["operation_id"]

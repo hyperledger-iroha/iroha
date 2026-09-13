@@ -92,6 +92,18 @@ fn fresh_proposal_refreshes_merge_certification_before_freezing_attachments() {
         .find("lane_work.reconcile_pending_queue_plan_admissions(")
         .map(|offset| refresh + offset)
         .expect("QueuePlan controls are reconciled after merge refresh");
+    let refresh_continuation = scheduler[refresh..admissions]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        refresh_continuation.contains(
+            "== super::v2_lane_work::MergeRefreshOutcome::Deferred { \
+             proposal_state.defer_merge_frontier(owner, Instant::now()); return Ok(()); }"
+        ),
+        "a deferred merge frontier must stop before control reconciliation, \
+         attachment selection, and assembly without arming a non-empty retry"
+    );
     let attachments = scheduler[admissions..]
         .find("let attachments = candidate_attachments(")
         .map(|offset| admissions + offset)

@@ -1379,10 +1379,9 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             "merge execution cache identity must bind the exact height",
         ),
         (
-            "merge_parent_frontier_is_exact_at_generation",
-            "&& self.merge_parent_frontier_is_exact()\n"
-            "            && self.state.state_view_generation() == state_view_generation",
-            "&& self.state.state_view_generation() == state_view_generation",
+            "merge_parent_frontier_at_generation",
+            "if durable_parent != Some(expected_parent) {",
+            "if false {",
             "merge execution cache reuse must bracket an exact durable parent frontier",
         ),
         (
@@ -1393,7 +1392,7 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
         ),
         (
             "build_and_memoize_merge_execution_candidate",
-            "&& self.merge_parent_frontier_is_exact_at_generation(state_view_generation)",
+            "&& matches!(\n                self.merge_parent_frontier_at_generation(state_view_generation),\n                Ok(MergeCandidateValidation::Ready)\n            )",
             "&& state_view_generation % 2 == 0",
             "only State's validating builder may seed a memo",
         ),
@@ -1466,6 +1465,10 @@ def test_merge_execution_validation_cache_semantics_survive_digest_refresh(tmp_p
             shutil.copy2(
                 ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
                 lane_path,
+            )
+            shutil.copy2(
+                ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                lane_path.with_name("v2_runner.rs"),
             )
             baseline_errors: list[str] = []
             module._require_merge_execution_validation_cache_contract(
@@ -5256,3 +5259,94 @@ def test_stable_liveness_repair_mutations_fail_closed(tmp_path: Path) -> None:
             expected in error and "exact reviewed token digest" not in error
             for error in errors
         ), (expected, errors)
+
+
+
+def test_merge_frontier_deferral_current_owner_contract(tmp_path: Path) -> None:
+    """The narrow typed-deferral owner passes independently of unrelated stale seals."""
+    module = load_checker()
+    lane_path = tmp_path / "v2_lane_work.rs"
+    for name in ("v2_lane_work.rs", "v2_runner.rs"):
+        shutil.copy2(ROOT_DIR / "crates/iroha_core/src/sumeragi" / name,
+                     lane_path.with_name(name))
+    errors: list[str] = []
+    module._require_merge_frontier_deferral_contract(
+        lane_path, lane_path.read_text(encoding="utf-8"), errors)
+    assert not errors, errors
+
+
+def test_merge_frontier_deferral_semantics_survive_digest_refresh(tmp_path: Path) -> None:
+    """Resealing typed outcomes cannot authorize work or mask fatal stable errors."""
+    module = load_checker()
+    mutations = (
+        ('authorize_local_merge_claim', 'let state_publication_lease = state.consensus_publication_lease();', 'let state_publication_lease = ();', 'signing validates the exact generation'),
+        ('authorize_local_merge_claim', 'let kura_publication_lease = kura.canonical_publication_lease();', 'let kura_publication_lease = ();', 'signing validates the exact generation'),
+        ('refresh_merge_candidates', 'let state_publication_lease = state.consensus_publication_lease();', 'let state_publication_lease = ();', 'signing and pending insertion'),
+        ('refresh_merge_candidates', 'let kura_publication_lease = kura.canonical_publication_lease();', 'let kura_publication_lease = ();', 'signing and pending insertion'),
+        ('authorize_local_merge_claim', 'self.merge_signing_guard\n            .as_ref()\n            .expect("merge signing guard checked above")\n            .authorize(durable_context, message_digest, candidate)?;', 'drop(kura_publication_lease); self.merge_signing_guard.as_ref().expect("merge signing guard checked above").authorize(durable_context, message_digest, candidate)?;', 'signing validates the exact generation'),
+        ('refresh_merge_candidates', 'let signature = Signature::try_new(self.key_pair.private_key(), digest.as_ref())', 'drop(kura_publication_lease); let signature = Signature::try_new(self.key_pair.private_key(), digest.as_ref())', 'signing and pending insertion'),
+        ('merge_parent_frontier_at_generation', 'return Ok(MergeCandidateValidation::Deferred);', 'return Ok(MergeCandidateValidation::Ready);', 'odd or changing State generation'),
+        ('merge_parent_frontier_at_generation', 'if durable_parent != Some(expected_parent) {', 'if false {', 'storage errors and stable contradictory frontier'),
+        ('merge_parent_frontier_at_generation', '.map_err(|error| error.to_string())?;', '.unwrap_or(0);', 'storage errors and stable contradictory frontier'),
+        ('merge_parent_frontier_at_generation', 'if durable_height_after != durable_height', 'if durable_height_after == durable_height', 'storage errors and stable contradictory frontier'),
+        ('validate_merge_candidate_for_active_round', 'return Ok(MergeCandidateValidation::Deferred);', 'return Ok(MergeCandidateValidation::Ready);', 'each frontier deferral'),
+        ('validate_merge_candidate_for_active_round', 'validation.map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()))?;', 'let _ = validation;', 'stable live validation error'),
+        ('defer_merge_candidate_work', 'self.purge_queued_merge_broadcasts();', 'let _ = &self.effects;', 'deferral purges only'),
+        ('defer_merge_candidate_work', 'MergeRefreshOutcome::Deferred', 'MergeRefreshOutcome::Ready', 'deferral purges only'),
+        ('authorize_local_merge_claim', 'let validation_generation = self.state.state_view_generation();\n        if self\n            .merge_parent_frontier_at_generation(validation_generation)\n            .map_err(MergeSidecarError::SigningGuard)?\n            == MergeCandidateValidation::Deferred\n        {\n            self.validated_merge_execution_candidate = None;\n            return Ok(LocalMergeAuthorization::Deferred);\n        }', 'let validation_generation = self.state.state_view_generation();\n        if self\n            .merge_parent_frontier_at_generation(validation_generation)\n            .map_err(MergeSidecarError::SigningGuard)?\n            == MergeCandidateValidation::Deferred\n        {\n            self.validated_merge_execution_candidate = None;\n            return Ok(LocalMergeAuthorization::Authorized);\n        }', 'signing validates the exact generation'),
+        ('refresh_merge_candidates', 'Ok(LocalMergeAuthorization::Deferred) => {\n                    return Ok(self.defer_merge_candidate_work());\n                }', 'Ok(LocalMergeAuthorization::Deferred) => {}', 'signing and pending insertion'),
+        ('accept_merge_signature', 'Ok(None) => {\n                    self.defer_merge_candidate_work();\n                    return Ok(V2LaneIngressOutcome::Rejected);\n                }', 'Ok(None) => return Ok(V2LaneIngressOutcome::Duplicate),', 'deferred leader validation'),
+        ('schedule_retransmission_at', 'active_merge_view = None;', 'let _ = active_merge_view;', 'deferred refresh clears'),
+        ('schedule_retransmission_at', 'self.schedule_merge_share_retransmissions(view)?;', 'let _ = view;', 'merge share retransmission'),
+        ('schedule_retransmission_at', 'let Some(active_merge_view) = active_merge_view else {', 'let Some(active_merge_view) = self.pre_apply_unlocked_merge_view() else {', 'merge QC retry stops'),
+        ('prepare', 'operation.complete();\n                return Err(all_unavailable(\n                    candidates.len(),\n                    "merge frontier is changing",\n                ));', 'drop(operation);\n                return Err(all_unavailable(candidates.len(), "merge frontier is changing"));', 'provider completes'),
+        ('prepare_certified_execution_carrier', 'operation.complete();\n                return Err(all_unavailable(\n                    candidates.len(),\n                    "merge frontier is changing",\n                ));', 'drop(operation);\n                return Err(all_unavailable(candidates.len(), "merge frontier is changing"));', 'provider completes'),
+        ('prepare', 'drop(operation);', 'operation.complete();', 'provider keeps refresh errors fatal'),
+        ('defer_merge_frontier', 'CANDIDATE_WORK_RECHECK', 'NON_EMPTY_CANDIDATE_WORK_RECHECK', 'producer uses bounded recheck'),
+        ('schedule_local_proposal', 'proposal_state.defer_merge_frontier(owner, Instant::now());', 'proposal_state.defer_candidate_work(owner, Instant::now());', 'producer returns before admitting'),
+        ('refresh_merge_candidates', 'Err(MergeCandidateValidationError::Frontier(reason)) => {\n                    return Err(V2LaneWorkError::SigningGuard(reason));\n                }', 'Err(MergeCandidateValidationError::Frontier(_)) => {}', 'installed candidates propagate'),
+        ('accept_merge_signature', 'Err(MergeCandidateValidationError::Frontier(reason)) => {\n                    return Err(V2LaneWorkError::SigningGuard(reason));\n                }', 'Err(MergeCandidateValidationError::Frontier(_)) => return Ok(V2LaneIngressOutcome::Rejected),', 'leader filtering never suppresses'),
+        ('refresh_merge_candidates', 'let parent_header = self.state.latest_block_header_fast();', 'let parent_header = None;', 'parent snapshot recheck'),
+        ('defer_merge_candidate_work', 'self.purge_queued_merge_broadcasts();', 'self.purge_queued_merge_broadcasts(); self.merge_claims.clear();', 'deferral purges only'),
+        ('new_with_output_guard_and_transport_inner', '#[cfg(test)]\n            merge_validation_test_hook: None,', 'merge_validation_test_hook: None,', 'constructor frontier hook remains test-only'),
+        ('authorize_local_merge_claim', 'if candidate.view != active_view', 'if false', 'intrinsic candidate mismatch is fatal'),
+        ('authorize_local_merge_claim', 'if self.pre_apply_unlocked_merge_view() != Some(active_view) {\n            self.validated_merge_execution_candidate = None;\n            return Ok(LocalMergeAuthorization::Deferred);\n        }', 'if self.pre_apply_unlocked_merge_view() != Some(active_view) { return Ok(LocalMergeAuthorization::Authorized); }', 'intrinsic candidate mismatch is fatal'),
+        ('schedule_retransmission_at', 'self.collect_committed_lane_sessions()?;', 'let _ = self.collect_committed_lane_sessions();', 'scheduler preserves fatal collect_committed_lane_sessions'),
+        ('schedule_retransmission_at', 'self.purge_queued_global_body_effects_except_committed_outputs()?;', 'let _ = self.purge_queued_global_body_effects_except_committed_outputs();', 'scheduler preserves fatal purge_queued_global_body_effects_except_committed_outputs'),
+        ('schedule_retransmission_at', 'self.schedule_committed_lane_outputs()?;', 'let _ = self.schedule_committed_lane_outputs();', 'scheduler preserves fatal schedule_committed_lane_outputs'),
+    )
+    for index, (name, old, new, diagnostic) in enumerate(mutations):
+        fixture_root = tmp_path / str(index)
+        fixture_root.mkdir()
+        lane_path = fixture_root / "v2_lane_work.rs"
+        for filename in ("v2_lane_work.rs", "v2_runner.rs"):
+            shutil.copy2(ROOT_DIR / "crates/iroha_core/src/sumeragi" / filename,
+                         fixture_root / filename)
+        baseline: list[str] = []
+        module._require_merge_frontier_deferral_contract(
+            lane_path, lane_path.read_text(encoding="utf-8"), baseline)
+        assert not baseline, baseline
+        relative, context, _attributes, seal_map, seal_key = module._MERGE_FRONTIER_DEFERRAL_OWNERS[name]
+        path = fixture_root / Path(relative).name
+        source = path.read_text(encoding="utf-8")
+        original = next(item for item in module.rust_items(source, name)
+                        if item.brace_context == context)
+        assert old in original.source, (name, old)
+        # Replace one deliberate semantic branch; other occurrences stay unchanged.
+        changed = original.source.replace(old, new, 1)
+        assert changed != original.source
+        path.write_text(source.replace(original.source, changed, 1), encoding="utf-8")
+        changed_item = next(item for item in module.rust_items(path.read_text(encoding="utf-8"), name)
+                            if item.brace_context == context)
+        seals = getattr(module, seal_map)
+        old_seal = seals[seal_key]
+        try:
+            seals[seal_key] = module._rust_item_token_sha256(changed_item)
+            errors: list[str] = []
+            module._require_merge_frontier_deferral_contract(
+                lane_path, lane_path.read_text(encoding="utf-8"), errors)
+            assert any(diagnostic in error and "exact reviewed token digest" not in error
+                       for error in errors), errors
+            assert not any("exact reviewed token digest" in error for error in errors), errors
+        finally:
+            seals[seal_key] = old_seal

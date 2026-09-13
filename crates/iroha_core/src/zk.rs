@@ -46,6 +46,9 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+/// Core-owned confidential polynomial storage foundation for the consuming prover.
+#[cfg(feature = "zk-halo2-ipa")]
+pub mod kagemusha_polynomial_store_v1;
 /// Shared paired field-native Poseidon relations for Kagemusha V1.
 pub(crate) mod kagemusha_v1_poseidon;
 /// Fixed-profile paired-Pasta recursion and native accumulator decisions for Kagemusha V1.

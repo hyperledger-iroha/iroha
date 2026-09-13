@@ -165,3 +165,177 @@ guards do not repair those inherited structural violations; no limits are
 raised and no source-budget or Linux-runtime qualification is claimed.
 
 The complete source-budget check also fails: 228 findings across 11295 checked files. Its unchanged configured limits and complete report are retained in `native28-source-amendments/source-budget.json`. These broader merged-tree findings are not repaired or suppressed by this scoped patch. `cargo fmt --all`, `git diff --check`, the retired-codec guard and historical archive verification pass.
+
+## Native28 failure and subsequent source revision
+
+The six-package test build with the Kaigi evidence feature failed after 672.91
+seconds on Rust 1.93.1. Its complete source and index captures were unchanged.
+The compiler emitted two errors and six warnings: the suggested anonymous
+lifetime inside `impl Trait` is unstable (E0658), with a consequent inference
+error (E0282). The compiler's earlier `MachineApplicable` suggestion was invalid;
+this was not a successful warning cleanup. The new feature also exposed five
+distinct unused Core evidence declarations. Raw diagnostics and the failed
+classification remain in `native28-coordinated-test-build/`.
+
+After that build finished, separate merges advanced the clean checkout to
+`73e64d276d3c17e7535d72373e40c789ebcde3db`. The Native29 baseline captures 20,003
+source entries: 810 existing entries differ from Native28 and 81 are new.
+`native29-baseline-reconciliation/` retains the exact comparison. Earlier native
+results do not qualify this new source revision. A fresh test graph and release
+daemon are required before executing the eight Kaigi preflights and actual
+four-validator lifecycle. The local-release profile is not used for that
+deployment evidence.
+
+The current-source correction expresses the scoped worker lifetime through a
+named iterator bound, preserving worker settlement and removing the lint
+suppression. Exact Rust 1.93.1 metadata probes reproduce the faulty suggestion
+and compile the corrected signature with warnings denied. The unused Bootle
+payload accessor is removed; one DER accessor and three descriptor/bound
+expectations retain their existing test-only callers. Production relation and
+readiness checks remain present. Their native regressions await the new build.
+
+Separately, the private conditional scalar PCS composition passed all 109 tests
+in both its author run and an independent fresh compilation/replay. It owns the
+first six complete transcript moves, all 923 independent AIR coefficients, the
+685 canonical claims, and the checked trace-to-quotient handoff. Root verified
+all 364 sealed artifacts. The independent review capsule is
+`native28-scalar-first-six-independent-review/review-capsule.json`, SHA-256
+`c7c7b0b2e6994110dd82b037246ff3912db45f0d90cf53d2dd5befb1cd2ad729`.
+Its direct-rustc facade uses pinned older owner libraries; this is not a current
+Cargo graph or a coherent complete proof with every query derived from the
+transcript. Authenticated caller/AIR binding, final descriptors, production
+reachability, registration and security qualification remain open.
+
+## Native29 current graph
+
+The fresh six-package test graph failed after 963.67 seconds with 17 warnings
+and one error. All 20,003 captured source entries and the index remained
+unchanged. The earlier warning cleanup and scoped-worker signature compiled;
+the remaining warnings belong to merged consensus lifecycle code and
+an unused Kaigi harness import. The integration error is the harness's attempt
+to frame the payload-only `KaigiRecord` directly. Its diagnostic must hash the
+existing canonical `Json` metadata frame instead. No complete build, regression
+run or network pass is claimed from the three emitted partial test artifacts.
+The full failure is retained in `native29-current-source-test-build/`.
+
+At the subsequent source boundary, the existing DER unit module was extracted
+to a same-directory test file. The runtime owner now has 4,124 lines, within its
+unchanged 5,322-line cap; the test file has 1,179 lines. All 17 direct tests and
+both included test files keep their original module paths and code. Independent
+reconstruction and formatting reproduce the previous inline source byte for
+byte. Native execution of the extracted module is still pending.
+
+During compilation, 19 inactive incremental compiler caches older than 24 hours
+were removed after process and open-file checks showed no incremental users.
+Free disk space increased from 5,597,134,848 to 110,934,556,672 bytes. Source,
+index, dependency artifacts, executables and retained evidence were not removed;
+the active test build disables incremental compilation. The scoped cleanup
+receipt is `native29-inactive-cache-cleanup/result.json`.
+
+Before the retry, the Kaigi diagnostic was corrected to frame its existing
+`Json` metadata representation. The scoped consensus cleanup narrows two
+ledger-record methods to their actual module owner and removes unused query
+wrappers and comparison methods. The original Decision WAL seal, exact binding
+checks and consuming Apply publication remain. Four test callsites now consume
+the same output-settlement yield predicate as the production runner, retaining
+their original assertions and turn bounds. Those fixtures require fresh native
+execution because a newly completed output consumes another bounded turn.
+The older formal direct-serve source checks still expect obsolete callsites;
+this cleanup does not alter those checks or claim formal validation.
+
+Further cross-owner review identified a mismatch in the private scalar trace
+functional: its derived order-65,536 generator differs from the actual AIR
+catalog's row generator. The previous 109-test private results did not expose
+that mismatch and do not establish the actual AIR relation. A correction and
+nonconstant-witness cross-owner check are being prepared before any final
+parameter identity or complete-proof qualification.
+
+The Native29 retry1 test graph subsequently passed in 749.73 seconds with no
+compiler diagnostics. All eight test harnesses and the ordinary CLI companion
+were retained, and all 20,004 source entries and the index stayed unchanged.
+The source capture is `abf28c1829bc45b89e1f0b9b0009949ce7fb3fb0b2463994ecff0c8688c1cdd6`;
+the build receipt is `native29-current-source-test-build-retry1/result.json`.
+
+The prepared 75-test run stopped before executing tests because its exact
+namespace check found three nested finalized-provider frame tests omitted from
+the source inventory. The corrected inventory preserves every original leaf
+and includes those three. Its actual 78-test run finished with 67 passes and
+11 failures. All 48 finalized-provider query tests passed. Ten lifecycle tests
+stopped at the existing signer/peer equality assertion: their live fixture
+installed roster index zero while its owner signed as the selected leader or
+Set-A validator. The other failure tried to construct a 16,383-byte `Name`,
+exceeding its actual 255-byte limit, before checking Soracloud response lengths.
+The stopped inventory and every test outcome remain in
+`native29-retry1-corrected-regression-run-01/` and `-run-02/`.
+
+At the next source boundary, the existing lifecycle fixture helper now takes
+the explicit local validator. All ten call sites migrate together; the two
+role-selected callers pass their actual index and the other eight retain zero.
+The signer assertion, moved body-store identity, capacity and replay assertions
+remain intact. The Soracloud fixture uses a maximal valid `Name` and places the
+16,383-byte boundary in its existing String field, preserving both exact size
+assertions and the 16,384-byte state key and payload. These corrections require
+a new native build and rerun before the later replay paths can be qualified.
+The obsolete DER 5,322-line exception is removed: its 4,124-line runtime owner
+now falls under the normal 5,000-line limit. Other source-budget findings remain.
+Five existing direct Sign/WAL tests are also extracted at their original include
+position, reducing their test parent from 3,221 to 2,616 lines with a 608-line
+child. Byte-exact reconstruction and independent recursive source assembly
+preserve their bodies, attributes and module paths. The source manifest gains
+only that child and its digest is updated. Shared index contents are preserved;
+the indexed-source check remains distinct from the pending native rerun.
+
+SoraFS Node on the retry1 graph passed all 129 focused tests. Its full 1,545-test
+inventory then finished with 1,543 passes, no failures and two ignored tests in
+581.22 seconds. Both ignored cases require an actual local Kubo runtime for IPNS
+or signed-head publication, restart and tamper checks; those external lanes are
+still unqualified. Full source and index captures remained unchanged. Receipts
+are under `target/evidence/sorafs-v1/current-native29-retry1-node-focused-01/`
+and `current-native29-retry1-node-full-01/`; the full result SHA-256 is
+`261b47219b59a13343a694e746a847356ae1911b35573f9f6f4f580aa1331e9c`.
+
+The isolated scalar AIR-root correction passed all 112 private tests, including
+three new checks against the actual catalog generator and nonconstant witness.
+Recompiling the original expression causes those three checks to fail as
+expected. Both compilations emitted no diagnostics and retained all pinned
+inputs. This uses an explicitly historical dependency closure and a test facade,
+not the current Cargo graph or a complete production proof. Its runtime seal is
+`native29-scalar-air-root-alignment-validation-private-retry1/execution/runtime-seal.json`,
+SHA-256 `20165dcc20a0e4290bd6ec150b3f4f08817362607511333c553d9d9238eae4b6`.
+
+## Retry2 lifecycle, response framing and local Kubo results
+
+At HEAD `73e64d276d3c17e7535d72373e40c789ebcde3db`, the next six-package
+Cargo test build passed in 360 seconds with no compiler diagnostics. All eight
+test harnesses and the ordinary CLI companion were retained. The 20,005-entry
+repository capture is
+`575818e752ce38610106fe667fecb998c6b1c0e1991fb7db8dc6b90fc7063f3f`;
+this bounded file/symlink inventory does not capture a complete compiled
+source closure. Source entries and index remained unchanged during the build.
+The build receipt is `native29-current-source-test-build-retry2/result.json`,
+SHA-256 `f169c9b3874b2ea2572e68509d0e57ba0675c0455e088305c455c5b15b1e35bd`.
+
+The complete corrected selection ran 112 tests: **100 passed and 12 failed**.
+It preserves the prior 78 and adds all 26 affected fixture leaves, five moved
+Sign/WAL tests and three response-bound tests. All 48 finalized-provider query
+tests, five Torii tests and the CLI test pass. The nine Core failures concern
+released Apply ownership/publication, historical rejection reports, cold replay,
+view progression and a crash fixture's invalid certificate. The three daemon
+failures compare actual response frames with payload-only size quotes: the
+quotes omit the 40-byte Norito header and 8-byte response alignment padding.
+The exact failures and source/index/artifact checks remain in
+`native29-retry2-corrected-regression-run-01/result.json`, SHA-256
+`22565c250076c476d2ea5ed744764314b57851a4bf34c3ebf24cf90a117c3d4f`.
+Source corrections and test diagnostics require a subsequent compiled graph;
+these failures have not been promoted to passes.
+
+Both previously ignored local Kubo tests now pass against the retry2 Cargo
+artifact, using the pinned Kubo 0.42.0 executable and fresh owner-only temporary
+repositories. The IPNS lane takes 22.74 seconds; the signed-head lane takes
+43.46 seconds. Each runs exactly one test with zero ignored outcomes. Observed
+child PIDs are absent and both empty temporary roots are removed. The runtime
+receipt is `target/evidence/sorafs-v1/current-native29-retry2-kubo-lanes-01/result.json`,
+SHA-256 `891f3f616913dd92d9715941ed714942ab2dbf08f7171a2338656b958762e5b4`.
+This verifies local publication, restart and tamper handling only. It does not
+establish global process cleanup, hardware custody, regional independence,
+replicated signed RS16 DA/RBC or four-validator deployment qualification.

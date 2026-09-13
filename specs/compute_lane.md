@@ -21,7 +21,7 @@ and configuration defaults for the first release.
   - pricing family (`price_family`) + resource profile (`resource_profile`)
   - authentication policy (`auth`)
 - Sandbox guardrails live in the manifest `sandbox` block and are shared by all
-  routes (mode/randomness/storage and non-deterministic syscall rejection).
+  routes (randomness/storage and non-deterministic syscall rejection).
 
 Example: `fixtures/compute/manifest_compute_payments.json`.
 
@@ -52,12 +52,22 @@ Examples:
 
 ## Sandbox and resource profiles
 
-- `ComputeSandboxRules` locks the execution mode to `IvmOnly` by default,
-  seeds deterministic randomness from the request hash, allows read-only SoraFS
-  access, and rejects non-deterministic syscalls. GPU/TEE hints are gated by
+- IVM is the sole compute execution engine; Kotodama entrypoints compile to IVM
+  bytecode. `ComputeSandboxRules` controls deterministic randomness, SoraFS
+  storage access, and non-deterministic syscall rejection. The defaults seed
+  randomness from the request hash, allow read-only storage access, and reject
+  non-deterministic syscalls. GPU/TEE hints are gated by
   `allow_gpu_hints`/`allow_tee_hints` to keep execution deterministic.
 - `ComputeResourceBudget` sets per-profile caps on cycles, linear memory, stack
-  size, IO budget, and egress, plus toggles for GPU hints and WASI-lite helpers.
+  size, IO budget, and egress, plus permission for GPU hints. Both resource
+  profiles and sandbox rules reject unknown JSON fields; there is no execution
+  mode selector or alternate-runtime allowance.
+- Payload-free configuration policies use exact variant-name strings in JSON
+  and TOML: randomness (for example, "SeededFromRequest"), storage ("ReadOnly"),
+  route/configuration authentication ("Either"), and price risk classes
+  ("Balanced"). Object envelopes, case aliases, and unknown variants are
+  rejected. Norito binary discriminants and nominal identities are independent
+  of this JSON representation.
 - Defaults ship two profiles (`cpu-small`, `cpu-balanced`) under
   `defaults::compute::resource_profiles` with deterministic fallbacks.
 

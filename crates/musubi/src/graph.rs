@@ -5,7 +5,10 @@
 //! every public selector to a stable structural package identity, and collects one coherent
 //! finalized sparse index snapshot before invoking the pure backtracking resolver.
 use crate::{
-    lockfile::{LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1},
+    lockfile::{
+        LockContextV1, LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1,
+        MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
+    },
     manifest::ConcreteDependency,
     registry::{RegistryErrorV1, RegistryReadClientV1},
     registry_cache::{CachedResolverSourceV1, RecordingResolverSourceV1, ResolverIndexCacheV1},
@@ -68,6 +71,15 @@ impl ResolverRegistrySourceV1 for RegistryReadClientV1 {
 pub enum GraphErrorV1 {
     /// Workspace path packages or their dependency graph are invalid.
     Workspace(WorkspaceError),
+    /// Effective local manifests do not form a valid dependency graph.
+    LocalGraphInvalid(String),
+    /// Exact closed path of local package dependencies forming a cycle.
+    LocalCycle(Vec<MusubiPackageSelectorV1>),
+    /// A local dependency path exceeds the shared resolver depth limit.
+    LocalDepthExceeded {
+        /// Maximum permitted number of dependency edges on one path.
+        limit: usize,
+    },
     /// A public registry query failed with a redacted stable code.
     Registry(String),
     /// Durable resolver-cache publication or validation failed.
@@ -89,6 +101,21 @@ impl fmt::Display for GraphErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Workspace(error) => write!(formatter, "{error}"),
+            Self::LocalGraphInvalid(reason) => {
+                write!(formatter, "invalid local dependency graph: {reason}")
+            }
+            Self::LocalCycle(packages) => write!(
+                formatter,
+                "local dependency cycle: {}",
+                packages
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ),
+            Self::LocalDepthExceeded { limit } => {
+                write!(formatter, "local dependency path exceeds {limit} edges")
+            }
             Self::Registry(code) => write!(formatter, "registry query failed: {code}"),
             Self::Cache(reason) => write!(formatter, "resolver cache failed: {reason}"),
             Self::OfflineMiss(reason) => write!(formatter, "{reason}"),
@@ -184,6 +211,14 @@ struct LocalDependencySpecV1 {
     package: MusubiPackageSelectorV1,
     requirement: MusubiVersionReqV1,
 }
+/// Which source authority determines dependency edges for this operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphPurposeV1 {
+    /// Compile the local workspace; path dependencies always use local source.
+    Workspace,
+    /// Resolve publication identities for a clean, independently reconstructible package.
+    Publication,
+}
 /// User-facing targeted update before the selector is normalized structurally.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphUpdateV1 {
@@ -194,7 +229,152 @@ pub struct GraphUpdateV1 {
     /// Optional exact replacement requested with `--precise`.
     pub precise: Option<iroha_data_model::musubi::MusubiVersionV1>,
 }
+/// Resolve an entirely local workspace without loading registry configuration or a cache.
+///
+/// Returns `None` when a reachable normal or selected-root development dependency requires
+/// registry resolution. A path dependency remains local even when it declares a publication
+/// identity. Source text is deliberately excluded from the manifest-graph commitment: editing
+/// implementation code does not change dependency selection. Publication uses the separate
+/// registry resolver and must never treat this context as authenticated release evidence.
+///
+/// # Errors
+///
+/// Returns an error for invalid or oversized local graphs, invalid existing locks, or a
+/// locked invocation whose effective manifest graph has changed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the local graph commitment validates every effective edge before producing its lock"
+)]
+pub fn resolve_workspace_local(
+    workspace: &Workspace,
+    selected: &[MusubiPackageSelectorV1],
+    previous: Option<LockfileV1>,
+    mode: ResolveModeV1,
+) -> Result<Option<ResolveOutcomeV1>, GraphErrorV1> {
+    let members = collect_local_members(workspace, selected)?;
+    let selected = selected.iter().cloned().collect::<BTreeSet<_>>();
+    let mut hasher = blake3::Hasher::new_derive_key("iroha.musubi.local-manifest-graph.v1");
+    let mut edge_count = 0usize;
+    for member in &members {
+        hash_local_graph_field(&mut hasher, member.package.selector.to_string().as_bytes());
+        hash_local_graph_field(&mut hasher, member.package.version.to_string().as_bytes());
+        hash_local_graph_field(&mut hasher, member.workspace_path.as_str().as_bytes());
+        hash_local_graph_field(&mut hasher, &member.package.abi_version.to_le_bytes());
+        hash_local_graph_field(
+            &mut hasher,
+            &[match member.package.edition {
+                iroha_data_model::musubi::MusubiKotodamaEditionV1::V1 => 1,
+            }],
+        );
+        let include_dev = selected.contains(&member.package.selector);
+        hash_local_graph_field(&mut hasher, &[u8::from(include_dev)]);
+        let dependencies = member
+            .dependencies
+            .values()
+            .chain(member.dev_dependencies.values().filter(|_| include_dev))
+            .collect::<Vec<_>>();
+        edge_count = edge_count
+            .checked_add(dependencies.len())
+            .ok_or(GraphErrorV1::CandidateLimit)?;
+        if dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1
+            || edge_count > MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1
+        {
+            return Err(GraphErrorV1::CandidateLimit);
+        }
+        hash_local_graph_field(&mut hasher, &(dependencies.len() as u64).to_le_bytes());
+        for dependency in dependencies {
+            let Some(target) = &dependency.local_manifest else {
+                return Ok(None);
+            };
+            let target = members
+                .iter()
+                .find(|member| &member.manifest_path == target)
+                .ok_or_else(|| {
+                    GraphErrorV1::LocalGraphInvalid(
+                        "local dependency target is absent from the manifest graph".to_owned(),
+                    )
+                })?;
+            hash_local_graph_field(&mut hasher, dependency.alias.as_ref().as_bytes());
+            hash_local_graph_field(
+                &mut hasher,
+                &[match dependency.kind {
+                    crate::workspace::DependencyKind::Normal => 0,
+                    crate::workspace::DependencyKind::Development => 1,
+                }],
+            );
+            hash_local_graph_field(&mut hasher, target.package.selector.to_string().as_bytes());
+            hash_local_graph_field(&mut hasher, target.workspace_path.as_str().as_bytes());
+            let ConcreteDependency::Path {
+                package,
+                requirement,
+                ..
+            } = &dependency.dependency
+            else {
+                return Err(GraphErrorV1::LocalGraphInvalid(
+                    "registry dependency unexpectedly owns a local manifest".to_owned(),
+                ));
+            };
+            hash_local_graph_field(
+                &mut hasher,
+                package
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default()
+                    .as_bytes(),
+            );
+            hash_local_graph_field(
+                &mut hasher,
+                requirement
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default()
+                    .as_bytes(),
+            );
+        }
+    }
+    let roots = members
+        .iter()
+        .map(|member| LockedRootV1 {
+            package: member.package.selector.clone(),
+            dependencies: Vec::new(),
+        })
+        .collect();
+    let proposed = LockfileV1::new(
+        LockContextV1::Local {
+            graph_digest: *hasher.finalize().as_bytes(),
+        },
+        roots,
+        Vec::new(),
+    )
+    .map_err(|error| GraphErrorV1::LocalGraphInvalid(error.to_string()))?;
+    if let Some(previous) = previous {
+        previous
+            .validate()
+            .map_err(|error| GraphErrorV1::LocalGraphInvalid(error.to_string()))?;
+        if previous == proposed {
+            return Ok(Some(ResolveOutcomeV1 {
+                lockfile: previous,
+                changed: false,
+            }));
+        }
+    }
+    if mode == ResolveModeV1::Locked {
+        return Err(GraphErrorV1::Resolver(ResolverError::LockChangeRequired));
+    }
+    Ok(Some(ResolveOutcomeV1 {
+        lockfile: proposed,
+        changed: true,
+    }))
+}
+fn hash_local_graph_field(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
 /// Resolve online and atomically publish only the coherent validated pages consumed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resolution requires explicit graph purpose and registry/cache authority"
+)]
 pub fn resolve_workspace_online_cached(
     registry: &RegistryReadClientV1,
     cache: &ResolverIndexCacheV1,
@@ -203,12 +383,17 @@ pub fn resolve_workspace_online_cached(
     previous: Option<LockfileV1>,
     update: Option<GraphUpdateV1>,
     mode: ResolveModeV1,
+    purpose: GraphPurposeV1,
 ) -> Result<ResolveOutcomeV1, GraphErrorV1> {
     resolve_workspace_online_cached_with_policy(
-        registry, cache, workspace, selected, previous, update, mode, false,
+        registry, cache, workspace, selected, previous, update, mode, false, purpose,
     )
 }
 /// Resolve and cache a publication graph that contains only fresh-selectable releases.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resolution requires explicit graph purpose and registry/cache authority"
+)]
 pub fn resolve_workspace_online_cached_fresh(
     registry: &RegistryReadClientV1,
     cache: &ResolverIndexCacheV1,
@@ -217,9 +402,10 @@ pub fn resolve_workspace_online_cached_fresh(
     previous: Option<LockfileV1>,
     update: Option<GraphUpdateV1>,
     mode: ResolveModeV1,
+    purpose: GraphPurposeV1,
 ) -> Result<ResolveOutcomeV1, GraphErrorV1> {
     resolve_workspace_online_cached_with_policy(
-        registry, cache, workspace, selected, previous, update, mode, true,
+        registry, cache, workspace, selected, previous, update, mode, true, purpose,
     )
 }
 #[allow(
@@ -235,10 +421,12 @@ fn resolve_workspace_online_cached_with_policy(
     update: Option<GraphUpdateV1>,
     mode: ResolveModeV1,
     fresh_only: bool,
+    purpose: GraphPurposeV1,
 ) -> Result<ResolveOutcomeV1, GraphErrorV1> {
+    let previous = registry_previous_lock(previous, mode)?;
     let recorder = RecordingResolverSourceV1::new(registry);
     let outcome = resolve_workspace_from_source_with_policy(
-        &recorder, workspace, selected, previous, update, mode, fresh_only,
+        &recorder, workspace, selected, previous, update, mode, fresh_only, purpose,
     )?;
     let snapshot = recorder
         .finish()
@@ -255,6 +443,18 @@ pub struct CachedResolveOutcomeV1 {
     /// Snapshot source retained for local namespace binding during packaging.
     pub source: CachedResolverSourceV1,
 }
+/// Dependency authority and deployment selection for one offline graph resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OfflineGraphOptionsV1 {
+    /// Whether the effective dependency graph may change the existing lock.
+    pub mode: ResolveModeV1,
+    /// Whether path dependencies use workspace sources or publication identities.
+    pub purpose: GraphPurposeV1,
+    /// Explicit network and account-address discriminant required of cached snapshots.
+    ///
+    /// Without an explicit binding, compatible cache snapshots must identify one deployment.
+    pub expected_binding: Option<(iroha_data_model::NetworkId, u16)>,
+}
 /// Resolve entirely from the newest complete coherent cached snapshot.
 ///
 /// A missing query in a newer snapshot permits trying an older compatible snapshot. Any semantic
@@ -266,10 +466,16 @@ pub fn resolve_workspace_offline_cached(
     selected: &[MusubiPackageSelectorV1],
     previous: Option<LockfileV1>,
     update: Option<GraphUpdateV1>,
-    mode: ResolveModeV1,
+    options: OfflineGraphOptionsV1,
 ) -> Result<CachedResolveOutcomeV1, GraphErrorV1> {
+    let OfflineGraphOptionsV1 {
+        mode,
+        purpose,
+        expected_binding,
+    } = options;
+    let previous = registry_previous_lock(previous, mode)?;
     let sources = cache
-        .sources(previous.as_ref())
+        .sources(previous.as_ref(), expected_binding)
         .map_err(|error| GraphErrorV1::OfflineMiss(error.to_string()))?;
     let mut last_miss = None;
     let mut sources = sources.into_iter().peekable();
@@ -288,6 +494,7 @@ pub fn resolve_workspace_offline_cached(
             attempt_previous,
             attempt_update,
             mode,
+            purpose,
         ) {
             Ok(outcome) => return Ok(CachedResolveOutcomeV1 { outcome, source }),
             Err(GraphErrorV1::OfflineMiss(reason)) => last_miss = Some(reason),
@@ -298,6 +505,22 @@ pub fn resolve_workspace_offline_cached(
         "MUSUBI_E_OFFLINE_MISS: no cached snapshot covers the requested graph".to_owned()
     })))
 }
+fn registry_previous_lock(
+    previous: Option<LockfileV1>,
+    mode: ResolveModeV1,
+) -> Result<Option<LockfileV1>, GraphErrorV1> {
+    if let Some(lock) = &previous {
+        lock.validate()
+            .map_err(|error| GraphErrorV1::InvalidRegistryData(error.to_string()))?;
+        if matches!(lock.context, LockContextV1::Local { .. }) {
+            if mode == ResolveModeV1::Locked {
+                return Err(GraphErrorV1::Resolver(ResolverError::LockChangeRequired));
+            }
+            return Ok(None);
+        }
+    }
+    Ok(previous)
+}
 fn resolve_workspace_from_source<S: ResolverRegistrySourceV1>(
     source: &S,
     workspace: &Workspace,
@@ -305,13 +528,15 @@ fn resolve_workspace_from_source<S: ResolverRegistrySourceV1>(
     previous: Option<LockfileV1>,
     update: Option<GraphUpdateV1>,
     mode: ResolveModeV1,
+    purpose: GraphPurposeV1,
 ) -> Result<ResolveOutcomeV1, GraphErrorV1> {
     resolve_workspace_from_source_with_policy(
-        source, workspace, selected, previous, update, mode, false,
+        source, workspace, selected, previous, update, mode, false, purpose,
     )
 }
 #[allow(
     clippy::too_many_lines,
+    clippy::too_many_arguments,
     reason = "the resolver keeps one auditable path from authenticated pages to a request"
 )]
 fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
@@ -322,8 +547,9 @@ fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
     update: Option<GraphUpdateV1>,
     mode: ResolveModeV1,
     fresh_only: bool,
+    purpose: GraphPurposeV1,
 ) -> Result<ResolveOutcomeV1, GraphErrorV1> {
-    let local_roots = collect_local_roots(workspace, selected)?;
+    let local_roots = collect_local_roots(workspace, selected, purpose)?;
     validate_local_root_edge_bound(&local_roots)?;
     let mut anchor = None;
     let mut bindings = BTreeMap::new();
@@ -501,6 +727,7 @@ fn initial_requirement_queries(
 fn collect_local_roots(
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
+    purpose: GraphPurposeV1,
 ) -> Result<Vec<LocalRootSpecV1>, GraphErrorV1> {
     let packages = collect_local_members(workspace, selected)?;
     let selected = selected.iter().cloned().collect::<BTreeSet<_>>();
@@ -510,14 +737,14 @@ fn collect_local_roots(
         let mut dependencies = member
             .dependencies
             .values()
-            .filter_map(local_requirement)
+            .filter_map(|dependency| local_requirement(dependency, purpose))
             .collect::<Result<Vec<_>, _>>()?;
         if include_dev {
             dependencies.extend(
                 member
                     .dev_dependencies
                     .values()
-                    .filter_map(local_requirement)
+                    .filter_map(|dependency| local_requirement(dependency, purpose))
                     .collect::<Result<Vec<_>, _>>()?,
             );
         }
@@ -526,7 +753,7 @@ fn collect_local_roots(
             .windows(2)
             .any(|pair| pair[0].alias == pair[1].alias)
         {
-            return Err(GraphErrorV1::InvalidRegistryData(format!(
+            return Err(GraphErrorV1::LocalGraphInvalid(format!(
                 "local package `{}` has duplicate effective dependency aliases",
                 member.package.selector
             )));
@@ -546,7 +773,7 @@ pub fn collect_local_members(
 ) -> Result<Vec<WorkspaceMember>, GraphErrorV1> {
     let selected = selected.iter().cloned().collect::<BTreeSet<_>>();
     if selected.is_empty() {
-        return Err(GraphErrorV1::InvalidRegistryData(
+        return Err(GraphErrorV1::LocalGraphInvalid(
             "at least one workspace package must be selected".to_owned(),
         ));
     }
@@ -560,7 +787,7 @@ pub fn collect_local_members(
     let mut discovered_manifests = BTreeMap::new();
     for selector in &selected {
         let member = by_selector.get(selector).ok_or_else(|| {
-            GraphErrorV1::InvalidRegistryData(format!(
+            GraphErrorV1::LocalGraphInvalid(format!(
                 "selected package `{selector}` is not a workspace member"
             ))
         })?;
@@ -595,7 +822,101 @@ pub fn collect_local_members(
         pending.sort_by(|left, right| right.package.selector.cmp(&left.package.selector));
         packages.insert(member.package.selector.clone(), member);
     }
-    Ok(packages.into_values().collect())
+    let packages = packages.into_values().collect::<Vec<_>>();
+    validate_local_topology(&packages, &selected)?;
+    Ok(packages)
+}
+fn validate_local_topology(
+    members: &[WorkspaceMember],
+    selected: &BTreeSet<MusubiPackageSelectorV1>,
+) -> Result<(), GraphErrorV1> {
+    let indices = members
+        .iter()
+        .enumerate()
+        .map(|(index, member)| (&member.manifest_path, index))
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = Vec::with_capacity(members.len());
+    let mut total_edges = 0usize;
+    for member in members {
+        let mut aliases = BTreeSet::new();
+        let mut targets = Vec::new();
+        for dependency in member.dependencies.values().chain(
+            member
+                .dev_dependencies
+                .values()
+                .filter(|_| selected.contains(&member.package.selector)),
+        ) {
+            if !aliases.insert(&dependency.alias) {
+                return Err(GraphErrorV1::LocalGraphInvalid(format!(
+                    "package `{}` repeats dependency alias `{}`",
+                    member.package.selector, dependency.alias
+                )));
+            }
+            total_edges = total_edges
+                .checked_add(1)
+                .ok_or(GraphErrorV1::CandidateLimit)?;
+            if aliases.len() > MUSUBI_MAX_DEPENDENCIES_V1
+                || total_edges > MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1
+            {
+                return Err(GraphErrorV1::CandidateLimit);
+            }
+            if let Some(path) = &dependency.local_manifest {
+                targets.push(*indices.get(path).ok_or_else(|| {
+                    GraphErrorV1::LocalGraphInvalid(
+                        "local dependency target disappeared".to_owned(),
+                    )
+                })?);
+            }
+        }
+        edges.push(targets);
+    }
+    let mut states = vec![0u8; members.len()];
+    let mut longest = vec![0usize; members.len()];
+    let limit = usize::from(iroha_data_model::musubi::MUSUBI_MAX_RESOLUTION_DEPTH_V1);
+    for root in 0..members.len() {
+        if states[root] != 0 {
+            continue;
+        }
+        states[root] = 1;
+        let mut stack = vec![(root, 0usize)];
+        while let Some(&(node, next)) = stack.last() {
+            if let Some(&child) = edges[node].get(next) {
+                stack.last_mut().expect("active DFS frame").1 += 1;
+                match states[child] {
+                    0 => {
+                        states[child] = 1;
+                        stack.push((child, 0));
+                    }
+                    1 => {
+                        let start = stack
+                            .iter()
+                            .position(|&(index, _)| index == child)
+                            .expect("active child frame");
+                        let cycle = stack[start..]
+                            .iter()
+                            .map(|&(index, _)| members[index].package.selector.clone())
+                            .chain(std::iter::once(members[child].package.selector.clone()))
+                            .collect();
+                        return Err(GraphErrorV1::LocalCycle(cycle));
+                    }
+                    _ => {}
+                }
+            } else {
+                let depth = edges[node]
+                    .iter()
+                    .map(|&child| longest[child] + 1)
+                    .max()
+                    .unwrap_or(0);
+                if depth > limit {
+                    return Err(GraphErrorV1::LocalDepthExceeded { limit });
+                }
+                longest[node] = depth;
+                states[node] = 2;
+                stack.pop();
+            }
+        }
+    }
+    Ok(())
 }
 fn enqueue_local_member(
     pending: &mut Vec<WorkspaceMember>,
@@ -605,7 +926,7 @@ fn enqueue_local_member(
 ) -> Result<(), GraphErrorV1> {
     if let Some(previous_path) = discovered_packages.get(&member.package.selector) {
         if previous_path != &member.manifest_path {
-            return Err(GraphErrorV1::InvalidRegistryData(format!(
+            return Err(GraphErrorV1::LocalGraphInvalid(format!(
                 "local package `{}` is declared by both `{}` and `{}`",
                 member.package.selector,
                 previous_path.display(),
@@ -617,13 +938,13 @@ fn enqueue_local_member(
     if let Some(previous_package) = discovered_manifests.get(&member.manifest_path)
         && previous_package != &member.package.selector
     {
-        return Err(GraphErrorV1::InvalidRegistryData(format!(
+        return Err(GraphErrorV1::LocalGraphInvalid(format!(
             "manifest `{}` changed package identity",
             member.manifest_path.display()
         )));
     }
     if discovered_packages.len() >= MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1 {
-        return Err(GraphErrorV1::InvalidRegistryData(format!(
+        return Err(GraphErrorV1::LocalGraphInvalid(format!(
             "selected and reachable local packages exceed the {MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1}-root consumer-lock bound"
         )));
     }
@@ -640,7 +961,11 @@ fn enqueue_local_member(
 }
 fn local_requirement(
     dependency: &EffectiveDependency,
+    purpose: GraphPurposeV1,
 ) -> Option<Result<LocalDependencySpecV1, GraphErrorV1>> {
+    if purpose == GraphPurposeV1::Workspace && dependency.local_manifest.is_some() {
+        return None;
+    }
     let (package, requirement) = match &dependency.dependency {
         ConcreteDependency::Registry {
             package,
@@ -1005,12 +1330,350 @@ exports = []
             None,
             None,
             ResolveModeV1::UpdateLock,
+            GraphPurposeV1::Workspace,
         )
         .expect("dependency-free resolution");
         assert!(result.changed);
-        assert_eq!(result.lockfile.network_id, network_id());
+        assert_eq!(
+            result
+                .lockfile
+                .registry_context()
+                .expect("registry context")
+                .0,
+            network_id()
+        );
         assert_eq!(result.lockfile.roots.len(), 1);
         assert!(result.lockfile.nodes.is_empty());
+    }
+    #[test]
+    fn cold_local_resolution_has_no_registry_identity_and_locked_requires_exact_graph() {
+        let temp = TempDir::new().expect("temporary directory");
+        write(&temp.path().join("Musubi.toml"), APP);
+        let selected = vec!["apps.sora/app".parse().expect("selector")];
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        assert!(matches!(
+            resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::Locked),
+            Err(GraphErrorV1::Resolver(ResolverError::LockChangeRequired))
+        ));
+        let first = resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock)
+            .expect("local resolution")
+            .expect("local graph");
+        assert!(first.changed);
+        assert!(matches!(
+            first.lockfile.context,
+            LockContextV1::Local { .. }
+        ));
+        assert!(first.lockfile.registry_context().is_err());
+        write(&temp.path().join("src/lib.ko"), "module Updated {}");
+        write(
+            &temp.path().join("Musubi.toml"),
+            &format!("# formatting has no graph meaning\n{APP}"),
+        );
+        let unchanged = load_workspace(temp.path()).expect("unchanged workspace");
+        let locked = resolve_workspace_local(
+            &unchanged,
+            &selected,
+            Some(first.lockfile.clone()),
+            ResolveModeV1::Locked,
+        )
+        .expect("unchanged graph")
+        .expect("local graph");
+        assert!(!locked.changed);
+        write(
+            &temp.path().join("Musubi.toml"),
+            &APP.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        );
+        let changed = load_workspace(temp.path()).expect("changed workspace");
+        assert!(matches!(
+            resolve_workspace_local(
+                &changed,
+                &selected,
+                Some(first.lockfile),
+                ResolveModeV1::Locked
+            ),
+            Err(GraphErrorV1::Resolver(ResolverError::LockChangeRequired))
+        ));
+    }
+    #[test]
+    fn local_path_graph_commits_alias_kind_version_and_selected_roots() {
+        let temp = TempDir::new().expect("temporary directory");
+        let app = format!(
+            "{APP}\n[workspace]\nmembers = [\"helper\"]\n[dependencies]\nhelper = {{ path = \"helper\", package = \"apps.sora/helper\", version = \"^1.0.0\" }}\n"
+        );
+        let helper = local_package_manifest("helper", None);
+        write(&temp.path().join("Musubi.toml"), &app);
+        write(&temp.path().join("helper/Musubi.toml"), &helper);
+        let selected = vec!["apps.sora/app".parse().expect("selector")];
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let first = resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock)
+            .expect("path resolution")
+            .expect("publication fallback remains local")
+            .lockfile;
+        assert_eq!(first.roots.len(), 2);
+        for changed in [
+            app.replace("helper =", "renamed ="),
+            app.replace("[dependencies]", "[dev-dependencies]"),
+        ] {
+            write(&temp.path().join("Musubi.toml"), &changed);
+            let workspace = load_workspace(temp.path()).expect("changed workspace");
+            assert!(matches!(
+                resolve_workspace_local(
+                    &workspace,
+                    &selected,
+                    Some(first.clone()),
+                    ResolveModeV1::Locked
+                ),
+                Err(GraphErrorV1::Resolver(ResolverError::LockChangeRequired))
+            ));
+        }
+        write(&temp.path().join("Musubi.toml"), &app);
+        write(
+            &temp.path().join("helper/Musubi.toml"),
+            &helper.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        );
+        let workspace = load_workspace(temp.path()).expect("version change");
+        assert!(
+            resolve_workspace_local(
+                &workspace,
+                &selected,
+                Some(first.clone()),
+                ResolveModeV1::Locked
+            )
+            .is_err()
+        );
+        write(&temp.path().join("helper/Musubi.toml"), &helper);
+        let workspace = load_workspace(temp.path()).expect("original workspace");
+        assert!(
+            resolve_workspace_local(
+                &workspace,
+                &["apps.sora/helper".parse().expect("helper")],
+                Some(first),
+                ResolveModeV1::Locked
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn local_resolution_detects_transitive_registry_dependencies_and_only_selected_dev_edges() {
+        let temp = TempDir::new().expect("temporary directory");
+        let app = format!(
+            "{APP}\n[workspace]\nmembers = [\"helper\"]\n[dependencies]\nhelper = {{ path = \"helper\" }}\n"
+        );
+        let helper = format!(
+            "{}\n[dev-dependencies]\nremote = {{ package = \"apps.sora/remote\", version = \"^1.0.0\" }}\n",
+            local_package_manifest("helper", None)
+        );
+        write(&temp.path().join("Musubi.toml"), &app);
+        write(&temp.path().join("helper/Musubi.toml"), &helper);
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let app_selected = vec!["apps.sora/app".parse().expect("app")];
+        assert!(
+            resolve_workspace_local(&workspace, &app_selected, None, ResolveModeV1::UpdateLock)
+                .expect("local graph")
+                .is_some()
+        );
+        assert!(
+            resolve_workspace_local(
+                &workspace,
+                &["apps.sora/helper".parse().expect("helper")],
+                None,
+                ResolveModeV1::UpdateLock
+            )
+            .expect("registry classification")
+            .is_none()
+        );
+        write(
+            &temp.path().join("helper/Musubi.toml"),
+            &helper.replace("[dev-dependencies]", "[dependencies]"),
+        );
+        let workspace = load_workspace(temp.path()).expect("transitive registry workspace");
+        assert!(
+            resolve_workspace_local(&workspace, &app_selected, None, ResolveModeV1::UpdateLock)
+                .expect("registry classification")
+                .is_none()
+        );
+    }
+    #[test]
+    fn local_to_registry_transition_requires_permission_to_change_the_lock() {
+        let temp = TempDir::new().expect("temporary directory");
+        write(&temp.path().join("Musubi.toml"), APP);
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let selected = vec!["apps.sora/app".parse().expect("app")];
+        let local = resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock)
+            .expect("resolution")
+            .expect("local")
+            .lockfile;
+        assert!(
+            registry_previous_lock(Some(local.clone()), ResolveModeV1::UpdateLock)
+                .expect("transition")
+                .is_none()
+        );
+        assert!(matches!(
+            registry_previous_lock(Some(local), ResolveModeV1::Locked),
+            Err(GraphErrorV1::Resolver(ResolverError::LockChangeRequired))
+        ));
+    }
+    #[test]
+    fn mixed_workspace_uses_local_paths_while_publication_resolves_their_release_identities() {
+        let temp = TempDir::new().expect("temporary directory");
+        let app = format!(
+            "{APP}\n[dependencies]\nhelper = {{ path = \"helper\", package = \"apps.sora/helper\", version = \"^1.0.0\" }}\nremote = {{ package = \"apps.sora/remote\", version = \"^2.0.0\" }}\n"
+        );
+        write(&temp.path().join("Musubi.toml"), &app);
+        write(
+            &temp.path().join("helper/Musubi.toml"),
+            &local_package_manifest("helper", None),
+        );
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let selected = vec!["apps.sora/app".parse().expect("selector")];
+        let local = collect_local_roots(&workspace, &selected, GraphPurposeV1::Workspace)
+            .expect("workspace roots");
+        assert_eq!(local.len(), 2);
+        assert_eq!(
+            local[0]
+                .dependencies
+                .iter()
+                .map(|edge| edge.alias.as_ref())
+                .collect::<Vec<_>>(),
+            ["remote"]
+        );
+        let publication = collect_local_roots(&workspace, &selected, GraphPurposeV1::Publication)
+            .expect("publication roots");
+        assert_eq!(
+            publication[0]
+                .dependencies
+                .iter()
+                .map(|edge| edge.alias.as_ref())
+                .collect::<Vec<_>>(),
+            ["helper", "remote"]
+        );
+        assert!(
+            resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock)
+                .expect("classification")
+                .is_none()
+        );
+    }
+    #[test]
+    fn local_and_mixed_cycles_are_rejected_before_resolution() {
+        for registry_dependency in [
+            "",
+            "remote = { package = \"apps.sora/remote\", version = \"*\" }\n",
+        ] {
+            let temp = TempDir::new().expect("temporary directory");
+            write(
+                &temp.path().join("Musubi.toml"),
+                &format!(
+                    "{APP}\n[dependencies]\nhelper = {{ path = \"helper\" }}\n{registry_dependency}"
+                ),
+            );
+            write(
+                &temp.path().join("helper/Musubi.toml"),
+                &local_package_manifest("helper", Some(("app", ".."))),
+            );
+            let workspace = load_workspace(temp.path()).expect("workspace");
+            let selected = vec!["apps.sora/app".parse().expect("selector")];
+            for purpose in [GraphPurposeV1::Workspace, GraphPurposeV1::Publication] {
+                assert!(
+                    matches!(collect_local_roots(&workspace, &selected, purpose), Err(GraphErrorV1::LocalCycle(cycle))
+                    if cycle.iter().map(ToString::to_string).collect::<Vec<_>>() == ["apps.sora/app", "apps.sora/helper", "apps.sora/app"])
+                );
+            }
+            assert!(matches!(
+                resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock),
+                Err(GraphErrorV1::LocalCycle(_))
+            ));
+        }
+    }
+    #[test]
+    fn local_depth_limit_is_exact_and_shared_by_mixed_graphs() {
+        let temp = TempDir::new().expect("temporary directory");
+        let limit = usize::from(iroha_data_model::musubi::MUSUBI_MAX_RESOLUTION_DEPTH_V1);
+        for depth in [limit, limit + 1] {
+            write(
+                &temp.path().join("Musubi.toml"),
+                &format!("{APP}\n[dependencies]\nnext = {{ path = \"p000\" }}\n"),
+            );
+            for index in 0..depth {
+                let next = (index + 1 < depth).then(|| format!("../p{:03}", index + 1));
+                write(
+                    &temp.path().join(format!("p{index:03}/Musubi.toml")),
+                    &local_package_manifest(
+                        &format!("p{index:03}"),
+                        next.as_deref().map(|path| ("next", path)),
+                    ),
+                );
+            }
+            let selected = vec!["apps.sora/app".parse().expect("selector")];
+            let workspace = load_workspace(temp.path()).expect("workspace");
+            let result =
+                resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock);
+            if depth == limit {
+                assert!(result.expect("exact depth succeeds").is_some());
+            } else {
+                assert!(
+                    matches!(result, Err(GraphErrorV1::LocalDepthExceeded { limit: actual }) if actual == limit)
+                );
+                write(
+                    &temp.path().join("Musubi.toml"),
+                    &format!(
+                        "{APP}\n[dependencies]\nnext = {{ path = \"p000\" }}\nremote = {{ package = \"apps.sora/remote\", version = \"*\" }}\n"
+                    ),
+                );
+                let workspace = load_workspace(temp.path()).expect("mixed workspace");
+                assert!(matches!(
+                    collect_local_roots(&workspace, &selected, GraphPurposeV1::Workspace),
+                    Err(GraphErrorV1::LocalDepthExceeded { .. })
+                ));
+            }
+        }
+    }
+    #[test]
+    fn local_alias_reuse_and_aggregate_edges_fail_before_registry_classification() {
+        let temp = TempDir::new().expect("temporary directory");
+        write(
+            &temp.path().join("Musubi.toml"),
+            &format!(
+                "{APP}\n[dependencies]\nhelper = {{ path = \"helper\" }}\n[dev-dependencies]\nhelper = {{ path = \"helper\" }}\n"
+            ),
+        );
+        write(
+            &temp.path().join("helper/Musubi.toml"),
+            &local_package_manifest("helper", None),
+        );
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let selected = vec!["apps.sora/app".parse().expect("selector")];
+        assert!(
+            matches!(collect_local_members(&workspace, &selected), Err(GraphErrorV1::LocalGraphInvalid(reason)) if reason.contains("repeats dependency alias"))
+        );
+        let aliases = |path: &str| {
+            (0..MUSUBI_MAX_DEPENDENCIES_V1)
+                .map(|index| format!("a{index:03} = {{ path = \"{path}\" }}\n"))
+                .collect::<String>()
+        };
+        write(
+            &temp.path().join("Musubi.toml"),
+            &format!("{APP}\n[dependencies]\n{}", aliases("helper")),
+        );
+        write(
+            &temp.path().join("helper/Musubi.toml"),
+            &format!(
+                "{}\n[dependencies]\n{}",
+                local_package_manifest("helper", None),
+                aliases("../leaf")
+            ),
+        );
+        write(
+            &temp.path().join("leaf/Musubi.toml"),
+            &format!(
+                "{}\n[dependencies]\nremote = {{ package = \"apps.sora/remote\", version = \"*\" }}\n",
+                local_package_manifest("leaf", None)
+            ),
+        );
+        let workspace = load_workspace(temp.path()).expect("bounded manifests");
+        assert!(matches!(
+            resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock),
+            Err(GraphErrorV1::CandidateLimit)
+        ));
     }
     #[test]
     fn initial_query_inventory_contains_only_current_manifest_ranges() {
@@ -1084,6 +1747,7 @@ exports = []
                 None,
                 None,
                 ResolveModeV1::UpdateLock,
+                GraphPurposeV1::Publication,
             ),
             Err(GraphErrorV1::InvalidRegistryData(_))
         ));
@@ -1117,7 +1781,8 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
         );
         let workspace = load_workspace(temp.path()).expect("workspace");
         let selected = vec!["apps.sora/app".parse().expect("selector")];
-        let roots = collect_local_roots(&workspace, &selected).expect("local roots");
+        let roots = collect_local_roots(&workspace, &selected, GraphPurposeV1::Publication)
+            .expect("local roots");
         assert_eq!(
             roots
                 .iter()
@@ -1168,7 +1833,7 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
         let workspace = load_workspace(temp.path()).expect("workspace over root bound");
         assert!(matches!(
             collect_local_members(&workspace, &selected),
-            Err(GraphErrorV1::InvalidRegistryData(reason))
+            Err(GraphErrorV1::LocalGraphInvalid(reason))
                 if reason.contains("257-root consumer-lock bound")
         ));
     }

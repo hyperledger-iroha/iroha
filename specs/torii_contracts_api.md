@@ -64,6 +64,22 @@ Alias-write draft responses set `submitted: false` and include
 verify the decoded payload, sign it locally, construct a `SignedTransaction`,
 and submit through the standard transaction pipeline.
 
+### Contract-call response shape
+
+Contract-call preparation binds `QueuePlanSynced` in the signed payload. Local
+signing and detached-signature submission both require globally certified public
+admission of those exact bytes. The Rust and maintained SDK validators reject
+an `Ordinary` contract-call draft before signing or submission.
+
+`POST /v1/contracts/call` returns the closed `ContractCallResponseDto` shape
+described in [the lifecycle API](torii/contract_lifecycle_app_api.md#response-contractcallresponsedto).
+Every response key is present: unavailable nullable values are JSON `null`.
+An unsigned prepare response has null transaction hashes and `pipeline_status`;
+a submitted response has null unsigned-payload and signing-message fields.
+`transaction_ttl_ms` is null when the request supplies no TTL override.
+The nested `operation_receipt` also has a closed shape: its ten nullable fields
+remain required keys with explicit nulls. Missing or unknown keys are invalid.
+
 ### Type encodings (JSON)
 
 - `Hash` values inside a canonical manifest (for example `code_hash` and

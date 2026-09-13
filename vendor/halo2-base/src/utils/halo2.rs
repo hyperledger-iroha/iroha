@@ -1,3 +1,4 @@
+use crate::AssignedValue;
 use crate::ff::Field;
 use crate::halo2_proofs::{
     circuit::{AssignedCell, Cell, Region, Value},
@@ -6,7 +7,6 @@ use crate::halo2_proofs::{
     poly::kzg::commitment::ParamsKZG,
 };
 use crate::virtual_region::copy_constraints::{CopyConstraintManager, EXTERNAL_CELL_TYPE_ID};
-use crate::AssignedValue;
 
 pub use keygen::ProvingKeyGenerator;
 
@@ -58,6 +58,27 @@ pub fn raw_assign_advice_discarding_value<F: Field>(
     #[cfg(feature = "halo2-pse")]
     {
         let _ = raw_assign_advice(region, column, offset, value);
+    }
+}
+
+/// Assign advice and retain its physical cell without retaining its value.
+///
+/// Axiom returns the cell directly from discard-only assignment, including the
+/// floor planner's region offset. Other backends retain their ordinary cell API.
+#[inline(always)]
+pub fn raw_assign_advice_cell<F: Field>(
+    region: &mut Region<F>,
+    column: Column<Advice>,
+    offset: usize,
+    value: Value<impl Into<Assigned<F>>>,
+) -> Cell {
+    #[cfg(feature = "halo2-axiom")]
+    {
+        region.assign_advice_discarding_value(column, offset, value)
+    }
+    #[cfg(feature = "halo2-pse")]
+    {
+        raw_assign_advice(region, column, offset, value).cell()
     }
 }
 
@@ -118,7 +139,9 @@ pub fn constrain_virtual_equals_external<F: Field + Ord>(
     } else {
         // Only an external identity may first acquire coordinates at this bridge.
         assert_eq!(ctx_cell.type_id(), EXTERNAL_CELL_TYPE_ID);
-        copy_manager.assigned_advices.insert(ctx_cell, external_cell);
+        copy_manager
+            .assigned_advices
+            .insert(ctx_cell, external_cell);
     }
 }
 
@@ -192,3 +215,7 @@ mod keygen {
         }
     }
 }
+
+#[cfg(all(test, feature = "halo2-axiom"))]
+#[path = "halo2/cell_assignment_tests.rs"]
+mod cell_assignment_tests;

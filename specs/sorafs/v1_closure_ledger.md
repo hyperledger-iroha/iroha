@@ -33,6 +33,53 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
+## 2026-09-10 native custody source checkpoint
+
+This G02 slice is a private source candidate and has not been applied. Native
+StreamToken custody control requires the dedicated provider-scoped permission,
+current account/provider registration and exact revision/digest CAS. Retained
+history binds each transition to its original request, authority and execution
+coordinates. Exact authorized retries make no writes. Enrollment requires the
+previous committed control anchor; key-generation and first-use history prevent
+rollback or historical key reuse, and revocation remains terminal for that
+generation. Normal actions stop at revision 8,192; all actions, including earlier
+revokes, share the 8,194 total cap. The final two slots allow revocation without
+pruning earlier records.
+
+The Torii consumer resolves native custody from the same State view used for
+capture or validation, checks current provider registration and retains the
+independent durable Kura/QC checks. Historical control remains readable after
+provider removal; current mutations, retries and Torii use then fail. No token
+body, per-token journal or compatibility decoder is added to native control.
+
+The coherent source and budget candidate contains **31 newly authored tests and
+one expanded existing test, all native UNRUN**. A separate source-only supplement
+(ready SHA-256 `9f47914b9b6dc04f8ea719ee64a8b57bff0fb736e752933ded95cbcc6efade1c`)
+adds three local fixture tests, for **34 new plus one expanded test, all native
+UNRUN**. The further private namespace candidate
+(ready SHA-256 `6fd1c9f08f64928785bee86bd79fdc9e1556f48756b83e73481e7d449bddcabf`)
+adds six tests, retains eight extracted test selectors, adds the host cap ratchet
+27,505→27,440 (three downward ratchets in total), and reserves the native
+root as opaque alongside existing upstream generic guards, bringing the total
+to **40 new plus one expanded test, all native UNRUN**, without establishing a
+production raw-overwrite finding; the typed custody query remains the API. The native owner and Torii changes
+have independent source reviews. Private source preservation, formatting, patch
+replay and two downward budget ratchets do not establish compilation or runtime
+behavior. Matching native inventory, focused and retained tests, and the required
+full crate suites remain pending. The exact composition receipt is:
+
+`target/evidence/sorafs-v1/g02-native-stream-token-control-composition-candidate/candidate-ready.json`
+(SHA-256 `def821a0450b186d73d3023fe6bdce5d8674d0056ad5a4537547d6da820b76f5`).
+
+This checkpoint completes no goal or lane. Positive native custody integration
+with durable certified history, G02-specific generic-state runtime witnesses,
+and genuine HSM/PKCS#11/KMS custody and operation-authority qualification remain
+open. The genuine four-validator deployment with mandatory signed RS16
+DA/RBC, multiple providers, two independently administered regional gateways,
+load/soak, recovery rehearsal, workspace/SDK checks and independent security
+qualification are still required. All 17 signed readiness lanes and the trusted
+nine-prerequisite foundational envelope in its specified order remain mandatory.
+
 ## 2026-09-10 merge reconciliation checkpoint
 
 This checkpoint records work prepared after the resolved merge at HEAD

@@ -647,6 +647,76 @@ impl LifecycleLedgerV1 {
             .into_startup(self, verified)
             .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidStorageCut)
     }
+    /// Complete timeout retirement after a crash between WAL installation and
+    /// the ordinary body owner's cancellation. Authenticate every original
+    /// source and body before selecting leaves, then preserve the same opened
+    /// store's contiguous owner-open publication witness.
+    fn reconcile_timeout_body_pipeline_startup(
+        &self,
+        verified: &VerifiedHeightContext,
+        store: &V2BodyStore,
+        ledger_store: &LifecycleLedgerStoreV1,
+        adapter_startup: &ProductionLifecycleAdapterStartupV1,
+        original: super::replay_authority::PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<
+        (
+            Self,
+            super::replay_authority::PreparedDurableCertifiedBodyPipelineStartupV1,
+        ),
+        &'static str,
+    > {
+        let Some(frontier) = adapter_startup.recovered_lifecycle_output_frontier(verified)? else {
+            return Ok((self.clone(), original));
+        };
+        let eligible = self
+            .records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                (record.terminal() == Some(None)
+                    && matches!(
+                        record.work_class(),
+                        Some(
+                            LifecycleWorkClass::Fetch
+                                | LifecycleWorkClass::Store
+                                | LifecycleWorkClass::Validate
+                        )
+                    )
+                    && matches!(
+                        record.durable_payload(),
+                        Some(DurablePayloadReference::BodyFrame(_))
+                    )
+                    && record
+                        .replay_authority
+                        .ordinary_body_is_superseded_by_timeout(frontier))
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if eligible.is_empty() {
+            return Ok((self.clone(), original));
+        }
+        let mut reconciled = self.clone();
+        for index in eligible {
+            if !original.contains_live_ordinal(self.records[index].ordinal()) {
+                return Err("timeout body retirement lost its authenticated live leaf");
+            }
+            reconciled.records[index] = Self::cancelled_record(&self.records[index])
+                .map_err(|_| "timeout body retirement changed its exact leaf")?;
+        }
+        reconciled
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .map_err(|_| "timeout body retirement produced an invalid ledger")?;
+        let remaining = reconciled
+            .authenticate_durable_certified_body_pipeline_startup(verified, store)
+            .map_err(|_| "timeout body retirement changed the remaining body census")?;
+        ledger_store
+            .persist_exact_successor(self, &reconciled)
+            .map_err(|_| "timeout body retirement successor publication failed")?;
+        if !ledger_store.load().is_ok_and(|loaded| loaded == reconciled) {
+            return Err("timeout body retirement changed after publication");
+        }
+        Ok((reconciled, remaining))
+    }
     fn authenticate_durable_certified_body_pipeline_census(
         &self,
         verified: &VerifiedHeightContext,
@@ -1770,17 +1840,24 @@ impl LifecycleLedgerV1 {
                 "Decision body retirement changed its verified context".to_owned(),
             ));
         }
-        let eligible = self.records.iter().enumerate()
+        let eligible = self
+            .records
+            .iter()
+            .enumerate()
             .filter(|(_, record)| projection.supersedes_retained_body_record(record))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         if eligible.is_empty() {
             return Ok((self.clone(), false));
         }
-        let census = self.authenticate_durable_certified_body_pipeline_startup(verified, body_store)
-            .map_err(|_| LifecycleLedgerError::InvalidLedger(
-                "Decision body retirement cannot authenticate the original body census".to_owned(),
-            ))?;
+        let census = self
+            .authenticate_durable_certified_body_pipeline_startup(verified, body_store)
+            .map_err(|_| {
+                LifecycleLedgerError::InvalidLedger(
+                    "Decision body retirement cannot authenticate the original body census"
+                        .to_owned(),
+                )
+            })?;
         let mut reconciled = self.clone();
         for index in eligible {
             if !census.contains_live_ordinal(self.records[index].ordinal()) {

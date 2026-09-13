@@ -4356,6 +4356,290 @@ fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay
 }
 
 #[test]
+fn recovered_decision_fetch_store_publication_commits_catalogs_and_marker_together() {
+    let fixture = Fixture::new();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        key.0,
+        key.1,
+        HashOf::new(&fixture.manifest),
+    );
+    let body =
+        crate::sumeragi::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1::for_test(
+            fixture.manifest.clone(),
+            durable.clone(),
+        )
+        .expect("seal the exact persisted recovered response body");
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: key.0,
+        subject: key.1,
+        manifest: None,
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit),
+    };
+    let store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: key.0,
+        subject: key.1,
+    };
+    let ownership = bound_test_effect_ownership(&fetch, tag(0), 9_044)
+        .rebind_as_inherited_adapter_effect(&store)
+        .expect("project the recovered Decision Store successor");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&store)
+        .expect("bind the recovered Decision Store successor");
+    let expected_census = BTreeMap::from([(
+        key,
+        PublishedLifecycleStoreRetryCensusEntryV1::from_exact_published_store(
+            &store, &pending, &durable,
+        )
+        .expect("project the immutable Store publication"),
+    )]);
+
+    for preexisting in [false, true] {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        if preexisting {
+            executor
+                .recovered_bodies
+                .insert(key, (fixture.manifest.clone(), durable.clone()));
+            executor.durable_bodies.insert(key, durable.clone());
+        }
+        let snapshot = |executor: &V2EffectExecutor<FakeRuntime>| {
+            (
+                executor.recovered_bodies.clone(),
+                executor.durable_bodies.clone(),
+                executor
+                    .published_lifecycle_store_retry_census()
+                    .expect("read the exact Store marker census"),
+                executor.pending_work(),
+            )
+        };
+        let before = snapshot(&executor);
+        let unpublished = executor
+            .prepare_recovered_decision_fetch_store_publication(&body)
+            .expect("absent and exact preexisting catalogs both admit publication");
+        assert_eq!(snapshot(&executor), before);
+        drop(unpublished);
+        assert_eq!(snapshot(&executor), before);
+
+        let wrong_store = AdapterEffect::StoreBody {
+            tag: tag(1),
+            round: key.0,
+            subject: key.1,
+        };
+        assert!(
+            executor
+                .prepare_recovered_decision_fetch_store_publication(&body)
+                .expect("prepare the unchanged publication")
+                .bind_store_successor(&wrong_store, &pending)
+                .is_err()
+        );
+        assert_eq!(snapshot(&executor), before);
+
+        let bound_unpublished = executor
+            .prepare_recovered_decision_fetch_store_publication(&body)
+            .expect("prepare the unchanged publication")
+            .bind_store_successor(&store, &pending)
+            .expect("bind before the Ledger publication boundary");
+        assert_eq!(snapshot(&executor), before);
+        drop(bound_unpublished);
+        assert_eq!(snapshot(&executor), before);
+
+        let published = executor
+            .prepare_recovered_decision_fetch_store_publication(&body)
+            .expect("prepare the exact publication again")
+            .bind_store_successor(&store, &pending)
+            .expect("bind the exact durable Store successor");
+        executor.commit_recovered_decision_fetch_store_publication(published);
+        assert_eq!(
+            executor.recovered_bodies.get(&key),
+            Some(&(fixture.manifest.clone(), durable.clone()))
+        );
+        assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+        assert_eq!(
+            executor
+                .published_lifecycle_store_retry_census()
+                .expect("read the published Store marker"),
+            expected_census
+        );
+        let after = snapshot(&executor);
+        assert!(
+            executor
+                .prepare_recovered_decision_fetch_store_publication(&body)
+                .is_err()
+        );
+        assert_eq!(snapshot(&executor), after);
+        assert!(!executor.status().fail_closed);
+    }
+}
+
+#[test]
+fn recovered_decision_fetch_store_publication_rejects_partial_or_conflicting_catalogs() {
+    let fixture = Fixture::new();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        key.0,
+        key.1,
+        HashOf::new(&fixture.manifest),
+    );
+    let body =
+        crate::sumeragi::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1::for_test(
+            fixture.manifest.clone(),
+            durable.clone(),
+        )
+        .expect("seal the exact persisted recovered response body");
+    let mut conflicting_manifest = fixture.manifest.clone();
+    conflicting_manifest.chunk_root = Hash::new(b"conflicting recovered body catalog");
+    let conflicting_durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        key.0,
+        key.1,
+        HashOf::new(&conflicting_manifest),
+    );
+    for (recovered, durable_entry) in [
+        (Some((fixture.manifest.clone(), durable.clone())), None),
+        (None, Some(durable.clone())),
+        (
+            Some((conflicting_manifest.clone(), conflicting_durable.clone())),
+            Some(conflicting_durable.clone()),
+        ),
+        (
+            Some((conflicting_manifest.clone(), durable.clone())),
+            Some(durable.clone()),
+        ),
+        (
+            Some((fixture.manifest.clone(), conflicting_durable.clone())),
+            Some(durable.clone()),
+        ),
+        (
+            Some((fixture.manifest.clone(), durable.clone())),
+            Some(conflicting_durable.clone()),
+        ),
+    ] {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        if let Some(recovered) = recovered {
+            executor.recovered_bodies.insert(key, recovered);
+        }
+        if let Some(durable_entry) = durable_entry {
+            executor.durable_bodies.insert(key, durable_entry);
+        }
+        let before = (
+            executor.recovered_bodies.clone(),
+            executor.durable_bodies.clone(),
+        );
+        assert!(
+            executor
+                .prepare_recovered_decision_fetch_store_publication(&body)
+                .is_err()
+        );
+        assert_eq!(
+            (
+                executor.recovered_bodies.clone(),
+                executor.durable_bodies.clone(),
+            ),
+            before
+        );
+        assert!(executor.published_lifecycle_store_retry_markers.is_empty());
+        assert_eq!(executor.pending_work(), 0);
+        assert!(!executor.status().fail_closed);
+    }
+}
+
+#[test]
+fn recovered_decision_fetch_store_publication_rejects_overlapping_body_stage() {
+    let fixture = Fixture::new();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        key.0,
+        key.1,
+        HashOf::new(&fixture.manifest),
+    );
+    let body =
+        crate::sumeragi::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1::for_test(
+            fixture.manifest.clone(),
+            durable.clone(),
+        )
+        .expect("seal the exact persisted recovered response body");
+    for stage in [
+        "pipeline",
+        "ready",
+        "validated",
+        "rejected",
+        "retired_rejection",
+    ] {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()));
+        executor.durable_bodies.insert(key, durable.clone());
+        match stage {
+            "pipeline" => {
+                executor.body_pipeline_owners.insert(
+                    key,
+                    BodyPipelineOwner {
+                        tag: tag(0),
+                        manifest_hash: Some(HashOf::new(&fixture.manifest)),
+                    },
+                );
+            }
+            "ready" => {
+                executor.ready_bodies.insert(
+                    key,
+                    ReadyBody {
+                        manifest: fixture.manifest.clone(),
+                        bytes: Arc::from(fixture.body.clone()),
+                    },
+                );
+            }
+            "validated" => {
+                executor.validated_bodies.insert(
+                    key,
+                    ValidatedBodyReceipt::for_test_with_commitment(
+                        durable.clone(),
+                        fixture.qc(wire::GlobalPhase::Commit).execution_commitment,
+                    ),
+                );
+            }
+            "rejected" => {
+                executor.rejected_bodies.insert(key, durable.clone());
+            }
+            "retired_rejection" => {
+                executor
+                    .retired_rejected_bodies
+                    .insert(key, durable.clone());
+            }
+            _ => unreachable!("the collision matrix is closed"),
+        }
+        let snapshot = |executor: &V2EffectExecutor<FakeRuntime>| {
+            (
+                executor.recovered_bodies.clone(),
+                executor.durable_bodies.clone(),
+                executor.body_pipeline_owners.clone(),
+                executor.ready_bodies.clone(),
+                executor.validated_bodies.clone(),
+                executor.rejected_bodies.clone(),
+                executor.retired_rejected_bodies.clone(),
+            )
+        };
+        let before = snapshot(&executor);
+        assert!(
+            executor
+                .prepare_recovered_decision_fetch_store_publication(&body)
+                .is_err(),
+            "overlapping {stage} must retain its sole body owner"
+        );
+        assert_eq!(snapshot(&executor), before);
+        assert!(executor.published_lifecycle_store_retry_markers.is_empty());
+        assert!(!executor.status().fail_closed);
+    }
+}
+
+#[test]
 fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -6583,3 +6867,4 @@ fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
     assert!(executor.output_guard.restart_required());
 }
 include!("v2_effects_02_admission_handoffs.rs");
+include!("v2_effects_proposal_fetch_store_refinement.rs");

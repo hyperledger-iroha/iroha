@@ -48,18 +48,21 @@ for (const [name, value] of Object.entries(examples)) {
   test(`native instruction catalog ${name} preserves exact public value bytes`, () => {
     const input = structuredClone(value), snapshot = structuredClone(input);
     const bare = noritoEncodeGameValueV1(name, input);
-    const wire = noritoEncodeInstructionBoxArchive({ [name]: input });
-    const decoded = noritoDecodeInstructionBoxArchive(wire);
+    const wire = noritoEncodeInstructionBoxArchive({ [name]: input }, 753);
+    const decoded = noritoDecodeInstructionBoxArchive(wire, 753);
     assert.deepEqual(decoded[name], noritoDecodeGameValueV1(name, bare));
     assert.deepEqual(noritoEncodeGameValueV1(name, decoded[name]), bare);
-    assert.deepEqual(noritoEncodeInstructionBoxArchive(decoded), wire);
+    assert.deepEqual(noritoEncodeInstructionBoxArchive(decoded, 753), wire);
     const native = row(name);
     if (native) {
       assert.equal(bare.toString("hex").toUpperCase(), native.encoded_hex);
       assert.ok(wire.includes(Buffer.from(native.framed_hex, "hex")), "archive retains the exact native inner frame");
     }
     assert.deepEqual(input, snapshot);
-    assert.throws(() => noritoEncodeInstructionBoxArchive({ [name]: { ...input, extra: 1 } }), /missing or unknown fields/);
+    assert.throws(
+      () => noritoEncodeInstructionBoxArchive({ [name]: { ...input, extra: 1 } }, 753),
+      { name: "Error", code: "InvalidArg", message: `${name}: JSON error: unknown field \`extra\`` },
+    );
   });
 }
 
@@ -69,13 +72,23 @@ test("native checkpoint frontier preserves ordered signatures and shared field e
     value[field].signatures.reverse();
     const expected = { name: "RangeError", message: "Race signatures must be unique and ordered by slot" };
     assert.throws(() => noritoEncodeGameValueV1("CommitGameCheckpointV1", value), expected);
-    assert.throws(() => noritoEncodeInstructionBoxArchive({ CommitGameCheckpointV1: value }), expected);
+    assert.throws(
+      () => noritoEncodeInstructionBoxArchive({ CommitGameCheckpointV1: value }, 753),
+      { name: "Error", code: "InvalidArg", message: expected.message },
+    );
   }
   const value = structuredClone(examples.RevealGameInputsV1);
   value.reveal.epoch = "01";
   const expected = { name: "TypeError", message: "RevealGameInputsV1.reveal.epoch must be a canonical integer" };
   assert.throws(() => noritoEncodeGameValueV1("RevealGameInputsV1", value), expected);
-  assert.throws(() => noritoEncodeInstructionBoxArchive({ RevealGameInputsV1: value }), expected);
+  assert.throws(
+    () => noritoEncodeInstructionBoxArchive({ RevealGameInputsV1: value }, 753),
+    {
+      name: "Error",
+      code: "InvalidArg",
+      message: "RevealGameInputsV1.reveal.epoch must be a JSON safe unsigned integer or an exact decimal u64 string above 9007199254740991",
+    },
+  );
 });
 
 test("public resource facade retains independent native clause bytes and strict fields", () => {

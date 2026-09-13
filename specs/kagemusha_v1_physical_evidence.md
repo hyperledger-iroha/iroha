@@ -50,6 +50,25 @@ capability mask, platform, qualification report, validity interval, release
 candidate context and artifact inventory. Its attestation digest must match the
 retained raw OEM bytes.
 
+Each restart and power-loss cycle must end on a fresh hardware boot identifier
+that has not appeared earlier in the run, including the initial boot. Matching
+the immediately preceding boot and control pair is insufficient: returning to
+an older boot is rejected even when the event chain and observer approvals are
+valid. Sender recovery retains this same freshness requirement across the
+complete prefix and its subsequent recovery cycles.
+
+Inbox and outbox recovery must preserve every durable record field: the exact
+operation or credit identity, canonical bytes, certificate or receipt, revision
+and durable result. Per-attempt `latency_ms` and `rss_bytes` may differ after a
+restart. Each original and recovery measurement still undergoes integer/schema
+validation and contributes independently to the existing overall operation p95
+limit of 30,000 ms and whole-process RSS maximum of 128 MiB. Thermal folds also
+retain their separate 10,000 ms p95 limit. These are quantile limits, not a new
+per-attempt latency timeout or separate original/recovery populations;
+measurement changes do not permit any durable record substitution.
+See [release-runner software validation](kagemusha_v1_release_runner_validation.md)
+for the scoped regression evidence and remaining qualification limits.
+
 `iroha.kagemusha_v1.oem_attestation_verification_report` is a closed V1 JSON
 report. Besides standard schema/version/verification identifier fields, it binds:
 

@@ -14,7 +14,7 @@ import {
 import { isExactJsonMediaType } from "../src/toriiBoundedResponse.js";
 
 const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
-const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID, 753);
 
 class ToriiClient extends BaseToriiClient {
   constructor(baseUrl, options = {}) {
@@ -625,10 +625,7 @@ test("findFeeSponsorProgramById enforces its strict 64 KiB transport boundary", 
       status: 200,
       headers: { "Content-Type": "application/json, application/json" },
     }),
-    new Response(encoded, {
-      status: 200,
-      headers: { "Content-Type": 'application/json; profile="a,b"' },
-    }),
+
     new Response(encoded, {
       status: 200,
       headers: { "Content-Type": "application/json;" },
@@ -651,19 +648,21 @@ test("findFeeSponsorProgramById enforces its strict 64 KiB transport boundary", 
     assert.equal(isExactJsonMediaType(confusable), false);
   }
 
-  const parameterized = new ToriiClient("https://example.test", {
-    fetchImpl: async () => new Response(encoded, {
-      status: 200,
-      headers: {
-        "Content-Type": 'Application/JSON; charset="utf-8"; note="é"',
-      },
-    }),
-  });
-  const parameterizedProgram = await parameterized.findFeeSponsorProgramById(
-    programId,
-    { canonicalAuth },
-  );
-  assert.deepEqual(parameterizedProgram, program);
+  for (const contentType of [
+    'Application/JSON; charset="utf-8"; note="é"',
+    'application/json; profile="a,b"',
+  ]) {
+    const parameterized = new ToriiClient("https://example.test", {
+      fetchImpl: async () => new Response(encoded, {
+        status: 200,
+        headers: { "Content-Type": contentType },
+      }),
+    });
+    assert.deepEqual(
+      await parameterized.findFeeSponsorProgramById(programId, { canonicalAuth }),
+      program,
+    );
+  }
 
   const quotedRevision = new ToriiClient("https://example.test", {
     fetchImpl: async () => new Response(

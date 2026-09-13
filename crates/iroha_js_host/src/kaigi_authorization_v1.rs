@@ -1,7 +1,6 @@
 //! Native construction of the final context-bound Kaigi authorization proof.
 
 use iroha_data_model::{
-    account::AccountId,
     kaigi::{KaigiId, authorization::KaigiAuthorizationIdentitiesV1},
     proof::VerifyingKeyBox,
 };
@@ -76,8 +75,9 @@ pub(super) fn parse_context(
             "account identities must not contain surrounding whitespace",
         ));
     }
-    let host = AccountId::parse_encoded(host).map_err(invalid)?;
-    let subject = AccountId::parse_encoded(subject).map_err(invalid)?;
+    let _chain_guard = super::scoped_chain_discriminant_for_literal(host)?;
+    let host = super::parse_account_id(host, "Kaigi host")?;
+    let subject = super::parse_account_id(subject, "Kaigi subject")?;
     let identities = KaigiAuthorizationIdentitiesV1::new(
         network,
         &KaigiId::new(domain_id, name),
@@ -187,6 +187,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
+        account::AccountId,
         proof::ProofBox,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
@@ -211,6 +212,40 @@ mod tests {
             &[0x35; 32],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn explicit_host_selects_context_and_rejects_a_subject_from_another_network() {
+        use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+        let _outer = ChainDiscriminantGuard::enter(753);
+        let network =
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([3; 32])));
+        let mut first = None;
+        for prefix in [369, 42] {
+            let host = account(1).to_i105_for_discriminant(prefix).unwrap();
+            let subject = account(2).to_i105_for_discriminant(prefix).unwrap();
+            let parse = |subject: &str| {
+                parse_context(
+                    network.as_bytes(),
+                    "kaigi.universal",
+                    "native-proof",
+                    &host,
+                    subject,
+                    &BigInt::from(1_u64),
+                    "join",
+                    &[0x35; 32],
+                )
+            };
+            let context = parse(&subject).unwrap();
+            assert_eq!(chain_discriminant(), 753);
+            if let Some(first) = first {
+                assert_eq!(context, first);
+            } else {
+                first = Some(context);
+            }
+            assert!(parse(&account(2).to_i105_for_discriminant(753).unwrap()).is_err());
+            assert_eq!(chain_discriminant(), 753);
+        }
     }
 
     #[test]

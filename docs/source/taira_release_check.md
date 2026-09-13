@@ -2,19 +2,27 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **359 native regressions on macOS**: startup
+`--native-check-scope basic` runs **387 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **542-case** native census,
+Use `--native-check-scope full` to execute the full **570-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
+
+Both scopes cover Proposal Fetch-to-Store handoff after Prepare or Commit
+authority refinement, including a completion queued before the upgrade. The
+successor retains the original causal root and exact body coordinates. Restart
+recovery can cancel an obsolete Proposal output only when its authenticated
+SignProposal predecessor and installed WAL timeout prove that the view has
+closed. Cancellation preserves output ordering and the same durable row;
+failed persistence retains ownership and never invokes the output service.
 
 Both scopes exercise a full-block-gas contract call with another idle lane,
 reject over-budget sources before anchoring or shared execution, and verify that

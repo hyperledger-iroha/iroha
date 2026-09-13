@@ -30,9 +30,9 @@ test('Join requires explicit resources, rejects the obsolete native layout and s
   const signed = { ...join, resources: [clause] };
   const payload = value => buildBrowserInstructionTransactionPayload({ networkId: NetworkId.parse(fixture.network_id), authority: account(1),
     instructions: [buildJoinGameSessionV1(value)], feePayment: { payer: 'authority', chargeLimits: [{ kind: 'nexus', assetDefinitionId: join.expected_asset_definition, maxAmount: '0.25' }] }, creationTimeMs: 1, ttlMs: 120000 });
-  const digest = browserTransactionPayloadHashHex(payload(signed));
+  const digest = browserTransactionPayloadHashHex(payload(signed), 753);
   for (const changed of [{ ...clause, expected_metadata_hash: hash(9) }, { ...clause, role_id: hash(11) }, { ...clause, nft_id: 'other$equipment.universal' }]) {
-    assert.notEqual(browserTransactionPayloadHashHex(payload({ ...signed, resources: [changed] })), digest);
+    assert.notEqual(browserTransactionPayloadHashHex(payload({ ...signed, resources: [changed] }), 753), digest);
   }
   assert.throws(() => buildJoinGameSessionV1({ ...signed, resources: [{ ...clause, policy: { kind: 'return_to_winner_at_terminal', value: null } }] }));
 });
@@ -89,7 +89,7 @@ test('retained equipment event records validate common terminal return heights a
   const record = { slot: 0, nft_id: clause.nft_id, metadata_hash: clause.expected_metadata_hash, role_id: clause.role_id, policy, original_owner: account(1), custody: account(3), reserved_at_height: '10', released_at_height: '20' };
   assert.deepEqual(validateGameResourceRecordsV1([record], [account(1), account(2)]), [record]);
   assert.throws(() => validateGameResourceRecordsV1([record], [account(2), account(1)]));
-  const event = { session_id: join.session_id, revision: '2', phase: 6, dispute_root: hash(17), payout_claims: [], item_stakes: [], resources: [record], terminal_at_height: '20' };
+  const event = { session_id: join.session_id, revision: 2, phase: 6, dispute_root: hash(17), payout_claims: [], item_stakes: [], resources: [record], terminal_at_height: 20 };
   assert.deepEqual(decodeGameValueV1('GameSessionEventV1', encodeGameValueV1('GameSessionEventV1', event)), event);
 });
 

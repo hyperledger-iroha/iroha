@@ -51,7 +51,7 @@
     },
     {
       "stage": "poseidon",
-      "operation": "poseidon_hash_columns",
+      "operation": "digest384_trace_columns",
       "benchmark_json": "artifacts/poseidon/fastpq_metal_bench.json",
       "stats": {
         "cpu": {

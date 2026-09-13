@@ -1967,6 +1967,16 @@ mod tests {
     #[test]
     fn header_and_jni_names_pin_the_kagemusha_only_boundary() {
         let header = include_str!("../include/connect_norito_bridge.h");
+        let version = KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1;
+        assert!(header.contains(&format!(
+            "#define CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_FRAME_VERSION_V1 UINT16_C({version})"
+        )));
+        let swift = include_str!(
+            "../../../IrohaSwift/Sources/IrohaSwift/KagemushaCoreCoordinatorFrameV1.swift"
+        );
+        assert!(swift.contains(&format!(
+            "public static let schemaVersion: UInt16 = {version}"
+        )));
         for symbol in [
             "connect_norito_kagemusha_core_coordinator_contract_v1(",
             "connect_norito_kagemusha_core_coordinator_open_v1(",

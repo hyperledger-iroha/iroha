@@ -20,6 +20,145 @@ private final class ToriiRejectRedirectTaskDelegate: NSObject, URLSessionTaskDel
     }
 }
 
+/// A synchronous MainActor owner lease around one supplied action. Top-up task
+/// resume is supplied by the SDK, and must be invoked exactly once by the owner.
+public typealias ToriiTopUpOwnershipV1 = @MainActor @Sendable (_ action: @MainActor () throws -> Void) throws -> Void
+
+/// One bounded task on the caller's exact URLSession. Task creation, owner check
+/// and resume share MainActor execution; cancellation never queues a later POST.
+/// This is internal transport machinery, never an unverified top-up constructor.
+final class ToriiOwnedTopUpResponseTask: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let maximumBytes: Int
+    private let validateResponse: @Sendable (HTTPURLResponse) throws -> Void
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
+    private var task: URLSessionDataTask?
+    private var response: HTTPURLResponse?
+    private var body = Data()
+    private var cancelled = false
+    private var completed = false
+    private var ownerValidationPending = true
+    private var pendingResult: Result<(Data, HTTPURLResponse), Error>?
+
+    init(maximumBytes: Int, validateResponse: @escaping @Sendable (HTTPURLResponse) throws -> Void) {
+        self.maximumBytes = maximumBytes
+        self.validateResponse = validateResponse
+    }
+
+    @MainActor
+    func execute(session: URLSession, request: URLRequest,
+                 withCurrentOwner: @escaping ToriiTopUpOwnershipV1) async throws -> (Data, HTTPURLResponse) {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                self.continuation = continuation
+                let wasCancelled = cancelled
+                lock.unlock()
+                if wasCancelled { finish(.failure(CancellationError()), resolvingOwner: true); return }
+                var suspendedTask: URLSessionDataTask?
+                do {
+                    let task = session.dataTask(with: request)
+                    suspendedTask = task
+                    task.delegate = self
+                    // The owner lease encloses resume, with no actor hop or suspension.
+                    try Task.checkCancellation()
+                    var invocationCount = 0
+                    var actionCompleted = false
+                    var actionFailure: Error?
+                    try withCurrentOwner {
+                        invocationCount += 1
+                        do {
+                            guard invocationCount == 1 else {
+                                throw ToriiClientError.invalidPayload("top-up owner invoked dispatch more than once")
+                            }
+                            try Task.checkCancellation()
+                            lock.lock()
+                            self.task = task
+                            if cancelled { lock.unlock(); throw CancellationError() }
+                            task.resume()
+                            lock.unlock()
+                            actionCompleted = true
+                        } catch {
+                            if actionFailure == nil { actionFailure = error }
+                            throw error
+                        }
+                    }
+                    if let actionFailure { throw actionFailure }
+                    guard invocationCount == 1, actionCompleted else {
+                        throw ToriiClientError.invalidPayload("top-up owner did not invoke dispatch")
+                    }
+                    acceptDispatch()
+                } catch {
+                    finish(.failure(error), resolvingOwner: true)
+                    suspendedTask?.cancel()
+                }
+            }
+        } onCancel: { self.cancel() }
+    }
+
+    private func cancel() {
+        lock.lock(); cancelled = true; let task = self.task; lock.unlock()
+        finish(.failure(CancellationError()), resolvingOwner: true)
+        task?.cancel()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive value: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        do {
+            guard let response = value as? HTTPURLResponse else { throw ToriiClientError.invalidResponse }
+            try validateResponse(response)
+            lock.lock(); self.response = response; let stopped = completed; lock.unlock()
+            completionHandler(stopped ? .cancel : .allow)
+        } catch { finish(.failure(error)); completionHandler(.cancel) }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        guard !completed else { lock.unlock(); return }
+        guard data.count <= maximumBytes - body.count else {
+            lock.unlock()
+            finish(.failure(ToriiClientError.invalidPayload("KAGEMUSHA operation response exceeded its byte limit")))
+            dataTask.cancel()
+            return
+        }
+        body.append(data); lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock(); let response = self.response; let data = body; lock.unlock()
+        if let error { finish(.failure(error)) }
+        else if let response { finish(.success((data, response))) }
+        else { finish(.failure(ToriiClientError.invalidResponse)) }
+    }
+
+    private func acceptDispatch() {
+        lock.lock()
+        guard !completed else { lock.unlock(); return }
+        ownerValidationPending = false
+        guard let result = pendingResult, let continuation else { lock.unlock(); return }
+        pendingResult = nil; completed = true; self.continuation = nil; task = nil
+        lock.unlock()
+        continuation.resume(with: result)
+    }
+
+    private func finish(_ result: Result<(Data, HTTPURLResponse), Error>, resolvingOwner: Bool = false) {
+        lock.lock()
+        guard !completed, let continuation else { lock.unlock(); return }
+        if ownerValidationPending && !resolvingOwner {
+            if pendingResult == nil { pendingResult = result }
+            lock.unlock(); return
+        }
+        ownerValidationPending = false; pendingResult = nil
+        completed = true; self.continuation = nil; task = nil
+        lock.unlock()
+        continuation.resume(with: result)
+    }
+}
+
 public struct ToriiClientAuthentication: Equatable, Sendable {
     public let headers: [String: String]
 
@@ -11834,7 +11973,7 @@ public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
             throw DecodingError.dataCorruptedError(
                 forKey: .boundKind,
                 in: container,
-                debugDescription: "dynamic access hint bound_kind must be take or range"
+                debugDescription: "dynamic access hint bound_kind must be take or page"
             )
         }
         guard hasCanonicalMaximum else {
@@ -11853,7 +11992,7 @@ public struct ToriiContractDynamicAccessHint: Codable, Sendable, Equatable {
                 .init(codingPath: encoder.codingPath,
                       debugDescription:
                           "dynamic access hint must use a canonical state declaration, "
-                          + "StateMap key type, take/range bound, and max_keys in 1...64")
+                          + "StateMap key type, take/page bound, and max_keys in 1...64")
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -15168,6 +15307,7 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
 
 /// A server-prepared contract call whose exact signing bytes and all public
 /// operation bindings are retained for a detached Ed25519 signature.
+/// Preparation requires QueuePlanSynced admission before exposing signing bytes.
 public struct ToriiContractCallDraft: Sendable, Equatable {
     public let request: ToriiContractCallRequest
     public let transactionPayload: Data
@@ -26854,17 +26994,27 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiKagemushaStatus.self, from: data)
     }
 
-    /// Submit one exact canonical payer-signed KAGEMUSHA top-up transaction.
+    /// Submit only native-verified immutable signed bytes. The owner must still
+    /// own the durable original operation when this task actually resumes.
     public func submitKagemushaTopUp(
-        _ transaction: SignedTransactionEnvelope,
-        operationID: Data
+        _ submission: KagemushaPreparedTopUpSubmissionV1,
+        withCurrentOwner: @escaping ToriiTopUpOwnershipV1
     ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
-        return try await submitKagemushaOperation(
-            path: "/v1/kagemusha/top-up",
-            operationID: operationID,
-            expectedKind: .topUp,
-            body: transaction.norito
-        )
+        try await withCurrentOwner({})
+        do {
+            let result = try await submitKagemushaOperation(
+                path: "/v1/kagemusha/top-up",
+                operationID: submission.expectedRequest.operationID,
+                expectedKind: .topUp,
+                body: submission.signedTransactionBytes,
+                withCurrentOwner: withCurrentOwner
+            )
+            try await withCurrentOwner({})
+            return result
+        } catch {
+            try await withCurrentOwner({})
+            throw error
+        }
     }
 
     /// Submit one exact canonical full or partial KAGEMUSHA redemption request.
@@ -26903,7 +27053,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         path: String,
         operationID: Data,
         expectedKind: ToriiKagemushaOperationKindV1,
-        body: Data
+        body: Data,
+        withCurrentOwner: ToriiTopUpOwnershipV1? = nil
     ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
         try Self.requireKagemushaOperationID(operationID)
         let request = try makeRequest(
@@ -26917,7 +27068,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             ]
         )
         let (status, response) = try await receiveKagemushaOperationStatus(
-            request, acceptedStatuses: [200, 202])
+            request, acceptedStatuses: [200, 202], withCurrentOwner: withCurrentOwner)
         guard status.operationID == operationID, status.kind == expectedKind else {
             throw ToriiClientError.invalidPayload(
                 "KAGEMUSHA operation response does not match the submitted request"
@@ -26955,12 +27106,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     private func receiveKagemushaOperationStatus(
         _ request: URLRequest,
-        acceptedStatuses: Set<Int>
+        acceptedStatuses: Set<Int>,
+        withCurrentOwner: ToriiTopUpOwnershipV1? = nil
     ) async throws -> (ToriiUnverifiedKagemushaOperationStatusV1, HTTPURLResponse) {
         let (data, response) = try await sendBoundedSccpResponse(
             request,
             context: "KAGEMUSHA operation status",
-            maximumBytes: Self.kagemushaOperationStatusResponseMaximumBytes
+            maximumBytes: Self.kagemushaOperationStatusResponseMaximumBytes,
+            withCurrentOwner: withCurrentOwner
         )
         guard acceptedStatuses.contains(response.statusCode) else {
             throw ToriiClientError.httpStatus(
@@ -28172,7 +28325,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private func sendBoundedSccpResponse(
         _ request: URLRequest,
         context: String,
-        maximumBytes: Int
+        maximumBytes: Int,
+        withCurrentOwner: ToriiTopUpOwnershipV1? = nil
     ) async throws -> (Data, HTTPURLResponse) {
         precondition(maximumBytes > 0)
         if let url = request.url,
@@ -28189,6 +28343,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
         do {
             let observedAtLocalMs = currentEpochMs()
+            if let withCurrentOwner {
+                let task = ToriiOwnedTopUpResponseTask(maximumBytes: maximumBytes) { response in
+                    _ = try Self.validatedSccpContentLength(response, context: context, maximumBytes: maximumBytes)
+                }
+                let (data, response) = try await task.execute(
+                    session: session, request: request, withCurrentOwner: withCurrentOwner)
+                recordObservedServerClock(from: response, observedAtLocalMs: observedAtLocalMs)
+                let declaredLength = try Self.validatedSccpContentLength(
+                    response, context: context, maximumBytes: maximumBytes)
+                let encoding = response.value(forHTTPHeaderField: "Content-Encoding")?
+                    .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if encoding == nil || encoding == "" || encoding == "identity",
+                   let declaredLength, data.count != declaredLength {
+                    throw ToriiClientError.invalidPayload(
+                        "\(context) response length did not match its Content-Length header")
+                }
+                return (data, response)
+            }
             let (bytes, response) = try await session.bytes(
                 for: request,
                 delegate: ToriiRejectRedirectTaskDelegate.shared

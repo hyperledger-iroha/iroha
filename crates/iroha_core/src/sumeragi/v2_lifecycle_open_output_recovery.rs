@@ -44,10 +44,20 @@ impl ReadyRecoveredLifecycleBroadcastAttestationV1 {
 }
 
 impl PreparedLifecycleOutputRecoveryV1 {
+    #[cfg(test)]
     fn assemble(
         ledger: &LifecycleLedgerV1,
         verified: &VerifiedHeightContext,
         recovered_wal: RecoveredWalStartupProjectionV1<'_>,
+    ) -> Result<Self, LifecycleRecoveryAssemblyErrorKind> {
+        Self::assemble_with_frontier(ledger, verified, recovered_wal, None)
+    }
+
+    fn assemble_with_frontier(
+        ledger: &LifecycleLedgerV1,
+        verified: &VerifiedHeightContext,
+        recovered_wal: RecoveredWalStartupProjectionV1<'_>,
+        output_frontier: Option<crate::sumeragi::v2::LeaderWireRecoveryAuthority>,
     ) -> Result<Self, LifecycleRecoveryAssemblyErrorKind> {
         let mut entries = BTreeMap::new();
         let mut keys = BTreeSet::new();
@@ -89,8 +99,16 @@ impl PreparedLifecycleOutputRecoveryV1 {
             } else {
                 None
             };
+            let obsolete_proposal = output_frontier.and_then(|frontier| {
+                unique_proposal_sign_predecessor(ledger, record).map(|parent| (parent, frontier))
+            });
             let output = record
-                .authenticate_recovered_lifecycle_output(ledger.context(), verified, invalid_parent)
+                .authenticate_recovered_lifecycle_output(
+                    ledger.context(),
+                    verified,
+                    invalid_parent,
+                    obsolete_proposal,
+                )
                 .ok_or_else(|| {
                     LifecycleRecoveryAssemblyErrorKind::InvalidLifecycleOutputRecovery {
                         ordinal: record.ordinal(),
@@ -199,7 +217,7 @@ pub(in crate::sumeragi) enum RecoveredLifecycleOutputSettlementV1 {
     Deferred,
     /// The output source retained responsibility and the same Ready row remains owned.
     SourceRetained,
-    /// The exact output service and same-row terminal fsync both completed.
+    /// The exact output or authenticated cancellation and same-row terminal fsync completed.
     Completed,
 }
 
@@ -325,18 +343,20 @@ impl super::ProductionLifecycleOwnerV1 {
                 "cold output changed its exact Ready lifecycle row",
             ));
         }
-        match execute(output.effect())
-            .map_err(RecoveredLifecycleOutputSettlementErrorV1::Service)?
-        {
-            super::concrete_admission::LifecycleOutputServiceDispositionV1::Accepted => {}
-            super::concrete_admission::LifecycleOutputServiceDispositionV1::SourceRetained => {
-                return Ok(RecoveredLifecycleOutputSettlementV1::SourceRetained);
+        if output.requires_output_service() {
+            match execute(output.effect())
+                .map_err(RecoveredLifecycleOutputSettlementErrorV1::Service)?
+            {
+                super::concrete_admission::LifecycleOutputServiceDispositionV1::Accepted => {}
+                super::concrete_admission::LifecycleOutputServiceDispositionV1::SourceRetained => {
+                    return Ok(RecoveredLifecycleOutputSettlementV1::SourceRetained);
+                }
             }
         }
 
         let mut staged = coordinator.stage_durable_transaction();
         if staged
-            .finish_terminal(ordinal, super::TerminalOutcome::Advanced)
+            .finish_terminal(ordinal, output.terminal_outcome())
             .is_err()
             || !recovered_output_terminal_successor_is_exact(coordinator, &staged, output)
         {
@@ -424,7 +444,7 @@ fn recovered_output_terminal_successor_is_exact(
         && staged_record.stage == current_record.stage
         && staged_record.physical_slots == current_record.physical_slots
         && staged_record.episode == current_record.episode
-        && staged_record.state == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
+        && staged_record.state == super::LifecycleState::Terminal(output.terminal_outcome())
         && !staged.ready_index.contains(&ordinal)
         && staged.key_index == current.key_index
         && staged.owner_index == current.owner_index
@@ -434,6 +454,21 @@ fn recovered_output_terminal_successor_is_exact(
             .iter()
             .all(|(other, record)| *other == ordinal || staged.records.get(other) == Some(record))
         && super::ledger::LifecycleLedgerV1::from_coordinator(staged).is_ok()
+}
+
+fn unique_proposal_sign_predecessor<'ledger>(
+    ledger: &'ledger LifecycleLedgerV1,
+    child: &LifecycleLedgerRecordV1,
+) -> Option<&'ledger LifecycleLedgerRecordV1> {
+    if child.stage()?.kind() != LifecycleStageKind::BroadcastProposal {
+        return None;
+    }
+    let mut parents = ledger
+        .records()
+        .iter()
+        .filter(|parent| child.has_exact_proposal_sign_predecessor(ledger.context(), parent));
+    let parent = parents.next()?;
+    parents.next().is_none().then_some(parent)
 }
 
 fn has_durable_sign_predecessor(
@@ -512,6 +547,8 @@ mod output_recovery_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::block::consensus_v2 as wire;
     use iroha_model_base::peer::PeerId;
+
+    include!("tests/v2_lifecycle_obsolete_proposal_cases.rs");
 
     fn verified_fixture() -> (VerifiedHeightContext, Vec<KeyPair>) {
         let mut keys = (0x91_u8..=0x94)

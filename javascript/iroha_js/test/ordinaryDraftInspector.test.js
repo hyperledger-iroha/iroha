@@ -109,7 +109,7 @@ for (const name of ["VerifyExecutionProofV1", "SettleGameSessionV1"]) {
       proof,
       outcome: structuredClone(fixture.vectors.find((row) => row.name === "GameOutcomeV1").value),
     };
-    const instruction = noritoEncodeInstructionBoxArchive({ [name]: value });
+    const instruction = noritoEncodeInstructionBoxArchive({ [name]: value }, 753);
     const count = Buffer.alloc(8);
     count.writeBigUInt64LE(1n);
     const executable = Buffer.concat([Buffer.alloc(4), field(Buffer.concat([count, field(instruction)]))]);

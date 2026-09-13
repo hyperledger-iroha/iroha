@@ -35,9 +35,11 @@ use super::v2_lifecycle_coordinator::{
 };
 #[cfg(all(test, feature = "bls"))]
 use super::v2_lifecycle_coordinator::{
+    append_terminal_validate_before_current_control_for_test,
     control_timeout_supersession_persistence_failure_for_test,
     control_timeout_supersession_summary_for_test,
     install_non_timeout_broadcast_before_current_control_for_test,
+    install_proposal_broadcast_before_current_control_for_test,
     install_timeout_broadcasts_before_current_control_for_test,
 };
 use super::{
@@ -61,7 +63,8 @@ use super::{
         ValidatedBodyReceipt,
     },
     v2_lifecycle_coordinator::{
-        AdapterEffectAdmissionError, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
+        AdapterEffectAdmissionError, AuthenticatedBodyPipelineColdReplayOriginV1,
+        AuthenticatedRecoveredLifecycleSuccessorFloorV1,
         AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalStandaloneSignProjection,
@@ -513,6 +516,12 @@ impl RecoveredLifecycleLocalProposalAttemptV1 {
     fn from_authenticated_durable_current_round(
         adapter: &SumeragiV2Adapter,
     ) -> Result<Option<Self>, AdapterError> {
+        // A replay-authenticated Decision owns this height even when its Fetch
+        // authority moves into the pending-Kura seal. The ProposalIntent stays
+        // durable history, but must not mint runner-local proposal ownership.
+        if adapter.reducer.durable_state().decision().is_some() {
+            return Ok(None);
+        }
         let tag = adapter.reducer.current_tag();
         let round = reducer::Round::new(tag.height(), tag.view());
         let Some(proposal) = adapter.reducer.durable_state().proposal_intent(round) else {
@@ -600,6 +609,7 @@ pub(in crate::sumeragi) struct CertifiedBodyPipelineColdReplayStepV1 {
 }
 #[derive(Clone, Debug)]
 enum CertifiedBodyPipelineColdReplayKindV1 {
+    BodyOrigin(AuthenticatedBodyPipelineColdReplayOriginV1),
     BodyAvailable {
         tag: reducer::EventTag,
         manifest: wire::PayloadManifest,
@@ -616,10 +626,21 @@ impl CertifiedBodyPipelineColdReplayStepV1 {
     /// both reducer inputs at one immutable lifecycle ordinal.
     pub(in crate::sumeragi) const fn order_key(&self) -> (u128, u8) {
         let sequence = match &self.kind {
-            CertifiedBodyPipelineColdReplayKindV1::BodyAvailable { .. } => 0,
-            CertifiedBodyPipelineColdReplayKindV1::BodyStored { .. } => 1,
+            CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(_) => 0,
+            CertifiedBodyPipelineColdReplayKindV1::BodyAvailable { .. } => 1,
+            CertifiedBodyPipelineColdReplayKindV1::BodyStored { .. } => 2,
         };
         (self.ordinal, sequence)
+    }
+    /// Retain the complete authenticated predecessor before body completion replay.
+    pub(in crate::sumeragi) fn body_origin(
+        ordinal: u128,
+        origin: AuthenticatedBodyPipelineColdReplayOriginV1,
+    ) -> Option<Self> {
+        (ordinal != 0 && origin.tag().height() == origin.manifest().round.height).then_some(Self {
+            ordinal,
+            kind: CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(origin),
+        })
     }
     /// Seal one terminal Fetch input and its exact live Store effect.
     pub(in crate::sumeragi) fn body_available(
@@ -687,6 +708,9 @@ impl CertifiedBodyPipelineColdReplayStepV1 {
     #[cfg(test)]
     fn is_structurally_exact_for_test(&self) -> bool {
         match &self.kind {
+            CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(origin) => {
+                origin.tag().height() == origin.manifest().round.height
+            }
             CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
                 tag,
                 manifest,
@@ -1065,6 +1089,38 @@ impl ProductionLeaderWireLaunchAuthorityV1 {
     }
 }
 impl ProductionLifecycleAdapterStartupV1 {
+    /// Retain the actual replayed WAL frontier for same-row obsolete output cancellation.
+    /// This comparison capability never reconstructs a runtime producer or permits fanout.
+    pub(in crate::sumeragi) fn recovered_lifecycle_output_frontier(
+        &self,
+        verified: &VerifiedHeightContext,
+    ) -> Result<Option<LeaderWireRecoveryAuthority>, &'static str> {
+        let adapter = match &self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                leader_wire_launch_prepared,
+                ..
+            } if effects.is_empty() && !*leader_wire_launch_prepared => adapter,
+            #[cfg(test)]
+            ProductionLifecycleAdapterStartupStateV1::Fixture => return Ok(None),
+            _ => return Err("cold output frontier requires pristine recovered adapter startup"),
+        };
+        if &adapter.wire_context != verified.context()
+            || adapter.proofs_of_possession.as_slice() != verified.proofs_of_possession()
+            || adapter.current_tag().height() != verified.context().height
+        {
+            return Err("cold output frontier changed its verified context");
+        }
+        adapter
+            .authenticate_recovered_wal_frontier()
+            .map_err(|_| "cold output frontier changed its authenticated WAL")?;
+        adapter
+            .leader_wire_recovery_authority()
+            .map(Some)
+            .map_err(|_| "cold output frontier lost its durable reducer authority")
+    }
+
     fn recovered(adapter: SumeragiV2Adapter, effects: Vec<AdapterEffect>) -> Self {
         Self {
             state: ProductionLifecycleAdapterStartupStateV1::Recovered {
@@ -1077,6 +1133,28 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
     }
 
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn recovered_for_test(
+        adapter: SumeragiV2Adapter,
+        effects: Vec<AdapterEffect>,
+    ) -> Self {
+        Self::recovered(adapter, effects)
+    }
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn into_adapter_for_test(
+        self,
+    ) -> (SumeragiV2Adapter, Vec<AdapterEffect>) {
+        match self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply: None,
+                local_proposal_attempt: None,
+                leader_wire_launch_prepared: false,
+            } => (adapter, effects),
+            _ => panic!("cold body replay fixture retained foreign startup debt"),
+        }
+    }
     fn recovered_with_local_proposal_attempt(
         adapter: SumeragiV2Adapter,
         effects: Vec<AdapterEffect>,
@@ -1143,8 +1221,9 @@ impl ProductionLifecycleAdapterStartupV1 {
     /// Replay the exact terminal ordinary certified-body prefix retained by
     /// LedgerV1 before any Store or Validate successor is exposed as Ready.
     ///
-    /// Each input is prepared on cloned reducer state and must apply with the
-    /// exact effect already authenticated by the lifecycle/body-store join.
+    /// The authenticated origin first restores the exact volatile body predecessor.
+    /// Each completion is then prepared on cloned reducer state and must apply
+    /// with the exact effect authenticated by the lifecycle/body-store join.
     /// Busy, stale, duplicate, missing-work, or effect-shape outcomes are all
     /// startup-fatal: accepting any of them would publish a concrete carrier
     /// whose reducer predecessor was not reconstructed in this process.
@@ -1206,6 +1285,9 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
         for step in steps {
             match &step.kind {
+                CertifiedBodyPipelineColdReplayKindV1::BodyOrigin(origin) => {
+                    adapter.restore_authenticated_cold_body_origin(origin)?;
+                }
                 CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
                     tag,
                     manifest,
@@ -2928,6 +3010,7 @@ impl VerifiedHeightContext {
     }
 }
 include!("v2_verified_height_context_recovered_output_auth.rs");
+include!("v2_cold_body_pipeline_origin.rs");
 /// A canonical message whose safety intent is already durable and may be signed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SignRequest {
@@ -9457,6 +9540,10 @@ impl SignatureAggregator for BlsNormalSignatureAggregator {
         }
     }
 }
+#[path = "v2_complete_tip_activation.rs"]
+mod complete_tip_activation;
+pub(crate) use complete_tip_activation::RecoveredSuccessorDecisionActivationAuthorityV1;
+
 /// Fatal or structurally invalid adapter input.
 #[derive(Debug, Error)]
 pub(crate) enum AdapterError {
@@ -9478,6 +9565,9 @@ pub(crate) enum AdapterError {
     /// Successor context is not anchored to the supplied durable parent.
     #[error("Sumeragi v2 height context does not match its durable parent artifact")]
     ParentContextMismatch,
+    /// CompleteTip's successor Decision is not an exact durable, unapplied WAL owner.
+    #[error("Sumeragi v2 recovered successor Decision is not ready for exact activation")]
+    RecoveredSuccessorDecisionActivationMismatch,
     /// Successor election inputs changed outside a certified epoch boundary or
     /// differ from the finalized next-epoch snapshot.
     #[error("Sumeragi v2 successor context violates the certified epoch transition")]
@@ -9842,31 +9932,6 @@ fn commit_qc_status(
     })
 }
 impl SumeragiV2Adapter {
-    /// Return whether the exact live Decision WAL source still awaits its
-    /// Validate-to-Apply body-frame join. This borrows the affine seal only;
-    /// lifecycle publication remains its sole consuming path.
-    #[cfg(test)]
-    pub(crate) fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: reducer::EventTag,
-        decision_round: wire::ConsensusRound,
-        proposal_round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        execution_commitment: wire::ExecutionCommitment,
-    ) -> bool {
-        self.pending_live_decision_apply
-            .as_ref()
-            .is_some_and(|sealed| {
-                sealed.exactly_binds_pending_apply_decision(
-                    tag,
-                    decision_round,
-                    proposal_round,
-                    subject,
-                    execution_commitment,
-                )
-            })
-    }
-
     /// Open the safety WAL, replay every complete frame, and resume durable work.
     ///
     /// Network ingress is never exposed before replay has completed.  The
@@ -18982,6 +19047,8 @@ enum WalRecordV2 {
     InstallTimeout(wire::TimeoutCertificate),
     Decision(wire::QuorumCertificate),
 }
+#[cfg(test)]
+include!("v2_retained_incident_diagnostic.rs");
 #[derive(Clone, Default)]
 struct WireRegistry {
     wire_context: Option<wire::HeightContext>,
@@ -19118,6 +19185,8 @@ mod tests {
     include!("tests/v2_adapter_main_02.rs");
     include!("tests/v2_adapter_main_03.rs");
     include!("tests/v2_adapter_main_04.rs");
+    include!("tests/v2_adapter_complete_tip_decision_activation_cases.rs");
+    include!("tests/v2_adapter_complete_tip_decision_authority_cases.rs");
 
     /// Open one genuine recovered Decision Apply owner for cross-lineage tests.
     #[cfg(feature = "bls")]

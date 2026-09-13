@@ -402,7 +402,7 @@ pub mod compute {
     use iroha_data_model::compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputePriceAmplifiers, ComputePriceDeltaBounds,
         ComputePriceRiskClass, ComputePriceWeights, ComputeRandomnessPolicy, ComputeResourceBudget,
-        ComputeSandboxMode, ComputeSandboxRules, ComputeSponsorPolicy, ComputeStorageAccess,
+        ComputeSandboxRules, ComputeSponsorPolicy, ComputeStorageAccess,
     };
     use iroha_model_base::name::Name;
     use std::str::FromStr;
@@ -483,7 +483,6 @@ pub mod compute {
                 max_io_bytes: nonzero!(16 * 1024 * 1024_u64),
                 max_egress_bytes: nonzero!(8 * 1024 * 1024_u64),
                 allow_gpu_hints: false,
-                allow_wasi: false,
             },
         );
         profiles.insert(
@@ -495,7 +494,6 @@ pub mod compute {
                 max_io_bytes: nonzero!(24 * 1024 * 1024_u64),
                 max_egress_bytes: nonzero!(12 * 1024 * 1024_u64),
                 allow_gpu_hints: true,
-                allow_wasi: true,
             },
         );
         profiles
@@ -567,7 +565,6 @@ pub mod compute {
     /// Default sandbox rules for compute execution.
     pub fn sandbox_rules() -> ComputeSandboxRules {
         ComputeSandboxRules {
-            mode: ComputeSandboxMode::IvmOnly,
             randomness: ComputeRandomnessPolicy::SeededFromRequest,
             storage: ComputeStorageAccess::ReadOnly,
             deny_nondeterministic_syscalls: true,

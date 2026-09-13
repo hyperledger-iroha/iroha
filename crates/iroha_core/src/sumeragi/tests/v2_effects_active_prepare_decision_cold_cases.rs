@@ -1,3 +1,163 @@
+#[test]
+fn live_idle_decision_cleanup_reconciles_runner_frontier() {
+    let result = crate::sumeragi::sumeragi_thread_builder("live-idle-decision-cleanup")
+        .spawn(|| {
+            for pacemaker_only in [false, true] {
+                let mut fixture = ready_body_fixture();
+                // The paired body fixture starts with a generic worker shell.
+                // Bind its closed, drained ingress to this actual adapter WAL
+                // before any live transition; later cuts use normal monotone
+                // production reconciliation without replacing its authority.
+                let initial_wal_authority = fixture
+                    .transport
+                    .executor
+                    .runtime
+                    .leader_wire_recovery_authority()
+                    .expect("read the actual initial runtime WAL authority")
+                    .expect("the production runtime has one WAL authority");
+                crate::sumeragi::v2_worker::tests::install_completion_runtime_wal_authority_for_test(
+                    &mut fixture.services,
+                    initial_wal_authority,
+                );
+                let mut ordinal = fixture.ordinal;
+                for next in [LifecycleWorkClass::Store, LifecycleWorkClass::Validate] {
+                    let advanced = fixture
+                        .owner
+                        .dispatch_completion_for_test(
+                            &mut fixture.services,
+                            &mut fixture.transport.executor,
+                            0,
+                        )
+                        .expect("advance the real body to its Ready Validate owner");
+                    let ProductionCompletionDispatchV1::BodyStageAdvanced {
+                        parent_ordinal,
+                        child_ordinal,
+                        child,
+                    } = advanced
+                    else {
+                        panic!("the exact certified body owner must advance normally")
+                    };
+                    assert_eq!(parent_ordinal, ordinal);
+                    assert_eq!(child, next);
+                    ordinal = child_ordinal;
+                }
+                let before = fixture
+                    .owner
+                    .active_body_owner_before_decision_cold_for_test(
+                        ordinal,
+                        LifecycleWorkClass::Validate,
+                    );
+                let now = Instant::now();
+                fixture
+                    .transport
+                    .executor
+                    .arm_live_clocks(
+                        ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                        now,
+                    )
+                    .expect("arm the real serialized runtime before Decision");
+                let commit = fixture.transport.quorum_certificate(
+                    wire::GlobalPhase::Commit,
+                    fixture.transport.canonical_commitment,
+                );
+                let decision = (
+                    commit.round,
+                    commit.proposal_round,
+                    commit.subject,
+                    commit.execution_commitment,
+                );
+                let wal_path = fixture
+                    .transport
+                    ._directory
+                    .path()
+                    .join("transport-regression-safety.wal");
+                let wal_before = std::fs::read(&wal_path).expect("pre-Decision safety WAL");
+                // Hold the actual post-persistence/pre-runtime cut. An already
+                // Durable body retains Validate and emits no Decision effect;
+                // no executor state is synthesized or cleared for this fixture.
+                let driver = fixture.transport.executor.runtime.driver_mut_for_test();
+                let authenticated = driver
+                    .authenticate(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::QuorumCertificate(commit),
+                    ))
+                    .expect("authenticate the real three-validator CommitQC");
+                let outcome = driver
+                    .receive_authenticated(authenticated)
+                    .expect("fsync Decision while the exact Validate is still Ready");
+                assert!(outcome.effects().is_empty());
+                let wal_after = std::fs::read(&wal_path).expect("fsynced Decision safety WAL");
+                assert!(wal_after.starts_with(&wal_before));
+                assert!(wal_after.len() > wal_before.len());
+                let executor = &mut fixture.transport.executor;
+                assert!(executor
+                    .runtime
+                    .leader_wire_recovery_authority()
+                    .expect("read the actual post-Decision runtime WAL authority")
+                    .expect("Decision retains its exact WAL authority")
+                    .monotonically_extends(initial_wal_authority));
+                assert_eq!(executor.runtime.decided_body().unwrap(), Some(decision));
+                assert!(executor.protected_decision.is_none());
+                assert!(executor.pending_runner_decision_cleanup.is_none());
+                let step = if pacemaker_only {
+                    executor.step_pacemaker_once(now, &mut fixture.services)
+                } else {
+                    executor.step(now, &mut fixture.services)
+                }
+                .expect("observe the live Decision in an otherwise idle runtime turn");
+                assert_eq!(step, EffectExecutorStep::Idle);
+                assert!(executor.protected_decision.is_none());
+                let pending = executor
+                    .pending_runner_decision_cleanup
+                    .expect("a live zero-effect Decision still requires runner cleanup");
+                assert_eq!(pending.decision, decision);
+                assert!(executor.retained_effect_batch.is_none());
+                assert!(executor.parked_effect_batch.is_none());
+                let directive = executor.local_proposal_directive().unwrap();
+                assert!(matches!(
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    ),
+                    Err(EffectExecutorError::Contract(reason))
+                        if reason == "runner Decision cleanup changed the exact Decision handoff"
+                ));
+                // This is the shared production helper used by ordinary and
+                // pacemaker runner cleanup, not private executor reconciliation.
+                crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+                    executor,
+                    &mut fixture.services,
+                )
+                .expect("reconcile the exact Decision before runner acknowledgement");
+                assert_eq!(executor.protected_decision, Some(decision));
+                assert_eq!(executor.pending_runner_decision_cleanup, Some(pending));
+                let directive = executor.local_proposal_directive().unwrap();
+                executor
+                    .acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    )
+                    .expect("the unchanged exact handoff may now be acknowledged");
+                assert!(executor.pending_runner_decision_cleanup.is_none());
+                assert!(!executor.output_guard.restart_required());
+                fixture
+                    .owner
+                    .assert_active_body_owner_after_decision_cold_for_test(
+                        &before,
+                        LifecycleWorkClass::Validate,
+                    );
+                assert_eq!(
+                    std::fs::read(&wal_path).expect("WAL after process-local cleanup"),
+                    wal_after,
+                );
+            }
+        })
+        .expect("production consensus stack")
+        .join();
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 // Crash after the real Commit WAL append, before any current Decision effect
 // can replace or settle an already durable Prepare body owner.
 fn active_prepare_body_survives_decision_crash_fixture(
@@ -128,7 +288,12 @@ fn active_prepare_body_survives_decision_crash_fixture(
     // executable owner; cold startup authenticates both durable stores itself.
     drop(pending_decision);
     if timeout_before_commit {
-        recover_stale_prepare_decision_crash_fixture(fixture, snapshot, ordinal, expected_decision);
+        recover_stale_prepare_decision_crash_fixture(
+            fixture,
+            Some((snapshot, ordinal)),
+            expected_decision,
+            false,
+        );
         return;
     }
     let (mut fixture, _gate) =
@@ -213,14 +378,18 @@ fn active_prepare_body_survives_decision_crash_fixture(
         assert_eq!(child, next);
         ordinal = child_ordinal;
     }
-    finish_current_decision_validate_and_reopen(fixture, ordinal);
+    finish_current_decision_validate_and_reopen(fixture, ordinal, false);
 }
 
-fn finish_current_decision_validate_and_reopen(mut fixture: ReadyBodyFixture, ordinal: u128) {
+fn finish_current_decision_validate_and_reopen(
+    mut fixture: ReadyBodyFixture,
+    ordinal: u128,
+    decision_reconciled: bool,
+) {
     fixture
         .transport
         .executor
-        .assert_cold_decision_protection_for_test(fixture.transport.subject, false);
+        .assert_decision_protection_for_test(fixture.transport.subject, decision_reconciled, false);
     assert_eq!(fixture.owner.dispatch_completion_for_test(
         &mut fixture.services, &mut fixture.transport.executor, 0,
     ).expect("queue the single real recovered Validate"),
@@ -272,7 +441,7 @@ fn finish_current_decision_validate_and_reopen(mut fixture: ReadyBodyFixture, or
     fixture
         .transport
         .executor
-        .assert_cold_decision_protection_for_test(fixture.transport.subject, true);
+        .assert_decision_protection_for_test(fixture.transport.subject, true, true);
     let settled_validate = fixture.planner_io.lifecycle_validate_io_snapshot();
     assert_eq!(settled_validate.command_depth(), 0);
     assert_eq!(settled_validate.physical_admissions(), 0);
@@ -283,18 +452,140 @@ fn finish_current_decision_validate_and_reopen(mut fixture: ReadyBodyFixture, or
     assert_active_prepare_linked_apply_cold_reopens(fixture, child_ordinal);
 }
 
+#[test]
+fn cold_decision_fetch_publishes_first_network_body_through_completion_and_apply() {
+    let result = crate::sumeragi::sumeragi_thread_builder("cold-decision-first-body")
+        .spawn(|| {
+            for fail_publication in [false, true] {
+                let mut transport =
+                    ProductionTransportFixture::new_with_local_role_and_queue_config(
+                        Some(crate::sumeragi::v2_core::CommitteeRole::Leader),
+                        RuntimeQueueConfig::default(),
+                    );
+                let local = transport
+                    .executor
+                    .local_validator
+                    .expect("the current leader");
+                let verified = VerifiedHeightContext::genesis(
+                    transport.context.clone(),
+                    transport
+                        .validator_keys
+                        .iter()
+                        .map(|key| {
+                            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                .expect("validator PoP")
+                        })
+                        .collect(),
+                )
+                .expect("verify all four validators");
+                let directory = TempDir::new().expect("body-free Decision lifecycle owner");
+                let mut owner = ProductionLifecycleOwnerV1::empty_owner_for_ingress_test(
+                    verified,
+                    &transport.validator_keys[usize::try_from(local).expect("local index")],
+                    directory.path(),
+                );
+                let ordinals = RuntimeLifecycleOrdinalSource::from_authority(
+                    owner.bind_empty_ingress_ordinal_authority_for_test(),
+                );
+                let adapter = transport.executor.runtime.into_driver();
+                let (runtime, startup) = SerializedV2Runtime::new_with_lifecycle_ordinals(
+                    adapter,
+                    Vec::new(),
+                    Instant::now(),
+                    Duration::from_secs(10),
+                    RuntimeQueueConfig::default(),
+                    ordinals.clone(),
+                )
+                .expect("pair the empty owner and real WAL adapter");
+                assert!(startup.is_empty());
+                transport.executor = V2EffectExecutor::with_runtime(
+                    runtime,
+                    BTreeMap::new(),
+                    transport.context.clone(),
+                    PeerId::new(transport.requester_key.public_key().clone()),
+                    Some(local),
+                    EffectQueueConfig::default(),
+                )
+                .expect("start with no recovered, durable or validated body catalog");
+                transport._lifecycle_ordinals = ordinals;
+                assert!(transport.executor.recovered_bodies.is_empty());
+                assert!(transport.executor.durable_bodies.is_empty());
+                let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+                let planner_io = owner.bind_body_store_to_planner_io_for_test(
+                    &mut services,
+                    local,
+                    Arc::clone(&transport.executor.output_guard),
+                    1,
+                );
+                let certificate = transport
+                    .quorum_certificate(wire::GlobalPhase::Prepare, transport.canonical_commitment);
+                let commit = transport
+                    .quorum_certificate(wire::GlobalPhase::Commit, transport.canonical_commitment);
+                let decision = Some((
+                    commit.round,
+                    commit.proposal_round,
+                    commit.subject,
+                    commit.execution_commitment,
+                ));
+                let driver = transport.executor.runtime.driver_mut_for_test();
+                let authenticated = driver
+                    .authenticate(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::QuorumCertificate(commit),
+                    ))
+                    .expect("authenticate the body-free Commit quorum");
+                let pending = driver
+                    .receive_authenticated(authenticated)
+                    .expect("fsync Commit before any body acquisition or ledger dispatch");
+                assert!(matches!(
+                    pending.effects(),
+                    [AdapterEffect::FetchBody { .. }]
+                ));
+                assert_eq!(transport.executor.runtime.decided_body().unwrap(), decision);
+                assert!(transport.executor.recovered_bodies.is_empty());
+                assert!(transport.executor.durable_bodies.is_empty());
+                drop(pending);
+                // No response was enqueued or persisted before this genuine crash.
+                // The common tail proves empty catalogs after both cold opens and
+                // after physical persistence, then drives outer Completion, Store,
+                // physical Validate, Apply publication and another cold reopen.
+                recover_stale_prepare_decision_crash_fixture(
+                    ReadyBodyFixture {
+                        transport,
+                        owner,
+                        planner_io,
+                        services,
+                        _owner_directory: directory,
+                        certificate,
+                        ordinal: 0,
+                    },
+                    None,
+                    decision,
+                    fail_publication,
+                );
+            }
+        })
+        .expect("production consensus stack")
+        .join();
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 // Reopen at two real crash boundaries before executing the fresh Decision's
 // signed-response persistence, then use the ordinary physical Validate tail.
 fn recover_stale_prepare_decision_crash_fixture(
     fixture: ReadyBodyFixture,
-    previous: crate::sumeragi::v2_lifecycle_coordinator::BodyOwnerSnapshotForTest,
-    previous_ordinal: u128,
+    previous: Option<(
+        crate::sumeragi::v2_lifecycle_coordinator::BodyOwnerSnapshotForTest,
+        u128,
+    )>,
     expected_decision: Option<(
         wire::ConsensusRound,
         wire::ConsensusRound,
         wire::BlockSubject,
         wire::ExecutionCommitment,
     )>,
+    fail_publication: bool,
 ) {
     use crate::sumeragi::v2_lifecycle_coordinator::{
         LaunchedProductionLifecycleV1, ProductionLifecycleIngressSelectionV1,
@@ -331,12 +622,15 @@ fn recover_stale_prepare_decision_crash_fixture(
         .path()
         .join("transport-regression-safety.wal");
     let ledger_path = directory.path().join("ledger/lifecycle-ledger-v1.norito");
+    let queued_commit = (previous.is_none() && !fail_publication).then(|| {
+        transport.quorum_certificate(wire::GlobalPhase::Commit, transport.canonical_commitment)
+    });
     planner_io.detach(&mut services);
     drop(services);
     drop(owner);
     drop(transport.executor);
     let reopen = || {
-        SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+        SumeragiV2Adapter::reopen_body_owner_for_test(
             &wal_path,
             directory.path(),
             VerifiedHeightContext::genesis(context.clone(), proofs.clone())
@@ -353,7 +647,17 @@ fn recover_stale_prepare_decision_crash_fixture(
         )
     };
     let mut first = reopen();
-    let fetch = first.assert_stale_body_owner_retired_for_test(&previous, directory.path());
+    let fetch = match &previous {
+        Some((previous, _)) => {
+            first.assert_stale_body_owner_retired_for_test(previous, directory.path())
+        }
+        None => {
+            first
+                .recovered_decision_fetch_row_summary_for_test()
+                .expect("the body-free Commit WAL must recover one Fetch")
+                .0
+        }
+    };
     assert_eq!(
         first.recovered_decision_fetch_row_summary_for_test(),
         Some((fetch, fetch))
@@ -366,10 +670,12 @@ fn recover_stale_prepare_decision_crash_fixture(
     let owner = reopen();
     owner
         .assert_active_body_owner_after_decision_cold_for_test(&current, LifecycleWorkClass::Fetch);
-    assert_eq!(
-        owner.assert_stale_body_owner_retired_for_test(&previous, directory.path()),
-        fetch
-    );
+    if let Some((previous, _)) = &previous {
+        assert_eq!(
+            owner.assert_stale_body_owner_retired_for_test(previous, directory.path()),
+            fetch
+        );
+    }
     assert_eq!(
         std::fs::read(&ledger_path).expect("second cold Fetch ledger"),
         after_retirement,
@@ -433,8 +739,14 @@ fn recover_stale_prepare_decision_crash_fixture(
             Arc::clone(&output_guard),
             Arc::clone(&ingress),
         );
+    let mut next_timer = now;
     let request_hash =
         launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+            if previous.is_none() {
+                assert!(executor.recovered_bodies.is_empty());
+                assert!(executor.durable_bodies.is_empty());
+                assert!(executor.validated_bodies.is_empty());
+            }
             assert_eq!(
                 executor
                     .runtime
@@ -477,6 +789,30 @@ fn recover_stale_prepare_decision_crash_fixture(
                 .recovered_decision_fetch_owner_for_test()
                 .expect("retain the exact canonical Fetch request");
             assert_eq!(key.lifecycle_ordinal(), fetch);
+            services
+                .retry_pending_exact_output()
+                .expect("release the initial recovered request's physical output occurrence");
+            let wal_before_retry = std::fs::read(&wal_path).expect("recovered Decision WAL");
+            next_timer += executor.runtime.retransmit_interval();
+            let retry = step_recovered_periodic_timer(owner, executor, services, next_timer);
+            assert_eq!(retry.effect_count(), retry.broadcast_count() + 1);
+            assert_eq!(retry.store_count() + retry.validate_count(), 0);
+            crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+                executor, services,
+            )
+            .expect("reconcile the actual recovered Decision after the timer");
+            let directive = executor.local_proposal_directive().unwrap();
+            executor
+                .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+                .expect("acknowledge the exact recovered Decision handoff");
+            assert_eq!(
+                executor.recovered_decision_fetch_owner_for_test(),
+                Some((key, request_hash))
+            );
+            assert!(executor.pending_fetches.is_empty());
+            assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+            assert_eq!(std::fs::read(&wal_path).unwrap(), wal_before_retry);
+            assert!(!output_guard.restart_required());
             request_hash
         });
     let mut response = wire::CertifiedBodyResponse {
@@ -531,8 +867,180 @@ fn recover_stale_prepare_decision_crash_fixture(
     );
     assert_eq!(queued_fetch.active(), 0);
     assert_eq!(queued_fetch.completion_pending(), 0);
+    launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+        let owner_before = executor.recovered_decision_fetch_owner_for_test();
+        assert!(owner_before.is_some());
+        assert!(
+            executor
+                .recovered_decision_fetch_retransmission_owner()
+                .unwrap()
+                .is_none(),
+            "the authenticated response already claimed the dedicated Fetch"
+        );
+        next_timer += executor.runtime.retransmit_interval();
+        // The typed pacemaker escape admits certified control/absolute
+        // timeout work, not periodic retransmission. The ordinary turn owns
+        // the due Fetch retry while persistence remains queued.
+        assert_eq!(
+            executor
+                .step_pacemaker_once(next_timer, services)
+                .expect("an unrelated control escape preserves the claimed Fetch"),
+            EffectExecutorStep::Idle
+        );
+        let retry = step_recovered_periodic_timer(owner, executor, services, next_timer);
+        assert_eq!(retry.effect_count(), retry.broadcast_count() + 1);
+        assert_eq!(retry.store_count() + retry.validate_count(), 0);
+        crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+            executor, services,
+        )
+        .expect("reconcile the claimed Decision after the timer");
+        let directive = executor.local_proposal_directive().unwrap();
+        executor
+            .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+            .expect("preserve the exact claimed Decision handoff");
+        assert_eq!(
+            executor.recovered_decision_fetch_owner_for_test(),
+            owner_before
+        );
+        assert!(executor.pending_fetches.is_empty());
+        assert!(!output_guard.restart_required());
+    });
+    let after_claimed_timer = planner_io.lifecycle_validate_io_snapshot();
+    assert_eq!(after_claimed_timer.physical_admissions(), 1);
+    assert_eq!(after_claimed_timer.command_depth(), 1);
     planner_io.execute_one_recovered_decision_fetch_for_test(Arc::clone(&output_guard));
+    launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+        if previous.is_none() {
+            assert!(executor.recovered_bodies.is_empty());
+            assert!(executor.durable_bodies.is_empty());
+            assert!(executor.published_lifecycle_store_retry_markers.is_empty());
+        }
+    });
+    if fail_publication {
+        assert!(previous.is_none());
+        let ledger_before = std::fs::read(&ledger_path).expect("pre-publication claimed Fetch");
+        let request_before = launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+            executor.recovered_decision_fetch_owner_for_test()
+        });
+        let completion_before = planner_io.recovered_decision_fetch_completions_for_test();
+        assert_eq!(completion_before.len(), 1);
+        assert_eq!(
+            Some(completion_before[0].0),
+            request_before.map(|(key, _)| key)
+        );
+        launched.fail_decision_fetch_store_publication_for_test(directory.path());
+        launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+            assert!(executor.recovered_bodies.is_empty());
+            assert!(executor.durable_bodies.is_empty());
+            assert!(executor.published_lifecycle_store_retry_markers.is_empty());
+            assert_eq!(
+                executor.recovered_decision_fetch_owner_for_test(),
+                request_before
+            );
+        });
+        assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_before);
+        assert_eq!(
+            planner_io.recovered_decision_fetch_completions_for_test(),
+            completion_before,
+            "failed publication must retain the exact callback identity and response hash"
+        );
+        let failed = planner_io.lifecycle_validate_io_snapshot();
+        assert_eq!(
+            failed.physical_admissions(),
+            0,
+            "activation releases the command slot while its dedicated completion remains owned"
+        );
+        assert_eq!(failed.command_depth(), 0);
+        assert_eq!(failed.completion_pending(), 0, "Validate has not begun");
+        assert_eq!(
+            failed.completion_owners(),
+            0,
+            "the parked Fetch owns the completion"
+        );
+        return;
+    }
+    let queued_completion_cycle = queued_commit.is_some();
+    if let Some(duplicate_commit) = queued_commit {
+        launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+            assert_eq!(executor.runtime.queued_commands(), 0);
+            executor
+                .runtime
+                .enqueue_network(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(duplicate_commit),
+                ))
+                .expect("queue an authenticated duplicate Commit behind the physical Fetch");
+            assert_eq!(executor.runtime.queued_commands(), 1);
+        });
+        planner_io.publish_auxiliary_completion_fixture();
+        assert_eq!(
+            planner_io
+                .lifecycle_validate_io_snapshot()
+                .completion_owners(),
+            2
+        );
+    }
     launched.settle_decision_fetch_worker_for_test();
+    if queued_completion_cycle {
+        assert_eq!(
+            planner_io
+                .lifecycle_validate_io_snapshot()
+                .completion_owners(),
+            1
+        );
+    }
+    launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+        let key = (transport.round, transport.subject);
+        let (manifest, durable) = executor
+            .recovered_bodies
+            .get(&key)
+            .expect("the physical response publishes its recovered body catalog");
+        assert_eq!(manifest, &transport.manifest);
+        assert_eq!(executor.durable_bodies.get(&key), Some(durable));
+        assert!(
+            executor
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+        );
+        if queued_completion_cycle {
+            assert_eq!(
+                executor.runtime.queued_commands(),
+                1,
+                "Store publication must preserve the inert queued Commit"
+            );
+            assert!(matches!(
+                services.take_next_lifecycle_completion().unwrap(),
+                LifecycleCompletionTakeV1::PassThrough
+            ));
+            assert_eq!(
+                services
+                    .drain_one_ordinary_completion_after_lifecycle_pass_through(executor)
+                    .expect("drain the independently owned ordinary physical head"),
+                1
+            );
+            assert!(matches!(
+                executor
+                    .step(next_timer, services)
+                    .expect("drain the preserved duplicate Commit before advancing the body"),
+                EffectExecutorStep::Advanced { .. }
+            ));
+            assert_eq!(executor.runtime.queued_commands(), 0);
+            crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+                executor, services,
+            )
+            .expect("reconcile the real queued Commit turn");
+            let directive = executor.local_proposal_directive().unwrap();
+            executor
+                .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+                .expect("acknowledge the unchanged Decision after queued ingress drains");
+        }
+        assert_recovered_body_publication_timer(
+            owner,
+            executor,
+            services,
+            &mut next_timer,
+            LifecycleWorkClass::Store,
+        );
+    });
     let settled_fetch = planner_io.lifecycle_validate_io_snapshot();
     assert_eq!(settled_fetch.command_depth(), 0);
     assert_eq!(settled_fetch.physical_admissions(), 0);
@@ -542,6 +1050,27 @@ fn recover_stale_prepare_decision_crash_fixture(
         0,
         "the actual response occurrence was durably consumed"
     );
+    let validate = launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+        let ProductionCompletionDispatchV1::BodyStageAdvanced {
+            parent_ordinal: store,
+            child_ordinal: validate,
+            child: LifecycleWorkClass::Validate,
+        } = owner
+            .dispatch_completion_for_test(services, executor, 0)
+            .expect("the real persisted current response Store publishes Validate")
+        else {
+            panic!("actual current Decision Store must advance to one physical Validate")
+        };
+        assert!(store > fetch && validate > store);
+        assert_recovered_body_publication_timer(
+            owner,
+            executor,
+            services,
+            &mut next_timer,
+            LifecycleWorkClass::Validate,
+        );
+        validate
+    });
     let (owner, executor, services) = (*launched).into_settled_body_fixture_for_test();
     transport.executor = executor;
     let mut fixture = ReadyBodyFixture {
@@ -553,27 +1082,138 @@ fn recover_stale_prepare_decision_crash_fixture(
         certificate,
         ordinal: fetch,
     };
-    let ProductionCompletionDispatchV1::BodyStageAdvanced {
-        parent_ordinal: store,
-        child_ordinal: validate,
-        child: LifecycleWorkClass::Validate,
-    } = fixture
-        .owner
-        .dispatch_completion_for_test(&mut fixture.services, &mut fixture.transport.executor, 0)
-        .expect("the real persisted current response Store publishes Validate")
-    else {
-        panic!("actual current Decision Store must advance to one physical Validate")
-    };
-    assert!(store > fetch && validate > store);
-    fixture
-        .owner
-        .body_recovery_snapshot_for_test(previous_ordinal, validate);
+    if let Some((_, previous_ordinal)) = previous {
+        fixture
+            .owner
+            .body_recovery_snapshot_for_test(previous_ordinal, validate);
+    }
     fixture.planner_io.assert_owned_durable_body_for_test(
         &fixture.transport.executor.durable_bodies
             [&(fixture.transport.round, fixture.transport.subject)],
         &fixture.transport.body,
     );
-    finish_current_decision_validate_and_reopen(fixture, validate);
+    finish_current_decision_validate_and_reopen(fixture, validate, true);
+}
+
+// Published Store/Validate markers must retain their sole physical lineage
+// when the same recovered Decision is rediscovered by a live periodic turn.
+fn assert_recovered_body_publication_timer(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    services: &mut ProductionV2Services,
+    next_timer: &mut Instant,
+    stage: LifecycleWorkClass,
+) {
+    assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
+    let ownership = |executor: &V2EffectExecutor<SerializedV2Runtime>| {
+        (
+            executor.next_work_id,
+            executor.pending_fetches.clone(),
+            executor.pending_stores.clone(),
+            executor.body_pipeline_owners.clone(),
+            executor.durable_bodies.clone(),
+            executor
+                .pending_durable_validate_admissions
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+    };
+    let before = ownership(executor);
+    *next_timer += executor.runtime.retransmit_interval();
+    let observation = step_recovered_periodic_timer(owner, executor, services, *next_timer);
+    assert_eq!(
+        observation.effect_count(),
+        observation.broadcast_count() + 1
+    );
+    match stage {
+        LifecycleWorkClass::Store => {
+            assert_eq!(observation.store_count(), 1);
+            assert_eq!(observation.validate_count(), 0);
+        }
+        LifecycleWorkClass::Validate => {
+            assert_eq!(observation.store_count(), 0);
+            assert_eq!(observation.validate_count(), 1);
+        }
+        _ => panic!("only the published Store and Validate boundaries are exercised"),
+    }
+    crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+        executor, services,
+    )
+    .expect("reconcile the published recovered Decision");
+    let directive = executor.local_proposal_directive().unwrap();
+    executor
+        .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+        .expect("retain the exact published Decision handoff");
+    assert_eq!(ownership(executor), before);
+    assert!(executor.recovered_decision_fetch_owner_for_test().is_none());
+    assert!(!executor.output_guard.restart_required());
+}
+
+// An ordinary step may first drain an earlier admitted ingress occurrence.
+// Verify the actual selected periodic turn, not its position among those steps
+// or the number of effects left after exact executor-side coalescing.
+fn step_recovered_periodic_timer(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    services: &mut ProductionV2Services,
+    now: Instant,
+) -> RuntimeStepObservationV1 {
+    let mut periodic = None;
+    let mut last = None;
+    for _ in 0..32 {
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("release physically admitted output before the next runner turn"),
+            "the accepting fixture transport must release every admitted target"
+        );
+        let outputs = executor
+            .settle_pending_lifecycle_output_admissions(owner, services)
+            .expect("settle the prior turn's lifecycle output through its owner");
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("release newly admitted and terminal-duplicate timer output"),
+            "the accepting fixture transport must release the complete timer output"
+        );
+        if outputs.requires_outer_executor_yield() {
+            continue;
+        }
+        assert!(!executor.has_pending_lifecycle_output_admissions());
+        if let Some(observation) = periodic {
+            if executor.retained_effect_batch.is_none() && executor.parked_effect_batch.is_none() {
+                return observation;
+            }
+            executor
+                .drain_retained_effect_batch(services, true)
+                .expect("dispatch the selected timer's complete retained body suffix");
+            executor
+                .consume_leader_wire_runtime_terminals(services)
+                .expect("consume the selected timer's completed runtime occurrence");
+        } else {
+            executor.last_runtime_step_observation = None;
+            let step = executor
+                .step(now, services)
+                .expect("drive the actual due recovery timer");
+            let observation = executor.last_runtime_step_observation_for_test();
+            if let Some(observation) = observation
+                && observation.selected() == Some(RuntimeSelectedOwnerKind::PeriodicTimer)
+            {
+                periodic = Some(observation);
+            }
+            last = Some((step, observation));
+        }
+        crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+            executor, services,
+        )
+        .expect("reconcile each actual scheduler turn before continuing");
+        let directive = executor.local_proposal_directive().unwrap();
+        executor
+            .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+            .expect("acknowledge each exact scheduler handoff");
+    }
+    panic!("the due periodic recovery owner did not finish: {last:?}");
 }
 
 // The second crash exercises the real linked Apply producer/consumer join,
@@ -616,7 +1256,7 @@ fn assert_active_prepare_linked_apply_cold_reopens(fixture: ReadyBodyFixture, ap
     drop(owner);
     drop(transport.executor);
     let mut revalidated = 0;
-    let mut reopened = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+    let mut reopened = SumeragiV2Adapter::reopen_body_owner_for_test(
         &wal_path,
         directory.path(),
         verified,

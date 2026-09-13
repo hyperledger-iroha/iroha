@@ -165,7 +165,11 @@ export function createNoritoGameEngine(h, {
       case "account": return h.decodeAccountIdValue(payload, context);
       case "quantity": return h.decodeQuantityValue(payload, context);
       case "bool": return h.decodeBoolValue(payload, context);
-      case "u8": case "u16": case "u32": case "u64": return h[`decode${type.toUpperCase()}Value`](payload, context);
+      case "u8": case "u16": case "u32": return h[`decode${type.toUpperCase()}Value`](payload, context);
+      case "u64": {
+        const exact = h.decodeU64Value(payload, context);
+        return BigInt(exact) <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(exact) : exact;
+      }
       case "i32": case "i64": {
         if (payload.length !== Number(type.slice(1)) / 8) throw new TypeError(`${context} has invalid signed integer width`);
         return type === "i32" ? payload.readInt32LE() : payload.readBigInt64LE().toString();

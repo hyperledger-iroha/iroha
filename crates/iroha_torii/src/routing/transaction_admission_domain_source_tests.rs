@@ -50,6 +50,17 @@ mod transaction_admission_domain_source_tests {
                 "`{name}` must derive transaction security domains from CoreState NetworkId: {signature}"
             );
         }
+        let public_source = include_str!("../lib.rs");
+        for name in [
+            "handler_post_contract_call",
+            "submit_prepared_contract_call",
+        ] {
+            let signature = function_signature(public_source, name);
+            assert!(
+                !signature.contains("ChainId"),
+                "`{name}` must use the same CoreState NetworkId security domain: {signature}"
+            );
+        }
         let dead_underscore_parameter = source.lines().find(|line| {
             let line = line.trim_start();
             line.starts_with("_chain_id:") && line.contains("Arc<ChainId>")

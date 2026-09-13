@@ -138,9 +138,13 @@ fn unqualified_vote_circuits_cannot_enter_the_production_registry() {
         }
         .execute(&ALICE_ID, &mut transaction)
         .expect_err("unqualified governance circuits must be rejected");
-        assert!(
-            error.to_string().contains("production circuit registry"),
-            "unexpected rejection for {circuit_id}: {error}"
+        // Assert the typed cause: the outer Display only describes the error category.
+        assert_eq!(
+            error,
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "Halo2 OpenVerify circuit_id is not in the production circuit registry".to_owned(),
+            )),
+            "unexpected rejection for {circuit_id}"
         );
         assert!(transaction.world.verifying_keys().get(&id).is_none());
     }

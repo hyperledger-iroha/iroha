@@ -1434,3 +1434,54 @@ test("createConnectAppSession surfaces encrypted close frames", async () => {
     return true;
   });
 });
+
+test("createConnectCanonicalRequestAuth rejects valid multisig and non-Ed25519 accounts before signing", async () => {
+  const vectors = JSON.parse(
+    readFileSync(new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8"),
+  );
+  const multisigVector = vectors.cases.positive.find(
+    (vector) => vector.case_id === "addr-multisig-council-threshold3",
+  );
+  assert.ok(multisigVector);
+  const multisig = AccountAddress.fromI105(multisigVector.encodings.i105.string);
+  assert.deepEqual(
+    Buffer.from(multisig.canonicalBytes()),
+    Buffer.from(multisigVector.encodings.canonical_hex.replace(/^0x/u, ""), "hex"),
+  );
+  const secp256k1 = AccountAddress.fromAccount({
+    algorithm: "secp256k1",
+    publicKey: Buffer.from(
+      readFileSync(new URL("../../../fixtures/account/secp256k1_public_key.hex", import.meta.url), "utf8").trim(),
+      "hex",
+    ),
+  });
+  for (const [kind, address] of [["multisig", multisig], ["secp256k1", secp256k1]]) {
+    const accountId = address.toI105(753);
+    assert.deepEqual(
+      Buffer.from(AccountAddress.fromI105(accountId).canonicalBytes()),
+      Buffer.from(address.canonicalBytes()),
+      `${kind}: native-admitted canonical account`,
+    );
+    let approvalCalls = 0;
+    let signCalls = 0;
+    await assert.rejects(
+      createConnectCanonicalRequestAuth({
+        async waitForApproval() {
+          approvalCalls += 1;
+          return { accountId };
+        },
+        async signRaw() {
+          signCalls += 1;
+          assert.fail(`${kind}: unsupported account must reject before signing`);
+        },
+      }),
+      {
+        name: "Error",
+        message: "Connect approval account id must be a canonical single-key Ed25519 I105 address",
+      },
+      kind,
+    );
+    assert.equal(approvalCalls, 1, kind);
+    assert.equal(signCalls, 0, kind);
+  }
+});

@@ -13,10 +13,15 @@ pub use bootstrap_checkpoint::{
     KagemushaBootstrapCheckpointV1, KagemushaBootstrapJournalStageV1, KagemushaBootstrappedWalletV1,
 };
 #[cfg(unix)]
+mod recovery_journal_bundle;
+#[cfg(unix)]
+pub use recovery_journal_bundle::KagemushaPendingRecoveryJournalsV1;
+#[cfg(unix)]
 mod response_evidence_archive;
 #[cfg(unix)]
 pub use response_evidence_archive::{
     KagemushaResponseEvidenceArchiveErrorV1, KagemushaResponseEvidenceArchiveV1,
+    KagemushaResponseEvidenceContextV1,
 };
 mod candidate_lifecycle;
 mod commitments;
@@ -30,6 +35,12 @@ pub use coordinator_operation_store::{
     KagemushaCoordinatorSenderIntentRecoveryV1,
 };
 mod handoff_verification;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod hardware_transaction_journal;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub use hardware_transaction_journal::{
+    KagemushaHardwareTransactionJournalV1, KagemushaHardwareTransactionTransportV1,
+};
 mod mint_fold_private_inputs;
 mod mint_inbox;
 mod mint_inbox_operations;
@@ -125,7 +136,7 @@ use thiserror::Error;
 
 use self::sparse_merkle::ExactConsumedCreditIndex;
 #[cfg(unix)]
-pub(crate) use self::sparse_merkle::authenticated_history::disk_history_store::{
+pub use self::sparse_merkle::authenticated_history::disk_history_store::{
     KagemushaDiskAuthenticatedHistoryStoreV1, KagemushaHistoryDeviceCredentialsV1,
 };
 pub use self::sparse_merkle::authenticated_history::{
@@ -3886,9 +3897,6 @@ where
         guard_verifier: G,
     ) -> Result<Self, KagemushaStateErrorV1> {
         validate_guard_bytes(&anchor.guard_bundle)?;
-        guard_verifier
-            .verify_durability_anchor(&anchor.statement, &anchor.guard_bundle)
-            .map_err(KagemushaStateErrorV1::GuardRejected)?;
         if snapshot.version != KAGEMUSHA_STATE_VERSION_V1
             || anchor.statement.version != KAGEMUSHA_STATE_VERSION_V1
         {
@@ -3947,6 +3955,8 @@ where
             &credential_floor_release,
             expected_enrollment,
         )?;
+        // Publication retains the original checkpoint CAS certificate in the anchor. It is
+        // authenticated as that exact transaction, not as a separate historical-anchor seal.
         guard_verifier
             .verify_recovery_checkpoint_cas(
                 &snapshot

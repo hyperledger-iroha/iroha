@@ -172,12 +172,14 @@ Deployment, signing, and broadcasting are intentionally out of process. Do not
 store deployer keys, bearer tokens, or wallet secrets in repository artifacts,
 route manifests, evidence bundles, or documentation.
 
-Production sources require exact Solidity `0.7.4`. The governed TVM artifact
-is built with authenticated `0.7.4+commit.3f05b770`, optimizer run count `200`,
+Production sources require exact Solidity `0.7.6`. The governed TVM artifact
+is built with TRON's authenticated native `0.7.6+commit.d1802f25`, optimizer run count `200`,
 and the `istanbul` opcode target. Its exact compiler, complete
 standard-json input, ABI, creation/runtime bytes, immutable-runtime patch
 ranges, and hashes are release-policy inputs and must match the governed route
 exactly; ordinary EVM execution is never accepted as TVM evidence.
+The [native compiler policy](../../../scripts/contract_tooling/README.md) records
+the separate Ethereum/TRON release owners, platform pins and execution requirements.
 
 ## Testing
 
@@ -188,9 +190,10 @@ bash scripts/sccp_evm_contract_smoke.sh
 ```
 
 The suite verifies every production artifact against the target-specific
-source-map and artifact locks. It executes the exact reviewed TRON creation
-code under an EVM compatibility runtime, while still treating the real-TRE
-phase as the only TVM deployment evidence. It covers
+source-map and artifact locks. Its separate EVM diagnostic harness compiles
+TRON sources with the EVM compiler and verifies that these bytes differ from
+the governed native TVM output. Only the real-TRE phase provides TVM deployment
+evidence. The diagnostic harness covers
 canonical cross-language vectors, zero and mismatched revisions, malformed
 payloads and codecs, hash-role separation, wrong networks/routes/assets, token
 failures, zero-first allowance replacement, independent per-sender nonces,

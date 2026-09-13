@@ -1,6 +1,6 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-09. **Production qualification is unavailable.** The selected
+Updated: 2026-09-12. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
@@ -38,7 +38,12 @@ own row/evaluator workspaces in one phase. The public verifier checks the
 complete artifact before it is returned. Per-segment structural allocation
 charges are local policy, not an RSS reservation or a consensus parameter;
 actual and inherited decoder budgets remain authoritative at final verification.
-Merged-source complete producer execution and resource qualification remain
+The [September 12 execution record](../docs/history/2026-09-12/fastpq-execution-and-six-lane.md)
+captures a successful complete ordinary/AXT producer run from the retained
+six-lane executable at `7d831c9`: 8,004,591 and 8,021,972 artifact bytes,
+750 AIR evaluations and two terminal checks each, and 2,414,379,008-byte maximum
+RSS for the combined unoptimized CPU test. Its source binding is explicit;
+merged-source complete producer and release resource qualification remain
 required. The fixed-column synthetic AIR exercises framing and openings, not
 release semantics.
 
