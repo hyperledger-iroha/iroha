@@ -475,7 +475,7 @@ mod tests {
             norito::json!({"schema": "taira.daemon-update.plan.v1", "operation": operation,
                 "commit": ("b".repeat(40)), "units": units,
                 "deployment": {"runtime_root": "/private/runtime/taira", "config_root": "/srv/taira",
-                    "state_root": "/var/lib/taira", "roles": (super::super::super::VALIDATOR_SLUGS),
+                    "state_root": "/var/lib/taira", "roles": (super::super::super::VALIDATOR_SLUGS.to_vec()),
                     "current": {"daemon": "/private/runtime/taira/selected/bin/iroha3d_taira"}}}),
         )
     }
