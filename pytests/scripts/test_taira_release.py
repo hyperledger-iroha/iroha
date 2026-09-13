@@ -70,7 +70,8 @@ class TairaPrepareTests(unittest.TestCase):
             path.write_bytes(elf(machine))
             path.chmod(0o755)
 
-    def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88):
+    def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88,
+                isolate=None):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -83,7 +84,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "signed_source_size", return_value=0), \
              patch.object(release, "capture_source", return_value=self.source), \
              patch.object(release, "frozen_snapshot", side_effect=(lambda *_: snapshot(self.source)) if snapshot else (lambda *_: [])), \
-             patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
+             patch.object(release, "isolated_cargo_environment", side_effect=isolate or (lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), []))), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release, "captured_gate", return_value=release.gate), \
              patch.object(release, "local_package_names", return_value=set()), \
@@ -238,6 +239,118 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(gate.call_count, 1)
         self.assertEqual(build.call_count, 1)
         self.assertEqual(result["attempt"], "attempts/000001")
+
+    def test_resume_restores_actual_environment_before_tool_resolution_and_build(self):
+        selected, built = [], []
+        def isolate(_root, _source, environment):
+            selected.append(dict(environment))
+            return dict(environment, CARGO="/fixed/cargo"), []
+        def interrupted(_root, _command, environment, log):
+            built.append(dict(environment))
+            log.write_text("fixture process interruption")
+            raise release.PrepareError("fixture process interruption")
+        with patch.dict(os.environ, {"PATH": "/fixture/session-one:/bin", "TMPDIR": "/fixture/tmp-one"}):
+            with self.assertRaisesRegex(release.PrepareError, "process interruption"):
+                self.prepare(build=interrupted, isolate=isolate)
+        request_before = (self.out / "request.json").read_bytes()
+        def resumed(_root, _command, environment, log):
+            built.append(dict(environment))
+            self.binaries()
+            log.write_text("fixture resumed build")
+        with patch.dict(os.environ, {"PATH": "/fixture/session-two:/bin", "TMPDIR": "/fixture/tmp-two"}):
+            result, gate, build = self.prepare(build=resumed, isolate=isolate)
+        self.assertEqual(selected[0], selected[1])
+        self.assertEqual(built[0], built[1])
+        self.assertEqual(selected[1]["PATH"], "/fixture/session-one:/bin")
+        self.assertEqual((self.out / "request.json").read_bytes(), request_before)
+        self.assertEqual(result["attempt"], "attempts/000002")
+        gate.assert_not_called()
+        self.assertEqual(build.call_count, 1)
+
+    def test_recorded_environment_tampering_rejects_before_tool_resolution(self):
+        self.prepare()
+        environment_path, request_path = self.out / "environment.json", self.out / "request.json"
+        original_environment = environment_path.read_bytes()
+        original_request = request_path.read_bytes()
+        def replace_record(path, record):
+            path.chmod(0o600)
+            path.write_bytes(release.canonical_json_bytes(record))
+            path.chmod(0o400)
+        def must_not_resolve(*_args):
+            self.fail("tampered environment reached compiler resolution")
+        for mutation in ("changed_path", "hook_even_with_rebound_digest", "writable", "hardlink"):
+            with self.subTest(mutation=mutation):
+                environment = json.loads(original_environment)
+                request = json.loads(original_request)
+                if mutation == "changed_path":
+                    environment["child_environment"]["PATH"] = "/foreign/tool/path"
+                    replace_record(environment_path, environment)
+                elif mutation == "hook_even_with_rebound_digest":
+                    environment["child_environment"]["RUSTC_WRAPPER"] = "/foreign/wrapper"
+                    replace_record(environment_path, environment)
+                    request["environment_sha256"] = hashlib.sha256(environment_path.read_bytes()).hexdigest()
+                    replace_record(request_path, request)
+                elif mutation == "writable":
+                    environment_path.chmod(0o600)
+                else:
+                    os.link(environment_path, self.root / "environment-alias")
+                try:
+                    with self.assertRaises(release.PrepareError):
+                        self.prepare(isolate=must_not_resolve)
+                finally:
+                    if mutation == "hardlink":
+                        (self.root / "environment-alias").unlink()
+                    replace_record(environment_path, json.loads(original_environment))
+                    replace_record(request_path, json.loads(original_request))
+
+    def test_resume_rejects_changed_compiler_bytes_with_restored_environment(self):
+        compiler = self.root / "fixture-rustc"
+        compiler.write_bytes(b"original compiler fixture")
+        compiler.chmod(0o755)
+        def isolate(_root, _source, environment):
+            row = {"name": "rustc", **release.verify_tool(
+                compiler, hashlib.sha256(compiler.read_bytes()).hexdigest())}
+            return dict(environment, CARGO="/fixed/cargo", RUSTC=str(compiler)), [row]
+        self.prepare(isolate=isolate)
+        compiler.write_bytes(b"changed compiler fixture")
+        with patch.dict(os.environ, {"PATH": "/fixture/new-session:/bin"}):
+            with self.assertRaisesRegex(release.PrepareError, "different inputs"):
+                self.prepare(isolate=isolate)
+        self.assertEqual(len(list((self.out / "attempts").iterdir())), 1)
+
+    def test_resume_requires_environment_checkpoint_without_legacy_fallback(self):
+        self.prepare()
+        self.out.chmod(0o700)
+        (self.out / "environment.json").unlink()
+        with self.assertRaisesRegex(release.PrepareError, "environment checkpoint"):
+            self.prepare()
+
+    def test_resume_without_incremental_override_retains_recorded_zero(self):
+        def interrupted(_root, _command, _environment, log):
+            log.write_text("fixture interrupted nonincremental build")
+            raise release.PrepareError("fixture interrupted nonincremental build")
+        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "0"}):
+            with self.assertRaisesRegex(release.PrepareError, "interrupted nonincremental"):
+                self.prepare(build=interrupted)
+        request_before = (self.out / "request.json").read_bytes()
+        inherited = {key: value for key, value in os.environ.items() if key != "CARGO_INCREMENTAL"}
+        with patch.dict(os.environ, inherited, clear=True):
+            result, gate, build = self.prepare()
+        self.assertIs(result["native_incremental"], False)
+        self.assertEqual((self.out / "request.json").read_bytes(), request_before)
+        gate.assert_not_called()
+        self.assertEqual(build.call_count, 1)
+
+    def test_resume_rejects_explicit_invalid_incremental_policy_before_tool_resolution(self):
+        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "0"}):
+            self.prepare()
+        def must_not_resolve(*_args):
+            self.fail("invalid incremental policy reached compiler resolution")
+        for value in ("", "false", "2", "fixture-private-value"):
+            with self.subTest(value=value), patch.dict(os.environ, {"CARGO_INCREMENTAL": value}):
+                with self.assertRaisesRegex(release.PrepareError, "must be 0 or 1") as rejected:
+                    self.prepare(isolate=must_not_resolve)
+                self.assertNotIn("fixture-private-value", str(rejected.exception))
 
     def test_cache_retirement_cannot_reuse_pass_after_failed_gate_rerun(self):
         def failed_build(_root, _command, _environment, log):

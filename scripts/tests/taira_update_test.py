@@ -64,6 +64,7 @@ def installed_unit(role):
 def fixture():
     value=deployment()
     build={'commit':'a'*40, 'target':'aarch64-unknown-linux-gnu', 'profile':'release',
+        'environment_sha256':'e'*64,
         'jobs':6, 'source_unchanged':True, 'toolchain_unchanged':True,
         'deployed':False, 'release_qualified':False, 'native_check_scope':'basic',
         'artifacts':[{'name':name,'package':package,'path':'/public/'+name,
