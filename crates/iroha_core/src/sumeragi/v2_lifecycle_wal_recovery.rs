@@ -1326,6 +1326,48 @@ impl AuthenticatedRecoveredWalStandaloneSignProjection {
     pub(super) fn names_record(&self, record: &super::ledger::LifecycleLedgerRecordV1) -> bool {
         record.key() == Some(self.candidate.key)
     }
+    /// Match the semantic timeout output without accepting another signer or payload.
+    /// The subsequent sealed WAL join authenticates those exact envelope fields.
+    pub(super) fn names_timeout_broadcast(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let Some(key) = record.key() else {
+            return false;
+        };
+        self.candidate.work_class == LifecycleWorkClass::SignTimeout
+            && key.phase() == super::LifecyclePhase::BroadcastTimeoutVote
+            && key.context() == self.candidate.key.context()
+            && key.round() == self.candidate.key.round()
+            && key.proposal_round() == self.candidate.key.proposal_round()
+            && key.subject() == self.candidate.key.subject()
+            && key.execution_commitment() == self.candidate.key.execution_commitment()
+    }
+    /// Reuse a published timeout signature only for the identical authenticated WAL request.
+    pub(super) fn recover_standalone_timeout_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        standalone: super::replay_authority::DurableStandaloneTimeoutBroadcastV1,
+    ) -> Option<RecoveredLifecycleSignedBroadcastProjectionV1> {
+        if !self.is_exact(verified)
+            || !matches!(
+                &self.effect,
+                AdapterEffect::Sign {
+                    request: crate::sumeragi::v2::SignRequest::TimeoutVote(_),
+                    ..
+                }
+            )
+        {
+            return None;
+        }
+        let effect = standalone
+            .consume_for_recovered_wal(RecoveredLifecycleSignBroadcastProjectionPermitV1::new());
+        let AdapterEffect::Broadcast(message) = &effect else {
+            return None;
+        };
+        verified.verify_consensus_message(message).ok()?;
+        project_recovered_signed_broadcast(verified, &self.effect, &self.pending, &effect)
+    }
     /// Compare every persisted admission field, including standalone owner identity.
     pub(super) fn exactly_matches_record(
         &self,

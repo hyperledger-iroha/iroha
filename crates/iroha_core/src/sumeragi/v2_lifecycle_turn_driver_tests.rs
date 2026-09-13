@@ -7,13 +7,13 @@ crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
 );
 
 #[test]
-fn recovered_sign_completion_classifies_only_lost_or_post_publication_owners_for_restart() {
-    let retry = ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
+fn recovered_sign_completion_restarts_on_invariants_but_retries_runtime_debt() {
+    let invariant = ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
         ProductionRecoveredLifecycleSignCompletionSelectionV1::Broadcast(
-            ProductionRecoveredLifecycleSignBroadcastSettlementV1::Retry,
+            ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired,
         ),
     );
-    assert!(!retry.restart_required());
+    assert!(invariant.restart_required());
 
     let absent = ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
         ProductionRecoveredLifecycleSignCompletionSelectionV1::Broadcast(
@@ -36,6 +36,13 @@ fn recovered_sign_completion_classifies_only_lost_or_post_publication_owners_for
             ),
         );
     assert!(proposal_restart.restart_required());
+
+    let vote_restart = ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
+        ProductionRecoveredLifecycleSignCompletionSelectionV1::VoteBroadcastAndSign(
+            ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired,
+        ),
+    );
+    assert!(vote_restart.restart_required());
 
     let vote_applied = ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
         ProductionRecoveredLifecycleSignCompletionSelectionV1::VoteBroadcastAndSign(

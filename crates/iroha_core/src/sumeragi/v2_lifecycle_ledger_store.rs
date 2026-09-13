@@ -2545,6 +2545,100 @@ pub(crate) fn install_timeout_broadcasts_before_current_control_for_test(
     store.persist(&incident).is_ok()
 }
 
+/// Reproduce a standalone Timeout Broadcast before its recovered WAL Sign.
+///
+/// These are deliberately separate owners without a continuation edge, matching
+/// the retained two-row incident rather than an already linked Sign/Broadcast pair.
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) fn install_standalone_timeout_broadcast_before_current_control_for_test(
+    root: &Path,
+    context: LifecycleContext,
+    unsigned: wire::TimeoutVote,
+    signed: wire::TimeoutVote,
+    broadcast_ordinal: u128,
+    completed: bool,
+    shared_owner: bool,
+) -> bool {
+    let Ok((store, ledger)) = LifecycleLedgerStoreV1::open(root, context) else {
+        return false;
+    };
+    let [current] = ledger.records.as_slice() else {
+        return false;
+    };
+    let Some(current_ordinal) = broadcast_ordinal.checked_add(1) else {
+        return false;
+    };
+    if broadcast_ordinal == 0
+        || current.work_class() != Some(LifecycleWorkClass::SignTimeout)
+        || current.terminal() != Some(None)
+        || current.continuation() != Some(DurableContinuation::None)
+    {
+        return false;
+    }
+    let [parent_replay, broadcast_replay] =
+        super::replay_authority::exact_timeout_sign_broadcast_fixture(context, unsigned, signed);
+    if current.key() != Some(parent_replay.key) {
+        return false;
+    }
+    let owner = OwnerId::new(
+        CausalRoot::new(LifecycleDigest::new([0xD1; 32])),
+        broadcast_ordinal,
+    );
+    if owner.causal_root() == current.owner().causal_root() {
+        return false;
+    }
+    let Ok(broadcast) = LifecycleLedgerRecordV1::new(
+        broadcast_replay.key,
+        owner,
+        broadcast_ordinal,
+        LifecycleWorkClass::Broadcast,
+        broadcast_replay.stage,
+        completed.then_some(TerminalOutcome::Advanced),
+        owner.causal_root().digest(),
+        DurablePayloadReference::None,
+        broadcast_replay.authority,
+        DurableContinuation::None,
+    ) else {
+        return false;
+    };
+    let mut current = current.clone();
+    current.owner_first_ordinal = current_ordinal;
+    current.ordinal = current_ordinal;
+    let mut records = vec![broadcast, current];
+    let high_water = if shared_owner {
+        let Some(ordinal) = current_ordinal.checked_add(1) else {
+            return false;
+        };
+        let replay = super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::ReportProposalEquivocation,
+            0x7F,
+        );
+        let Ok(other) = LifecycleLedgerRecordV1::new(
+            replay.key,
+            owner,
+            ordinal,
+            replay.work_class,
+            replay.stage,
+            Some(TerminalOutcome::Cancelled),
+            owner.causal_root().digest(),
+            replay.payload,
+            replay.authority,
+            DurableContinuation::None,
+        ) else {
+            return false;
+        };
+        records.push(other);
+        ordinal
+    } else {
+        current_ordinal
+    };
+    let Ok(incident) = LifecycleLedgerV1::new(context, high_water, records, BTreeMap::new()) else {
+        return false;
+    };
+    store.persist(&incident).is_ok()
+}
+
 /// Install a live non-timeout Broadcast lineage beside an incumbent control Sign.
 #[cfg(all(test, feature = "bls"))]
 pub(crate) fn install_non_timeout_broadcast_before_current_control_for_test(

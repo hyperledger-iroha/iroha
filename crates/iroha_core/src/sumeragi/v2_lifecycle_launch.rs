@@ -403,9 +403,7 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastPreparatio
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastSettlementV1 {
     /// No parked recovered Sign completion is currently present.
     None,
-    /// A pre-publication owner changed; every durable owner remains unchanged.
-    Retry,
-    /// LedgerV1 publication was attempted and process restart is now required.
+    /// An ownership invariant or durable publication failed; restart is required.
     RestartRequired,
     /// Sign, Broadcast, adapter, registry, and worker owners advanced.
     ///
@@ -419,11 +417,9 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastSettlement
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 {
     /// No parked recovered Sign completion is currently present.
     None,
-    /// Every pre-fsync owner remains unchanged and the completion was reparked.
-    Retry,
     /// The aggregate Proposal control-and-chunk output corridor is currently full.
     CapacityUnavailable,
-    /// Durable publication was attempted or output admission closed; restart is required.
+    /// An ownership invariant or durable publication failed; restart is required.
     RestartRequired,
     /// Ledger, coordinator, registry, adapter, worker, and exact output advanced.
     Applied,
@@ -434,9 +430,7 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleProposalBroadcastAndSig
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1 {
     /// No parked recovered Sign completion is currently present.
     None,
-    /// Every pre-fsync owner remains unchanged and the completion was reparked.
-    Retry,
-    /// Durable publication was attempted or output admission closed; restart is required.
+    /// An ownership invariant or durable publication failed; restart is required.
     RestartRequired,
     /// Ledger, coordinator, registry, adapter, and worker ownership advanced.
     /// The Ready Broadcast remains the durable source for typed refanout.
@@ -1044,17 +1038,12 @@ impl LaunchedProductionLifecycleV1 {
         else {
             return ProductionRecoveredLifecycleSignBroadcastSettlementV1::None;
         };
-        macro_rules! retry {
-            () => {{
-                assert!(pending_lifecycle_completion.is_none());
-                *pending_lifecycle_completion =
-                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
-                return ProductionRecoveredLifecycleSignBroadcastSettlementV1::Retry;
-            }};
-        }
         macro_rules! restart {
             () => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
                 drop(completion);
                 return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
             }};
@@ -1090,7 +1079,14 @@ impl LaunchedProductionLifecycleV1 {
                 preview,
             ) {
             Ok(successor) => successor,
-            Err(_) => retry!(),
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "recovered Sign Broadcast successor violates lifecycle ownership"
+                );
+                restart!();
+            }
         };
         let transition = match owner
             .coordinator
@@ -1100,7 +1096,14 @@ impl LaunchedProductionLifecycleV1 {
                 successor,
             ) {
             Ok(transition) => transition,
-            Err(_) => retry!(),
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "recovered Sign Broadcast transition violates lifecycle ownership"
+                );
+                restart!();
+            }
         };
         let output_guard = services.lifecycle_output_guard();
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
@@ -1143,14 +1146,6 @@ impl LaunchedProductionLifecycleV1 {
         else {
             return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::None;
         };
-        macro_rules! retry {
-            () => {{
-                assert!(pending_lifecycle_completion.is_none());
-                *pending_lifecycle_completion =
-                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
-                return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Retry;
-            }};
-        }
         macro_rules! restart {
             () => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -1194,14 +1189,28 @@ impl LaunchedProductionLifecycleV1 {
                 body,
             ) {
             Ok(successor) => successor,
-            Err(_) => retry!(),
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "recovered Vote Broadcast and Sign successor violates lifecycle ownership"
+                );
+                restart!();
+            }
         };
         let transition = match owner
             .coordinator
             .prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(&lease, successor)
         {
             Ok(transition) => transition,
-            Err(_) => retry!(),
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "recovered Vote Broadcast and Sign transition violates lifecycle ownership"
+                );
+                restart!();
+            }
         };
         let output_guard = services.lifecycle_output_guard();
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
@@ -1384,14 +1393,6 @@ impl LaunchedProductionLifecycleV1 {
         else {
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
         };
-        macro_rules! retry {
-            () => {{
-                assert!(pending_lifecycle_completion.is_none());
-                *pending_lifecycle_completion =
-                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
-                return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Retry;
-            }};
-        }
         macro_rules! restart {
             () => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -1464,9 +1465,14 @@ impl LaunchedProductionLifecycleV1 {
                 body,
             ) {
             Ok(successor) => successor,
-            Err(_) => {
-                drop(output.abort_before_publication());
-                retry!();
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "recovered Proposal Broadcast and Sign successor violates lifecycle ownership"
+                );
+                drop(output);
+                restart!();
             }
         };
         let transition = match owner
@@ -1474,9 +1480,14 @@ impl LaunchedProductionLifecycleV1 {
             .prepare_recovered_lifecycle_sign_broadcast_and_sign_transition(&lease, successor)
         {
             Ok(transition) => transition,
-            Err(_) => {
-                drop(output.abort_before_publication());
-                retry!();
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal = lease.ordinal(),
+                    "recovered Proposal Broadcast and Sign transition violates lifecycle ownership"
+                );
+                drop(output);
+                restart!();
             }
         };
         if transition.persist_exact_successor().is_err() {

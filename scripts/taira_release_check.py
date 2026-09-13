@@ -757,6 +757,9 @@ CORE_ADMISSION_STARTUP_STAGES += (("same-round timeout recovery and bounded fron
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("terminal validation history and shared outcome recovery", (
     "sumeragi::v2::tests::same_round_timeout_cold_owner_preserves_retired_terminal_validation_history",
+    "sumeragi::v2::tests::same_round_timeout_cold_owner_publishes_broadcast_after_retired_validation_history",
+    "sumeragi::v2::tests::same_round_timeout_cold_owner_reconciles_standalone_broadcast",
+    "sumeragi::v2::tests::same_round_timeout_cold_owner_rejects_foreign_standalone_broadcast",
     "sumeragi::v2_body_store::tests::terminal_validate_shared_outcomes_keep_one_latest_retry_origin",
     "sumeragi::v2_body_store::tests::retired_terminal_claim_comparison_never_promotes_marker_authority",
 )),)
@@ -834,7 +837,11 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
 )),)
 
-BASIC_NETWORK_STAGES = (("four-validator universal-route commit and signed snapshot restart", (
+BASIC_NETWORK_STAGES = (("bounded validator status observation", (
+    "status_observation_tests::status_observation_retries_typed_busy_json_and_norito_with_remaining_budget",
+    "status_observation_tests::status_observation_stops_at_original_deadline_during_retry_after",
+    "status_observation_tests::status_observation_propagates_auth_other_service_and_decode_failures",
+)), ("four-validator universal-route commit and signed snapshot restart", (
     "four_peer_universal_public_transaction_sequence_reaches_applied",
 )),)
 NETWORK_STAGES = BASIC_NETWORK_STAGES + (("four-validator multi-route commit and signed snapshot restart", (

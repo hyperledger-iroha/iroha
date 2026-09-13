@@ -884,7 +884,8 @@ class CoordinatorTests(unittest.TestCase):
         def running(role):
             index = guest.ROLES.index(role) + 1
             props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
-                     'MainPID': str(100 + index), 'InvocationID': str(index) * 32, 'Job': ''}
+                     'MainPID': str(100 + index), 'InvocationID': str(index) * 32,
+                     'NRestarts': '0', 'Job': ''}
             if 'public-doctor' in events and role == guest.ROLES[2]:
                 if failure == 'post-doctor-invocation':
                     props['InvocationID'] = 'b' * 32
@@ -894,6 +895,8 @@ class CoordinatorTests(unittest.TestCase):
 
         def native(argv, *, timeout=60, name=None):
             events.append(name or str(argv[0]))
+            if failure == 'failure-record' and name == 'public-doctor':
+                raise RuntimeError('injected public-doctor')
             if failure is not None and name == failure:
                 raise RuntimeError('injected ' + str(name))
             if name == 'candidate-version':
@@ -959,7 +962,11 @@ class CoordinatorTests(unittest.TestCase):
                                             original_open(fake if path in (guest.DAEMON, guest.CLI) else path, flags, *a)))
             stack.enter_context(patch.object(guest, 'sync'))
             stack.enter_context(patch.object(guest, 'write_new'))
-            stack.enter_context(patch.object(guest, 'record', side_effect=lambda k, v: records.update({k: v})))
+            def record(name, value):
+                if failure == 'failure-record' and name == 'failure.json':
+                    raise OSError(28, 'No space left on device')
+                records[name] = value
+            stack.enter_context(patch.object(guest, 'record', side_effect=record))
             stack.enter_context(patch.object(guest, 'command', side_effect=native))
             stack.enter_context(patch.object(guest, 'native_private_command', side_effect=lambda *a, **k: events.append(k['name'])))
             stack.enter_context(patch.object(guest, 'observe', side_effect=observe))
@@ -990,7 +997,7 @@ class CoordinatorTests(unittest.TestCase):
             def systemd(unit):
                 events.append('systemd-' + unit)
                 return (running(unit.removeprefix('iroha3d-').removesuffix('.service'))
-                        if 'start' in events else paused)
+                        if 'start' in events and 'failed-start-stop' not in events else paused)
             stack.enter_context(patch.object(guest, 'systemd', side_effect=systemd))
             stack.enter_context(patch.object(guest, 'stop_all', side_effect=lambda: events.append('stop-all') or [{'unit': unit, 'systemd': paused} for unit in guest.UNITS]))
             def checkpoint(row, *, stopped, prior):
@@ -1016,7 +1023,7 @@ class CoordinatorTests(unittest.TestCase):
             stack.enter_context(patch.object(Path, 'read_bytes', read))
             with redirect_stdout(io.StringIO()):
                 if failure:
-                    with self.assertRaises(RuntimeError):
+                    with self.assertRaises(OSError if failure == 'failure-record' else RuntimeError):
                         guest.apply(plan)
                 else:
                     guest.apply(plan)
@@ -1082,6 +1089,16 @@ class CoordinatorTests(unittest.TestCase):
         self.assertNotIn('rollback-start', events)
         self.assertTrue(records['failure.json']['new_start_attempted'])
         self.assertNotIn('result.json', records)
+        self.assertIn('failed-start-stop', events)
+        self.assertTrue(records['failed-start-stopped.json']['all_four_stopped'])
+
+    def test_failure_record_enospc_does_not_prevent_stopping_failed_candidate(self):
+        events, records, _, _ = self.simulate('failure-record')
+        self.assertIn('failed-start-stop', events)
+        self.assertTrue(records['failed-start-stopped.json']['all_four_stopped'])
+        self.assertNotIn('failure.json', records)
+        self.assertNotIn('result.json', records)
+        self.assertNotIn('rollback-start', events)
 
     def test_post_doctor_cohort_failures_cannot_report_success_or_restart_old_daemons(self):
         for failure in ('post-doctor-invocation', 'post-doctor-pid',
@@ -1298,9 +1315,32 @@ class CohortProgressTests(unittest.TestCase):
                     if change == 'restart' and index == 2 and self.now >= 2:
                         props['InvocationID'] = 'f' * 32
                     return props
-                with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
+                expected_error = ('validator process changed' if change == 'restart'
+                                  else 'cohort observation deadline')
+                with self.assertRaisesRegex(RuntimeError, expected_error):
                     self.run_catchup(sample, systemd=systemd)
-                self.assertEqual(self.now, 6)
+                self.assertEqual(self.now, 2 if change == 'restart' else 6)
+
+    def test_startup_restart_fails_before_any_healthy_http_observation(self):
+        startup = [{'role': role, 'systemd': dict(props)}
+                   for role, props in zip(guest.ROLES, self.props, strict=True)]
+        def systemd(unit):
+            props = dict(self.props[guest.UNITS.index(unit)])
+            if self.now >= 2:
+                props['MainPID'] = '999'
+            return props
+        def sleep(seconds):
+            self.now += seconds
+        with patch.object(guest.time, 'monotonic', side_effect=lambda: self.now), \
+             patch.object(guest.time, 'sleep', side_effect=sleep), \
+             patch.object(guest, 'systemd', side_effect=systemd), \
+             patch.object(guest, 'observe_healthy_cohort', side_effect=RuntimeError('listener warming')) as read:
+            with self.assertRaisesRegex(RuntimeError, 'validator process changed'):
+                guest.wait_for_cohort(self.rows, self.before, after=True, commit=guest.OLD,
+                    retained_tip={'height': 220, 'hash': 'c' * 64}, startup_processes=startup,
+                    timeout=600, max_timeout=600)
+        self.assertEqual(self.now, 2)
+        self.assertEqual(read.call_count, 1)
 
     def test_advancing_but_unready_peer_does_not_extend_the_deadline(self):
         def ready(argv, **kwargs):

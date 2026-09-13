@@ -793,7 +793,7 @@ def observe_cohort(rows, before, *, after, commit, retained_tip, expected_proces
     return observations
 
 
-def wait_for_cohort(rows, before, *, after, commit, retained_tip,
+def wait_for_cohort(rows, before, *, after, commit, retained_tip, startup_processes=None,
                     timeout=COHORT_STALL_TIMEOUT_SECONDS,
                     max_timeout=COHORT_MAX_TIMEOUT_SECONDS):
     """Extend catch-up only for advancing peers; never restart or rebuild here."""
@@ -804,11 +804,17 @@ def wait_for_cohort(rows, before, *, after, commit, retained_tip,
     progress_deadlines = [started + timeout for _ in rows]
     pending = list(range(len(rows)))
     previous_heights = None
-    expected_processes = None
+    expected_processes = startup_processes
     last_healthy = started
     deadline = min(hard_deadline, started + timeout)
     latest = None
     while time.monotonic() < deadline:
+        # A missing listener may be normal during snapshot loading. A changed
+        # process is a failed startup, not another recoverable HTTP sample.
+        # Check outside the transient-read retry block, including before the
+        # first healthy Torii response can establish an observation census.
+        if expected_processes is not None:
+            verify_cohort_processes(expected_processes)
         try:
             observations = observe_healthy_cohort(
                 rows, before, after=after, commit=commit, retained_tip=retained_tip,
@@ -1121,6 +1127,12 @@ def apply(plan):
                  'stopped Kura tip changed before new runtime startup')
         new_start_attempted = True
         command(['/usr/bin/systemctl', 'start', *UNITS], timeout=150, name='start')
+        startup_processes = [{'role': role, 'systemd': systemd(unit)}
+                             for role, unit in zip(ROLES, UNITS, strict=True)]
+        need(all(row['systemd']['NRestarts'] == '0' for row in startup_processes),
+             'validator restarted before startup process capture')
+        verify_cohort_processes(startup_processes)
+        record('startup-processes.json', startup_processes)
         record('cohort-observation-intent.json', {
             'schema': COHORT_OBSERVATION_SCHEMA, 'operation': plan['operation'],
             'commit': plan['commit'], 'phase': 'cohort_observation',
@@ -1128,7 +1140,7 @@ def apply(plan):
             'automatic_restart_or_rollback_after_start': False,
             'remaining_actions': list(COHORT_REMAINING_ACTIONS)})
         after = wait_for_cohort(plan['units'], before, after=True, commit=plan['commit'],
-                                retained_tip=retained_tip)
+                                retained_tip=retained_tip, startup_processes=startup_processes)
         record('after.json', after)
         restored = [verify_restored_checkpoint(row, checkpoint)
                     for row, checkpoint in zip(after, checkpoints, strict=True)]
@@ -1158,29 +1170,44 @@ def apply(plan):
         record('result.json', result)
         print(json.dumps(result), flush=True)
     except BaseException as error:
-        record('failure.json', {'error': str(error), 'new_start_attempted': new_start_attempted,
-                               'installed_units': [row['role'] for row in installed]})
-        if not new_start_attempted:
-            # No new daemon was allowed to execute retained state. Restore all
-            # old units, including any replacement completed before an I/O error.
-            for row, original in zip(plan['units'], before, strict=True):
-                path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
-                current = path.read_bytes()
-                old = base64.b64decode(row['before'])
-                new = base64.b64decode(row['after'])
-                need(current in (old, new), 'unit has an unknown rollback successor')
-                if current != old:
-                    install_unit(path, old, new, original['unit_stamp'][2] & 0o7777)
-            command(['/usr/bin/systemctl', 'daemon-reload'], name='rollback-reload')
-            restored = []
-            for unit in UNITS:
-                state = systemd(unit)
-                need((state['ActiveState'], state['SubState']) in (('inactive', 'dead'), ('failed', 'failed'))
-                     and state['MainPID'] == state['ControlPID'] == '0' and state['Job'] == '',
-                     'rollback did not retain the paused cohort: ' + unit)
-                restored.append({'unit': unit, 'systemd': state})
-            record('rollback.json', {'restored_previous_stopped_cohort': True,
-                                     'old_daemons_restarted': False, 'observations': restored})
+        try:
+            record('failure.json', {'error': str(error), 'new_start_attempted': new_start_attempted,
+                                   'installed_units': [row['role'] for row in installed]})
+        finally:
+            # Evidence storage failure must never suppress process containment.
+            if new_start_attempted:
+                # Keep the failed candidate and its retained state for diagnosis,
+                # while preventing the service supervisor from repeating failures.
+                # The caller still owns the deployment lock throughout containment.
+                command(['/usr/bin/systemctl', 'stop', *UNITS], timeout=150,
+                        name='failed-start-stop')
+                stopped = [{'unit': unit, 'systemd': systemd(unit)} for unit in UNITS]
+                need(all(row['systemd']['MainPID'] == row['systemd']['ControlPID'] == '0'
+                         and row['systemd']['ActiveState'] in ('inactive', 'failed')
+                         for row in stopped), 'failed candidate cohort stop incomplete')
+                record('failed-start-stopped.json', {'all_four_stopped': True,
+                                                   'observations': stopped})
+            else:
+                # No new daemon was allowed to execute retained state. Restore all
+                # old units, including any replacement completed before an I/O error.
+                for row, original in zip(plan['units'], before, strict=True):
+                    path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
+                    current = path.read_bytes()
+                    old = base64.b64decode(row['before'])
+                    new = base64.b64decode(row['after'])
+                    need(current in (old, new), 'unit has an unknown rollback successor')
+                    if current != old:
+                        install_unit(path, old, new, original['unit_stamp'][2] & 0o7777)
+                command(['/usr/bin/systemctl', 'daemon-reload'], name='rollback-reload')
+                restored = []
+                for unit in UNITS:
+                    state = systemd(unit)
+                    need((state['ActiveState'], state['SubState']) in (('inactive', 'dead'), ('failed', 'failed'))
+                         and state['MainPID'] == state['ControlPID'] == '0' and state['Job'] == '',
+                         'rollback did not retain the paused cohort: ' + unit)
+                    restored.append({'unit': unit, 'systemd': state})
+                record('rollback.json', {'restored_previous_stopped_cohort': True,
+                                         'old_daemons_restarted': False, 'observations': restored})
         raise
 
 

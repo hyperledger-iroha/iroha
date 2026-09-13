@@ -3217,11 +3217,13 @@ impl ProductionLifecycleOwnerV1 {
     /// Projection exactness is checked before this method opens LedgerV1.
     /// Absence publishes only the deterministic checked successor; an exact
     /// existing row normally remains byte-for-byte untouched while its volatile
-    /// carrier is reconstructed. The sole exception atomically terminalizes one
-    /// roster-authenticated, strict-lower-view timeout Broadcast before the
-    /// current Sign is staged. Every other live row remains unchanged and owned
-    /// by the closed storage census; when no exact supersession or Sign staging
-    /// is eligible, its rejection performs no lifecycle publication.
+    /// carrier is reconstructed. A signed standalone timeout output first
+    /// restores the exact Signed transition and one durable refanout obligation;
+    /// a roster-authenticated strict-lower-view timeout Broadcast is terminalized
+    /// before a still-unsigned current Sign is staged. Every other live row
+    /// remains unchanged and owned by the closed storage census; when no exact
+    /// recovery, supersession, or Sign staging is eligible, its rejection
+    /// performs no lifecycle publication.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_control_startup(
         verified: VerifiedHeightContext,
@@ -3630,6 +3632,34 @@ impl ProductionLifecycleOwnerV1 {
                 adapter_startup: Some(adapter_startup),
             })
         }
+        let opened = if let Some(reconciled) = opened
+            .reconcile_standalone_timeout_broadcast(&verified, &projection)
+            .map_err(|_| {
+                ProductionRecoveredWalControlStartupErrorV1::new(
+                    "standalone timeout output failed exact WAL recovery",
+                )
+            })? {
+            ledger_store
+                .persist_exact_successor(&opened, &reconciled)
+                .map_err(|_| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "standalone timeout output successor publication failed",
+                    )
+                })?;
+            let published = ledger_store.load().map_err(|_| {
+                ProductionRecoveredWalControlStartupErrorV1::new(
+                    "standalone timeout output successor readback failed",
+                )
+            })?;
+            if published != reconciled {
+                return Err(ProductionRecoveredWalControlStartupErrorV1::new(
+                    "standalone timeout output successor changed after publication",
+                ));
+            }
+            published
+        } else {
+            opened
+        };
         if let Ok((broadcast, parent_ordinal, child_ordinal)) =
             opened.authenticate_recovered_control_signed_broadcast(&verified, &projection)
         {

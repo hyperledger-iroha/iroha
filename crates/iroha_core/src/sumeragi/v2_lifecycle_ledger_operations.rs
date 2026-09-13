@@ -1380,6 +1380,128 @@ impl LifecycleLedgerV1 {
         }
         Ok(selected)
     }
+    /// Recover a signed normal-runtime timeout output under its durable WAL owner.
+    ///
+    /// A prior process may have published a standalone Broadcast while its WAL
+    /// still retains the unsigned TimeoutIntent. Reuse that exact signed output
+    /// before scheduling a cold Sign, whether its send completed or is still
+    /// owed. Only the independent singleton output row is coalesced; every other
+    /// row and the ordinal high-water mark survive. The returned frame is
+    /// published once before cold Signed replay.
+    fn reconcile_standalone_timeout_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
+    ) -> Result<Option<Self>, LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !projection.is_exact(verified) || !projection.belongs_to_context(self.context()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "standalone timeout output has a foreign recovered WAL context".to_owned(),
+            ));
+        }
+        let mut matching = self.records.iter().filter(|record| {
+            projection.names_timeout_broadcast(record)
+                && matches!(
+                    record.terminal(),
+                    Some(None | Some(TerminalOutcome::Advanced))
+                )
+                && record.owner().first_admission_ordinal() == record.ordinal()
+                && record.continuation() == Some(DurableContinuation::None)
+        });
+        let Some(standalone) = matching.next() else {
+            return Ok(None);
+        };
+        if matching.next().is_some()
+            || self
+                .records
+                .iter()
+                .filter(|record| record.owner() == standalone.owner())
+                .count()
+                != 1
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "standalone timeout output is not a unique standalone owner".to_owned(),
+            ));
+        }
+        let standalone_source = super::replay_authority::project_standalone_timeout_broadcast(
+            self.context(),
+            standalone,
+            &standalone.replay_authority,
+        )
+        .ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "standalone timeout output changed its exact signed source".to_owned(),
+            )
+        })?;
+        let broadcast = projection
+            .recover_standalone_timeout_broadcast(verified, standalone_source)
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "standalone timeout output does not sign the exact recovered WAL request"
+                        .to_owned(),
+                )
+            })?;
+        let mut compacted = self.clone();
+        compacted
+            .records
+            .retain(|record| record.ordinal() != standalone.ordinal());
+        let (mut reconciled, parent_ordinal, _) =
+            compacted.stage_authenticated_wal_control_sign(projection)?;
+        let child_ordinal = reconciled.high_water.checked_add(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "standalone timeout output ordinal exhausted".to_owned(),
+            )
+        })?;
+        let parent = reconciled
+            .records
+            .iter_mut()
+            .find(|record| record.ordinal() == parent_ordinal)
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "standalone timeout output lost its exact WAL parent".to_owned(),
+                )
+            })?;
+        if standalone.ordinal() >= parent_ordinal || standalone.owner() == parent.owner() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "standalone timeout output is not an earlier independent operation".to_owned(),
+            ));
+        }
+        parent.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
+        parent.continuation =
+            PersistedDurableContinuationV1::from_schema(DurableContinuation::successor(
+                DurableContinuationEdge::SignTimeoutToBroadcast,
+                child_ordinal,
+            ));
+        let owner = parent.owner();
+        let candidate = broadcast.candidate();
+        let child = LifecycleLedgerRecordV1::new(
+            candidate.key,
+            owner,
+            child_ordinal,
+            candidate.work_class,
+            candidate.stage,
+            None,
+            candidate.reconstruction_source,
+            candidate.payload,
+            candidate.replay_authority.clone(),
+            DurableContinuation::None,
+        )?;
+        reconciled.records.push(child);
+        reconciled.high_water = child_ordinal;
+        reconciled.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        let (authenticated, observed_parent, observed_child) =
+            reconciled.authenticate_recovered_control_signed_broadcast(verified, projection)?;
+        if observed_parent != parent_ordinal
+            || observed_child != child_ordinal
+            || !broadcast.exactly_matches_durable_projection(&authenticated)
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "standalone timeout output changed its canonical signed continuation".to_owned(),
+            ));
+        }
+        Ok(Some(reconciled))
+    }
+
     /// Stage exactly one standalone Proposal/Timeout control Sign row.
     ///
     /// An exact existing row stutters without rewriting it. Absence appends
