@@ -1316,7 +1316,7 @@ function normalizeTransferInput(input) {
 }
 
 // The ordinary bound remains unchanged. Only one canonical native execution-proof instruction
-// can enter the larger corridor; batches, WASM, attachments and unrelated instructions cannot.
+// can enter the larger corridor; batches, attachments and unrelated instructions cannot.
 function assertTransactionPayloadByteBound(payload) {
   if (payload.length === 0 || payload.length > MAX_EXECUTION_PAYLOAD_BYTES) {
     fail(BOUNDS_EXCEEDED, (TEXT_TRANSACTION_PAYLOAD_2 + "exceeds the compiled browser payload limit"));

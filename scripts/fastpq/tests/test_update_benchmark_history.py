@@ -5,6 +5,7 @@ import json
 import pytest
 
 from scripts.fastpq import update_benchmark_history
+from scripts.fastpq.tests.report_fixtures import add_synthetic_raw_copy, flat_report
 
 
 def test_format_operation_filter_prefers_explicit_filter():
@@ -16,7 +17,7 @@ def test_format_operation_filter_prefers_explicit_filter():
 
 def test_format_operation_filter_rejects_missing_field():
     bench = {}
-    with pytest.raises(ValueError, match="operation_filter"):
+    with pytest.raises(ValueError, match="operation filter"):
         update_benchmark_history.format_operation_filter(bench)
 
 
@@ -28,21 +29,10 @@ def test_collect_benchmark_rows_carries_operation_filter(tmp_path):
                 "gpu_model": "NVIDIA RTX 6000 Ada",
             }
         },
-        "benchmarks": {
-            "execution_mode": "gpu",
-            "gpu_backend": "cuda",
-            "gpu_available": True,
-            "operation_filter": "lde",
-            "operations": [
-                {
-                    "operation": "lde",
-                    "cpu_mean_ms": 12.0,
-                    "gpu_mean_ms": 6.0,
-                    "speedup_ratio": 2.0,
-                }
-            ],
-        },
+        "producer_schema": "cuda_nested",
+        "benchmarks": flat_report(cpu=12.0, gpu=6.0),
     }
+    add_synthetic_raw_copy(bundle)
     path = tmp_path / "fastpq_cuda_bench_probe.json"
     path.write_text(json.dumps(bundle), encoding="utf-8")
 
@@ -52,7 +42,7 @@ def test_collect_benchmark_rows_carries_operation_filter(tmp_path):
     row = rows[0]
     assert row.operation_filter == "lde"
     assert row.gpu_backend == "cuda"
-    assert row.lde == "12.0/6.0/2.00"
+    assert update_benchmark_history.format_operation(row.operation_evidence["report"]["operations"][0]) == "12.0/6.0/2.00"
 
 
 def test_gpu_table_mentions_filter_column():
@@ -65,8 +55,7 @@ def test_gpu_table_mentions_filter_column():
         operation_filter="lde",
         device_class="xeon-rtx",
         gpu_model="NVIDIA RTX 6000 Ada",
-        lde="12.0/6.0/2.00",
-        poseidon="—/—/—",
+        operation_evidence={"flattened": True, "producer_schema": "cuda_nested", "report": flat_report(cpu=12.0, gpu=6.0)},
     )
 
     table = update_benchmark_history.gpu_table([row])
@@ -75,66 +64,19 @@ def test_gpu_table_mentions_filter_column():
     assert "| `fastpq_cuda_bench_probe.json` | cuda | gpu | cuda | yes | lde |" in table
 
 
-def test_poseidon_table_mentions_filter_and_columns(tmp_path):
-    manifest = {
-        "entries": [
-            {
-                "file": "benchmarks/poseidon/poseidon_microbench_cuda.json",
-                "bundle": "fastpq_cuda_bench_poseidon.json",
-                "capture_timestamp": "2026-03-27T12:00:00Z",
-                "operation_filter": "poseidon_hash_columns",
-                "column_count": 16,
-                "default_mean_ms": 1.0,
-                "scalar_mean_ms": 2.0,
-                "speedup_vs_scalar": 2.0,
-            }
-        ]
-    }
-    path = tmp_path / "manifest.json"
-    path.write_text(json.dumps(manifest), encoding="utf-8")
-
-    table = update_benchmark_history.poseidon_table(path)
-
-    assert "| Summary | Bundle | Timestamp | Filter | Columns | Default ms | Scalar ms | Speedup |" in table
-    assert "| `benchmarks/poseidon/poseidon_microbench_cuda.json` | `fastpq_cuda_bench_poseidon.json` | 2026-03-27T12:00:00Z | poseidon_hash_columns | 16 | 1.0 | 2.0 | 2.00 |" in table
 
 
-def test_poseidon_table_rejects_missing_filter(tmp_path):
-    manifest = {
-        "entries": [
-            {
-                "file": "benchmarks/poseidon/poseidon_microbench_incomplete.json",
-                "bundle": "fastpq_metal_bench_incomplete.json",
-                "capture_timestamp": "2025-11-09T06:11:01Z",
-                "default_mean_ms": 2.0,
-                "scalar_mean_ms": 3.0,
-                "speedup_vs_scalar": 1.5,
-            }
-        ]
-    }
-    path = tmp_path / "manifest.json"
-    path.write_text(json.dumps(manifest), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="operation_filter"):
-        update_benchmark_history.poseidon_table(path)
+def test_retired_manifest_cli_is_removed(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["update_benchmark_history.py", "--poseidon-manifest", "manifest.json"])
+    with pytest.raises(SystemExit) as error:
+        update_benchmark_history.parse_args()
+    assert error.value.code == 2
 
 
-def test_poseidon_table_rejects_missing_column_count(tmp_path):
-    manifest = {
-        "entries": [
-            {
-                "file": "benchmarks/poseidon/poseidon_microbench_incomplete.json",
-                "bundle": "fastpq_metal_bench_incomplete.json",
-                "capture_timestamp": "2025-11-09T06:11:01Z",
-                "operation_filter": "poseidon_hash_columns",
-                "default_mean_ms": 2.0,
-                "scalar_mean_ms": 3.0,
-                "speedup_vs_scalar": 1.5,
-            }
-        ]
-    }
-    path = tmp_path / "manifest.json"
-    path.write_text(json.dumps(manifest), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="column_count"):
-        update_benchmark_history.poseidon_table(path)
+def test_history_has_no_scalar_manifest_table_or_regeneration_hint():
+    rendered = update_benchmark_history.render_document([], "merkle", "rows")
+    assert "Poseidon Microbench" not in rendered
+    assert "default-vs-scalar" not in rendered
+    assert "export_poseidon_microbench" not in rendered
+    for label in ["FFT", "IFFT", "LDE", "Six-lane trace columns", "Six-lane Merkle pairs", "BN254 Poseidon words"]:
+        assert label in rendered

@@ -3,7 +3,14 @@
 //! This crate owns strict JSON admission and native Norito reconstruction. Platform
 //! adapters only convert buffers and errors; they do not duplicate ledger codecs.
 
+mod activation_instructions;
 mod error;
+mod game_instructions;
+mod json_u64;
+mod kaigi;
+mod lifecycle_instructions;
+mod manifest;
+mod verifying_key_instructions;
 pub use error::{CodecError, CodecErrorKind, CodecResult};
 mod archive;
 pub use archive::{decode_instruction_archive, encode_instruction_archive};
@@ -14,7 +21,6 @@ mod tests;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use iroha_crypto::Hash;
-use iroha_data_model::HasMetadata;
 use iroha_data_model::account::Account;
 use iroha_data_model::account::AccountId;
 use iroha_data_model::account::NewAccount;
@@ -95,9 +101,7 @@ use iroha_data_model::isi::settlement::RefundFxCorridorEscrow;
 use iroha_data_model::isi::settlement::SetFxCorridorPolicy;
 use iroha_data_model::isi::settlement::SettleFxCorridor;
 use iroha_data_model::isi::settlement::SettlementInstructionBox;
-use iroha_data_model::isi::smart_contract_code::ActivateContractInstance;
 use iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload;
-use iroha_data_model::isi::smart_contract_code::DeactivateContractInstance;
 use iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes;
 use iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode;
 use iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes;
@@ -115,7 +119,6 @@ use iroha_data_model::kaigi::KaigiParticipantCommitment;
 use iroha_data_model::kaigi::KaigiParticipantNullifier;
 use iroha_data_model::kaigi::KaigiRelayHealthStatus;
 use iroha_data_model::kaigi::KaigiRelayRegistration;
-use iroha_data_model::kaigi::NewKaigi;
 use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::ministry::AgendaProposalV1;
 use iroha_data_model::nft::NewNft;
@@ -133,7 +136,6 @@ use iroha_data_model::rwa::NewRwa;
 use iroha_data_model::rwa::RwaControlPolicy;
 use iroha_data_model::rwa::RwaId;
 use iroha_data_model::rwa::RwaParentRef;
-use iroha_data_model::smart_contract::ContractAddress;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
 use iroha_data_model::trigger::Trigger;
 use iroha_data_model::trigger::TriggerId;
@@ -147,8 +149,6 @@ use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Quantity;
 use norito::core as norito_core;
 use norito::json;
-use norito::json::Map;
-use norito::json::Value;
 use std::fmt;
 use std::panic::AssertUnwindSafe;
 use std::panic::catch_unwind;
@@ -1206,6 +1206,18 @@ pub fn validate_governance_instruction_selectors(value: &json::Value) -> CodecRe
 
 /// Admit a JSON instruction value with the existing explicit variant checks.
 pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
+    if let Some(instruction) = activation_instructions::from_json(&value) {
+        return instruction;
+    }
+    if let Some(instruction) = lifecycle_instructions::from_json(&value) {
+        return instruction;
+    }
+    if let Some(instruction) = game_instructions::from_json(&value) {
+        return instruction;
+    }
+    if let Some(instruction) = verifying_key_instructions::from_json(&value) {
+        return instruction;
+    }
     validate_governance_instruction_selectors(&value)?;
     // These instructions carry release-critical JSON contracts. The generic
     // `InstructionBox` decoder may accept data-model defaults and unknown
@@ -1216,6 +1228,7 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
             if map.contains_key("Register")
                 || map.contains_key("Settlement")
                 || map.contains_key("CancelSmartContractCodeUpload")
+                || map.contains_key("RegisterSmartContractCode")
                 || map.contains_key("CancelAssetLock")
                 || map.contains_key("SetAssetTransferAvailability")
                 || map.contains_key("SetAssetTransferBlacklist")
@@ -1224,6 +1237,18 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
     );
     if !requires_explicit_parser {
         if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
+            if activation_instructions::is_activation_instruction(&instruction)
+                || game_instructions::is_game_instruction(&instruction)
+                || verifying_key_instructions::is_verifying_key_instruction(&instruction)
+                || lifecycle_instructions::is_lifecycle_instruction(&instruction)
+                || instruction.as_any().is::<CancelSmartContractCodeUpload>()
+                || instruction.as_any().is::<RegisterSmartContractCode>()
+            {
+                return Err(CodecError::new(
+                    CodecErrorKind::InvalidArgument,
+                    "instruction requires its exact canonical JSON envelope",
+                ));
+            }
             return Ok(instruction);
         }
     }
@@ -1671,7 +1696,12 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                 }
                 if let Some(account_value) = register_map.remove("Account") {
                     let new_account: NewAccount =
-                        json::from_value(account_value).map_err(codec_error)?;
+                        json::from_value(account_value).map_err(|error| {
+                            CodecError::new(
+                                CodecErrorKind::InvalidArgument,
+                                format!("invalid Register.Account: {error}"),
+                            )
+                        })?;
                     let register_box =
                         RegisterBox::Account(Register::<Account>::account(new_account));
                     return Ok(InstructionBox::from(register_box));
@@ -2431,12 +2461,7 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                             "CreateKaigi.call field missing",
                         )
                     })?;
-                    let call: NewKaigi = json::from_value(call_value).map_err(|err| {
-                        CodecError::new(
-                            CodecErrorKind::InvalidArgument,
-                            format!("CreateKaigi.call parse error: {err}"),
-                        )
-                    })?;
+                    let call = kaigi::parse_call(call_value)?;
                     let commitment = parse_optional_commitment(
                         create_fields.remove("commitment"),
                         "CreateKaigi",
@@ -2542,7 +2567,7 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                     let call_id: KaigiId = json::from_value(call_id_value).map_err(codec_error)?;
                     let ended_at = match end_fields.remove("ended_at_ms") {
                         None | Some(json::Value::Null) => None,
-                        Some(value) => Some(json::from_value(value).map_err(codec_error)?),
+                        Some(value) => Some(kaigi::parse_u64(value, "EndKaigi.ended_at_ms")?),
                     };
                     let commitment =
                         parse_optional_commitment(end_fields.remove("commitment"), "EndKaigi")?;
@@ -2580,10 +2605,11 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                             "RecordKaigiUsage.duration_ms field missing",
                         )
                     })?;
-                    let duration_ms: u64 = json::from_value(duration_value).map_err(codec_error)?;
+                    let duration_ms =
+                        kaigi::parse_u64(duration_value, "RecordKaigiUsage.duration_ms")?;
                     let billed_gas = usage_fields
                         .remove("billed_gas")
-                        .map(|value| json::from_value(value).map_err(codec_error))
+                        .map(|value| kaigi::parse_u64(value, "RecordKaigiUsage.billed_gas"))
                         .transpose()?
                         .unwrap_or_default();
                     let usage_commitment = parse_optional_kaigi_scalar(
@@ -2618,7 +2644,7 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                             .remove("relay_manifest")
                             .map_or(Ok(None), |value| match value {
                                 json::Value::Null => Ok(None),
-                                other => json::from_value(other).map(Some).map_err(codec_error),
+                                other => kaigi::parse_relay_manifest(other).map(Some),
                             })?;
                     let manifest = SetKaigiRelayManifest {
                         call_id,
@@ -2682,7 +2708,7 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                     let reported_at_ms = health_fields
                         .remove("reported_at_ms")
                         .map_or(Ok(0_u64), |value| {
-                            json::from_value(value).map_err(codec_error)
+                            kaigi::parse_u64(value, "ReportKaigiRelayHealth.reported_at_ms")
                         })?;
                     let notes =
                         health_fields
@@ -2833,10 +2859,13 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                 return Ok(Box::new(instruction).into_instruction_box());
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractCode") {
+                require_exact_json_fields(&map, &[], "RegisterSmartContractCode envelope")?;
+                require_exact_json_fields(&fields, &["manifest"], "RegisterSmartContractCode")?;
                 let manifest_value =
                     required_value(&mut fields, "manifest", "RegisterSmartContractCode")?;
                 let manifest: ContractManifest =
                     json::from_value(manifest_value).map_err(codec_error)?;
+                manifest::validate_manifest_schemas(&manifest)?;
                 let instruction = RegisterSmartContractCode { manifest };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
@@ -2861,79 +2890,6 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
                     "RemoveSmartContractBytes.reason",
                 )?;
                 let instruction = RemoveSmartContractBytes { code_hash, reason };
-                return Ok(Box::new(instruction).into_instruction_box());
-            }
-            if let Some(json::Value::Object(mut fields)) = map.remove("ActivateContractInstance") {
-                let contract_address: iroha_data_model::smart_contract::ContractAddress =
-                    parse_string_value(
-                        required_value(
-                            &mut fields,
-                            "contract_address",
-                            "ActivateContractInstance",
-                        )?,
-                        "ActivateContractInstance.contract_address",
-                    )?
-                    .parse()
-                    .map_err(|err| {
-                        CodecError::new(
-                            CodecErrorKind::InvalidArgument,
-                            format!(
-                                "invalid ActivateContractInstance.contract_address literal: {err}"
-                            ),
-                        )
-                    })?;
-                let expected_revision = parse_u64_value(
-                    required_value(&mut fields, "expected_revision", "ActivateContractInstance")?,
-                    "ActivateContractInstance.expected_revision",
-                )?;
-                let code_hash_value =
-                    required_value(&mut fields, "code_hash", "ActivateContractInstance")?;
-                let code_hash =
-                    parse_hash_value(code_hash_value, "ActivateContractInstance.code_hash")?;
-                let instruction = ActivateContractInstance {
-                    contract_address,
-                    expected_revision,
-                    code_hash,
-                };
-                return Ok(Box::new(instruction).into_instruction_box());
-            }
-            if let Some(json::Value::Object(mut fields)) = map.remove("DeactivateContractInstance")
-            {
-                let contract_address: iroha_data_model::smart_contract::ContractAddress =
-                    parse_string_value(
-                        required_value(
-                            &mut fields,
-                            "contract_address",
-                            "DeactivateContractInstance",
-                        )?,
-                        "DeactivateContractInstance.contract_address",
-                    )?
-                    .parse()
-                    .map_err(|err| {
-                        CodecError::new(
-                            CodecErrorKind::InvalidArgument,
-                            format!(
-                                "invalid DeactivateContractInstance.contract_address literal: {err}"
-                            ),
-                        )
-                    })?;
-                let expected_revision = parse_u64_value(
-                    required_value(
-                        &mut fields,
-                        "expected_revision",
-                        "DeactivateContractInstance",
-                    )?,
-                    "DeactivateContractInstance.expected_revision",
-                )?;
-                let reason = parse_optional_string_value(
-                    fields.remove("reason"),
-                    "DeactivateContractInstance.reason",
-                )?;
-                let instruction = DeactivateContractInstance {
-                    contract_address,
-                    expected_revision,
-                    reason,
-                };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
             if let Some(value) = map.remove("ClaimTwitterFollowReward") {
@@ -3282,6 +3238,18 @@ fn exact_json_object_fields(
 
 /// Render a typed instruction through its canonical JavaScript JSON contract.
 pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<json::Value> {
+    if let Some(value) = activation_instructions::to_json(instruction) {
+        return value;
+    }
+    if let Some(value) = lifecycle_instructions::to_json(instruction) {
+        return value;
+    }
+    if let Some(value) = game_instructions::to_json(instruction) {
+        return value;
+    }
+    if let Some(value) = verifying_key_instructions::to_json(instruction) {
+        return value;
+    }
     let instruction_ref: &dyn InstructionTrait = &**instruction;
     if let Some(availability) = instruction_ref
         .as_any()
@@ -3412,6 +3380,26 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
             json::Value::Object(inner),
         );
         return Ok(json::Value::Object(outer));
+    }
+    if let Some(cancel) = instruction_ref
+        .as_any()
+        .downcast_ref::<CancelSmartContractCodeUpload>()
+    {
+        return Ok(json::Value::Object(
+            [(
+                "CancelSmartContractCodeUpload".to_owned(),
+                json::Value::Object(
+                    [(
+                        "code_hash".to_owned(),
+                        json::to_value(&cancel.code_hash).map_err(codec_error)?,
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            )]
+            .into_iter()
+            .collect(),
+        ));
     }
     if let Some(cancel) = instruction_ref.as_any().downcast_ref::<CancelAssetLock>() {
         if cancel.expected_remaining_amount.is_zero() {
@@ -4204,6 +4192,7 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         .as_any()
         .downcast_ref::<RegisterSmartContractCode>()
     {
+        manifest::validate_manifest_schemas(&register_code.manifest)?;
         let manifest_value = json::to_value(&register_code.manifest).map_err(codec_error)?;
         let mut inner = json::Map::new();
         inner.insert("manifest".to_owned(), manifest_value);
@@ -4253,53 +4242,6 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         );
         return Ok(json::Value::Object(outer));
     }
-    if let Some(activate) = instruction_ref
-        .as_any()
-        .downcast_ref::<ActivateContractInstance>()
-    {
-        let mut inner = json::Map::new();
-        inner.insert(
-            "contract_address".to_owned(),
-            json::Value::String(activate.contract_address.to_string()),
-        );
-        inner.insert(
-            "expected_revision".to_owned(),
-            json::Value::String(activate.expected_revision.to_string()),
-        );
-        inner.insert(
-            "code_hash".to_owned(),
-            json::to_value(&activate.code_hash).map_err(codec_error)?,
-        );
-        let mut outer = json::Map::new();
-        outer.insert(
-            "ActivateContractInstance".to_owned(),
-            json::Value::Object(inner),
-        );
-        return Ok(json::Value::Object(outer));
-    }
-    if let Some(deactivate) = instruction_ref
-        .as_any()
-        .downcast_ref::<DeactivateContractInstance>()
-    {
-        let mut inner = json::Map::new();
-        inner.insert(
-            "contract_address".to_owned(),
-            json::Value::String(deactivate.contract_address.to_string()),
-        );
-        inner.insert(
-            "expected_revision".to_owned(),
-            json::Value::String(deactivate.expected_revision.to_string()),
-        );
-        if let Some(reason) = &deactivate.reason {
-            inner.insert("reason".to_owned(), json::Value::String(reason.clone()));
-        }
-        let mut outer = json::Map::new();
-        outer.insert(
-            "DeactivateContractInstance".to_owned(),
-            json::Value::Object(inner),
-        );
-        return Ok(json::Value::Object(outer));
-    }
     if let Some(claim) = instruction_ref
         .as_any()
         .downcast_ref::<ClaimTwitterFollowReward>()
@@ -4345,10 +4287,7 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
     }
     if let Some(create) = instruction_ref.as_any().downcast_ref::<CreateKaigi>() {
         let mut payload = json::Map::new();
-        payload.insert(
-            "call".to_owned(),
-            json::to_value(create.call()).map_err(codec_error)?,
-        );
+        payload.insert("call".to_owned(), kaigi::call_json(create.call())?);
         payload.insert(
             "commitment".to_owned(),
             optional_commitment_to_json(create.commitment().as_ref()),
@@ -4434,7 +4373,7 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         );
         payload.insert(
             "ended_at_ms".to_owned(),
-            json::to_value(end.ended_at_ms()).map_err(codec_error)?,
+            end.ended_at_ms().map_or(json::Value::Null, kaigi::u64_json),
         );
         payload.insert(
             "commitment".to_owned(),
@@ -4462,11 +4401,11 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         );
         payload.insert(
             "duration_ms".to_owned(),
-            json::to_value(usage.duration_ms()).map_err(codec_error)?,
+            kaigi::u64_json(*usage.duration_ms()),
         );
         payload.insert(
             "billed_gas".to_owned(),
-            json::to_value(usage.billed_gas()).map_err(codec_error)?,
+            kaigi::u64_json(*usage.billed_gas()),
         );
         payload.insert(
             "usage_commitment".to_owned(),
@@ -4500,7 +4439,7 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
         );
         payload.insert(
             "reported_at_ms".to_owned(),
-            json::Value::Number(health.reported_at_ms.into()),
+            kaigi::u64_json(health.reported_at_ms),
         );
         payload.insert(
             "notes".to_owned(),
@@ -4523,10 +4462,14 @@ pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<js
             "call_id".to_owned(),
             json::to_value(manifest.call_id()).map_err(codec_error)?,
         );
-        let relay_manifest = manifest.relay_manifest().clone();
         payload.insert(
             "relay_manifest".to_owned(),
-            json::to_value(&relay_manifest).map_err(codec_error)?,
+            manifest
+                .relay_manifest()
+                .as_ref()
+                .map(kaigi::relay_manifest_json)
+                .transpose()?
+                .unwrap_or(json::Value::Null),
         );
         return Ok(kaigi_json_value(
             "SetKaigiRelayManifest",

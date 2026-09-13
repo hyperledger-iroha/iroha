@@ -37,9 +37,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::ComputeResourceBudget>(
         "iroha_data_model::compute::ComputeResourceBudget",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::ComputeSandboxMode>(
-        "iroha_data_model::compute::ComputeSandboxMode",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::ComputeRandomnessPolicy>(
         "iroha_data_model::compute::ComputeRandomnessPolicy",
     ),

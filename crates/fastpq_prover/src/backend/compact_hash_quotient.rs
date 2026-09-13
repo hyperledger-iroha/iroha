@@ -1,4 +1,4 @@
-//! Shared fixed-coset constraint ledger for the 512-row compact hash schedule.
+//! Shared fixed-polynomial constraint ledger for the 512-row compact hash schedule.
 //!
 //! The exact invocation is active: compilation fixes the gadget's `active` input
 //! to one. Rows 0..407 retain the existing gadget's constraint order, zero-filled
@@ -14,19 +14,24 @@
 //! phase's full residue vector at every point. The compiled immutable graph is
 //! shared across verifier/prover instances, independently of witness contents.
 //!
-//! TODO: Combine these slots with the separate SMT/public-boundary ledger, bind
-//! the complete schema and degree metadata before challenges, and commit/open
-//! every column. Measure complete proof resources before changing admission.
-//! This module provides numerators, not a standalone proof or authenticated
-//! public ports, and does not remove mandatory replay.
+//! The complete transfer AIR combines these slots with the SMT/public-boundary
+//! ledger in fixed order. This owner supplies numerators at base or extension
+//! points; it does not authenticate public ports, prove polynomial openings or
+//! degrees, add witness masking, or qualify the surrounding proof profile.
 
 use std::{cell::RefCell, collections::BTreeMap, sync::OnceLock};
 
+#[cfg(test)]
+use super::air_degree::{PolynomialDegree, evaluate_node_degrees};
+#[cfg(test)]
+use super::{GOLDILOCKS_MODULUS, GoldilocksFp4V1, add_mod, mul_mod, sub_mod};
 use fastpq_isi::StarkParameterSet;
 
 use super::{
-    FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1, add_mod, fixed_schedule::PeriodicSelectors,
-    mul_mod, sub_mod,
+    FriDomain,
+    air_expression::{Builder, Expression, Node},
+    fixed_schedule::PeriodicSelectors,
+    polynomial_field::PolynomialField,
 };
 use crate::{
     Error, Result,
@@ -53,46 +58,6 @@ pub(super) const MAX_PROVER_SELECTOR_MASKS: usize = 2_048;
 pub(super) const MAX_PROVER_SELECTOR_RUNS: usize = 16_384;
 /// Fixed-source upper bound on compiled output terms.
 pub(super) const MAX_PROVER_OUTPUT_TERMS: usize = 16_384;
-
-/// Canonical base or extension values accepted by this ledger's opening boundary.
-pub(super) trait LedgerField: IntegerAirField {
-    /// First noncanonical base coefficient, if any.
-    fn noncanonical_coefficient(self) -> Option<usize>;
-    /// Embed a canonical base constant without losing extension coordinates.
-    fn embed_base(value: u64) -> Self;
-    /// Scale every coordinate by a canonical base-field selector value.
-    fn scale_base(self, value: u64) -> Self;
-}
-
-impl LedgerField for u64 {
-    fn noncanonical_coefficient(self) -> Option<usize> {
-        (self >= GOLDILOCKS_MODULUS).then_some(0)
-    }
-
-    fn embed_base(value: u64) -> Self {
-        value
-    }
-
-    fn scale_base(self, value: u64) -> Self {
-        mul_mod(self, value)
-    }
-}
-
-impl LedgerField for GoldilocksFp4V1 {
-    fn noncanonical_coefficient(self) -> Option<usize> {
-        self.coefficients()
-            .iter()
-            .position(|&value| value >= GOLDILOCKS_MODULUS)
-    }
-
-    fn embed_base(value: u64) -> Self {
-        Self::from_base(value).expect("compiled constants and fixed selectors are canonical")
-    }
-
-    fn scale_base(self, value: u64) -> Self {
-        self.mul_base(value)
-    }
-}
 
 /// Fixed-slot full-field numerators, before alpha mixing and row-zerofier division.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,9 +174,9 @@ impl CompactHashQuotient {
     /// and Merkle binding belong to the surrounding proof. Every current/next
     /// field coefficient is checked before arithmetic. No active witness input
     /// exists: each execution phase is the exact active single-block invocation.
-    pub(super) fn evaluate<F: LedgerField>(
+    pub(super) fn evaluate<F: PolynomialField>(
         &self,
-        point: u64,
+        point: F,
         current: &CompactRow<F>,
         next: &CompactRow<F>,
     ) -> Result<HashNumerators<F>> {
@@ -220,8 +185,77 @@ impl CompactHashQuotient {
         Ok(self.compiled.evaluate(&phases, &inputs))
     }
 
+    /// Propagate declared column bounds through the actual compiled hash graph.
+    ///
+    /// Current and rotated next polynomials have the same degree bounds but
+    /// remain distinct graph inputs. Every phase mask has degree at most N-N/512;
+    /// using that upper bound preserves safety when a sum of phases cancels.
+    #[cfg(test)]
+    pub(super) fn numerator_degree_bounds(
+        &self,
+        columns: &[PolynomialDegree; hash::COLUMN_COUNT],
+    ) -> Result<HashNumerators<PolynomialDegree>> {
+        let inputs: [PolynomialDegree; INPUT_CELLS] =
+            core::array::from_fn(|index| columns[index % hash::COLUMN_COUNT]);
+        let mask = PolynomialDegree::from_inclusive(self.trace_rows - self.trace_rows / PERIOD)?;
+        self.compiled.numerator_degree_bounds(&inputs, mask)
+    }
+
+    /// Prepare the exact short public phase/mask cycle for a checked numerator coset.
+    #[cfg(test)]
+    pub(super) fn polynomial_evaluator(
+        &self,
+        domain: super::polynomial_transform::PolynomialDomain,
+    ) -> Result<(Vec<[GoldilocksFp4V1; PERIOD]>, PolynomialHashEvaluator<'_>)> {
+        use super::{
+            field_pow, polynomial_transform::reserved, secret_polynomial::SecretPolynomial,
+        };
+        let stride = domain.numerator_rotation(self.trace_rows)?;
+        let expected = field_pow(
+            self.lde_domain.generator,
+            (self.lde_rows / self.trace_rows) as u64,
+        );
+        if field_pow(domain.generator(), stride as u64) != expected {
+            return Err(Error::InvalidTraceShape {
+                details: "numerator masks and hash ledger use different trace roots".to_owned(),
+            });
+        }
+        let cycle = domain.rows() / (self.trace_rows / PERIOD);
+        if cycle > MAX_PROVER_MASK_CYCLE {
+            return Err(Error::VerifierLimitExceeded {
+                limit: "max_compact_hash_prover_mask_cycle",
+                actual: cycle,
+                max: MAX_PROVER_MASK_CYCLE,
+            });
+        }
+        let mask_cells = cycle
+            .checked_mul(self.compiled.masks.len())
+            .ok_or_else(|| Error::InvalidTraceShape {
+                details: "numerator hash mask cell count overflow".to_owned(),
+            })?;
+        let mut phases = reserved(cycle)?;
+        let mut masks = reserved(mask_cells)?;
+        for index in 0..cycle {
+            let row = self.selectors.evaluate(domain.point(index)?)?;
+            masks.extend(self.compiled.mask_values(&row));
+            phases.push(row.try_into().map_err(|_| Error::InvalidTraceShape {
+                details: "numerator public phase cycle has an unexpected width".to_owned(),
+            })?);
+        }
+        Ok((
+            phases,
+            PolynomialHashEvaluator {
+                ledger: self,
+                domain,
+                cycle,
+                masks,
+                scratch: SecretPolynomial::zeroed(self.compiled.nodes.len())?,
+            },
+        ))
+    }
+
     /// Allocate fixed-size arithmetic storage for reuse within one proof operation.
-    pub(super) fn evaluation_scratch<F: LedgerField>(&self) -> EvaluationScratch<F> {
+    pub(super) fn evaluation_scratch<F: PolynomialField>(&self) -> EvaluationScratch<F> {
         EvaluationScratch {
             compiled: self.compiled,
             values: vec![F::ZERO; self.compiled.nodes.len()].into_boxed_slice(),
@@ -289,6 +323,44 @@ impl CompactHashQuotient {
     }
 }
 
+/// Validation-only full-Fp4 numerator view with guarded witness arithmetic scratch.
+#[cfg(test)]
+pub(super) struct PolynomialHashEvaluator<'a> {
+    ledger: &'a CompactHashQuotient,
+    domain: super::polynomial_transform::PolynomialDomain,
+    cycle: usize,
+    // These masks depend only on the declared public domain and fixed selectors.
+    masks: Vec<GoldilocksFp4V1>,
+    scratch: super::secret_polynomial::SecretPolynomial<GoldilocksFp4V1>,
+}
+
+#[cfg(test)]
+impl PolynomialHashEvaluator<'_> {
+    /// Evaluate the same compiled nodes with exact-domain masks and private scratch.
+    pub(super) fn evaluate(
+        &mut self,
+        index: usize,
+        current: &CompactRow<GoldilocksFp4V1>,
+        next: &CompactRow<GoldilocksFp4V1>,
+    ) -> Result<HashNumerators<GoldilocksFp4V1>> {
+        if index >= self.domain.rows() {
+            return Err(Error::QueryIndexOutOfRange {
+                index,
+                len: self.domain.rows(),
+            });
+        }
+        let inputs = canonical_inputs(current, next)?;
+        let width = self.ledger.compiled.masks.len();
+        let start = (index % self.cycle) * width;
+        Ok(self.ledger.compiled.evaluate_masks_with_scratch(
+            &self.masks[start..start + width],
+            &inputs,
+            &mut self.scratch,
+            GoldilocksFp4V1::mul,
+        ))
+    }
+}
+
 /// Prover-only mask cycle tied by borrow to one exact ledger and LDE geometry.
 pub(super) struct ProverMaskCycle<'a> {
     ledger: &'a CompactHashQuotient,
@@ -298,7 +370,7 @@ pub(super) struct ProverMaskCycle<'a> {
 impl ProverMaskCycle<'_> {
     /// Evaluate shared arithmetic at one bounded LDE index with cached fixed masks.
     #[cfg(test)]
-    pub(super) fn evaluate<F: LedgerField>(
+    pub(super) fn evaluate<F: PolynomialField>(
         &self,
         index: usize,
         current: &CompactRow<F>,
@@ -325,7 +397,7 @@ impl ProverMaskCycle<'_> {
     /// `evaluate`, then overwrites the DAG in dependency order without allocating
     /// arithmetic or output vectors. Masks remain tied to this exact ledger's
     /// domain; only the domain-independent arithmetic storage is reusable.
-    pub(super) fn evaluate_with_scratch<F: LedgerField>(
+    pub(super) fn evaluate_with_scratch<F: PolynomialField>(
         &self,
         index: usize,
         current: &CompactRow<F>,
@@ -352,11 +424,12 @@ impl ProverMaskCycle<'_> {
             &self.values[start..start + width],
             &inputs,
             &mut scratch.values,
+            F::scale_base,
         ))
     }
 }
 
-fn canonical_inputs<F: LedgerField>(
+fn canonical_inputs<F: PolynomialField>(
     current: &CompactRow<F>,
     next: &CompactRow<F>,
 ) -> Result<[F; INPUT_CELLS]> {
@@ -379,139 +452,6 @@ fn canonical_inputs<F: LedgerField>(
             next[index - hash::COLUMN_COUNT]
         }
     }))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Node {
-    Constant(u64),
-    Input(usize),
-    Add(usize, usize),
-    Sub(usize, usize),
-    Mul(usize, usize),
-}
-
-impl Node {
-    #[cfg(test)]
-    fn is_arithmetic(self) -> bool {
-        matches!(self, Self::Add(..) | Self::Sub(..) | Self::Mul(..))
-    }
-}
-
-#[derive(Default)]
-struct Builder {
-    nodes: Vec<Node>,
-    degrees: Vec<usize>,
-    interned: BTreeMap<Node, usize>,
-}
-
-impl Builder {
-    fn intern(&mut self, node: Node) -> usize {
-        if let Some(&index) = self.interned.get(&node) {
-            return index;
-        }
-        let degree = match node {
-            Node::Constant(_) => 0,
-            Node::Input(_) => 1,
-            Node::Add(left, right) | Node::Sub(left, right) => {
-                self.degrees[left].max(self.degrees[right])
-            }
-            Node::Mul(left, right) => self.degrees[left] + self.degrees[right],
-        };
-        let index = self.nodes.len();
-        self.nodes.push(node);
-        self.degrees.push(degree);
-        self.interned.insert(node, index);
-        index
-    }
-}
-
-/// Copy handles borrow one local compilation arena; constants need no arena.
-#[derive(Clone, Copy)]
-enum Expression<'a> {
-    Constant(u64),
-    Node(&'a RefCell<Builder>, usize),
-}
-
-#[derive(Clone, Copy)]
-enum Operation {
-    Add,
-    Sub,
-    Mul,
-}
-
-impl<'a> Expression<'a> {
-    fn id(self, arena: &'a RefCell<Builder>) -> usize {
-        match self {
-            Self::Constant(value) => arena.borrow_mut().intern(Node::Constant(value)),
-            Self::Node(owner, index) => {
-                assert!(core::ptr::eq(owner, arena), "one fixed compilation arena");
-                index
-            }
-        }
-    }
-
-    fn binary(self, other: Self, operation: Operation) -> Self {
-        if let (Self::Constant(left), Self::Constant(right)) = (self, other) {
-            return Self::Constant(match operation {
-                Operation::Add => add_mod(left, right),
-                Operation::Sub => sub_mod(left, right),
-                Operation::Mul => mul_mod(left, right),
-            });
-        }
-        match (operation, self, other) {
-            (Operation::Add | Operation::Sub, _, Self::Constant(0))
-            | (Operation::Mul, _, Self::Constant(1)) => return self,
-            (Operation::Add, Self::Constant(0), _) | (Operation::Mul, Self::Constant(1), _) => {
-                return other;
-            }
-            (Operation::Mul, Self::Constant(0), _) | (Operation::Mul, _, Self::Constant(0)) => {
-                return Self::ZERO;
-            }
-            (Operation::Sub, Self::Node(left_arena, left), Self::Node(right_arena, right))
-                if core::ptr::eq(left_arena, right_arena) && left == right =>
-            {
-                return Self::ZERO;
-            }
-            _ => {}
-        }
-        let arena = match (self, other) {
-            (Self::Node(arena, _), _) | (_, Self::Node(arena, _)) => arena,
-            _ => unreachable!("constant arithmetic handled above"),
-        };
-        let mut left = self.id(arena);
-        let mut right = other.id(arena);
-        if matches!(operation, Operation::Add | Operation::Mul) && right < left {
-            core::mem::swap(&mut left, &mut right);
-        }
-        let node = match operation {
-            Operation::Add => Node::Add(left, right),
-            Operation::Sub => Node::Sub(left, right),
-            Operation::Mul => Node::Mul(left, right),
-        };
-        let index = arena.borrow_mut().intern(node);
-        Self::Node(arena, index)
-    }
-}
-
-impl IntegerAirField for Expression<'_> {
-    const ZERO: Self = Self::Constant(0);
-    const ONE: Self = Self::Constant(1);
-
-    fn from_u32(value: u32) -> Self {
-        Self::Constant(u64::from(value))
-    }
-
-    fn add(self, other: Self) -> Self {
-        self.binary(other, Operation::Add)
-    }
-
-    fn sub(self, other: Self) -> Self {
-        self.binary(other, Operation::Sub)
-    }
-
-    fn mul(self, other: Self) -> Self {
-        self.binary(other, Operation::Mul)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -552,9 +492,9 @@ impl PhaseMask {
         Self { runs }
     }
 
-    fn evaluate(&self, prefixes: &[u64; PERIOD + 1]) -> u64 {
-        self.runs.iter().fold(0, |sum, &(start, end)| {
-            add_mod(sum, sub_mod(prefixes[end], prefixes[start]))
+    fn evaluate<F: IntegerAirField>(&self, prefixes: &[F; PERIOD + 1]) -> F {
+        self.runs.iter().fold(F::ZERO, |sum, &(start, end)| {
+            sum.add(prefixes[end].sub(prefixes[start]))
         })
     }
 }
@@ -578,6 +518,29 @@ struct CompiledLedger {
 }
 
 impl CompiledLedger {
+    #[cfg(test)]
+    fn numerator_degree_bounds(
+        &self,
+        input: &[PolynomialDegree; INPUT_CELLS],
+        mask: PolynomialDegree,
+    ) -> Result<HashNumerators<PolynomialDegree>> {
+        let values = evaluate_node_degrees(&self.nodes, input)?;
+        let evaluate_slot = |terms: &[Term]| -> Result<PolynomialDegree> {
+            terms.iter().try_fold(PolynomialDegree::ZERO, |sum, term| {
+                Ok(sum.sum(values[term.expression].product(mask)?))
+            })
+        };
+        let mut local = [PolynomialDegree::ZERO; LOCAL_SLOTS];
+        let mut transitions = [PolynomialDegree::ZERO; TRANSITION_SLOTS];
+        for (out, terms) in local.iter_mut().zip(&self.local) {
+            *out = evaluate_slot(terms)?;
+        }
+        for (out, terms) in transitions.iter_mut().zip(&self.transitions) {
+            *out = evaluate_slot(terms)?;
+        }
+        Ok(HashNumerators { local, transitions })
+    }
+
     fn compile() -> Self {
         let arena = RefCell::new(Builder::default());
         let input: [Expression<'_>; INPUT_CELLS] = core::array::from_fn(|index| {
@@ -657,24 +620,25 @@ impl CompiledLedger {
         }
     }
 
-    fn evaluate<F: LedgerField>(
+    fn evaluate<F: PolynomialField>(
         &self,
-        phases: &[u64],
+        phases: &[F],
         input: &[F; INPUT_CELLS],
     ) -> HashNumerators<F> {
         let masks = self.mask_values(phases);
-        self.evaluate_masks(&masks, input)
+        let mut values = vec![F::ZERO; self.nodes.len()];
+        self.evaluate_masks_with_scratch(&masks, input, &mut values, F::mul)
     }
 
-    fn mask_values(&self, phases: &[u64]) -> Vec<u64> {
+    fn mask_values<F: IntegerAirField>(&self, phases: &[F]) -> Vec<F> {
         assert_eq!(
             phases.len(),
             PERIOD,
             "internally derived fixed selector width"
         );
-        let mut prefixes = [0; PERIOD + 1];
+        let mut prefixes = [F::ZERO; PERIOD + 1];
         for (phase, &value) in phases.iter().enumerate() {
-            prefixes[phase + 1] = add_mod(prefixes[phase], value);
+            prefixes[phase + 1] = prefixes[phase].add(value);
         }
         self.masks
             .iter()
@@ -682,20 +646,22 @@ impl CompiledLedger {
             .collect()
     }
 
-    fn evaluate_masks<F: LedgerField>(
+    #[cfg(test)]
+    fn evaluate_masks<F: PolynomialField>(
         &self,
         masks: &[u64],
         input: &[F; INPUT_CELLS],
     ) -> HashNumerators<F> {
         let mut values = vec![F::ZERO; self.nodes.len()];
-        self.evaluate_masks_with_scratch(masks, input, &mut values)
+        self.evaluate_masks_with_scratch(masks, input, &mut values, F::scale_base)
     }
 
-    fn evaluate_masks_with_scratch<F: LedgerField>(
+    fn evaluate_masks_with_scratch<F: PolynomialField, M: Copy>(
         &self,
-        masks: &[u64],
+        masks: &[M],
         input: &[F; INPUT_CELLS],
         values: &mut [F],
+        multiply_mask: impl Fn(F, M) -> F,
     ) -> HashNumerators<F> {
         assert_eq!(
             masks.len(),
@@ -725,7 +691,7 @@ impl CompiledLedger {
         }
         let evaluate_slot = |terms: &Vec<Term>| {
             terms.iter().fold(F::ZERO, |sum, term| {
-                sum.add(values[term.expression].scale_base(masks[term.mask]))
+                sum.add(multiply_mask(values[term.expression], masks[term.mask]))
             })
         };
         HashNumerators {
@@ -971,7 +937,9 @@ mod tests {
                 *value = value.add(term.mul_base(weight));
             }
         }
-        let actual = ledger.evaluate(point, &current, &next).unwrap();
+        let actual = ledger
+            .evaluate(GoldilocksFp4V1::embed_base(point), &current, &next)
+            .unwrap();
         assert_eq!(actual, expected);
         for lane in 1..4 {
             assert!(
@@ -988,7 +956,11 @@ mod tests {
         };
         let base = ledger.evaluate(point, &base_current, &base_next).unwrap();
         let extension = ledger
-            .evaluate(point, &embed(&base_current), &embed(&base_next))
+            .evaluate(
+                GoldilocksFp4V1::embed_base(point),
+                &embed(&base_current),
+                &embed(&base_next),
+            )
             .unwrap();
         assert_eq!(extension.local, base.local.map(GoldilocksFp4V1::embed_base));
         assert_eq!(
@@ -1076,7 +1048,7 @@ mod tests {
                         (&zero, &bad)
                     };
                     assert!(
-                        matches!(ledger.evaluate(7, current, next), Err(Error::NonCanonicalGoldilocksElement { indices, .. }) if indices == [side, column, lane])
+                        matches!(ledger.evaluate(GoldilocksFp4V1::embed_base(7), current, next), Err(Error::NonCanonicalGoldilocksElement { indices, .. }) if indices == [side, column, lane])
                     );
                 }
             }
@@ -1162,7 +1134,9 @@ mod tests {
                         cycle
                             .evaluate_with_scratch(index, current, next, &mut extension_scratch)
                             .unwrap(),
-                        ledger.evaluate(point, current, next).unwrap(),
+                        ledger
+                            .evaluate(GoldilocksFp4V1::embed_base(point), current, next)
+                            .unwrap(),
                         "extension trace_rows={trace_rows}, index={index}"
                     );
                 }
@@ -1321,7 +1295,7 @@ mod tests {
                 .unwrap(),
             ledger
                 .evaluate(
-                    ledger.lde_domain.point(4097),
+                    GoldilocksFp4V1::embed_base(ledger.lde_domain.point(4097)),
                     &extension_current,
                     &extension_next
                 )
@@ -1347,7 +1321,7 @@ mod tests {
             std::hint::black_box(
                 ledger
                     .evaluate(
-                        ledger.lde_domain.point(index),
+                        GoldilocksFp4V1::embed_base(ledger.lde_domain.point(index)),
                         std::hint::black_box(&extension_current),
                         &extension_next,
                     )
@@ -1414,6 +1388,114 @@ mod tests {
             core::mem::size_of_val(&*cycle.values),
             core::mem::size_of_val(&*base_scratch.values),
             core::mem::size_of_val(&*extension_scratch.values)
+        );
+    }
+
+    #[test]
+    fn extension_points_weight_all_hash_slots_by_independent_periodic_polynomials() {
+        use super::super::polynomial_reference as polynomial;
+        let ledger = CompactHashQuotient::new(&FASTPQ_FINAL_V1, 65_536).unwrap();
+        let current = hash_row_from_cells(&core::array::from_fn(|column| {
+            GoldilocksFp4V1::new([column as u64 + 1, 17, 31, 47]).unwrap()
+        }));
+        let next = hash_row_from_cells(&core::array::from_fn(|column| {
+            GoldilocksFp4V1::new([column as u64 + 7, 29, 43, 61]).unwrap()
+        }));
+        for point in polynomial::points().into_iter().skip(5) {
+            let mut expected = HashNumerators {
+                local: [GoldilocksFp4V1::ZERO; LOCAL_SLOTS],
+                transitions: [GoldilocksFp4V1::ZERO; TRANSITION_SLOTS],
+            };
+            for phase in 0..PERIOD {
+                let weight = polynomial::periodic(65_536, PERIOD, phase, point);
+                let row = reference(phase, &current, &next);
+                for (value, term) in expected.local.iter_mut().zip(row.local) {
+                    *value = value.add(term.mul(weight));
+                }
+                for (value, term) in expected.transitions.iter_mut().zip(row.transitions) {
+                    *value = value.add(term.mul(weight));
+                }
+            }
+            let actual = ledger.evaluate(point, &current, &next).unwrap();
+            assert_eq!(actual, expected);
+            // Rotate the actual compiled slot map as an adversarial source control.
+            // This changes which equation each slot evaluates, rather than editing
+            // the expected vector or adding a constant to an already computed output.
+            let mut wrong_slots = ledger.compiled.clone();
+            wrong_slots.local.rotate_left(1);
+            wrong_slots.transitions.rotate_left(1);
+            let wrong = wrong_slots.evaluate(
+                &ledger.selectors.evaluate(point).unwrap(),
+                &canonical_inputs(&current, &next).unwrap(),
+            );
+            assert_ne!(wrong, expected);
+            // A stale base projection cannot stand in for the complete point.
+            assert_ne!(
+                actual,
+                ledger
+                    .evaluate(
+                        GoldilocksFp4V1::embed_base(point.coefficients()[0]),
+                        &current,
+                        &next
+                    )
+                    .unwrap()
+            );
+        }
+    }
+    #[test]
+    fn compiled_hash_degree_bounds_cover_all_slots_against_small_polynomial_interpolation() {
+        use super::super::air_degree::reference as polynomial;
+        let compiled = CompiledLedger::compile();
+        let degrees: [PolynomialDegree; INPUT_CELLS] = core::array::from_fn(|index| {
+            PolynomialDegree::from_exclusive(1 + (index % hash::COLUMN_COUNT) % 4)
+        });
+        let bounds = compiled
+            .numerator_degree_bounds(&degrees, PolynomialDegree::from_exclusive(3))
+            .unwrap();
+        let bounds: Vec<_> = bounds.local.into_iter().chain(bounds.transitions).collect();
+        let evaluate = |point| {
+            let inputs = core::array::from_fn(|index| {
+                let column = index % hash::COLUMN_COUNT;
+                let x = if index < hash::COLUMN_COUNT {
+                    point
+                } else {
+                    polynomial::mul(3, point)
+                };
+                polynomial::polynomial(1 + column % 4, column + 11, x)
+            });
+            let phases: [u64; PERIOD] =
+                core::array::from_fn(|phase| polynomial::polynomial(3, phase + 1301, point));
+            let values = compiled.evaluate(&phases, &inputs);
+            values
+                .local
+                .into_iter()
+                .chain(values.transitions)
+                .collect::<Vec<_>>()
+        };
+        // Trace degree <=3 and arbitrary public phase degree <=2 make every
+        // hash expression degree <=8 by the independent quadratic premise.
+        // Twelve samples are sufficient without using a candidate bound.
+        let samples: Vec<_> = (0..12).map(evaluate).collect();
+        let coefficients = polynomial::interpolate_columns(&samples);
+        let held_out = evaluate(19);
+        assert_eq!(bounds.len(), LOCAL_SLOTS + TRANSITION_SLOTS);
+        for (slot, ((coefficients, bound), expected)) in
+            coefficients.iter().zip(&bounds).zip(held_out).enumerate()
+        {
+            assert!(
+                polynomial::degree_bound(coefficients) <= bound.exclusive(),
+                "hash slot {slot}"
+            );
+            assert_eq!(
+                polynomial::horner(coefficients, 19),
+                expected,
+                "hash slot {slot}"
+            );
+        }
+        assert!(
+            coefficients
+                .iter()
+                .any(|column| polynomial::degree_bound(column) > 4)
         );
     }
 }

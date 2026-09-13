@@ -19,10 +19,10 @@ import {
   noritoRequiredMethods,
 } from "./helpers/native.js";
 import {
-  assertNativeAndPureInstructionParity,
+  assertNativeInstructionAdapterParity,
   normalizedHashHex,
   toByteArray,
-  withPureJsInstructionCodec,
+  withNativeInstructionCodec,
 } from "./helpers/instructionCodec.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
@@ -126,7 +126,7 @@ baseTest("asset availability builder rejects ambiguous or noncanonical input", (
   );
 });
 
-baseTest("pure JS codec roundtrips directional asset availability", () => {
+baseTest("native instruction adapter roundtrips directional asset availability", () => {
   const instruction = buildSetAssetTransferAvailabilityInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -135,7 +135,7 @@ baseTest("pure JS codec roundtrips directional asset availability", () => {
     outgoing: "Enabled",
     reason: "operator review",
   });
-  withPureJsInstructionCodec(({
+  withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
@@ -156,7 +156,7 @@ baseTest("asset availability preserves the complete u64 revision domain", () => 
     instruction.SetAssetTransferAvailability.expected_revision,
     "18446744073709551615",
   );
-  withPureJsInstructionCodec(({
+  withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
@@ -176,7 +176,7 @@ baseTest("asset availability preserves the complete u64 revision domain", () => 
   );
 });
 
-baseTest("pure JS codec rejects noncanonical availability reasons", () => {
+baseTest("native instruction adapter rejects noncanonical availability reasons", () => {
   const base = buildSetAssetTransferAvailabilityInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -184,7 +184,7 @@ baseTest("pure JS codec rejects noncanonical availability reasons", () => {
     incoming: "Disabled",
     outgoing: "Enabled",
   });
-  withPureJsInstructionCodec(({ noritoEncodeInstruction }) => {
+  withNativeInstructionCodec(({ noritoEncodeInstruction }) => {
     for (const reason of ["line\u000abreached", "ר".repeat(257)]) {
       assert.throws(
         () =>
@@ -200,7 +200,7 @@ baseTest("pure JS codec rejects noncanonical availability reasons", () => {
   });
 });
 
-test("native and pure JS codecs byte-match for asset availability", () => {
+test("public adapter and native codec byte-match for asset availability", () => {
   const instruction = buildSetAssetTransferAvailabilityInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -209,13 +209,13 @@ test("native and pure JS codecs byte-match for asset availability", () => {
     outgoing: "Enabled",
     reason: "operator review",
   });
-  assertNativeAndPureInstructionParity(
+  assertNativeInstructionAdapterParity(
     instruction,
     "SetAssetTransferAvailability",
   );
 });
 
-baseTest("asset transfer blacklist builder and pure codec use the native shape", () => {
+baseTest("asset transfer blacklist builder and native instruction adapter use the native shape", () => {
   const instruction = buildSetAssetTransferBlacklistInstruction({
     accountId: ACCOUNT_ID,
     assetDefinitionId: ASSET_DEFINITION_ID,
@@ -228,7 +228,7 @@ baseTest("asset transfer blacklist builder and pure codec use the native shape",
       blacklisted: true,
     },
   });
-  withPureJsInstructionCodec(({
+  withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
@@ -267,7 +267,7 @@ baseTest("asset transfer control builder canonicalizes complete window caps", ()
       ],
     },
   });
-  withPureJsInstructionCodec(({
+  withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
@@ -309,7 +309,7 @@ baseTest("asset transfer control rejects ambiguous or noncanonical limits", () =
   assert.throws(() => build(null), /must be an array/u);
 });
 
-test("native and pure JS codecs byte-match for transfer blacklist and caps", () => {
+test("public adapter and native codec byte-match for transfer blacklist and caps", () => {
   const instructions = [
     buildSetAssetTransferBlacklistInstruction({
       accountId: ACCOUNT_ID,
@@ -326,7 +326,7 @@ test("native and pure JS codecs byte-match for transfer blacklist and caps", () 
     }),
   ];
   for (const instruction of instructions) {
-    assertNativeAndPureInstructionParity(
+    assertNativeInstructionAdapterParity(
       instruction,
       Object.keys(instruction)[0],
     );
@@ -419,8 +419,8 @@ baseTest("buildCancelAssetLockInstruction bounds the exact UTF-8 lock-id preimag
   );
 });
 
-baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape", () => {
-  withPureJsInstructionCodec(({
+baseTest("native instruction adapter roundtrips CancelAssetLock and rejects the legacy shape", () => {
+  withNativeInstructionCodec(({
     noritoDecodeInstruction,
     noritoEncodeInstruction,
   }) => {
@@ -436,7 +436,7 @@ baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape"
         noritoEncodeInstruction({
           CancelAssetLock: { escrow_id: instruction.CancelAssetLock.escrow_id },
         }),
-      /expected_remaining_amount is required/,
+      /CancelAssetLock is missing field\(s\): expected_remaining_amount/u,
     );
     for (const expected_remaining_amount of ["0", "01", "1.0"]) {
       assert.throws(
@@ -448,7 +448,7 @@ baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape"
             },
           }),
         undefined,
-        `pure JS codec accepted ${expected_remaining_amount}`,
+        `native instruction adapter accepted ${expected_remaining_amount}`,
       );
     }
     for (const escrow_id of [
@@ -467,13 +467,13 @@ baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape"
               escrow_id,
             },
           }),
-        /canonical uppercase hash/u,
+        /canonical uppercase checksummed hash literal/u,
       );
     }
   });
 });
 
-test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1", () => {
+test("public adapter and native codec byte-match and cross-decode CancelAssetLock V1", () => {
   const instruction = buildCancelAssetLockInstruction({
     lockId: "merchant-lock-001",
     expectedRemainingAmount: "1.25",
@@ -483,20 +483,20 @@ test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1",
     CANCEL_ASSET_LOCK_ESCROW_ID,
   );
 
-  const pureEncoded = withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
+  const adapterEncoded = withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
     noritoEncodeInstruction(instruction),
   );
   const nativeEncoded = nativeBinding.noritoEncodeInstruction(
     JSON.stringify(instruction),
   );
-  assert.deepEqual(toByteArray(pureEncoded), toByteArray(nativeEncoded));
+  assert.deepEqual(toByteArray(adapterEncoded), toByteArray(nativeEncoded));
 
   assert.deepEqual(
-    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
+    JSON.parse(nativeBinding.noritoDecodeInstruction(adapterEncoded)),
     instruction,
   );
   assert.deepEqual(
-    withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
+    withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
       noritoDecodeInstruction(nativeEncoded),
     ),
     instruction,
@@ -511,7 +511,7 @@ test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1",
           },
         }),
       ),
-    /missing field/,
+    /CancelAssetLock is missing field\(s\): expected_remaining_amount/u,
   );
   assert.throws(
     () =>

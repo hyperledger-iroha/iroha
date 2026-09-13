@@ -15,6 +15,8 @@ use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
+
+mod policy_json;
 /// Payload codec expected by a compute route.
 #[derive(
     Clone,
@@ -330,7 +332,7 @@ pub struct ComputeSponsorPolicy {
 }
 /// Risk classes applied to price families for governance-bound deltas.
 ///
-/// JSON object keys use the exact variant names: `Low`, `Balanced`, and `High`.
+/// JSON values and object keys use the exact variant names: `Low`, `Balanced`, and `High`.
 #[derive(
     Clone,
     Copy,
@@ -342,11 +344,8 @@ pub struct ComputeSponsorPolicy {
     Encode,
     Decode,
     IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(tag = "class", content = "value")]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputePriceRiskClass")]
 pub enum ComputePriceRiskClass {
     /// Low-risk price families (tight delta bounds).
@@ -392,12 +391,13 @@ pub struct ComputePriceDeltaBounds {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::compute::ComputeResourceBudget")]
+#[norito(deny_unknown_fields)]
 pub struct ComputeResourceBudget {
     /// Maximum deterministic cycle budget allowed for a call.
     pub max_cycles: NonZeroU64,
     /// Maximum linear memory available to the sandbox (bytes).
     pub max_memory_bytes: NonZeroU64,
-    /// Maximum WASM stack size allowed for the program (bytes).
+    /// Maximum IVM stack size allowed for the program (bytes).
     pub max_stack_bytes: NonZeroU64,
     /// Maximum combined IO budget (ingress + internal temp buffers) in bytes.
     pub max_io_bytes: NonZeroU64,
@@ -405,46 +405,9 @@ pub struct ComputeResourceBudget {
     pub max_egress_bytes: NonZeroU64,
     /// Whether GPU hints are allowed (deterministic fallbacks must exist).
     pub allow_gpu_hints: bool,
-    /// Whether WASI-lite helpers are permitted alongside pure IVM execution.
-    pub allow_wasi: bool,
 }
-/// Sandbox execution mode.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(tag = "mode", content = "value")]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::compute::ComputeSandboxMode")]
-pub enum ComputeSandboxMode {
-    /// Run inside the IVM only (deterministic Kotodama host surface).
-    IvmOnly,
-    /// Allow a WASI-lite shim for network-less helpers.
-    WasiLite,
-}
-/// Deterministic randomness policy for compute calls.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(tag = "randomness", content = "value")]
-#[derive(norito::NoritoSchema)]
+/// Deterministic randomness policy for compute calls, encoded as its exact variant name in JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeRandomnessPolicy")]
 pub enum ComputeRandomnessPolicy {
     /// Disallow randomness entirely.
@@ -452,21 +415,8 @@ pub enum ComputeRandomnessPolicy {
     /// Seed deterministic randomness from the request hash.
     SeededFromRequest,
 }
-/// Storage policy for the compute sandbox.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(tag = "storage", content = "value")]
-#[derive(norito::NoritoSchema)]
+/// IVM storage policy, encoded as its exact variant name in JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeStorageAccess")]
 pub enum ComputeStorageAccess {
     /// Allow read-only `SoraFS` bundle access; writes are rejected.
@@ -474,7 +424,7 @@ pub enum ComputeStorageAccess {
     /// Allow limited deterministic writes (e.g., logs), still sandboxed.
     ReadWrite,
 }
-/// Sandbox guardrails shared by compute manifests.
+/// IVM guardrails shared by compute manifests.
 #[derive(
     Clone,
     Copy,
@@ -489,9 +439,8 @@ pub enum ComputeStorageAccess {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::compute::ComputeSandboxRules")]
+#[norito(deny_unknown_fields)]
 pub struct ComputeSandboxRules {
-    /// Execution mode (IVM-only or WASI-lite).
-    pub mode: ComputeSandboxMode,
     /// Deterministic randomness policy.
     pub randomness: ComputeRandomnessPolicy,
     /// Storage access policy.
@@ -506,21 +455,8 @@ pub struct ComputeSandboxRules {
     #[norito(default)]
     pub allow_tee_hints: bool,
 }
-/// Authentication policy for a compute route.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(tag = "mode", content = "value")]
-#[derive(norito::NoritoSchema)]
+/// Authentication policy for a compute route, encoded as its exact variant name in JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeAuthPolicy")]
 pub enum ComputeAuthPolicy {
     /// Permit only public calls (no UAID binding).
@@ -1520,7 +1456,6 @@ mod tests {
             namespace: name("compute"),
             abi_version: ComputeManifest::ABI_VERSION,
             sandbox: ComputeSandboxRules {
-                mode: ComputeSandboxMode::IvmOnly,
                 randomness: ComputeRandomnessPolicy::SeededFromRequest,
                 storage: ComputeStorageAccess::ReadOnly,
                 deny_nondeterministic_syscalls: true,
@@ -1805,3 +1740,6 @@ mod tests {
 
 #[cfg(test)]
 mod captured_compute_schema_tests;
+
+#[cfg(test)]
+mod ivm_only_tests;

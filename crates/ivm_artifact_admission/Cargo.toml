@@ -12,22 +12,15 @@ crate-type = ["rlib"]
 
 [dependencies]
 iroha_model_base = { workspace = true }
-hex = { workspace = true, features = ["alloc"] }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["json"] }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "governance"] }
 ivm_abi = { path = "../ivm_abi" }
 kotodama_lang = { path = "../kotodama_lang" }
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# These declarations remain lock-constrained until the workspace lockfile is
-# intentionally regenerated; native builds do not select them.
-getrandom = { version = "0.2.17", features = ["js"] }
-getrandom_03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
-getrandom_04 = { package = "getrandom", version = "0.4.3", features = ["wasm_js"] }
-
 [dev-dependencies]
 base64 = { workspace = true, features = ["alloc"] }
+hex = { workspace = true, features = ["alloc"] }
 
 [lints]
 workspace = true

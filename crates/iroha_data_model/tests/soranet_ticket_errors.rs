@@ -35,7 +35,7 @@ fn ticket_signature_errors_preserve_owned_details_and_source() {
 }
 #[test]
 fn ticket_signature_error_fits_two_pointer_words() {
-    // Both error payloads remain out of line on 32-bit Wasm and native
+    // Both error payloads remain out of line on 32-bit and 64-bit native
     // targets, so either failure carries only a tag and an owned pointer.
     assert!(core::mem::size_of::<TicketSignatureError>() <= 2 * core::mem::size_of::<usize>());
 }

@@ -15,12 +15,16 @@ from pathlib import Path
 from typing import Any, Tuple
 
 try:
+    from .benchmark_operations import CANONICAL_OPERATION_ORDER, CANONICAL_OPERATIONS, CANONICAL_FILTERS, DIGEST384_OPERATIONS, reject_retired_fields
+    from .digest384_evidence import validate_digest384_operation
     from .validate_row_usage_snapshot import (
         COUNT_FIELDS,
         ValidationError as RowUsageValidationError,
         validate_row_usage_snapshot,
     )
 except ImportError:  # Direct `python3 scripts/fastpq/wrap_benchmark.py` execution.
+    from benchmark_operations import CANONICAL_OPERATION_ORDER, CANONICAL_OPERATIONS, CANONICAL_FILTERS, DIGEST384_OPERATIONS, reject_retired_fields
+    from digest384_evidence import validate_digest384_operation
     from validate_row_usage_snapshot import (  # type: ignore[no-redef]
         COUNT_FIELDS,
         ValidationError as RowUsageValidationError,
@@ -41,20 +45,10 @@ REQUIRED_LABEL_FIELDS = ("device_class", "gpu_kind")
 SYSTEM_PROFILER_TIMEOUT = 5  # seconds
 APPLE_CHIP_PATTERN = re.compile(r"apple\s+(m\d)(?:\s+(.*?))?\s*$", re.IGNORECASE)
 BUILTIN_GPU_BUSES = {"spdisplays_builtin", "spdisplays_internal"}
-POSEIDON_OPERATION = "poseidon_hash_columns"
+DIGEST384_COLUMNS_OPERATION = "digest384_trace_columns"
 CUDA_NESTED_SCHEMA = "cuda_nested"
 METAL_FLAT_SCHEMA = "metal_flat"
 V1_MAX_PADDED_ROWS = 1 << 16
-V1_OPERATION_NAMES = frozenset(
-    {
-        "fft",
-        "ifft",
-        "lde",
-        POSEIDON_OPERATION,
-        "poseidon_merkle_pairs",
-        "bn254_poseidon_words",
-    }
-)
 POSEIDON_PIPELINE_METRIC = "fastpq_poseidon_pipeline_total"
 EXECUTION_MODE_METRIC = "fastpq_execution_mode_total"
 POSEIDON_LABEL_KEYS = (
@@ -94,9 +88,9 @@ def parse_args() -> argparse.Namespace:
         help="Destination path for the wrapped benchmark JSON",
     )
     parser.add_argument(
-        "--require-poseidon-mean-ms",
+        "--require-digest384-columns-mean-ms",
         type=float,
-        help="Fail if the Poseidon GPU mean exceeds this many milliseconds (e.g., 1000).",
+        help="Fail if the six-lane trace-column GPU mean exceeds this many milliseconds (e.g., 1000).",
     )
     parser.add_argument(
         "--command",
@@ -854,12 +848,16 @@ def summarize_operations(
         if not isinstance(entry, dict):
             raise SystemExit(f"Benchmark operation {index} must be an object.")
         operation = entry.get("operation")
-        if not isinstance(operation, str) or not operation.strip():
+        if not isinstance(operation, str) or operation not in CANONICAL_OPERATIONS:
             raise SystemExit(
-                f"Benchmark operation {index} must contain a non-empty `operation` string."
+                f"Benchmark operation {index} must name a canonical V1 operation."
             )
+        try:
+            validate_digest384_operation(entry, report)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
         required_counts = ["input_len"]
-        if producer_schema == CUDA_NESTED_SCHEMA:
+        if producer_schema == CUDA_NESTED_SCHEMA and operation not in DIGEST384_OPERATIONS:
             required_counts.extend(
                 (
                     "output_len",
@@ -870,13 +868,13 @@ def summarize_operations(
             )
         for field in required_counts:
             value = entry.get(field)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            if type(value) is not int or not 0 <= value <= (1 << 64) - 1:
                 raise SystemExit(
                     f"Benchmark operation {operation!r} must contain a non-negative "
                     f"integer `{field}`."
                 )
         columns = entry.get("columns")
-        if not isinstance(columns, int) or isinstance(columns, bool) or columns <= 0:
+        if type(columns) is not int or not 1 <= columns <= (1 << 64) - 1:
             raise SystemExit(
                 f"Benchmark operation {operation!r} must contain a positive integer `columns`."
             )
@@ -896,6 +894,8 @@ def summarize_operations(
             required=bool(gpu_recorded),
             require_range=metal_schema,
         )
+        if "gpu_available" in report and (gpu_mean_ms is not None) != report["gpu_available"]:
+            raise SystemExit(f"Benchmark operation {operation!r} GPU timing disagrees with availability.")
         speedup = entry.get("speedup")
         if not metal_schema and ((entry.get("gpu") is None) != (speedup is None)):
             raise SystemExit(
@@ -939,15 +939,15 @@ def summarize_operations(
             "speedup_ratio": speedup.get("ratio") if speedup is not None else None,
             "speedup_delta_ms": speedup.get("delta_ms") if speedup is not None else None,
         }
-        if producer_schema == CUDA_NESTED_SCHEMA:
-            summary.update(
-                {
-                    "output_len": entry["output_len"],
-                    "input_bytes": entry["input_bytes"],
-                    "output_bytes": entry["output_bytes"],
-                    "estimated_gpu_transfer_bytes": entry["estimated_gpu_transfer_bytes"],
-                }
-            )
+        if producer_schema == CUDA_NESTED_SCHEMA or operation in DIGEST384_OPERATIONS:
+            summary.update({field: entry[field] for field in (
+                "output_len", "input_bytes", "output_bytes",
+            )})
+            if operation in DIGEST384_OPERATIONS:
+                summary["gpu_payload_buffer_bytes"] = entry["gpu_payload_buffer_bytes"]
+                summary["digest384"] = entry["digest384"]
+            else:
+                summary["estimated_gpu_transfer_bytes"] = entry["estimated_gpu_transfer_bytes"]
         if zero_fill:
             summary["zero_fill"] = zero_fill
             hotspots.append(
@@ -968,63 +968,63 @@ def summarize_operations(
 
 
 def producer_schema_for_payload(payload: dict[str, Any]) -> str:
-    if "report" not in payload:
-        return METAL_FLAT_SCHEMA
-    if not isinstance(payload["report"], dict):
-        raise SystemExit("Nested CUDA benchmark `report` must be a JSON object.")
-    return CUDA_NESTED_SCHEMA
+    """Require the producer's explicit format; wrappers preserve the same tag."""
+    if not isinstance(payload, dict):
+        raise SystemExit("Benchmark report root must be a JSON object.")
+    schema = payload.get("producer_schema")
+    if not isinstance(schema, str) or schema not in {METAL_FLAT_SCHEMA, CUDA_NESTED_SCHEMA}:
+        raise SystemExit("Benchmark producer_schema must be metal_flat or cuda_nested.")
+    return schema
 
 
-def _required_cuda_value(
+def _required_report_value(
     record: dict[str, Any], field: str, section: str
 ) -> Any:
     if field not in record:
-        raise SystemExit(f"Nested CUDA benchmark `{section}.{field}` is required.")
+        raise SystemExit(f"Native benchmark `{section}.{field}` is required.")
     return record[field]
 
 
-def _cuda_operation_projection(
-    entry: Any, index: int, *, flattened: bool
+def _operation_projection(
+    entry: Any, index: int, *, flattened: bool, producer_schema: str
 ) -> dict[str, Any]:
     section = f"benchmarks.operations[{index}]" if flattened else f"report.operations[{index}]"
     if not isinstance(entry, dict):
-        raise SystemExit(f"Nested CUDA benchmark `{section}` must be an object.")
-    projection = {
-        field: _required_cuda_value(entry, field, section)
-        for field in (
-            "operation",
-            "columns",
-            "input_len",
-            "output_len",
-            "input_bytes",
-            "output_bytes",
-            "estimated_gpu_transfer_bytes",
-        )
-    }
+        raise SystemExit(f"Native benchmark `{section}` must be an object.")
+    counts = ["operation", "columns", "input_len"]
+    digest = entry.get("operation") in DIGEST384_OPERATIONS
+    if producer_schema == CUDA_NESTED_SCHEMA or digest:
+        counts.extend(("output_len", "input_bytes", "output_bytes"))
+    if digest:
+        counts.extend(("gpu_payload_buffer_bytes", "digest384"))
+    elif producer_schema == CUDA_NESTED_SCHEMA:
+        counts.append("estimated_gpu_transfer_bytes")
+    projection = {field: _required_report_value(entry, field, section) for field in counts}
+    if digest and "estimated_gpu_transfer_bytes" in entry:
+        raise SystemExit("six-lane logical buffers cannot be labelled as estimated transfers")
     if flattened:
-        projection["cpu_mean_ms"] = _required_cuda_value(entry, "cpu_mean_ms", section)
-        projection["gpu_mean_ms"] = entry.get("gpu_mean_ms")
-        projection["speedup_ratio"] = entry.get("speedup_ratio")
-        projection["speedup_delta_ms"] = entry.get("speedup_delta_ms")
+        projection["cpu_mean_ms"] = _required_report_value(entry, "cpu_mean_ms", section)
+        for field in ("gpu_mean_ms", "speedup_ratio", "speedup_delta_ms"):
+            projection[field] = _required_report_value(entry, field, section)
         return projection
 
-    cpu = _required_cuda_value(entry, "cpu", section)
+    cpu = _required_report_value(entry, "cpu", section)
     if not isinstance(cpu, dict):
-        raise SystemExit(f"Nested CUDA benchmark `{section}.cpu` must be an object.")
-    projection["cpu_mean_ms"] = _required_cuda_value(cpu, "mean_ms", f"{section}.cpu")
+        raise SystemExit(f"Native benchmark `{section}.cpu` must be an object.")
+    projection["cpu_mean_ms"] = _required_report_value(cpu, "mean_ms", f"{section}.cpu")
 
     gpu = entry.get("gpu")
     if gpu is not None and not isinstance(gpu, dict):
-        raise SystemExit(f"Nested CUDA benchmark `{section}.gpu` must be an object.")
+        raise SystemExit(f"Native benchmark `{section}.gpu` must be an object.")
     projection["gpu_mean_ms"] = (
-        _required_cuda_value(gpu, "mean_ms", f"{section}.gpu") if gpu is not None else None
+        _required_report_value(gpu, "mean_ms", f"{section}.gpu") if gpu is not None else None
     )
 
     speedup = entry.get("speedup")
     if speedup is not None and not isinstance(speedup, dict):
-        raise SystemExit(f"Nested CUDA benchmark `{section}.speedup` must be an object.")
+        raise SystemExit(f"Native benchmark `{section}.speedup` must be an object.")
     projection["speedup_ratio"] = (
-        _required_cuda_value(speedup, "ratio", f"{section}.speedup")
+        _required_report_value(speedup, "ratio", f"{section}.speedup")
         if speedup is not None
         else None
     )
@@ -1034,73 +1034,94 @@ def _cuda_operation_projection(
     return projection
 
 
-def _validate_cuda_copies(
-    report: dict[str, Any], benchmarks: dict[str, Any]
+def _same_json_value(left: Any, right: Any) -> bool:
+    """Compare duplicated claims without Python's bool/integer equality alias."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(_same_json_value(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(_same_json_value(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def _validate_report_copies(
+    report: dict[str, Any], benchmarks: dict[str, Any], producer_schema: str
 ) -> None:
     for field in (
         "rows",
         "padded_rows",
         "iterations",
         "warmups",
+        "column_count",
         "execution_mode",
         "gpu_backend",
         "gpu_available",
         "operation_filter",
     ):
-        report_value = _required_cuda_value(report, field, "report")
-        benchmark_value = _required_cuda_value(benchmarks, field, "benchmarks")
-        if report_value != benchmark_value:
+        report_value = _required_report_value(report, field, "report")
+        benchmark_value = _required_report_value(benchmarks, field, "benchmarks")
+        if not _same_json_value(report_value, benchmark_value):
             raise SystemExit(
-                f"Nested CUDA benchmark disagrees on `{field}` between report and benchmarks."
+                f"Native benchmark disagrees on `{field}` between report and benchmarks."
             )
 
-    for field in ("bn254_metrics", "bn254_warnings"):
-        if report.get(field) != benchmarks.get(field):
+    for field in ("bn254_metrics", "bn254_warnings", "column_staging"):
+        if not _same_json_value(report.get(field), benchmarks.get(field)):
             raise SystemExit(
-                f"Nested CUDA benchmark disagrees on `{field}` between report and benchmarks."
+                f"Native benchmark disagrees on `{field}` between report and benchmarks."
             )
 
-    report_operations = _required_cuda_value(report, "operations", "report")
-    benchmark_operations = _required_cuda_value(benchmarks, "operations", "benchmarks")
+    report_operations = _required_report_value(report, "operations", "report")
+    benchmark_operations = _required_report_value(benchmarks, "operations", "benchmarks")
     if not isinstance(report_operations, list) or not isinstance(benchmark_operations, list):
         raise SystemExit(
-            "Nested CUDA benchmark `report.operations` and `benchmarks.operations` "
+            "Native benchmark `report.operations` and `benchmarks.operations` "
             "must be arrays."
         )
     if len(report_operations) != len(benchmark_operations):
         raise SystemExit(
-            "Nested CUDA benchmark operation counts differ between report and benchmarks."
+            "Native benchmark operation counts differ between report and benchmarks."
         )
     for index, (report_entry, benchmark_entry) in enumerate(
         zip(report_operations, benchmark_operations)
     ):
-        if _cuda_operation_projection(
-            report_entry, index, flattened=False
-        ) != _cuda_operation_projection(benchmark_entry, index, flattened=True):
+        if not _same_json_value(
+            _operation_projection(report_entry, index, flattened=False, producer_schema=producer_schema),
+            _operation_projection(benchmark_entry, index, flattened=True, producer_schema=producer_schema),
+        ):
             raise SystemExit(
-                "Nested CUDA benchmark operation "
+                "Native benchmark operation "
                 f"{index} differs between report and benchmarks."
             )
 
 
 def normalize_report(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return one report view, rejecting divergent CUDA copies."""
+    """Return one report view, rejecting divergent raw and flattened copies."""
 
-    nested = payload.get("report")
-    if not isinstance(nested, dict):
+    try:
+        reject_retired_fields(payload)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    producer_schema = producer_schema_for_payload(payload)
+    if "report" not in payload:
+        if producer_schema == CUDA_NESTED_SCHEMA:
+            raise SystemExit("cuda_nested benchmark must contain report and benchmarks copies.")
+        if "benchmarks" in payload:
+            raise SystemExit("Wrapped benchmark must contain its raw report copy.")
         return payload
-
+    nested = payload["report"]
+    if not isinstance(nested, dict):
+        raise SystemExit("Benchmark report must be a JSON object.")
     report = dict(nested)
+    if _required_report_value(report, "producer_schema", "report") != producer_schema:
+        raise SystemExit("Benchmark producer_schema differs between envelope and raw report.")
     benchmarks = payload.get("benchmarks")
     if not isinstance(benchmarks, dict):
-        raise SystemExit("Nested CUDA benchmark `benchmarks` must be a JSON object.")
-    _validate_cuda_copies(report, benchmarks)
-    column_count = _required_cuda_value(benchmarks, "column_count", "benchmarks")
-    if "column_count" in report and report["column_count"] != column_count:
-        raise SystemExit(
-            "Nested CUDA benchmark disagrees on `column_count` between report and benchmarks."
-        )
-    report["column_count"] = column_count
+        raise SystemExit("Native benchmark `benchmarks` must be a JSON object.")
+    if "producer_schema" in benchmarks and benchmarks["producer_schema"] != producer_schema:
+        raise SystemExit("Benchmark producer_schema differs between envelope and benchmarks.")
+    _validate_report_copies(report, benchmarks, producer_schema)
 
     metadata = payload.get("metadata")
     if isinstance(metadata, dict):
@@ -1120,9 +1141,9 @@ def _required_report_count(
     report: dict[str, Any], field: str, *, minimum: int
 ) -> int:
     value = report.get(field)
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    if type(value) is not int or not minimum <= value <= (1 << 64) - 1:
         qualifier = "positive" if minimum == 1 else "non-negative"
-        raise SystemExit(f"Benchmark report `{field}` must be a {qualifier} integer.")
+        raise SystemExit(f"Benchmark report `{field}` must be a {qualifier} u64 integer.")
     return value
 
 
@@ -1131,6 +1152,12 @@ def validate_report_header(report: dict[str, Any], producer_schema: str) -> None
 
     if producer_schema not in {CUDA_NESTED_SCHEMA, METAL_FLAT_SCHEMA}:
         raise SystemExit(f"Unsupported benchmark producer schema: {producer_schema!r}.")
+    try:
+        reject_retired_fields(report)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    if producer_schema_for_payload(report) != producer_schema:
+        raise SystemExit("Benchmark producer_schema disagrees with the selected decoder.")
     rows = _required_report_count(report, "rows", minimum=1)
     padded_rows = _required_report_count(report, "padded_rows", minimum=1)
     _required_report_count(report, "iterations", minimum=1)
@@ -1146,9 +1173,12 @@ def validate_report_header(report: dict[str, Any], producer_schema: str) -> None
             f"({padded_rows} > {V1_MAX_PADDED_ROWS})."
         )
 
+    if padded_rows != 1 << (rows - 1).bit_length():
+        raise SystemExit("Benchmark padded_rows must be exactly rows.next_power_of_two().")
+
     operation_filter = report.get("operation_filter")
     if not isinstance(operation_filter, str) or operation_filter not in (
-        V1_OPERATION_NAMES | {"all"}
+        CANONICAL_FILTERS
     ):
         raise SystemExit(
             "Benchmark report `operation_filter` must be `all` or a canonical V1 operation."
@@ -1184,7 +1214,7 @@ def validate_report_header(report: dict[str, Any], producer_schema: str) -> None
         if not isinstance(entry, dict):
             raise SystemExit(f"Benchmark operation {index} must be an object.")
         operation = entry.get("operation")
-        if not isinstance(operation, str) or operation not in V1_OPERATION_NAMES:
+        if not isinstance(operation, str) or operation not in CANONICAL_OPERATIONS:
             raise SystemExit(
                 f"Benchmark operation {index} must name a canonical V1 operation."
             )
@@ -1192,6 +1222,8 @@ def validate_report_header(report: dict[str, Any], producer_schema: str) -> None
             raise SystemExit(f"Benchmark operation {operation!r} is duplicated.")
         seen.add(operation)
         operation_names.append(operation)
+    if operation_filter == "all" and tuple(operation_names) != CANONICAL_OPERATION_ORDER:
+        raise SystemExit("Benchmark all filter requires the exact six-operation ordered inventory.")
     if operation_filter != "all" and operation_names != [operation_filter]:
         raise SystemExit(
             f"Focused benchmark filter {operation_filter!r} must contain exactly that operation."
@@ -1236,47 +1268,7 @@ def summarize_dispatch_queue(entry: dict | None) -> dict | None:
         value = entry.get(key)
         if value is not None:
             summary[key] = round3(value)
-    poseidon = summarize_dispatch_queue(entry.get("poseidon"))
-    if poseidon:
-        summary["poseidon"] = poseidon
     return summary or None
-
-
-def summarize_poseidon_microbench(entry: dict | None) -> dict | None:
-    if not isinstance(entry, dict):
-        return None
-
-    def summarize_sample(sample: Any) -> dict | None:
-        if not isinstance(sample, dict):
-            return None
-        summary: dict[str, Any] = {}
-        for key in ("mean_ms", "min_ms", "max_ms"):
-            value = sample.get(key)
-            if value is not None:
-                summary[key] = round3(value)
-        for key in ("columns", "trace_log2", "states", "warmups", "iterations"):
-            value = sample.get(key)
-            if value is not None:
-                summary[key] = value
-        tuning = sample.get("tuning")
-        if isinstance(tuning, dict):
-            summary["tuning"] = {
-                "threadgroup_lanes": tuning.get("threadgroup_lanes"),
-                "states_per_lane": tuning.get("states_per_lane"),
-            }
-        return summary or None
-
-    result: dict[str, Any] = {}
-    default_summary = summarize_sample(entry.get("default"))
-    if default_summary:
-        result["default"] = default_summary
-    scalar_summary = summarize_sample(entry.get("scalar_lane"))
-    if scalar_summary:
-        result["scalar_lane"] = scalar_summary
-    speedup = entry.get("speedup_vs_scalar")
-    if speedup is not None:
-        result["speedup_vs_scalar"] = round3(speedup)
-    return result or None
 
 
 def summarize_trace_metadata(report: dict) -> dict | None:
@@ -1364,8 +1356,7 @@ def auto_notes(report: dict) -> str:
     backend = report.get("gpu_backend")
     if backend in (None, "none"):
         return (
-            "FASTPQ_METAL_LIB missing on the capture host; GPU dispatch resolved to"
-            " 'none' and timings represent the CPU fallback."
+            "Explicit CPU benchmark; no device timing or parity evidence was recorded."
         )
     return f"GPU backend {backend} resolved successfully."
 
@@ -1386,64 +1377,22 @@ def enforce_lde_threshold(operations: list[dict], threshold_ms: float) -> None:
     raise SystemExit("LDE operation not found in benchmark report; required for verification.")
 
 
-def enforce_poseidon_threshold(operations: list[dict], threshold_ms: float) -> None:
+def enforce_digest384_columns_threshold(operations: list[dict], threshold_ms: float) -> None:
     for entry in operations:
-        if entry.get("operation") == POSEIDON_OPERATION:
+        if entry.get("operation") == DIGEST384_COLUMNS_OPERATION:
             mean_ms = entry.get("gpu_mean_ms")
             if mean_ms is None:
                 raise SystemExit(
-                    "Poseidon operation missing GPU metrics; cannot verify sub-second requirement."
+                    "Six-lane trace-column operation missing GPU metrics; cannot verify sub-second requirement."
                 )
             if mean_ms > threshold_ms:
                 raise SystemExit(
-                    f"Poseidon GPU mean {mean_ms:.3f} ms exceeds threshold {threshold_ms} ms."
+                    f"Six-lane trace-column GPU mean {mean_ms:.3f} ms exceeds threshold {threshold_ms} ms."
                 )
             return
     raise SystemExit(
-        "Poseidon operation not found in benchmark report; required when enforcing poseidon thresholds."
+        "Six-lane trace-column operation not found in benchmark report; required when enforcing six-lane trace-column thresholds."
     )
-
-
-def require_poseidon_telemetry(report: dict) -> None:
-    operations: list[dict] = report.get("operations") or []
-    poseidon_present = any(op.get("operation") == POSEIDON_OPERATION for op in operations)
-    if not poseidon_present:
-        return
-    backend = report.get("gpu_backend")
-    if backend != "metal":
-        return
-    queue = report.get("metal_dispatch_queue")
-    if not isinstance(queue, dict):
-        raise SystemExit(
-            "Poseidon capture missing `metal_dispatch_queue` telemetry; rerun fastpq_metal_bench with stats enabled."
-        )
-    poseidon_queue = queue.get("poseidon")
-    if not isinstance(poseidon_queue, dict):
-        raise SystemExit(
-            "Poseidon capture missing per-operation queue stats (`metal_dispatch_queue.poseidon`)."
-        )
-    dispatch_count = poseidon_queue.get("dispatch_count")
-    if not isinstance(dispatch_count, (int, float)) or int(dispatch_count) <= 0:
-        raise SystemExit(
-            "Poseidon queue telemetry reports zero dispatches; GPU captures must contain at least one Poseidon hash dispatch."
-        )
-    column_staging = report.get("column_staging")
-    if not isinstance(column_staging, dict):
-        raise SystemExit(
-            "Poseidon capture missing `column_staging` telemetry; rerun the bench so staging overlap evidence is recorded."
-        )
-    if column_staging.get("batches") in (None, 0):
-        raise SystemExit(
-            "Poseidon capture reported zero staging batches; confirm FASTPQ_METAL_TRACE stats were enabled."
-        )
-    if not isinstance(report.get("poseidon_profiles"), dict):
-        raise SystemExit(
-            "Poseidon capture missing `poseidon_profiles`; ensure FASTPQ_METAL_GPU_STATS=1 is set."
-        )
-    if not isinstance(report.get("poseidon_microbench"), dict):
-        raise SystemExit(
-            "Poseidon capture missing `poseidon_microbench`; rerun fastpq_metal_bench so the scalar vs default comparison is captured."
-        )
 
 
 def sign_output(output_path: Path, gpg_key: str | None) -> None:
@@ -1468,11 +1417,10 @@ def main() -> None:
     operations, zero_fill_hotspots = summarize_operations(report, producer_schema)
     enforce_zero_fill_hotspots(zero_fill_hotspots, args.require_zero_fill_max_ms)
     trace_meta = summarize_trace_metadata(report)
-    require_poseidon_telemetry(report)
     if args.require_lde_mean_ms is not None:
         enforce_lde_threshold(operations, args.require_lde_mean_ms)
-    if args.require_poseidon_mean_ms is not None:
-        enforce_poseidon_threshold(operations, args.require_poseidon_mean_ms)
+    if args.require_digest384_columns_mean_ms is not None:
+        enforce_digest384_columns_threshold(operations, args.require_digest384_columns_mean_ms)
     source_metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
     metadata = {
         "generated_at": iso_timestamp(report.get("unix_epoch_secs")),
@@ -1551,12 +1499,6 @@ def main() -> None:
         kernel_summary = summarize_kernel_profiles(kernel_profiles)
         if kernel_summary:
             benchmarks["kernel_summary"] = kernel_summary
-    poseidon_profiles = report.get("poseidon_profiles")
-    if poseidon_profiles:
-        benchmarks["poseidon_profiles"] = poseidon_profiles
-    poseidon_micro = summarize_poseidon_microbench(report.get("poseidon_microbench"))
-    if poseidon_micro:
-        benchmarks["poseidon_microbench"] = poseidon_micro
     column_staging = report.get("column_staging")
     if column_staging:
         benchmarks["column_staging"] = column_staging
@@ -1579,6 +1521,7 @@ def main() -> None:
         benchmarks["poseidon_metrics"] = poseidon_summaries
 
     bundle = {
+        "producer_schema": producer_schema,
         "metadata": metadata,
         "benchmarks": benchmarks,
         "report": report,

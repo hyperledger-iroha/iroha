@@ -180,7 +180,10 @@ def _load_fastpq_summary_dependencies() -> None:
     _load_captured_module(
         "export_prometheus", "acceleration/export_prometheus.py"
     )
+    _load_captured_module("scripts.fastpq.benchmark_operations", "fastpq/benchmark_operations.py")
+    _load_captured_module("scripts.fastpq.digest384_evidence", "fastpq/digest384_evidence.py")
     _load_captured_module("scripts.fastpq.wrap_benchmark", "fastpq/wrap_benchmark.py")
+    _load_captured_module("scripts.fastpq.report_projection", "fastpq/report_projection.py")
 
 
 def main() -> int:

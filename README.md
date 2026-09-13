@@ -73,7 +73,7 @@ Notes:
   is now conservative by default; if the VM is still constrained, use
   `scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-wsl-tests` to
   also serialize libtest execution.
-- The workspace targets `std` (WASM/no-std builds are not supported).
+- The workspace targets `std`; IVM is the sole Iroha VM. Wasm, WASI, and no-std implementations, SDK adapters, build targets, and release artifacts are prohibited.
 - Heavier local UI/media helpers are explicit features in default builds:
   `cargo run -p mochi-ui --features gui` for the egui desktop shell and
   `cargo run -p iroha_cli --features offline-visual-codecs -- ...` for Petal

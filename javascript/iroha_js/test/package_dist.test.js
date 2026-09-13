@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
-import * as packageKagemushaExports from "../dist/kagemusha.js";
+import * as packageKagemushaExports from "../dist/public/kagemusha.js";
 import * as packageTransactionExports from "../dist/transaction.js";
 import * as packageCryptoExports from "../dist/public/crypto.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
@@ -382,17 +382,21 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./bootle-lantern-issuance",
     "./browser",
     "./canonical-request",
+    "./classed-race",
     "./connect-browser",
     "./contract-payload",
     "./crypto",
+    "./game",
     "./instruction-builders",
     "./ivm-artifact",
     "./kagemusha",
     "./kotodama-compiler",
     "./nexus-app",
+    "./nft",
     "./norito",
     "./normalizers",
     "./privacy-capabilities",
+    "./race",
     "./sccp",
     "./smart-contract-deployment",
     "./sorafs",
@@ -405,11 +409,12 @@ test("package publishes the exact general-purpose subpath inventory", () => {
 
 test("package publishes KAGEMUSHA through one unversioned browser-safe subpath", () => {
   assert.deepEqual(packageJson.exports["./kagemusha"], {
-    browser: "./dist/kagemusha.js",
-    import: "./dist/kagemusha.js",
+    browser: "./dist/public/kagemusha.js",
+    import: "./dist/public/kagemusha.js",
     types: "./kagemusha.d.ts",
   });
   assert.equal(packageExports.Kagemusha, packageKagemushaExports.Kagemusha);
+  assert.deepEqual(Object.keys(packageKagemushaExports), ["Kagemusha"]);
   assert.equal(packageExports.Kagemusha.wireVersion, 1);
   assert.equal(Object.hasOwn(packageExports, ["Kagemusha", "V1"].join("")), false);
   assert.equal(Object.hasOwn(packageJson.exports, ["./kagemusha", "-v1"].join("")), false);
@@ -483,7 +488,7 @@ test("package SCCP exports expose the exact four-mainnet inventory", () => {
       SCCP_DOMAIN_ETH: 1,
       SCCP_DOMAIN_SORA: 0,
       SCCP_DOMAIN_TON: 4,
-      SCCP_DOMAIN_TRON: 3,
+      SCCP_DOMAIN_TRON: 5,
     },
   );
   assert.deepEqual(
@@ -493,13 +498,13 @@ test("package SCCP exports expose the exact four-mainnet inventory", () => {
         .sort(([left], [right]) => left.localeCompare(right)),
     ),
     {
-      SCCP_CODEC_CANONICAL_TEXT: 0,
-      SCCP_CODEC_EVM_ADDRESS20: 1,
-      SCCP_CODEC_TON_ACCOUNT36: 3,
-      SCCP_CODEC_TRON_ADDRESS21: 2,
+      SCCP_CODEC_CANONICAL_TEXT: 1,
+      SCCP_CODEC_EVM_ADDRESS20: 2,
+      SCCP_CODEC_TON_ACCOUNT36: 7,
+      SCCP_CODEC_TRON_ADDRESS21: 5,
     },
   );
-  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["0", "1", "2", "3"]);
+  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["1", "2", "5", "7"]);
   assert.deepEqual(Object.keys(packageSccpExports.SCCP_NETWORK_PROFILES), [
     "sora-taira",
     "ethereum-mainnet",
@@ -591,6 +596,8 @@ test("package Nexus browser export has an enforced browser-only dependency graph
     inputs.filter((input) => input.startsWith("dist/")).sort(),
     [
       "dist/address.js",
+      "dist/addressErrors.js",
+      "dist/addressPrimitives.js",
       "dist/blake2b.js",
       "dist/blockProofVerification.js",
       "dist/commonLiterals.js",
@@ -613,15 +620,26 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/networkId.js",
       "dist/nexusApp.js",
       "dist/norito.js",
+      "dist/noritoClassedRaceSchemas.js",
       "dist/noritoContractCodecs.js",
+      "dist/noritoGameCodecs.js",
+      "dist/noritoGameEngine.js",
+      "dist/noritoGameInstructionCodecs.js",
+      "dist/noritoGameRegistry.js",
+      "dist/noritoGameResourceEngine.js",
       "dist/noritoGovernanceBoundary.js",
+      "dist/noritoNftMarketCodecs.js",
+      "dist/noritoRecordDecoder.js",
+      "dist/noritoReplicationOrderValidator.js",
       "dist/normalizers.js",
       "dist/numericV1.js",
       "dist/privacyExact12Network.js",
       "dist/proofAttachment.js",
+      "dist/sorafsReplicationProfiles.js",
       "dist/strictLosslessJson.js",
       "dist/transactionCodec.js",
       "dist/validationError.js",
+      "dist/validationThrow.js",
     ],
   );
   const output = result.outputFiles?.[0];

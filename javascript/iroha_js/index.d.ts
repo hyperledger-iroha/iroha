@@ -3219,31 +3219,6 @@ export interface ToriiResolvedRetryProfile {
   retryMethods: Set<string>;
 }
 
-export interface SorafsAliasPolicyOptions {
-  positiveTtlSecs?: number;
-  refreshWindowSecs?: number;
-  hardExpirySecs?: number;
-  negativeTtlSecs?: number;
-  revocationTtlSecs?: number;
-  rotationMaxAgeSecs?: number;
-}
-
-export interface SorafsAliasEvaluation {
-  state: string | null;
-  statusLabel: string | null;
-  rotationDue: boolean;
-  ageSeconds: number | null;
-  generatedAtUnix: number | null;
-  expiresAtUnix: number | null;
-  expiresInSeconds: number | null;
-  servable: boolean;
-}
-
-export interface SorafsAliasWarning {
-  alias: string | null;
-  evaluation: SorafsAliasEvaluation;
-}
-
 export interface SorafsReplicationAssignment {
   providerIdHex: string;
   sliceGiB: number;
@@ -4148,8 +4123,6 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   operatorSigningContext?: OperatorSigningContext;
   canonicalRequestAuth?: CanonicalRequestAuth;
   allowInsecure?: boolean;
-  sorafsAliasPolicy?: SorafsAliasPolicyOptions;
-  onSorafsAliasWarning?: (warning: SorafsAliasWarning) => void;
   retryTelemetryHook?: (event: ToriiRetryTelemetryEvent) => void;
   insecureTransportTelemetryHook?: (
     event: InsecureTransportTelemetryEvent,
@@ -9277,99 +9250,87 @@ export interface SorafsChunkerHandle {
   namespace: string;
   name: string;
   semver: string;
-  multihash_code: number;
+  multihash_code: number | bigint;
 }
 
 export interface SorafsManifestAliasBinding {
   namespace: string;
   name: string;
-  proof_b64: string;
+  /** Exact native standard-base64 proof bytes. */
+  proof: string;
 }
 
 export type SorafsManifestStatusState = "pending" | "approved" | "retired";
 
-export interface SorafsManifestStatus {
-  state: SorafsManifestStatusState;
-  epoch: number | null;
+export interface SorafsPinPolicy {
+  min_replicas: number;
+  storage_class: { type: "Hot" | "Warm" | "Cold"; value: null };
+  retention_epoch: number | bigint;
 }
 
-export interface SorafsGovernanceReferenceTargets {
-  alias: string | null;
-  pin_digest_hex: string | null;
-}
-
-export interface SorafsGovernanceReference {
-  cid: string | null;
-  kind: string;
-  effective_at: string | null;
-  effective_at_unix: number | null;
-  targets: SorafsGovernanceReferenceTargets;
-  signers: ReadonlyArray<string>;
-}
-
-export interface SorafsLineageSuccessor {
-  digest_hex: string;
-  status: SorafsManifestStatus;
-  approved_epoch: number | null;
-  approved_at: string | null;
-  status_timestamp_unix: number | null;
-}
-
-export interface SorafsManifestLineage {
-  successor_of_hex: string | null;
-  head_hex: string;
-  depth_to_head: number;
-  is_head: boolean;
-  superseded_by: SorafsLineageSuccessor | null;
-  immediate_successor: SorafsLineageSuccessor | null;
-  anomalies: ReadonlyArray<string>;
+export interface SorafsPinFeePayment {
+  paid_by: string;
+  fee_asset_id: string;
+  treasury_account_id: string;
+  amount: string;
 }
 
 export interface SorafsManifestRecord {
-  digest_hex: string;
+  digest: Uint8Array;
+  root_cid: Uint8Array;
   chunker: SorafsChunkerHandle;
-  chunk_digest_sha3_256_hex: string;
-  pin_policy: Record<string, unknown>;
+  chunk_digest_sha3_256: Uint8Array;
+  por_root: Uint8Array;
+  content_length: number | bigint;
+  policy: SorafsPinPolicy;
   submitted_by: string;
-  submitted_epoch: number;
-  status: SorafsManifestStatus;
-  metadata: Record<string, unknown>;
+  submitted_epoch: number | bigint;
+  approved_epoch: number | bigint | null;
   alias: SorafsManifestAliasBinding | null;
-  successor_of_hex: string | null;
-  status_timestamp_unix: number | null;
-  governance_refs: ReadonlyArray<SorafsGovernanceReference>;
-  council_envelope_digest_hex: string | null;
-  lineage: SorafsManifestLineage | null;
+  successor_of?: Uint8Array;
+  metadata: Record<string, unknown>;
+  status: SorafsPinNativeStatus;
+  retirement_reason?: string;
+  council_envelope_digest: Uint8Array | null;
+  pin_fee_payment?: SorafsPinFeePayment;
 }
 
 export interface SorafsPinManifestResponse {
-  attestation: Record<string, unknown> | null;
+  finalized_cursor: SorafsPinFinalizedCursorV1;
   manifest: SorafsManifestRecord;
-  aliases: ReadonlyArray<SorafsAliasRecord>;
-  replication_orders: ReadonlyArray<SorafsReplicationOrderRecord>;
+}
+
+export interface SorafsPinManifestReadOptions {
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  /** Positive exact u64; must accompany expectedFinalizedBlockHashHex. */
+  expectedFinalizedHeight?: number | bigint;
+  /** Exact non-zero lowercase 32-byte hex; must accompany expectedFinalizedHeight. */
+  expectedFinalizedBlockHashHex?: string;
 }
 
 export interface SorafsPinFinalizedCursorV1 {
-  height: number;
+  height: number | bigint;
   block_hash: Uint8Array;
 }
 
 export interface SorafsPinResourceUsage {
-  manifest_count: number;
-  content_bytes: number;
+  manifest_count: number | bigint;
+  content_bytes: number | bigint;
 }
 
 export type SorafsPinNativeStatus =
   | { status: "Pending"; value: null }
-  | { status: "Approved"; value: number }
-  | { status: "Retired"; value: number };
+  | { status: "Approved"; value: number | bigint }
+  | { status: "Retired"; value: number | bigint };
 
 export interface SorafsPinManifestSummaryV1 {
   digest: Uint8Array;
   submitted_by: string;
-  submitted_epoch: number;
-  content_length: number;
-  retention_epoch: number;
+  submitted_epoch: number | bigint;
+  approved_epoch: number | bigint | null;
+  content_length: number | bigint;
+  retention_epoch: number | bigint;
   status: SorafsPinNativeStatus;
   successor_of: Uint8Array | null;
 }
@@ -9387,7 +9348,7 @@ export interface SorafsPinListOptions {
   limit?: NumericLike;
   maxBytes?: NumericLike;
   afterDigestHex?: string;
-  expectedFinalizedHeight?: NumericLike;
+  expectedFinalizedHeight?: number | bigint;
   expectedFinalizedBlockHashHex?: string;
   signal?: AbortSignal;
 }
@@ -9421,36 +9382,115 @@ export interface SorafsPinRegisterResponse {
   manifest_digest_hex: string;
 }
 
+export type SorafsAliasManifestStatusV1 =
+  | { state: "pending" }
+  | { state: "approved" | "retired"; epoch: ToriiU64 };
+
+export type SorafsAliasCacheDecisionV1 = "serve" | "hold" | "refuse";
+export type SorafsAliasCacheReasonV1 =
+  | "RefreshWindow" | "ExpiredTTL" | "HardExpired" | "RotationDue"
+  | "GovernanceGrace" | "GovernanceRevoked" | "GovernanceFrozen" | "GovernanceRotated"
+  | "ManifestMissing" | "LineageDepthExceeded" | "LineageCycleDetected" | "SuccessorForkResolved"
+  | "ApprovedSuccessorPending" | "ApprovedSuccessorGrace" | "ApprovedSuccessor"
+  | "MissingTimestamp" | "PendingSuccessor";
+export type SorafsAliasLineageAnomalyV1 =
+  | "ManifestMissing" | "SuccessorForkResolved" | "LineageDepthExceeded" | "LineageCycleDetected";
+export type SorafsAliasStatusLabelV1 =
+  | "fresh" | "fresh-rotate" | "refresh" | "refresh-rotate" | "expired" | "hard-expired"
+  | "lineage-invalid" | "governance-refused" | "successor-refused"
+  | "refresh-successor" | "refresh-governance" | "pending-successor";
+
+export interface SorafsAliasLineageSuccessorV1 {
+  digest_hex: string;
+  status: SorafsAliasManifestStatusV1;
+  approved_epoch: ToriiU64 | null;
+  approved_at: string | null;
+  status_timestamp_unix: ToriiU64 | null;
+}
+
+export interface SorafsAliasLineageV1 {
+  successor_of_hex: string | null;
+  head_hex: string;
+  depth_to_head: number;
+  is_head: boolean;
+  superseded_by: SorafsAliasLineageSuccessorV1 | null;
+  immediate_successor: SorafsAliasLineageSuccessorV1 | null;
+  anomalies: ReadonlyArray<SorafsAliasLineageAnomalyV1>;
+}
+
+export interface SorafsAliasCacheSuccessorV1 {
+  exists: boolean;
+  head_hex: string | null;
+  approved: boolean;
+  approved_at: string | null;
+  approved_at_unix: ToriiU64 | null;
+  depth_to_head: number;
+  anomalies: ReadonlyArray<SorafsAliasLineageAnomalyV1>;
+}
+
+export interface SorafsAliasGovernanceFlagsV1 {
+  revoked: boolean;
+  frozen: boolean;
+  rotated: boolean;
+}
+
+export interface SorafsAliasCacheGovernanceV1 extends SorafsAliasGovernanceFlagsV1 {
+  ref_ids: ReadonlyArray<string>;
+  flags: SorafsAliasGovernanceFlagsV1;
+  effective_at: string | null;
+  effective_at_unix: ToriiU64 | null;
+}
+
+export interface SorafsAliasCacheEvaluationV1 {
+  decision: SorafsAliasCacheDecisionV1;
+  reasons: ReadonlyArray<SorafsAliasCacheReasonV1>;
+  ttl_expires_at: string | null;
+  ttl_expires_at_unix: ToriiU64;
+  serve_until: string | null;
+  serve_until_unix: ToriiU64 | null;
+  successor: SorafsAliasCacheSuccessorV1;
+  governance: SorafsAliasCacheGovernanceV1;
+  policy_successor_grace_secs: ToriiU64;
+  policy_governance_grace_secs: ToriiU64;
+}
+
+/** Committed-state metadata; the SDK projection alone does not verify finality. */
+export interface SorafsAliasAttestationV1 {
+  block_height: ToriiU64;
+  block_hash_hex: string | null;
+  chain_id: string;
+}
+
 export interface SorafsAliasRecord {
   alias: string;
   namespace: string;
   name: string;
   manifest_digest_hex: string;
   bound_by: string;
-  bound_epoch: number;
-  expiry_epoch: number;
+  bound_epoch: ToriiU64;
+  expiry_epoch: ToriiU64;
   proof_b64: string;
-  cache_state: string | null;
-  status_label: string | null;
-  cache_rotation_due: boolean | null;
-  cache_age_seconds: number | null;
-  proof_generated_at_unix: number | null;
-  proof_expires_at_unix: number | null;
-  proof_expires_in_seconds: number | null;
-  policy_positive_ttl_secs: number | null;
-  policy_refresh_window_secs: number | null;
-  policy_hard_expiry_secs: number | null;
-  policy_rotation_max_age_secs: number | null;
-  policy_successor_grace_secs: number | null;
-  policy_governance_grace_secs: number | null;
-  cache_decision: string | null;
-  cache_reasons: ReadonlyArray<string> | null;
-  cache_evaluation: Record<string, unknown> | null;
-  lineage: Record<string, unknown> | null;
+  cache_state: SorafsAliasStatusLabelV1;
+  status_label: SorafsAliasStatusLabelV1;
+  cache_rotation_due: boolean;
+  cache_age_seconds: ToriiU64;
+  proof_generated_at_unix: ToriiU64;
+  proof_expires_at_unix: ToriiU64;
+  proof_expires_in_seconds?: ToriiU64;
+  policy_positive_ttl_secs: ToriiU64;
+  policy_refresh_window_secs: ToriiU64;
+  policy_hard_expiry_secs: ToriiU64;
+  policy_rotation_max_age_secs: ToriiU64;
+  policy_successor_grace_secs: ToriiU64;
+  policy_governance_grace_secs: ToriiU64;
+  cache_decision: SorafsAliasCacheDecisionV1;
+  cache_reasons: ReadonlyArray<SorafsAliasCacheReasonV1>;
+  cache_evaluation: SorafsAliasCacheEvaluationV1;
+  lineage: SorafsAliasLineageV1;
 }
 
 export interface SorafsAliasListResponse {
-  attestation: Record<string, unknown> | null;
+  attestation: SorafsAliasAttestationV1;
   total_count: number;
   returned_count: number;
   offset: number;
@@ -9467,29 +9507,58 @@ export interface SorafsAliasListOptions {
   canonicalAuth: CanonicalRequestAuth;
 }
 
-export interface SorafsReplicationReceipt {
+export type SorafsReplicationStatus =
+  | { state: "pending" }
+  | { state: "completed" | "expired" | "cancelled"; epoch: number | bigint };
+
+export interface SorafsReplicationCompletion {
   provider_hex: string;
-  status: string;
-  timestamp: number;
-  por_sample_digest_hex: string | null;
+  completed_by: string;
+  completion_epoch: number | bigint;
+  assignment_revision: number | bigint;
+  completion_authority: {
+    provider_owner: string;
+    signer_policy: {
+      policy_id_hex: string;
+      revision: number | bigint;
+      predecessor_digest_hex: string | null;
+      policy_digest_hex: string;
+    };
+  };
+  finalized_anchor: { height: number | bigint; block_hash_hex: string };
+}
+
+export interface SorafsReplicationOrderProjection {
+  version: 1;
+  order_id_hex: string;
+  manifest_cid_b64: string;
+  manifest_digest_hex: string;
+  chunking_profile: string;
+  target_replicas: number;
+  assignments: ReadonlyArray<{ provider_id_hex: string; slice_gib: number | bigint; lane: string | null }>;
+  issued_at: number | bigint;
+  deadline_at: number | bigint;
+  sla: { ingest_deadline_secs: number; min_availability_percent_milli: number; min_por_success_percent_milli: number };
+  metadata: ReadonlyArray<{ key: string; value: string }>;
 }
 
 export interface SorafsReplicationOrderRecord {
   order_id_hex: string;
   manifest_digest_hex: string;
   issued_by: string;
-  issued_epoch: number;
-  deadline_epoch: number;
-  status: { state: string; epoch: number | null };
+  issued_epoch: number | bigint;
+  deadline_epoch: number | bigint;
+  status: SorafsReplicationStatus;
   canonical_order_b64: string;
-  order: Record<string, unknown>;
-  receipts: ReadonlyArray<SorafsReplicationReceipt>;
+  assignment_revision: number | bigint;
+  order: SorafsReplicationOrderProjection;
+  provider_completions: ReadonlyArray<SorafsReplicationCompletion>;
   providers: ReadonlyArray<string>;
 }
 
 export interface SorafsReplicationListResponse {
-  attestation: Record<string, unknown> | null;
-  total_count: number;
+  attestation: { block_height: number | bigint; block_hash_hex: string | null; chain_id: string };
+  total_count: number | bigint;
   returned_count: number;
   offset: number;
   limit: number;
@@ -9497,10 +9566,10 @@ export interface SorafsReplicationListResponse {
 }
 
 export interface SorafsReplicationListOptions {
-  status?: "pending" | "completed" | "expired";
+  status?: "pending" | "completed" | "cancelled" | "expired";
   manifestDigestHex?: string;
-  limit?: NumericLike;
-  offset?: NumericLike;
+  limit?: number;
+  offset?: number;
   signal?: AbortSignal;
   canonicalAuth: CanonicalRequestAuth;
 }
@@ -11479,11 +11548,11 @@ export declare class ToriiClient {
   ): Promise<Record<string, unknown>>;
   getSorafsPinManifest(
     digestHex: string,
-    options?: { headers?: Record<string, string>; signal?: AbortSignal },
+    options?: SorafsPinManifestReadOptions,
   ): Promise<Record<string, unknown> | null>;
   getSorafsPinManifestTyped(
     digestHex: string,
-    options?: { headers?: Record<string, string>; signal?: AbortSignal },
+    options?: SorafsPinManifestReadOptions,
   ): Promise<SorafsPinManifestResponse>;
   registerSorafsPinManifest(
     signedTransaction: VersionedSignedTransactionV1,
@@ -12517,6 +12586,7 @@ export function encodeCancelAssetLockV1(
 export function decodeCancelAssetLockV1(
   bytes: CancelAssetLockV1Archive,
 ): CancelAssetLockV1;
+/** Encode instruction JSON or an exact native frame (bytes, standard base64 or lowercase 0x hex). */
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,

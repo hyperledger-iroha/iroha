@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""Build authenticated, deterministic SCCP EVM and TVM contract artifacts."""
+"""Build authenticated, deterministic SCCP EVM and TVM contract artifacts.
+
+Requires Python 3, HTTPS access to the pinned official compiler releases, and
+Linux x86-64 or macOS x86-64 execution (Rosetta on arm64). Outputs are explicit
+paths; existing compiler destinations are never overwritten. No runtime secrets
+or environment configuration are required.
+"""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
+import platform
 import re
+import resource
 import stat
 import subprocess
 import sys
 import tempfile
 import unicodedata
 import urllib.request
-from dataclasses import dataclass
+import zipfile
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
 
@@ -22,14 +32,13 @@ from typing import Callable, Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_COMPILER_LOCK = ROOT / "scripts" / "contract_tooling" / "compiler-lock.json"
 DEFAULT_ARTIFACT_LOCK = ROOT / "scripts" / "contract_tooling" / "artifact-lock.json"
-SOLJSON_RUNNER = ROOT / "scripts" / "contract_soljson_runner.js"
 MANIFEST_NAME = "sccp-contract-artifacts-v1.json"
 NATIVE_VECTORS_NAME = "native-transfer-event-v1.json"
 MANIFEST_SCHEMA = "iroha.sccp.contract-artifacts.v1"
 ARTIFACT_LOCK_SCHEMA = "iroha.sccp.contract-artifact-lock.v1"
 COMPILER_LOCK_SCHEMA = "iroha.sccp.contract-compiler-lock.v1"
 TARGETS = ("evm", "tron")
-SOLIDITY_VERSION_PRAGMA = "pragma solidity 0.7.4;"
+SOLIDITY_VERSION_PRAGMA = "pragma solidity 0.7.6;"
 ABI_ENCODER_V2_PRAGMA = "pragma experimental ABIEncoderV2;"
 ABI_ENCODER_V2_SOURCES = frozenset(
     {
@@ -40,20 +49,31 @@ ABI_ENCODER_V2_SOURCES = frozenset(
         "contracts/tron/sccp/TairaXorSccpBridge.sol",
     }
 )
-EXPECTED_COMPILERS = {
-    "evm": {
-        "identity": "solc-evm-0.7.4+commit.3f05b770",
-        "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
-        "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
-        "url": "https://binaries.soliditylang.org/wasm/soljson-v0.7.4+commit.3f05b770.js",
-    },
-    "tron": {
-        "identity": "tron-solc-tvm-0.7.4+commit.3f05b770",
-        "reported_version": "0.7.4+commit.3f05b770.Emscripten.clang",
-        "sha256": "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2",
-        "url": "https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/bin/soljson-v0.7.4+commit.3f05b770.js",
-    },
-}
+# Official release-list SHA-256 pins; archive members are independently hashed.
+EXPECTED_COMPILERS = {'evm': {'identity': 'solc-evm-0.7.6+commit.7338295f',
+         'reported_version': '0.7.6+commit.7338295f',
+         'artifacts': {'linux-amd64': {'url': 'https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/linux-amd64/solc-linux-amd64-v0.7.6+commit.7338295f',
+                                       'sha256': 'bd69ea85427bf2f4da74cb426ad951dd78db9dfdd01d791208eccc2d4958a6bb',
+                                       'executable_sha256': 'bd69ea85427bf2f4da74cb426ad951dd78db9dfdd01d791208eccc2d4958a6bb',
+                                       'archive_member': None,
+                                       'reported_version': '0.7.6+commit.7338295f.Linux.g++'},
+                       'macosx-amd64': {'url': 'https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/macosx-amd64/solc-macosx-amd64-v0.7.6+commit.7338295f',
+                                        'sha256': 'a6a8f9f9388c5fcd9222474e00270242c832e936b0f5257c20374d27ee5bd1ab',
+                                        'executable_sha256': 'a6a8f9f9388c5fcd9222474e00270242c832e936b0f5257c20374d27ee5bd1ab',
+                                        'archive_member': None,
+                                        'reported_version': '0.7.6+commit.7338295f.Darwin.appleclang'}}},
+ 'tron': {'identity': 'tron-solc-tvm-0.7.6+commit.d1802f25',
+          'reported_version': '0.7.6+commit.d1802f25',
+          'artifacts': {'linux-amd64': {'url': 'https://raw.githubusercontent.com/tronprotocol/solc-bin/main/linux-amd64/solc-linux-amd64-v0.7.6+commit.d1802f25.zip',
+                                        'sha256': 'fa912688ea66c416c30faee5cfb4d7d8c690d5a79881ec2a14e37a6304f6d5fb',
+                                        'executable_sha256': 'b40a70a4dd5ff965a701f98d278784e78a3c2a074ba4d03e5ecb1425ed548089',
+                                        'archive_member': 'solc-static-linux',
+                                        'reported_version': '0.7.6+commit.d1802f25.Linux.g++'},
+                        'macosx-amd64': {'url': 'https://raw.githubusercontent.com/tronprotocol/solc-bin/main/macosx-amd64/solc-macosx-amd64-v0.7.6+commit.d1802f25.zip',
+                                         'sha256': 'ad888faa33091a14c664427e1eb87e93002cb4ad4b0154cfa957a485ed3e3e5a',
+                                         'executable_sha256': '4cf11581f837425482191985db0dea76e5a76b33e0c571544f932addaaeef7ac',
+                                         'archive_member': 'solc',
+                                         'reported_version': '0.7.6+commit.d1802f25.Darwin.appleclang'}}}}
 MAX_COMPILER_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_COMPILER_OUTPUT_BYTES = 128 * 1024 * 1024
@@ -68,14 +88,45 @@ class CorridorError(ValueError):
 
 
 @dataclass(frozen=True)
+class NativeCompilerArtifact:
+    """One authenticated platform executable and its optional release archive."""
+
+    url: str
+    sha256: str
+    executable_sha256: str
+    archive_member: str | None
+    reported_version: str
+
+
+@dataclass(frozen=True)
 class CompilerSpec:
-    """One immutable compiler identity."""
+    """One target-specific compiler identity with exact native platform pins."""
 
     target: str
     identity: str
     reported_version: str
-    url: str
-    sha256: str
+    artifacts: Mapping[str, NativeCompilerArtifact]
+
+
+def compiler_identity(spec: CompilerSpec) -> Mapping[str, object]:
+    """Return the platform-independent compiler admission record."""
+
+    return {
+        "identity": spec.identity,
+        "reported_version": spec.reported_version,
+        "artifacts": {name: asdict(value) for name, value in sorted(spec.artifacts.items())},
+    }
+
+
+def native_compiler_platform() -> str:
+    """Select a supported native host; macOS arm64 requires OS-provided Rosetta."""
+
+    system, machine = platform.system(), platform.machine().lower()
+    if system == "Linux" and machine in ("x86_64", "amd64"):
+        return "linux-amd64"
+    if system == "Darwin" and machine in ("x86_64", "amd64", "arm64", "aarch64"):
+        return "macosx-amd64"
+    raise CorridorError("native SCCP compiler requires Linux x86-64 or macOS with x86-64 execution")
 
 
 @dataclass(frozen=True)
@@ -333,34 +384,15 @@ def load_corridor_config(path: Path = DEFAULT_COMPILER_LOCK) -> CorridorConfig:
     size_limits: dict[str, Mapping[str, int]] = {}
     for target in TARGETS:
         compiler = _require_object(compiler_values[target], f"{target} compiler")
-        _require_exact_keys(
-            compiler,
-            ("identity", "reported_version", "sha256", "url"),
-            f"{target} compiler",
-        )
-        digest = _require_string(compiler["sha256"], f"{target} compiler sha256")
-        if not HEX_32_RE.fullmatch(digest):
-            raise CorridorError(f"{target} compiler sha256 must be lowercase hexadecimal")
-        url = _require_string(compiler["url"], f"{target} compiler URL")
-        if not url.startswith("https://"):
-            raise CorridorError(f"{target} compiler URL must use HTTPS")
+        _require_exact_keys(compiler, ("identity", "reported_version", "artifacts"), f"{target} compiler")
+        if compiler != EXPECTED_COMPILERS[target]:
+            raise CorridorError(f"{target} compiler must be the authenticated exact native Solidity 0.7.6 release")
         compilers[target] = CompilerSpec(
             target=target,
-            identity=_require_string(compiler["identity"], f"{target} compiler identity"),
-            reported_version=_require_string(
-                compiler["reported_version"], f"{target} compiler reported version"
-            ),
-            url=url,
-            sha256=digest,
+            identity=compiler["identity"],
+            reported_version=compiler["reported_version"],
+            artifacts={name: NativeCompilerArtifact(**value) for name, value in compiler["artifacts"].items()},
         )
-        expected_compiler = EXPECTED_COMPILERS[target]
-        if any(
-            getattr(compilers[target], field) != expected_compiler[field]
-            for field in ("identity", "reported_version", "url", "sha256")
-        ):
-            raise CorridorError(
-                f"{target} compiler must be the authenticated exact Solidity 0.7.4 release"
-            )
 
         source_list = source_values[target]
         if not isinstance(source_list, list) or not source_list:
@@ -408,7 +440,7 @@ def load_corridor_config(path: Path = DEFAULT_COMPILER_LOCK) -> CorridorConfig:
 
 
 CompilerFetcher = Callable[[str], bytes]
-CompilerRunner = Callable[[Path, CompilerSpec, bytes, str], Mapping[str, object]]
+CompilerRunner = Callable[[Path, CompilerSpec, bytes], Mapping[str, object]]
 
 
 def _network_fetch(url: str) -> bytes:
@@ -435,12 +467,38 @@ def materialize_verified_compiler(
 
     if destination.exists() or destination.is_symlink():
         raise CorridorError("compiler destination collision")
-    payload = fetcher(spec.url)
+    artifact = spec.artifacts[native_compiler_platform()]
+    payload = fetcher(artifact.url)
     if not isinstance(payload, bytes) or not payload or len(payload) > MAX_COMPILER_BYTES:
         raise CorridorError("compiler download is empty or exceeds the bounded size policy")
-    actual_digest = sha256_hex(payload)
-    if actual_digest != spec.sha256:
+    if sha256_hex(payload) != artifact.sha256:
         raise CorridorError("authenticated compiler SHA-256 digest mismatch")
+    if artifact.archive_member is not None:
+        canonical_source_path(artifact.archive_member, "native compiler archive member")
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                entries = archive.infolist()
+                paths: set[str] = set()
+                for entry in entries:
+                    member = canonical_source_path(entry.filename, "native compiler archive member")
+                    if _collision_key(member) in paths:
+                        raise CorridorError("native compiler archive contains duplicate members")
+                    paths.add(_collision_key(member))
+                    mode = entry.external_attr >> 16
+                    if entry.is_dir() or (stat.S_IFMT(mode) and not stat.S_ISREG(mode)):
+                        raise CorridorError("native compiler archive members must be regular files")
+                    if not 0 < entry.file_size <= MAX_COMPILER_BYTES:
+                        raise CorridorError("native compiler archive member exceeds the bounded size policy")
+                matches = [entry for entry in entries if entry.filename == artifact.archive_member]
+                if len(matches) != 1 or matches[0].is_dir() or not 0 < matches[0].file_size <= MAX_COMPILER_BYTES:
+                    raise CorridorError("native compiler archive member is missing, duplicated or oversized")
+                if stat.S_ISLNK(matches[0].external_attr >> 16):
+                    raise CorridorError("native compiler archive member must not be a symbolic link")
+                payload = archive.read(matches[0])
+        except (zipfile.BadZipFile, KeyError, RuntimeError) as error:
+            raise CorridorError("invalid authenticated native compiler archive") from error
+    if sha256_hex(payload) != artifact.executable_sha256:
+        raise CorridorError("authenticated native compiler executable SHA-256 digest mismatch")
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -454,9 +512,10 @@ def materialize_verified_compiler(
     if destination.is_symlink() or not destination.is_file():
         destination.unlink(missing_ok=True)
         raise CorridorError("verified compiler destination changed during publication")
-    if sha256_hex(destination.read_bytes()) != spec.sha256:
+    if sha256_hex(destination.read_bytes()) != artifact.executable_sha256:
         destination.unlink(missing_ok=True)
         raise CorridorError("verified compiler changed before execution")
+    destination.chmod(0o500)
     return destination
 
 
@@ -656,53 +715,88 @@ def standard_json_input(
     )
 
 
-def run_soljson(
+def run_native_solc(
     compiler_path: Path,
     spec: CompilerSpec,
     compiler_input: bytes,
-    node_binary: str,
 ) -> Mapping[str, object]:
-    """Execute the authenticated compiler through the bounded Node ABI adapter."""
+    """Run exact native bytes from a private immutable copy after digest and version checks."""
 
-    with tempfile.TemporaryDirectory(prefix="iroha-sccp-solc-output-") as temporary:
-        output_path = Path(temporary) / "output.json"
-        error_path = Path(temporary) / "stderr.txt"
-        with output_path.open("xb") as stdout, error_path.open("xb") as stderr:
-            try:
-                result = subprocess.run(
-                    [
-                        node_binary,
-                        str(SOLJSON_RUNNER),
-                        str(compiler_path),
-                        spec.sha256,
-                        spec.reported_version,
-                    ],
-                    input=compiler_input,
-                    stdout=stdout,
-                    stderr=stderr,
-                    cwd=ROOT,
-                    check=False,
-                    timeout=240,
-                )
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise CorridorError("authenticated compiler runner could not complete") from error
-        stderr_bytes = error_path.read_bytes()
-        if len(stderr_bytes) > MAX_DIAGNOSTIC_BYTES:
-            stderr_bytes = stderr_bytes[:MAX_DIAGNOSTIC_BYTES]
-        if result.returncode != 0:
-            message = stderr_bytes.decode("utf-8", errors="replace").strip()
-            raise CorridorError(message or "authenticated compiler runner failed")
-        size = output_path.stat().st_size
-        if size <= 0 or size > MAX_COMPILER_OUTPUT_BYTES:
-            raise CorridorError("authenticated compiler output exceeds the bounded size policy")
-        parsed = _require_object(
-            parse_json_bytes(output_path.read_bytes(), "authenticated compiler output"),
-            "authenticated compiler output",
-        )
-    _require_exact_keys(parsed, ("compiler_version", "output"), "compiler runner response")
-    if parsed["compiler_version"] != spec.reported_version:
-        raise CorridorError("compiler runner reported an unexpected version")
-    return _require_object(parsed["output"], "standard-json compiler output")
+    if not compiler_input or len(compiler_input) > 16 * 1024 * 1024:
+        raise CorridorError("standard-json compiler input is empty or exceeds 16 MiB")
+    validate_native_compiler_input(compiler_input)
+    artifact = spec.artifacts[native_compiler_platform()]
+    compiler = _read_stable_regular_file(compiler_path, MAX_COMPILER_BYTES, "native compiler")
+    if sha256_hex(compiler) != artifact.executable_sha256:
+        raise CorridorError("authenticated native compiler SHA-256 digest mismatch before execution")
+    expected_magic = b"\x7fELF" if native_compiler_platform() == "linux-amd64" else b"\xcf\xfa\xed\xfe"
+    if compiler[:4] != expected_magic:
+        raise CorridorError("authenticated compiler is not the required native executable format")
+    with tempfile.TemporaryDirectory(prefix="iroha-sccp-native-solc-") as temporary:
+        directory = Path(temporary)
+        directory.chmod(0o700)
+        executable = directory / "solc"
+        executable.write_bytes(compiler)
+        executable.chmod(0o500)
+        expected_banner = (
+            ("solc.tron" if spec.target == "tron" else "solc")
+            + ", the solidity compiler commandline interface\nVersion: "
+            + artifact.reported_version + "\n"
+        ).encode()
+        version = _run_native_command(executable, ["--version"], b"", directory, 4096)
+        if version != expected_banner:
+            raise CorridorError("authenticated native compiler reported an unexpected version or target")
+        raw = _run_native_command(executable, ["--standard-json"], compiler_input, directory, MAX_COMPILER_OUTPUT_BYTES)
+    return _require_object(parse_json_bytes(raw, "standard-json compiler output"), "standard-json compiler output")
+
+
+def validate_native_compiler_input(payload: bytes) -> None:
+    """Admit content-only Solidity sources and the exact EVM output selection."""
+
+    value = _require_object(parse_json_bytes(payload, "native compiler input"), "native compiler input")
+    _require_exact_keys(value, ("language", "sources", "settings"), "native compiler input")
+    if value["language"] != "Solidity":
+        raise CorridorError("native compiler input must use Solidity")
+    sources = _require_object(value["sources"], "native compiler sources")
+    if not sources:
+        raise CorridorError("native compiler sources must not be empty")
+    for name, entry in sources.items():
+        canonical_source_path(name, "native compiler source path")
+        source = _require_object(entry, "native compiler source")
+        _require_exact_keys(source, ("content",), "native compiler source")
+        content = source["content"]
+        if not isinstance(content, str) or not 0 < len(content.encode("utf-8")) <= MAX_SOURCE_BYTES:
+            raise CorridorError("native compiler source content exceeds the bounded size policy")
+    settings = _require_object(value["settings"], "native compiler settings")
+    _require_exact_keys(settings, ("optimizer", "evmVersion", "metadata", "outputSelection"), "native compiler settings")
+    selection = {"*": {"*": [
+        "abi", "metadata", "evm.bytecode.object", "evm.bytecode.linkReferences",
+        "evm.deployedBytecode.object", "evm.deployedBytecode.immutableReferences",
+        "evm.deployedBytecode.linkReferences",
+    ]}}
+    if settings["outputSelection"] != selection:
+        raise CorridorError("native compiler output selection must use the exact EVM artifact fields")
+
+
+def _run_native_command(executable: Path, arguments: list[str], payload: bytes, directory: Path, limit: int) -> bytes:
+    """Capture one bounded native compiler result without a shell or import callback."""
+
+    output_path, error_path = directory / "output.json", directory / "stderr.txt"
+    with output_path.open("wb") as stdout, error_path.open("wb") as stderr:
+        try:
+            result = subprocess.run([str(executable), *arguments], input=payload, stdout=stdout,
+                stderr=stderr, cwd=directory, check=False, timeout=240,
+                env={"LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
+                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise CorridorError("authenticated native compiler could not complete") from error
+    if result.returncode != 0 or error_path.stat().st_size:
+        with error_path.open("rb") as errors:
+            message = errors.read(MAX_DIAGNOSTIC_BYTES).decode("utf-8", errors="replace").strip()
+        raise CorridorError(message or "authenticated native compiler failed")
+    if not 0 < output_path.stat().st_size <= limit:
+        raise CorridorError("authenticated native compiler output exceeds the bounded size policy")
+    return output_path.read_bytes()
 
 
 def _safe_diagnostic(entry: Mapping[str, object]) -> str:
@@ -746,7 +840,7 @@ def _metadata_record(value: object, label: str, compiler_version: str) -> tuple[
     parsed = parse_json_bytes(value.encode("utf-8"), f"{label} metadata")
     metadata = _require_object(parsed, f"{label} metadata")
     compiler = _require_object(metadata.get("compiler"), f"{label} metadata compiler")
-    if compiler.get("version") != compiler_version.replace(".Emscripten.clang", ""):
+    if compiler.get("version") != compiler_version:
         raise CorridorError(f"{label} metadata compiler identity mismatch")
     canonical = canonical_json_bytes(metadata)
     return metadata, canonical
@@ -909,14 +1003,13 @@ def compile_target(
     config: CorridorConfig,
     target: str,
     compiler_path: Path,
-    node_binary: str = "node",
-    runner: CompilerRunner = run_soljson,
+    runner: CompilerRunner = run_native_solc,
 ) -> CompiledTarget:
     """Compile and normalize one target through its exact compiler."""
 
     standard_input, source_inventory = standard_json_input(repo_root, config, target)
     input_bytes = canonical_json_bytes(standard_input)
-    output = runner(compiler_path, config.compilers[target], input_bytes, node_binary)
+    output = runner(compiler_path, config.compilers[target], input_bytes)
     _reject_compiler_diagnostics(output, target)
     contracts = _build_contract_records(
         output,
@@ -927,12 +1020,7 @@ def compile_target(
     )
     manifest: Mapping[str, object] = {
         "target": target,
-        "compiler": {
-            "identity": config.compilers[target].identity,
-            "reported_version": config.compilers[target].reported_version,
-            "source_url": config.compilers[target].url,
-            "soljson_sha256_hex": config.compilers[target].sha256,
-        },
+        "compiler": compiler_identity(config.compilers[target]),
         "settings": config.settings,
         "settings_sha256_hex": sha256_hex(canonical_json_bytes(config.settings)),
         "standard_json_input_sha256_hex": sha256_hex(input_bytes),
@@ -943,7 +1031,7 @@ def compile_target(
         target=target,
         source_paths=config.sources[target],
         input_sha256=sha256_hex(input_bytes),
-        compiler_sha256=config.compilers[target].sha256,
+        compiler_sha256=sha256_hex(canonical_json_bytes(compiler_identity(config.compilers[target]))),
         raw_output=output,
         manifest=manifest,
     )
@@ -954,6 +1042,8 @@ def validate_distinct_targets(evm: CompiledTarget, tron: CompiledTarget) -> None
 
     if evm.target != "evm" or tron.target != "tron":
         raise CorridorError("compiled target roles are reversed or missing")
+    if evm.compiler_sha256 == tron.compiler_sha256:
+        raise CorridorError("EVM and TVM compiler identities must be distinct")
     evm_contracts = evm.raw_output.get("contracts")
     tron_contracts = tron.raw_output.get("contracts")
     if evm.raw_output is tron.raw_output or evm_contracts is tron_contracts:
@@ -971,26 +1061,27 @@ def validate_distinct_targets(evm: CompiledTarget, tron: CompiledTarget) -> None
 def compile_corridor(
     repo_root: Path,
     config: CorridorConfig,
-    node_binary: str = "node",
     fetcher: CompilerFetcher = _network_fetch,
-    runner: CompilerRunner = run_soljson,
+    runner: CompilerRunner = run_native_solc,
 ) -> Mapping[str, object]:
     """Compile both targets using separate authenticated compiler processes."""
 
+    for name in set(config.compilers["evm"].artifacts) & set(config.compilers["tron"].artifacts):
+        if config.compilers["evm"].artifacts[name].executable_sha256 == config.compilers["tron"].artifacts[name].executable_sha256:
+            raise CorridorError("EVM and TVM native compiler executables must be distinct")
     with tempfile.TemporaryDirectory(prefix="iroha-sccp-authenticated-compilers-") as temporary:
         temp_root = Path(temporary)
         os.chmod(temp_root, 0o700)
         compiled: dict[str, CompiledTarget] = {}
         for target in TARGETS:
             compiler_path = materialize_verified_compiler(
-                config.compilers[target], temp_root / f"{target}-soljson.js", fetcher
+                config.compilers[target], temp_root / f"{target}-solc", fetcher
             )
             compiled[target] = compile_target(
                 repo_root,
                 config,
                 target,
                 compiler_path,
-                node_binary,
                 runner,
             )
         validate_distinct_targets(compiled["evm"], compiled["tron"])
@@ -1122,10 +1213,8 @@ def validate_manifest_integrity(manifest: Mapping[str, object], config: Corridor
     for target in TARGETS:
         value = _require_object(targets[target], f"{target} target manifest")
         compiler = _require_object(value.get("compiler"), f"{target} compiler identity")
-        if compiler.get("soljson_sha256_hex") != config.compilers[target].sha256:
-            raise CorridorError(f"{target} compiler digest mismatch")
-        if compiler.get("reported_version") != config.compilers[target].reported_version:
-            raise CorridorError(f"{target} compiler version mismatch")
+        if compiler != compiler_identity(config.compilers[target]):
+            raise CorridorError(f"{target} native compiler identity mismatch")
         if value.get("settings_sha256_hex") != sha256_hex(canonical_json_bytes(value.get("settings"))):
             raise CorridorError(f"{target} compiler settings digest mismatch")
         contracts = value.get("contracts")
@@ -1342,12 +1431,11 @@ def build_and_validate(
     repo_root: Path,
     compiler_lock_path: Path,
     artifact_lock_path: Path,
-    node_binary: str,
     fetcher: CompilerFetcher = _network_fetch,
-    runner: CompilerRunner = run_soljson,
+    runner: CompilerRunner = run_native_solc,
 ) -> tuple[Mapping[str, object], CorridorConfig]:
     config = load_corridor_config(compiler_lock_path)
-    manifest = compile_corridor(repo_root, config, node_binary, fetcher, runner)
+    manifest = compile_corridor(repo_root, config, fetcher, runner)
     validate_manifest_integrity(manifest, config)
     validate_artifact_lock(manifest, load_artifact_lock(artifact_lock_path))
     return manifest, config
@@ -1355,7 +1443,7 @@ def build_and_validate(
 
 def _compile_for_lock(args: argparse.Namespace) -> None:
     config = load_corridor_config(args.compiler_lock)
-    manifest = compile_corridor(args.repo_root, config, args.node)
+    manifest = compile_corridor(args.repo_root, config)
     validate_manifest_integrity(manifest, config)
     lock = artifact_lock_from_manifest(manifest)
     write_canonical_file(args.output, lock)
@@ -1369,7 +1457,6 @@ def _build_command(args: argparse.Namespace) -> None:
         args.repo_root,
         args.compiler_lock,
         args.artifact_lock,
-        args.node,
     )
     output = publish_manifest(args.output_dir, manifest)
     print(f"wrote authenticated SCCP contract manifest: {output}")
@@ -1395,9 +1482,22 @@ def _snapshot_command(args: argparse.Namespace) -> None:
     print(f"snapshotted Rust-generated SCCP native vectors: {vectors}")
 
 
+def _materialize_command(args: argparse.Namespace) -> None:
+    spec = load_corridor_config().compilers[args.target]
+    materialize_verified_compiler(spec, args.output)
+    print(spec.artifacts[native_compiler_platform()].executable_sha256)
+
+
+def _compile_input_command(args: argparse.Namespace) -> None:
+    spec = load_corridor_config().compilers[args.target]
+    payload = sys.stdin.buffer.read(16 * 1024 * 1024 + 1)
+    result = run_native_solc(args.compiler, spec, payload)
+    sys.stdout.buffer.write(canonical_json_bytes(result))
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
-        description="Compile SCCP EVM and TVM contracts with authenticated soljson artifacts."
+        description="Compile SCCP EVM and TVM contracts with authenticated native Solidity compilers."
     )
     subcommands = result.add_subparsers(dest="command", required=True)
 
@@ -1406,7 +1506,6 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--compiler-lock", type=Path, default=DEFAULT_COMPILER_LOCK)
     build.add_argument("--artifact-lock", type=Path, default=DEFAULT_ARTIFACT_LOCK)
     build.add_argument("--output-dir", type=Path, required=True)
-    build.add_argument("--node", default="node")
     build.set_defaults(handler=_build_command)
 
     lock = subcommands.add_parser(
@@ -1416,7 +1515,6 @@ def parser() -> argparse.ArgumentParser:
     lock.add_argument("--compiler-lock", type=Path, default=DEFAULT_COMPILER_LOCK)
     lock.add_argument("--output", type=Path, required=True)
     lock.add_argument("--manifest-output", type=Path)
-    lock.add_argument("--node", default="node")
     lock.set_defaults(handler=_compile_for_lock)
 
     verify = subcommands.add_parser("verify", help="verify one published manifest and its lock")
@@ -1440,6 +1538,14 @@ def parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--output-dir", type=Path, required=True)
     snapshot.set_defaults(handler=_snapshot_command)
 
+    materialize = subcommands.add_parser("materialize", help="authenticate and materialize one native compiler")
+    materialize.add_argument("--target", choices=TARGETS, required=True)
+    materialize.add_argument("--output", type=Path, required=True)
+    materialize.set_defaults(handler=_materialize_command)
+    compile_input = subcommands.add_parser("compile-input", help="compile bounded standard JSON with a pinned native owner")
+    compile_input.add_argument("--target", choices=TARGETS, required=True)
+    compile_input.add_argument("--compiler", type=Path, required=True)
+    compile_input.set_defaults(handler=_compile_input_command)
     return result
 
 

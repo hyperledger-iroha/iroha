@@ -11,7 +11,7 @@ use ivm_abi::{
     },
     pointer_abi::{PointerType, validate_tlv_bytes},
 };
-use ivm_artifact_admission::{verify_contract_artifact, verify_contract_artifact_json};
+use ivm_artifact_admission::verify_contract_artifact;
 use std::ops::Range;
 const CURRENT_FIXTURE: &str =
     include_str!("../../../javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json");
@@ -214,10 +214,6 @@ fn assert_shared_admission_rejects_semantic_literal(
     let error = verify_contract_artifact(artifact)
         .expect_err("semantically malformed numeric literal must fail shared admission");
     assert_eq!(error.to_string(), SEMANTIC_LITERAL_ERROR);
-    assert_eq!(
-        verify_contract_artifact_json(artifact),
-        format!("{{\"ok\":false,\"error\":\"{SEMANTIC_LITERAL_ERROR}\"}}")
-    );
 }
 #[test]
 fn exact_current_compiler_artifact_is_admitted() {
@@ -238,9 +234,19 @@ fn exact_current_compiler_artifact_is_admitted() {
         hex::encode(verified.abi_hash.as_ref()),
         fixture.abi_hash_hex
     );
-    let json = verify_contract_artifact_json(&fixture.artifact);
-    assert!(json.starts_with("{\"ok\":true,"), "{json}");
 }
+#[test]
+fn foreign_vm_modules_cannot_enter_native_ivm_admission() {
+    let minimal_foreign_module = b"\0asm\x01\0\0\0";
+    let mut substituted = current_fixture().artifact;
+    substituted[..4].copy_from_slice(&minimal_foreign_module[..4]);
+    for artifact in [minimal_foreign_module.as_slice(), substituted.as_slice()] {
+        let error = verify_contract_artifact(artifact)
+            .expect_err("only canonical IVM artifacts may enter contract admission");
+        assert_eq!(error.into_vm_error(), ivm_abi::VMError::InvalidMetadata);
+    }
+}
+
 #[test]
 fn host_private_system_syscall_is_rejected() {
     let fixture = current_fixture();
@@ -251,8 +257,6 @@ fn host_private_system_syscall_is_rejected() {
     let error = verify_contract_artifact(&mutated)
         .expect_err("host-private SYSTEM syscall must fail shared admission");
     assert!(error.to_string().contains("disallowed syscall 0xfe0000"));
-    let json = verify_contract_artifact_json(&mutated);
-    assert!(json.starts_with("{\"ok\":false,"), "{json}");
 }
 
 #[test]
@@ -271,10 +275,6 @@ fn stale_header_and_cntr_abi_hashes_are_rejected() {
             error.to_string(),
             "invalid contract artifact: contract interface abi_hash does not match the runtime ABI descriptor",
             "unexpected stale-{location} error"
-        );
-        assert_eq!(
-            verify_contract_artifact_json(&artifact),
-            format!("{{\"ok\":false,\"error\":\"{}\"}}", error)
         );
     }
 }
@@ -359,10 +359,6 @@ fn cntr_return_type_schema_mismatch_is_rejected() {
             .contains("entrypoint `inspect` has a return schema that does not match"),
         "unexpected CNTR/schema error: {error}"
     );
-    assert!(
-        verify_contract_artifact_json(&mutated).starts_with("{\"ok\":false,"),
-        "JSON admission must reject the same malformed CNTR"
-    );
 }
 
 #[test]
@@ -383,10 +379,6 @@ fn unassigned_exact_json_getter_syscalls_are_rejected() {
                 .to_string()
                 .contains(&format!("disallowed syscall {number:#08x}")),
             "unexpected reserved-syscall error for {number:#08x}: {error}"
-        );
-        assert!(
-            verify_contract_artifact_json(&mutated).starts_with("{\"ok\":false,"),
-            "JSON admission must reject reserved syscall {number:#08x}"
         );
     }
 }
@@ -423,10 +415,6 @@ fn malformed_numeric_pointer_envelopes_are_rejected() {
                 panic!("malformed {name} {fault} envelope must fail shared admission")
             });
             assert_eq!(error.to_string(), SEMANTIC_LITERAL_ERROR);
-            assert_eq!(
-                verify_contract_artifact_json(&mutated),
-                format!("{{\"ok\":false,\"error\":\"{SEMANTIC_LITERAL_ERROR}\"}}")
-            );
         }
     }
 }

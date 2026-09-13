@@ -134,8 +134,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   proof archives; pins the application-selected chain, height context, and
   expected entry hash; verifies Sumeragi-v2 roster PoPs and aggregate finality
   in Rust; derives the non-serializable proof anchor only from that verified
-  artifact; and enforces immediate successor state. Browser builds fail closed
-  until a digest-pinned Rust finality-verifier WASM is shipped. Torii exposes
+  artifact; and enforces immediate successor state. Browser builds reject this
+  native-only operation. Torii exposes
   the finality and `BlockProofs` archives but not yet the exact executed block
   wire required to assemble this verification input from public routes alone.
 - Replaced asset-selected offline readiness discovery with the universal
@@ -179,11 +179,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   adapter. Apps can request the explicit `sign_raw` permission, keep account
   keys inside the approved wallet, and sign the exact Torii canonical message
   under a fixed domain tag with shared single-flight and local Ed25519 checks.
-- Added digest-anchored browser instantiation for the raw shared
-  `ivm_artifact_admission` WebAssembly verifier. Browser contract deployment
-  now requires that authenticated verifier and cross-checks its semantic
-  admission result against the compiler identities and canonical manifest
-  before any node read, signing callback, or transaction submission.
+- Contract artifact admission requires the native Rust verifier and checks
+  compiler identities and the canonical manifest before signing or submission.
+  Browser contract deployment rejects operations requiring native admission.
 - Made canonical Torii request authentication browser-safe and first-release
   exact: `X-Iroha-Account` accepts either a canonical I105 account literal or
   a canonical lowercase ASCII account alias, rejects padded, case-foldable,

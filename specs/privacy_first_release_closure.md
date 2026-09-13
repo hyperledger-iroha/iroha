@@ -5,6 +5,15 @@ privacy stack. It is not an audit certificate or permission to activate an
 unqualified protocol. Source observations below were checked on 2026-09-06–10 in a
 shared working tree; they do not identify a sealed release candidate.
 
+The [2026-09-13 IVM-only correction](../docs/ivm_only_validation.md) removes
+foreign VM/codec targets and retires their interfaces. Execution STARK frames
+now use the shared six-lane Goldilocks owner, and BFV delegates to that owner
+instead of retaining a duplicate permutation. The new execution source/profile
+identities and composed native SDK corrections are under verification; prior
+proof, hardware and release records do not qualify these changes. All eight
+SCCP R1CS identities were freshly measured on native macOS against their exact
+source closure; this does not qualify the pinned Linux builder or ceremonies.
+
 The [2026-09-10 current-source checks](../docs/history/2026-09-10/privacy-current-source-verification.md)
 pass 18 FASTPQ regressions and 140 Core source/reservation tests on separate
 unchanged source captures, without compiler diagnostics. The production proof
@@ -16,6 +25,9 @@ build, failed whole Swift suite and integrated corrections awaiting execution.
 
 ## Final interface contracts
 
+- IVM is the sole Iroha virtual machine. Kotodama produces IVM bytecode (`.to`);
+  Wasm/WASI runtimes, SDK adapters, compiler paths and build artifacts are
+  prohibited. Final V1 interfaces have no compatibility aliases or decoders.
 - One ordered Exact12 catalog, one V1 proof envelope, exact protocol/proof-system/
   engine tuples, and one weakest-composition security model per protocol.
 - Native STARK commitments use the shared six-lane Goldilocks Poseidon-x7
@@ -62,7 +74,7 @@ independent audit, SDK, hardware, and deployment evidence.
 | ZK-ACE | Dedicated masked STARK; six identity lanes and six replay lanes, 8x LDE, Fp4 FRI and 136 distinct queries. Activation unavailable. | Complete qROM reduction, multi-target accounting, independent implementation review and final artifacts. |
 | Anonymous PGC | Native P-256 bootstrap and payment relations, including twisted-ElGamal legality. | Full maximum-shape, malicious-party, resource and release qualification. |
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
-| ZK-AMS | Admission/provisioning structure exists; composite MKHE readiness unavailable. | Complete resource, wire, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. |
+| ZK-AMS | Admission/provisioning structure exists; composite MKHE readiness unavailable. The unfinished RNS-native qPCS/FRI roots and staged transcript still use 32-byte Keccak. | Cut proof roots/transcripts to the shared six-lane owner with exact role-separated wire and unchanged caps; complete resource, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
 | ZK-X509 | Native certificate relation and pinned compiled metadata exist; activation is unavailable. | Narrow or recursively compose the relation to fit the 9 MiB limit. The shared-geometry MAIN maximum is 16,447,808 bytes, including 12,235,648 bytes of raw trace openings; the combined X5S1 maximum is 19,156,074 bytes. Regenerate artifacts and measure the real implementation. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |

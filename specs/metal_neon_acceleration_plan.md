@@ -281,10 +281,10 @@ python3 scripts/acceleration/acceleration_matrix.py \
   | LDE (262,144 inputs) | 68.389 | 65.701 | 1.04× |
   | Poseidon hash columns (524,288 inputs) | 1,728.835 | 1,447.076 | 1.19× |
 
-  Each capture logs `zero_fill` timings (9.651 ms for 33,554,432 bytes) and
-  `poseidon_microbench` entries (default lane 596.229 ms vs scalar 656.251 ms,
-  1.10× speedup) so dashboard consumers can diff queue pressure alongside the
-  main operations.
+  These historical captures record `zero_fill` timings (9.651 ms for 33,554,432 bytes)
+  and scalar `poseidon_microbench` timings (596.229 ms vs 656.251 ms, 1.10×).
+  Preserve those values as historical measurements. They do not measure the
+  six-lane construction; fresh [V1 benchmark evidence](fastpq_benchmark_v1.md) is required.
 - **Bindings/docs cross-link:** `specs/benchmarks.md` now references the
   release JSON and reproducer command, the Metal queue overrides are validated
   via `iroha_config` env/manifest tests, and `irohad` publishes live

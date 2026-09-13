@@ -241,16 +241,24 @@ fn cancel_lock_strict_fields_and_quantities_survive_extraction() {
 }
 
 #[test]
-fn register_account_defaults_remain_valid_but_unknown_envelopes_do_not() {
+fn register_account_requires_canonical_fields_and_rejects_unknown_envelopes() {
     let account_json = json::to_value(&NewAccount::new(account())).expect("new account JSON");
-    let defaults = object([(
-        "Register",
-        object([(
-            "Account",
-            object([("id", account_json.get("id").expect("account id").clone())]),
-        )]),
-    )]);
-    encode_instruction_frame(&text(&defaults)).expect("optional account defaults");
+    let canonical = object([("Register", object([("Account", account_json.clone())]))]);
+    encode_instruction_frame(&text(&canonical)).expect("canonical account registration");
+    encode_instruction_archive(&text(&canonical)).expect("canonical account registration archive");
+    for field in ["id", "metadata", "label", "uaid", "opaque_ids"] {
+        let mut incomplete = account_json.clone();
+        incomplete.as_object_mut().unwrap().remove(field);
+        let payload = text(&object([("Register", object([("Account", incomplete)]))]));
+        for encode in [encode_instruction_frame, encode_instruction_archive] {
+            let error = encode(&payload).expect_err("canonical account fields are required");
+            assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");
+            assert!(
+                error.reason().contains(&format!("missing field `{field}`")),
+                "{error}"
+            );
+        }
+    }
     let mut unknown = account_json.clone();
     unknown
         .as_object_mut()

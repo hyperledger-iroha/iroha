@@ -236,23 +236,13 @@ struct WalInitializationDirectoryLock<'directory> {
 #[cfg(all(unix, not(target_os = "espidf")))]
 impl<'directory> WalInitializationDirectoryLock<'directory> {
     fn acquire(directory: &'directory File) -> io::Result<Self> {
-        #[cfg(not(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita",
-            target_os = "wasi"
-        )))]
+        #[cfg(not(any(target_os = "horizon", target_os = "solaris", target_os = "vita")))]
         {
             rustix::fs::flock(directory, rustix::fs::FlockOperation::LockExclusive)
                 .map_err(io::Error::from)?;
             Ok(Self { directory })
         }
-        #[cfg(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita",
-            target_os = "wasi"
-        ))]
+        #[cfg(any(target_os = "horizon", target_os = "solaris", target_os = "vita"))]
         {
             let _ = directory;
             Err(io::Error::new(
@@ -265,12 +255,7 @@ impl<'directory> WalInitializationDirectoryLock<'directory> {
 #[cfg(all(unix, not(target_os = "espidf")))]
 impl Drop for WalInitializationDirectoryLock<'_> {
     fn drop(&mut self) {
-        #[cfg(not(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita",
-            target_os = "wasi"
-        )))]
+        #[cfg(not(any(target_os = "horizon", target_os = "solaris", target_os = "vita")))]
         let _ = rustix::fs::flock(self.directory, rustix::fs::FlockOperation::Unlock);
     }
 }

@@ -41,10 +41,10 @@ for (const [surface, moduleUrl] of [
     });
     const proof = instruction.zk.FinalizeElection.tally_proof;
     assert.equal(proof.vk_ref.name, "lane/privacy::membership_v1");
-    assert.equal(
-      proof.lane_privacy.witness.payload.proof.audit_path[0][31] & 1,
-      1,
-    );
+    assert.deepEqual(proof.lane_privacy.commitment_id, [0]);
+    const sibling = proof.lane_privacy.witness.payload.proof.audit_path[0];
+    assert.equal(sibling, "hash:0202020202020202020202020202020202020202020202020202020202020203#1F88");
+    assert.equal(Number.parseInt(sibling.slice(67, 69), 16) & 1, 1);
     assert.equal(
       input.lanePrivacy.merkle.auditPath[0][31],
       originalSiblingTail,

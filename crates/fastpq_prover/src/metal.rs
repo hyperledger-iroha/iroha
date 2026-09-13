@@ -6012,7 +6012,7 @@ mod tests {
     use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
     use iroha_crypto::Hash;
     use std::{thread, time::Duration};
-    const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
+    const SCALAR_PAIR_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:test:scalar-two-word-arithmetic";
     const REQUIRED_PIPELINES: &[&str] = &[
         POSEIDON_PERMUTE_KERNEL,
         POSEIDON_HASH_KERNEL,
@@ -6517,7 +6517,7 @@ mod tests {
         ensure_multi_queue_env();
         let _gpu_lane = crate::backend::acquire_gpu_lane();
         let domain_names = (0..8usize)
-            .map(|idx| format!("fastpq:v1:trace:column:vectorized:{idx}"))
+            .map(|idx| format!("fastpq:test:scalar-column:vectorized:{idx}"))
             .collect::<Vec<_>>();
         let domains = domain_names.iter().map(String::as_str).collect::<Vec<_>>();
         let columns = (0..domains.len())
@@ -6573,7 +6573,7 @@ mod tests {
         );
     }
     #[test]
-    fn poseidon_hash_columns_batches_merkle_pairs() {
+    fn poseidon_hash_columns_batches_two_word_inputs() {
         ensure_multi_queue_env();
         let _gpu_lane = crate::backend::acquire_gpu_lane();
         let pairs = (0..16usize)
@@ -6587,11 +6587,12 @@ mod tests {
                 [left, right]
             })
             .collect::<Vec<_>>();
-        let batch = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN_FOR_TESTS, &pairs)
-            .expect("batch");
+        let batch =
+            PoseidonColumnBatch::from_domain_and_pairs(SCALAR_PAIR_DOMAIN_FOR_TESTS, &pairs)
+                .expect("batch");
         let expected = pairs
             .iter()
-            .map(|pair| hash_with_domain_for_tests(TRACE_NODE_DOMAIN_FOR_TESTS, pair))
+            .map(|pair| hash_with_domain_for_tests(SCALAR_PAIR_DOMAIN_FOR_TESTS, pair))
             .collect::<Vec<_>>();
         super::adaptive_scheduler()
             .poseidon
@@ -6599,7 +6600,7 @@ mod tests {
         super::enable_kernel_stats(true);
         let Some(actual) = unwrap_or_skip(
             super::poseidon_hash_columns(&batch),
-            "poseidon_hash_columns merkle pairs",
+            "poseidon_hash_columns two-word arithmetic",
         ) else {
             super::enable_kernel_stats(false);
             return;

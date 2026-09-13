@@ -10,14 +10,15 @@ from pathlib import Path
 from typing import Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 
-OP_LABELS: Mapping[str, str] = {
-    "fft": "FFT",
-    "ifft": "IFFT",
-    "lde": "LDE",
-    "poseidon_hash_columns": "Poseidon",
-    "poseidon_merkle_pairs": "Poseidon Merkle pairs",
-    "bn254_poseidon_words": "BN254 Poseidon words",
-}
+try:
+    from .benchmark_operations import operation_label
+    from .digest384_evidence import validate_digest384_operation
+    from .wrap_benchmark import validate_report_header, METAL_FLAT_SCHEMA
+except ImportError:  # Direct script invocation.
+    from benchmark_operations import operation_label
+    from digest384_evidence import validate_digest384_operation
+    from wrap_benchmark import validate_report_header, METAL_FLAT_SCHEMA
+
 
 
 @dataclass
@@ -52,9 +53,11 @@ def load_capture(path: Path) -> MutableMapping[str, object]:
 def build_stage_rows(capture: Mapping[str, object]) -> List[StageRow]:
     """Convert capture operations into structured stage rows."""
 
+    validate_report_header(capture, METAL_FLAT_SCHEMA)
     operations: Sequence[Mapping[str, object]] = capture.get("operations") or []
     gpu_total = 0.0
     for entry in operations:
+        validate_digest384_operation(entry, capture)
         gpu = entry.get("gpu")
         if isinstance(gpu, Mapping) and entry.get("gpu_recorded", False):
             gpu_total += float(gpu.get("mean_ms") or 0.0)
@@ -62,7 +65,7 @@ def build_stage_rows(capture: Mapping[str, object]) -> List[StageRow]:
     rows: List[StageRow] = []
     for entry in operations:
         op_name = str(entry.get("operation") or "unknown")
-        label = OP_LABELS.get(op_name, op_name.replace("_", " ").title())
+        label = operation_label(op_name)
         columns = entry.get("columns")
         input_len = entry.get("input_len")
         gpu = entry.get("gpu") if isinstance(entry.get("gpu"), Mapping) else None
@@ -132,9 +135,6 @@ def _summarize_heuristics(capture: Mapping[str, object]) -> Optional[str]:
     if not isinstance(heuristics, Mapping):
         return None
     parts: List[str] = []
-    multiplier = heuristics.get("poseidon_batch_multiplier")
-    if isinstance(multiplier, (int, float)):
-        parts.append(f"poseidon_batch_multiplier={int(multiplier)}")
     tile_limit = heuristics.get("lde_tile_stage_limit")
     if isinstance(tile_limit, (int, float)):
         parts.append(f"lde_tile_stage_limit={int(tile_limit)}")
@@ -142,14 +142,11 @@ def _summarize_heuristics(capture: Mapping[str, object]) -> Optional[str]:
     if isinstance(batches, Mapping):
         fft = batches.get("fft") or {}
         lde = batches.get("lde") or {}
-        poseidon = batches.get("poseidon") or {}
         summaries = []
         if isinstance(fft, Mapping) and fft.get("columns") is not None:
             summaries.append(f"fft={fft.get('columns')}")
         if isinstance(lde, Mapping) and lde.get("columns") is not None:
             summaries.append(f"lde={lde.get('columns')}")
-        if isinstance(poseidon, Mapping) and poseidon.get("columns") is not None:
-            summaries.append(f"poseidon={poseidon.get('columns')}")
         if summaries:
             parts.append(f"batch_columns: {', '.join(summaries)}")
     if not parts:

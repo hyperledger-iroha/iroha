@@ -627,15 +627,10 @@ export {
 export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 
 import * as toriiNamespace from "./toriiClient.js";
-import * as noritoNamespace from "./norito.js";
+import * as noritoNamespace from "./public/norito.js";
 import * as cryptoNamespace from "./crypto.js";
 
 export const Torii = toriiNamespace;
-const {
-  _canonicalAccountIdNoritoValue: _internalAccountIdCodec,
-  _createNoritoInstructionApi: _internalNoritoInstructionApi,
-  ...publicNoritoNamespace
-} = noritoNamespace;
 const {
   _createCryptoApi: _internalCryptoApi,
   CONFIDENTIAL_MEMO_SUITES_V1: _nativeMemoSuites,
@@ -645,7 +640,7 @@ const {
   sealConfidentialMemoV1: _sealNativeMemo,
   ...publicCryptoNamespace
 } = cryptoNamespace;
-export const Norito = Object.freeze(publicNoritoNamespace);
+export const Norito = Object.freeze({ ...noritoNamespace });
 export const Crypto = Object.freeze(publicCryptoNamespace);
 export {
   ConnectError,

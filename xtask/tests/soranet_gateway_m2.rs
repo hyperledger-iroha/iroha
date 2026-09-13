@@ -165,7 +165,7 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let ga_dir = temp.path().join("gateway_m3");
     let autoscale_plan = temp.path().join("autoscale.json");
     fs::write(&autoscale_plan, r#"{"scale":"m3"}"#).expect("autoscale");
-    let worker_pack = temp.path().join("worker.wasm");
+    let worker_pack = temp.path().join("worker.tar");
     fs::write(&worker_pack, b"worker-bytes").expect("worker pack");
     let mut ga_cmd = cargo_bin_cmd!("xtask");
     let ga_output = ga_cmd

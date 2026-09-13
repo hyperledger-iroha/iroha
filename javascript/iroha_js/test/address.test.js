@@ -265,12 +265,11 @@ test("canonical decoding rejects reserved headers and controller class mismatche
       `${label} rejects checksum-valid wrong-class I105`,
     );
 
-    const constructor = new addressModule.AccountAddress(
-      { version: 1, classId: 0, normVersion: 1, extFlag: false },
-      { tag: 0, curve: 1, publicKey: DEFAULT_PUBLIC_KEY },
-    );
     assert.throws(
-      () => constructor.canonicalBytes(),
+      () => new addressModule.AccountAddress(
+        { version: 1, classId: 0, normVersion: 1, extFlag: false },
+        { tag: 0, curve: 1, publicKey: DEFAULT_PUBLIC_KEY },
+      ),
       (error) =>
         error instanceof addressModule.AccountAddressError &&
         error.code === addressModule.AccountAddressErrorCode.INVALID_HEADER_VERSION,

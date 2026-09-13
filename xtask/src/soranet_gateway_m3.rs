@@ -16,7 +16,7 @@ pub struct GatewayM3Options {
     pub output_dir: PathBuf,
     /// Autoscale/route plan JSON.
     pub autoscale_plan: PathBuf,
-    /// Worker pack archive (WASM/containers).
+    /// Native worker pack archive.
     pub worker_pack: PathBuf,
     /// Optional SLA target label.
     pub sla_target: Option<String>,

@@ -1,10 +1,15 @@
-import { getBrowserCodecBinding } from "./browserCodec.js";
-
 /**
- * Browser builds use the package-owned Rust Wasm codec after explicit initialization.
+ * Canonical native account and instruction codecs are unavailable in browsers.
  */
 export function getNativeBinding() {
-  return getBrowserCodecBinding();
+  const error = new Error(
+    "Native binding required; the canonical Rust codec is unavailable in browsers",
+  );
+  Object.defineProperties(error, {
+    code: { value: "ERR_IROHA_NATIVE_BINDING", enumerable: true },
+    nativeStatus: { value: "browser_unavailable", enumerable: true },
+  });
+  throw error;
 }
 
 /**

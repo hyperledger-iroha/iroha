@@ -25,6 +25,8 @@ mod bn254_poseidon_params;
 mod cyclotomic;
 mod digest;
 mod digest384_batch;
+#[cfg(any(test, feature = "dev-tools"))]
+mod digest384_benchmark;
 #[cfg(feature = "fastpq-gpu")]
 mod digest384_gpu;
 mod digest_executor;
@@ -86,6 +88,12 @@ pub use bn254_poseidon::{
     try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,
 };
 pub use digest::trace_commitment;
+#[cfg(feature = "dev-tools")]
+#[doc(hidden)]
+pub use digest384_benchmark::{
+    Digest384BenchmarkDeviceV1, Digest384BenchmarkInputV1, Digest384BenchmarkReportV1,
+    benchmark_digest384_v1,
+};
 #[cfg(feature = "fastpq-gpu")]
 pub use digest384_gpu::{
     Digest384GpuBackendV1, Digest384GpuErrorV1, MAX_DIGEST384_GPU_FRAMES_V1,
@@ -122,24 +130,10 @@ pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 #[cfg(any(test, feature = "dev-tools"))]
 pub use proof::{verify_raw_statement, verify_raw_statement_with_limits};
 pub use semantics::{ProofSemantics, validate_batch_semantics};
-#[cfg(feature = "dev-tools")]
-#[doc(hidden)]
-pub use trace::merkle_root;
-#[cfg(all(feature = "dev-tools", feature = "fastpq-gpu"))]
-#[doc(hidden)]
-pub use trace::{
-    ColumnDigests, PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch,
-    hash_columns_gpu_with_first_level,
-};
 pub use trace::{
     PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,
     clear_poseidon_gpu_event_observer, clear_poseidon_pipeline_observer,
     set_poseidon_gpu_event_observer, set_poseidon_pipeline_observer,
-};
-#[cfg(all(feature = "dev-tools", feature = "fastpq-gpu"))]
-#[doc(hidden)]
-pub use trace::{
-    PoseidonPipelineStats, enable_poseidon_pipeline_stats, take_poseidon_pipeline_stats,
 };
 #[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
 /// No-op when the Metal backend is unavailable.

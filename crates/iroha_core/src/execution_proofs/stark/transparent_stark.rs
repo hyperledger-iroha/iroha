@@ -3,23 +3,19 @@
 //!
 //! This module contains only proof-system substrate: canonical Goldilocks base and
 //! quartic-extension arithmetic, FFT/coset evaluation, zero-knowledge trace masking, framed
-//! Fiat–Shamir, wide Poseidon2 Merkle commitments, binary FRI folding, grinding, and exact byte
-//! readers/writers. This retained module accepts execution contexts only. Privacy protocols keep
-//! their original primitive and wire implementation; this new suite remains unqualified.
+//! Fiat–Shamir, six-lane Goldilocks Poseidon-x7 Merkle commitments, binary FRI folding, grinding,
+//! and exact byte readers/writers. This retained module accepts execution contexts only. Privacy protocols keep
+//! their own wire implementation and use the same canonical six-lane hash owner. This
+//! execution suite remains unqualified.
 //!
 //! The historical generic `crate::zk_stark` development envelope is not used: its query schedule
 //! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
-use super::super::poseidon2::hash_bytes_384_v1;
-#[cfg(test)]
-use super::super::poseidon2::{
-    LastFieldStream as GoldilocksDigest384LastFieldStreamV1,
-    StreamError as GoldilocksDigest384LastFieldStreamErrorV1,
-};
 pub(crate) use fastpq_isi::GoldilocksDigest384V1;
-use fastpq_isi::GoldilocksDigestDomainV1;
-use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
+#[cfg(test)]
+use fastpq_isi::{GoldilocksDigest384LastFieldStreamErrorV1, GoldilocksDigest384LastFieldStreamV1};
+use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use rand::TryRngCore;
 use rayon::prelude::*;
 use sha2::Digest as _;
@@ -54,50 +50,29 @@ const MAX_QUERY_INDEX_REJECTION_ATTEMPTS_V1: u64 = 256;
 ///
 /// The execution catalog commitment is pinned internally, so a caller cannot
 /// substitute a different catalog while retaining the same protocol and
-/// profile labels. Privacy contexts are rejected. Identifiers are kept as distinct
+/// profile labels. This type represents only execution contexts. Identifiers are distinct
 /// fields and never concatenated into an ambiguous free-form domain string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransparentStarkDigestContextV1 {
-    protocol: Option<PrivacyProtocolIdV1>,
     profile: &'static [u8],
 }
 impl TransparentStarkDigestContextV1 {
     /// Native execution proofs occupy a separate catalog and protocol namespace.
     pub(crate) const fn execution_v1(profile: &'static [u8]) -> Self {
-        Self {
-            protocol: None,
-            profile,
-        }
+        Self { profile }
     }
-    /// Proof byte ceiling is an admission bound, independent of cryptographic geometry.
-    pub(crate) fn maximum_proof_bytes_v1(self) -> usize {
-        if self.protocol.is_some() {
-            iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
-        } else {
-            iroha_data_model::execution_proofs::EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1
-        }
-    }
-    /// Whether the closed native execution catalog, rather than a privacy catalog, is selected.
-    pub(crate) const fn is_execution_v1(self) -> bool {
-        self.protocol.is_none()
+    /// Execution proof byte ceiling, independent of cryptographic geometry.
+    pub(crate) const fn maximum_proof_bytes_v1(self) -> usize {
+        iroha_data_model::execution_proofs::EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1
     }
     fn catalog_v1(self) -> [u8; 48] {
-        if self.protocol.is_some() {
-            exact12_catalog_commitment_bytes_v1()
-        } else {
-            sha2::Sha384::digest(b"iroha:execution:catalog:v1:poseidon2-w16-r8-c8").into()
-        }
+        sha2::Sha384::digest(b"iroha:execution:catalog:v1:goldilocks-poseidon-x7-six-lane").into()
     }
     fn protocol_label_v1(self) -> &'static [u8] {
-        self.protocol.map_or(b"native-execution-v1", |protocol| {
-            protocol.canonical_label().as_bytes()
-        })
+        b"native-execution-v1"
     }
     pub(crate) fn validate(self) -> Result<(), TransparentStarkErrorV1> {
-        if self.protocol.is_some()
-            || self.profile.is_empty()
-            || u16::try_from(self.profile.len()).is_err()
-        {
+        if self.profile.is_empty() || u16::try_from(self.profile.len()).is_err() {
             return Err(TransparentStarkErrorV1::InvalidDigestDomain);
         }
         Ok(())
@@ -638,13 +613,7 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
     }
     Ok(ReplayableTraceMaskV1 { coefficients: mask })
 }
-fn exact12_catalog_commitment_bytes_v1() -> [u8; 48] {
-    GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
-        .expect("the pinned Exact12 catalog commitment is canonical")
-        .to_le_bytes()
-}
-
-/// Hash one fully typed native-STARK frame with the canonical wide Poseidon2 digest.
+/// Hash one fully typed native-STARK frame with the canonical six-lane Goldilocks Poseidon-x7 digest.
 pub(crate) fn goldilocks_digest384_frame_v1(
     context: TransparentStarkDigestContextV1,
     role: &[u8],
@@ -731,7 +700,7 @@ pub(crate) const fn map_digest_stream_error_v1(
     }
 }
 
-/// Domain-separated binary wide Poseidon2 Merkle tree.
+/// Domain-separated binary six-lane Goldilocks Poseidon-x7 Merkle tree.
 #[derive(Clone, Debug)]
 pub(crate) struct GoldilocksMerkleTreeV1 {
     levels: Vec<Vec<GoldilocksDigest384V1>>,
@@ -1331,3 +1300,7 @@ pub(crate) fn append_u32_v1(bytes: &mut Vec<u8>, value: u32) {
 pub(crate) fn append_u64_v1(bytes: &mut Vec<u8>, value: u64) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
+
+#[cfg(test)]
+#[path = "transparent_stark_digest_tests.rs"]
+mod digest_tests;

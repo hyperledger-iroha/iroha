@@ -226,7 +226,7 @@ export function createNoritoReplicationOrderValidator(
         fields.chunking_profile,
         (TEXT_REPLICATION_ORDER_V1 + "chunking_profile"),
       );
-      if (!SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1.has(chunkingProfile)) {
+      if (!SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1.includes(chunkingProfile)) {
         rejectType((TEXT_REPLICATION_ORDER_V1 + "chunking_profile must be a" + TEXT_CANONICAL + "registered handle"));
       }
 

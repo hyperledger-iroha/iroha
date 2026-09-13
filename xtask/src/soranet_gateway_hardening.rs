@@ -19,7 +19,7 @@ pub struct GatewayHardeningOptions {
     pub vuln_report: Option<PathBuf>,
     /// Path to the signing policy document.
     pub signing_policy: Option<PathBuf>,
-    /// Path to the sandbox profile (cgroup/WASM/runtime).
+    /// Path to the native runtime sandbox and cgroup profile.
     pub sandbox_profile: Option<PathBuf>,
     /// Default data retention in days.
     pub data_retention_days: u32,

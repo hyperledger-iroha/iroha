@@ -334,7 +334,9 @@ test("SoraFS replication builders reject identifiers, epochs, legacy completion,
           relayer_id: "confused-deputy",
         },
       }),
-    /unknown field relayer_id/,
+    {
+      message: "CompleteReplicationOrder must contain exactly [order_id, provider_id, completion_epoch, expected_authority, expected_assignment_revision, finalized_anchor]; missing [], unexpected [relayer_id]",
+    },
   );
 });
 

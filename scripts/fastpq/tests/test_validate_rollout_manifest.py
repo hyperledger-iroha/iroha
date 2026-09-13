@@ -10,6 +10,8 @@ import blake3
 import pytest
 
 from scripts.fastpq import validate_rollout_manifest as validator
+from scripts.fastpq import wrap_benchmark
+from scripts.fastpq.tests.test_digest384_evidence import primitive_report
 
 
 def make_evidence(tmp_path):
@@ -23,6 +25,8 @@ def make_evidence(tmp_path):
             "warmups": 1,
             "gpu_backend": backend,
             "gpu_available": True,
+            "execution_mode": "gpu",
+            "column_count": 2,
             "operation_filter": "all",
             "operations": [
                 {"operation": operation, "cpu_mean_ms": 100.0,
@@ -30,12 +34,19 @@ def make_evidence(tmp_path):
                 for operation in sorted(validator.CANONICAL_OPERATIONS)
             ],
         }
+        for index, operation in enumerate(benchmarks["operations"]):
+            if operation["operation"].startswith("digest384_"):
+                raw = primitive_report(operation["operation"], backend, rows=20_000, iterations=5, warmups=1)
+                schema = wrap_benchmark.CUDA_NESTED_SCHEMA if backend == "cuda" else wrap_benchmark.METAL_FLAT_SCHEMA
+                projected, _ = wrap_benchmark.summarize_operations(raw, schema)
+                benchmarks["operations"][index] = projected[0]
         if backend == "metal":
             benchmarks["metal_dispatch_queue"] = {
                 "limit": 4, "max_in_flight": 3, "dispatch_count": 32,
             }
             benchmarks["zero_fill_hotspots"] = [{"operation": "lde", "mean_ms": 0.2}]
         capture = {
+            "producer_schema": "metal_flat" if backend == "metal" else "cuda_nested",
             "metadata": {"labels": {"device_class": "test-only", "gpu_kind": "test-only"}},
             "benchmarks": benchmarks,
         }
@@ -229,3 +240,21 @@ def test_rollout_shell_propagates_signature_verifier_rejection(tmp_path):
     )
     assert result.returncode == 7
     assert not Path((tmp_path / "snapshot-path").read_text()).exists()
+
+
+@pytest.mark.parametrize("mutation", ["missing_schema", "wrong_schema", "retired_profiles", "retired_scalar_phase"])
+def test_rollout_rejects_retired_fields_and_undeclared_producer_even_after_rehash(tmp_path, mutation):
+    manifest = make_evidence(tmp_path)
+    bench = manifest["payload"]["benches"][0]
+    capture = json.loads((tmp_path / bench["path"]).read_text())
+    if mutation == "missing_schema":
+        del capture["producer_schema"]
+    elif mutation == "wrong_schema":
+        capture["producer_schema"] = "cuda_nested"
+    elif mutation == "retired_profiles":
+        capture["benchmarks"]["poseidon_profiles"] = None
+    else:
+        capture["benchmarks"]["column_staging"] = {"phases": {"fft": {}, "lde": {}, "poseidon": {}}, "samples": {"fft": [], "lde": []}}
+    write_capture(tmp_path, bench, capture)
+    with pytest.raises(ValueError):
+        validate(tmp_path, manifest)

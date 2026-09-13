@@ -9,7 +9,6 @@ mod environment_air;
 mod error;
 mod integer_air;
 mod kernel_export;
-mod poseidon2;
 mod proof;
 pub mod race;
 mod race_air;

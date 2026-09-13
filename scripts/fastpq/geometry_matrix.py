@@ -4,7 +4,7 @@ Summarise FASTPQ Metal geometry sweep outputs into stability artefacts.
 
 The geometry sweep helper (`launch_geometry_sweep.py`) writes a `summary.json`
 bundle alongside the raw benchmark artefacts. This script ingests that summary,
-labels every run as either *stable* (GPU timings captured for FFT/LDE/Poseidon)
+labels every run as either *stable* (GPU timings captured for FFT/LDE and both six-lane operations)
 or *unstable* (missing timings, timeouts, or other failures), and emits both a
 Markdown table and optional JSON matrices that CI dashboards can ingest. Use the
 host and environment summaries to understand which launch geometries stay
@@ -20,14 +20,18 @@ import math
 import pathlib
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
+try:
+    from .digest384_evidence import validate_digest384_operation
+except ImportError:  # Direct script invocation.
+    from digest384_evidence import validate_digest384_operation
+
 ENV_COLUMNS: Sequence[tuple[str, str]] = (
     ("FASTPQ_METAL_FFT_COLUMNS", "FFT"),
     ("FASTPQ_METAL_LDE_COLUMNS", "LDE"),
     ("FASTPQ_METAL_QUEUE_FANOUT", "Fanout"),
-    ("FASTPQ_METAL_POSEIDON_LANES", "Lanes"),
 )
 
-REQUIRED_OPERATIONS = ("fft", "lde", "poseidon_hash_columns")
+REQUIRED_OPERATIONS = ("fft", "lde", "digest384_trace_columns", "digest384_merkle_pairs")
 
 HOST_HEADERS: Sequence[tuple[str, str]] = (
     ("host_label", "Host"),
@@ -47,6 +51,8 @@ RUN_HEADERS: Sequence[tuple[str, str]] = (
 
 def _accelerator_reasons(entry: Dict[str, Any]) -> List[str]:
     reasons: List[str] = []
+    if entry.get("producer_schema") != "metal_flat":
+        reasons.append("invalid_producer_schema")
     if entry.get("gpu_available") is not True:
         reasons.append("gpu_unavailable")
     backend = entry.get("gpu_backend")
@@ -98,6 +104,16 @@ def classify_entry(entry: Dict[str, Any]) -> tuple[str, List[str]]:
     if not isinstance(operations, dict):
         reasons.append("missing_operations")
     else:
+        for name, report in operations.items():
+            if not isinstance(report, dict):
+                reasons.append(f"{name}_invalid_evidence: operation must be an object")
+                continue
+            try:
+                if "operation" in report and report["operation"] != name:
+                    raise ValueError("operation map key disagrees with its embedded operation")
+                validate_digest384_operation({**report, "operation": name}, entry, flattened=True)
+            except ValueError as error:
+                reasons.append(f"{name}_invalid_evidence: {error}")
         for name in REQUIRED_OPERATIONS:
             report = operations.get(name)
             if not isinstance(report, dict):
@@ -614,7 +630,7 @@ def render_markdown(
                 _format_number(row.get("duration_seconds"), decimals=3),
                 _format_number(metrics.get("fft")),
                 _format_number(metrics.get("lde")),
-                _format_number(metrics.get("poseidon_hash_columns")),
+                _format_number(metrics.get("digest384_trace_columns")),
             ]
         )
         lines.append("| " + " | ".join(line) + " |")

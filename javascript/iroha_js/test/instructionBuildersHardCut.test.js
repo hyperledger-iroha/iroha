@@ -16,7 +16,7 @@ import {
   nativeBinding,
   noritoRequiredMethods,
 } from "./helpers/native.js";
-import { withPureJsInstructionCodec } from "./helpers/instructionCodec.js";
+import { withNativeInstructionCodec } from "./helpers/instructionCodec.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const descriptorTest = baseTest;
@@ -266,7 +266,7 @@ descriptorTest("retired confidential builders are absent from runtime and declar
   }
 });
 
-descriptorTest("public and pure-JS codecs reject every retired confidential instruction", () => {
+descriptorTest("public native instruction adapters reject every retired confidential instruction", () => {
   for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
     const instruction = retiredInstruction(variant);
     assertRetiredInstructionRejected(
@@ -274,7 +274,7 @@ descriptorTest("public and pure-JS codecs reject every retired confidential inst
       variant,
     );
     assertRetiredInstructionRejected(
-      () => withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
+      () => withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
         noritoEncodeInstruction(instruction)),
       variant,
     );
@@ -282,12 +282,12 @@ descriptorTest("public and pure-JS codecs reject every retired confidential inst
 
   assert.throws(
     () =>
-      withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
+      withNativeInstructionCodec(({ noritoDecodeInstruction }) =>
         noritoDecodeInstruction(
           Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
         ),
       ),
-    /instruction contains non-zero alignment padding or trailing bytes/u,
+    { message: "length mismatch" },
   );
 });
 

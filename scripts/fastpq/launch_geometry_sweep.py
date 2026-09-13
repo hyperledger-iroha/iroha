@@ -3,15 +3,14 @@
 Launch geometry sweep helper for FASTPQ Metal benchmarks.
 
 This utility runs ``fastpq_metal_bench`` across a set of environment variable
-overrides (FFT/LDE column batches, queue fan-out, and Poseidon lane width) and
+overrides (FFT/LDE column batches, and queue fan-out) and
 captures the resulting JSON artefacts alongside per-run stdout/stderr logs. It
 also classifies each run (stable vs unstable) using configurable heuristics and
 emits a CSV matrix so performance engineers can sort and compare launch shapes.
 Host metadata (labels, hostname, platform, device tags) is embedded in both the
 summary JSON and CSV matrix to make cross-device comparisons deterministic, and
 each run records start/end timestamps so Stage7 evidence bundles can reconstruct
-capture windows across machines. GPU execution is required by default; use
-``--allow-cpu-fallback`` when a sweep is intentionally limited to CPU-only hosts.
+capture windows across machines. Every sweep requires explicit GPU execution; an unavailable device fails the run.
 """
 
 from __future__ import annotations
@@ -34,7 +33,9 @@ import sys
 import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from scripts.fastpq import geometry_matrix
+from scripts.fastpq import geometry_matrix, wrap_benchmark
+from scripts.fastpq.benchmark_operations import DIGEST384_OPERATIONS
+from scripts.fastpq.digest384_evidence import validate_digest384_operation
 
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
@@ -126,11 +127,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated FASTPQ_METAL_QUEUE_FANOUT values (1-4 or 'auto').",
     )
     parser.add_argument(
-        "--poseidon-lanes",
-        default="auto",
-        help="Comma-separated FASTPQ_METAL_POSEIDON_LANES values (32-256 or 'auto').",
-    )
-    parser.add_argument(
         "--rows",
         type=int,
         default=20000,
@@ -165,8 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
             "fft",
             "ifft",
             "lde",
-            "poseidon_hash_columns",
-            "poseidon_merkle_pairs",
+            "digest384_trace_columns",
+            "digest384_merkle_pairs",
             "bn254_poseidon_words",
             "all",
         ],
@@ -228,11 +224,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Minimum dispatch_count required for a stable run (set to 0 to disable).",
-    )
-    parser.add_argument(
-        "--allow-cpu-fallback",
-        action="store_true",
-        help="Do not pass --require-gpu to fastpq_metal_bench (default: require GPU and fail when unavailable).",
     )
     return parser
 
@@ -303,6 +294,11 @@ def _report_payload_error(payload: Any) -> str | None:
     queue = payload.get("metal_dispatch_queue")
     if queue is not None and not isinstance(queue, dict):
         return "benchmark JSON metal_dispatch_queue must be an object"
+    try:
+        wrap_benchmark.validate_report_header(payload, wrap_benchmark.METAL_FLAT_SCHEMA)
+        wrap_benchmark.summarize_operations(payload, wrap_benchmark.METAL_FLAT_SCHEMA)
+    except (SystemExit, ValueError) as error:
+        return str(error)
     return None
 
 
@@ -374,6 +370,7 @@ def _classify_entry(
     if status != "ok":
         reasons.append(f"status:{status or 'unknown'}")
 
+    six_lane_dispatches = 0
     raw_operations = entry.get("operations")
     if not isinstance(raw_operations, dict) or not raw_operations:
         reasons.append("missing_operations")
@@ -383,6 +380,14 @@ def _classify_entry(
         for name, stats in raw_operations.items():
             if isinstance(stats, dict):
                 operations[name] = stats
+                try:
+                    if "operation" in stats and stats["operation"] != name:
+                        raise ValueError("operation map key disagrees with its embedded operation")
+                    validate_digest384_operation({**stats, "operation": name}, entry, flattened=True)
+                    if name in DIGEST384_OPERATIONS and entry.get("gpu_available") is True:
+                        six_lane_dispatches += stats["digest384"]["gpu"]["dispatches"]
+                except ValueError as error:
+                    reasons.append(f"invalid_operation={name}: {error}")
             else:
                 reasons.append(f"invalid_operation={name}")
     totals = _compute_totals(operations)
@@ -393,8 +398,12 @@ def _classify_entry(
         elif speedup < min_total_speedup:
             reasons.append(f"total_speedup<{_format_threshold(min_total_speedup)}")
 
+    six_lane_only = bool(operations) and set(operations) <= DIGEST384_OPERATIONS
     queue_stats = entry.get("metal_dispatch_queue")
-    if not isinstance(queue_stats, dict):
+    if six_lane_only:
+        busy_ratio = None
+        dispatch_count = six_lane_dispatches
+    elif not isinstance(queue_stats, dict):
         reasons.append("missing_queue_stats")
         busy_ratio = None
         dispatch_count = None
@@ -404,7 +413,7 @@ def _classify_entry(
         if dispatch_count is None and isinstance(run_status, dict):
             dispatch_count = run_status.get("dispatch_count")
 
-    if min_queue_busy > 0:
+    if min_queue_busy > 0 and not six_lane_only:
         if not _is_number(busy_ratio):
             reasons.append("missing_queue_busy")
         elif float(busy_ratio) < min_queue_busy:
@@ -534,8 +543,8 @@ def _reset_env_values(env_template: Dict[str, str], overrides: Dict[str, Optiona
 
 
 def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    if args.rows <= 0 or args.warmups <= 0 or args.iterations <= 0:
-        parser.error("--rows/--warmups/--iterations must be positive integers")
+    if not 1 <= args.rows <= 1 << 16 or args.warmups < 0 or args.iterations <= 0:
+        parser.error("--rows must be in 1..65536, --warmups non-negative and --iterations positive")
     if not math.isfinite(args.min_total_speedup) or args.min_total_speedup < 0:
         parser.error("--min-total-speedup must be finite and >= 0")
     if not math.isfinite(args.min_queue_busy) or not 0 <= args.min_queue_busy <= 1:
@@ -545,7 +554,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if not _is_number(args.timeout_seconds) or args.timeout_seconds < 0:
         parser.error("--timeout-seconds must be finite and >= 0")
 
-    timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if args.artifact_dir:
         artifact_root = pathlib.Path(args.artifact_dir)
     else:
@@ -571,7 +580,6 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         ("fft_columns", args.fft_columns, "FASTPQ_METAL_FFT_COLUMNS", "fft", 1, 32),
         ("lde_columns", args.lde_columns, "FASTPQ_METAL_LDE_COLUMNS", "lde", 1, 32),
         ("queue_fanout", args.queue_fanout, "FASTPQ_METAL_QUEUE_FANOUT", "fanout", 1, 4),
-        ("poseidon_lanes", args.poseidon_lanes, "FASTPQ_METAL_POSEIDON_LANES", "lanes", 32, 256),
     ]
 
     specs = []
@@ -598,7 +606,6 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     summary_entries: List[Dict[str, Any]] = []
     total_runs = len(combinations)
     env_template = os.environ.copy()
-    require_gpu = not args.allow_cpu_fallback
     host_metadata = collect_host_metadata(args.host_label)
 
     for index, combination in enumerate(combinations, start=1):
@@ -627,8 +634,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 str(output_path),
             ]
         )
-        if require_gpu:
-            cmd.append("--require-gpu")
+        cmd.append("--require-gpu")
         if args.operation:
             cmd.extend(["--operation", args.operation])
         if extra_args:
@@ -666,7 +672,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 "iterations": args.iterations,
                 "host": copy.deepcopy(host_metadata),
                 "operation": args.operation,
-                "require_gpu": require_gpu,
+                "require_gpu": True,
             }
             summary_entries.append(entry)
             print(f"  timeout after {args.timeout_seconds}s")
@@ -693,7 +699,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             "iterations": args.iterations,
             "host": copy.deepcopy(host_metadata),
             "operation": args.operation,
-            "require_gpu": require_gpu,
+            "require_gpu": True,
         }
 
         if result.returncode != 0:
@@ -739,27 +745,28 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 break
             continue
 
-        operations_block: Dict[str, Dict[str, Any]] = {}
-        for operation in report_payload.get("operations", []):
-            name = operation.get("operation")
-            if not name:
-                continue
-            operations_block[name] = {
-                "columns": operation.get("columns"),
-                "gpu_mean_ms": operation.get("gpu", {}).get("mean_ms"),
-                "cpu_mean_ms": operation.get("cpu", {}).get("mean_ms"),
-                "speedup_ratio": operation.get("speedup", {}).get("ratio"),
-            }
-        entry["operations"] = operations_block
-        entry["execution_mode"] = report_payload.get("execution_mode")
-        entry["gpu_backend"] = report_payload.get("gpu_backend")
-        entry["gpu_available"] = report_payload.get("gpu_available") is True
+        mismatches = [field for field, expected in (
+            ("rows", args.rows), ("iterations", args.iterations), ("warmups", args.warmups),
+            ("operation_filter", args.operation),
+        ) if report_payload.get(field) != expected]
+        if mismatches:
+            entry["status"] = "error"
+            entry["error"] = "benchmark output disagrees with requested " + ", ".join(mismatches)
+            entry["completed_at"] = completed_at
+            summary_entries.append(entry)
+            if args.halt_on_error:
+                break
+            continue
+        projected, _ = wrap_benchmark.summarize_operations(report_payload, wrap_benchmark.METAL_FLAT_SCHEMA)
+        entry["operations"] = {operation["operation"]: operation for operation in projected}
+        for field in ("producer_schema", "rows", "padded_rows", "column_count", "iterations", "warmups",
+                      "execution_mode", "gpu_backend", "gpu_available", "operation_filter"):
+            entry[field] = report_payload[field]
         run_status = report_payload.get("run_status")
         if isinstance(run_status, dict):
             entry["run_status"] = run_status
 
         queue_stats = report_payload.get("metal_dispatch_queue")
-        poseidon_pipeline = None
         if isinstance(queue_stats, dict):
             entry["metal_dispatch_queue"] = {
                 "fanout_limit": queue_stats.get("limit"),
@@ -767,31 +774,19 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 "overlap_ratio": queue_stats.get("overlap_ratio"),
                 "dispatch_count": queue_stats.get("dispatch_count"),
             }
-            poseidon_pipeline = queue_stats.get("poseidon_pipeline")
 
         fft_tuning = report_payload.get("fft_tuning")
         if isinstance(fft_tuning, dict):
             entry["fft_tuning"] = fft_tuning
-        if poseidon_pipeline is None:
-            poseidon_pipeline = report_payload.get("poseidon_pipeline")
-        if isinstance(poseidon_pipeline, dict):
-            entry["poseidon_pipeline"] = poseidon_pipeline
-
         warnings: List[str] = []
         if isinstance(run_status, dict):
             state = run_status.get("state")
             if isinstance(state, str) and state.lower() != "ok":
                 warnings.append(f"run_status={state}")
-        if entry["gpu_available"] and isinstance(queue_stats, dict):
+        if entry["gpu_available"] and isinstance(queue_stats, dict) and set(entry["operations"]) - DIGEST384_OPERATIONS:
             if queue_stats.get("dispatch_count", 0) == 0:
                 warnings.append(
                     "metal_dispatch_queue.dispatch_count==0 (likely CPU fallback despite GPU mode)"
-                )
-        if isinstance(poseidon_pipeline, dict):
-            fallbacks = poseidon_pipeline.get("fallbacks")
-            if isinstance(fallbacks, int) and fallbacks > 0:
-                warnings.append(
-                    f"poseidon_pipeline recorded {fallbacks} fallback dispatch(es)"
                 )
         if warnings:
             entry["warnings"] = warnings

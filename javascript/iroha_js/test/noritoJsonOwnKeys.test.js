@@ -4,7 +4,7 @@ import { _createNoritoInstructionApi } from "../src/norito.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 
 // Inspect the JSON handed to the Rust owner. These tests do not implement or
-// claim a Norito wire codec; native/Wasm parity is qualified separately.
+// claim a Norito wire codec; native codec parity is qualified separately.
 function ownerInput(instruction) {
   let input;
   const api = _createNoritoInstructionApi(createNativeRuntime({

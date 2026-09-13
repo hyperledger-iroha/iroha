@@ -24650,6 +24650,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.accounts.insert(account_id, account_value)
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Remove a provider-owner binding to isolate registry predicates in test fixtures.
+    ///
+    /// This bypasses registry lifecycle invariants and is unavailable in production builds.
+    pub fn remove_provider_owner_for_testing(&mut self, provider: ProviderId) -> Option<AccountId> {
+        self.provider_owners.remove(provider)
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,

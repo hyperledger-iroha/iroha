@@ -1,3 +1,4 @@
+import { SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1 } from "./sorafsReplicationProfiles.js";
 import { createNoritoReplicationOrderValidator } from "./noritoReplicationOrderValidator.js";
 import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
@@ -259,10 +260,6 @@ const REPLICATION_ORDER_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "sorafs_manifest::capacity::ReplicationOrderV1",
 );
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
-const SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1 = /* @__PURE__ */ new Set([
-  "sorafs.sf1@1.0.0",
-  "sorafs.sf2@1.0.0",
-]);
 
 const MULTISIG_PROPOSE_DTO_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "iroha_torii::routing::MultisigProposeDto",
@@ -702,7 +699,8 @@ function validateInstructionObjectNumbers(value) {
 }
 
 /**
- * Encode an instruction JSON payload to canonical Norito bytes.
+ * Encode instruction JSON, an exact standard-base64 frame, or a lowercase
+ * 0x-prefixed hex frame to canonical Norito bytes.
  * @param {object | string | ArrayBufferView | ArrayBuffer | Buffer} instruction
  * @returns {Buffer}
  */
@@ -719,12 +717,18 @@ function encodeInstruction(instruction, nativeRuntime) {
       if (!(error instanceof SyntaxError)) {
         throw error;
       }
-      const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
-      if (decoded) {
-        return canonicalInstructionFrame(decoded, nativeRuntime);
+      // Encoded frames have explicit representations. A 0x-prefixed hex frame
+      // can also be lexically valid base64, so decoder probing is ambiguous.
+      let frame;
+      if (instruction.startsWith("0x")) {
+        if (!/^0x(?:[0-9a-f]{2})+$/u.test(instruction)) {
+          rejectType("instruction frame must be exact lowercase 0x-prefixed hex");
+        }
+        frame = Buffer.from(instruction.slice(2), HEX_ENCODING);
+      } else {
+        frame = decodeExactStandardBase64(instruction, "instruction frame");
       }
-      const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-      return toBuffer(native.noritoEncodeInstruction(instruction));
+      return canonicalInstructionFrame(frame, nativeRuntime);
     }
     const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
       ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
@@ -3667,11 +3671,13 @@ function normalizeCanonicalLanePrivacyProofValue(value, context) {
   }
   assertExactObjectKeys(value, ["commitment_id", "witness"], context);
   if (
-    !Number.isInteger(value.commitment_id) ||
-    value.commitment_id < 0 ||
-    value.commitment_id > 0xffff
+    !Array.isArray(value.commitment_id) ||
+    value.commitment_id.length !== 1 ||
+    !Number.isInteger(value.commitment_id[0]) ||
+    value.commitment_id[0] < 0 ||
+    value.commitment_id[0] > 0xffff
   ) {
-    rejectRange(`${context}.commitment_id must fit within a u16`);
+    rejectRange(`${context}.commitment_id must be an exact one-element u16 tuple`);
   }
   return {
     commitment_id: value.commitment_id,
@@ -3722,19 +3728,15 @@ function normalizeCanonicalLanePrivacyWitnessValue(value, context) {
       rejectType(`${context}.payload.proof.audit_path[${index}]${TEXT_MUST_CONTAIN}a sibling`);
     }
     const siblingContext = `${context}.payload.proof.audit_path[${index}]`;
+    if (typeof entry !== JS_TYPE_STRING) {
+      rejectType(`${siblingContext}${TEXT_MUST_BE_A}canonical HashOf literal`);
+    }
     const siblingBytes = encodeHashLiteralBytes(entry, siblingContext);
-    if (typeof entry === JS_TYPE_STRING) {
-      const canonical = decodeHashLiteral(siblingBytes, siblingContext);
-      if (entry !== canonical) {
-        rejectType(`${siblingContext}${TEXT_MUST_BE_A}canonical HashOf literal`);
-      }
-      return canonical;
+    const canonical = decodeHashLiteral(siblingBytes, siblingContext);
+    if (entry !== canonical) {
+      rejectType(`${siblingContext}${TEXT_MUST_BE_A}canonical HashOf literal`);
     }
-    const sibling = Array.from(siblingBytes);
-    if ((sibling[31] & 1) === 0) {
-      rejectType(`${siblingContext} is not a${TEXT_CANONICAL}prehashed HashOf`);
-    }
-    return sibling;
+    return canonical;
   });
   return {
     kind: "merkle",
@@ -4640,18 +4642,3 @@ function tryDecodeBase64(value) {
   }
 }
 
-function tryDecodeHex(value) {
-  if (!value) {
-    return null;
-  }
-  const compact = value.replace(/^0x/i, "");
-  if (compact.length === 0 || compact.length % 2 !== 0 || /[^0-9A-Fa-f]/.test(compact)) {
-    return null;
-  }
-  try {
-    const decoded = Buffer.from(compact, HEX_ENCODING);
-    return decoded.length > 0 ? decoded : null;
-  } catch {
-    return null;
-  }
-}

@@ -95,7 +95,7 @@ body:
         You can use `git blame` or check the following list of people **you can tag** based on what the issue is connected to:
          - Documentation issues: Alexandra Zorina (`@a-zorina`)
          - Quality Assurance (`@AlexStroke`)
-         - WASM and Triggers: Marin Veršić (`@mversic`)
+         - IVM and Triggers
       placeholder: "@Username ..."
   - type: textarea
     id: notes
