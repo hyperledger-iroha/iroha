@@ -239,19 +239,31 @@ an application transaction as state-resolved Applied after installation.
 
 For an update that installed all four units and failed after starting the new
 daemon, retain the last completed deployment record and pass
-`--failed-start-reference /absolute/owner-private/taira/failed-start.json`.
-The reference uses schema `taira.failed-start-reference.v1`, a `plan` reference,
-and `records` references for `intent.json`, `before.json`,
-`checkpoint-stopped.json`, `start-intent.json`, and `failure.json`. Every reference
-contains the absolute public-record `path` and its `sha256`. Capture these public
-records from the failed guest operation without reading runtime credentials.
-The updater authenticates the installed failed release separately from the last
-completed health observation, stops the cohort, and retains the exact checkpoint
-and Kura prefix before installing the corrective candidate. Successful, rolled
-back, partial-install, or nested failed-recovery attempts are rejected by this
-specific recovery path. No failed deployment becomes accepted health evidence.
-Partial startup observations such as `after.json` remain diagnostic when a later
-check fails; only completion or rollback records exclude failed-start recovery.
+`--failed-start-chain /absolute/owner-private/taira/failed-chain.json`.
+Use schema `taira.failed-start-chain.v1` with an `attempts` array ordered oldest
+to newest. Each entry contains its exact `operation`, a `plan` reference, and
+`records` references for `intent.json`, `before.json`, `checkpoint-stopped.json`,
+`start-intent.json`, and `failure.json`. Every reference contains the absolute
+public-record `path` and its `sha256`; `plan` and `intent.json` bind identical
+bytes. Capture only these public records. When appending a failed corrective
+attempt, preserve all earlier entries and historical records unchanged.
+
+The chain admits 1–16 distinct operations, with an 8 MiB bound per public record
+and a 32 MiB aggregate read budget. Each intent must authenticate the exact earlier
+prefix. Installed unit bytes follow the immediately preceding attempt; accepted
+health remains the unchanged completed baseline. Every ancestor must have all
+four units installed and a recorded startup failure, with no completion or
+rollback marker. The guest checks every retained Kura prefix before its normal
+stop/checkpoint/start verification. Partial observations remain diagnostic.
+
+Retry the same retained `--prepared-result` after an infrastructure failure; a
+new operation does not require Cargo or a source change. Any reused source commit
+must retain the exact daemon and CLI package, size, and digest throughout the
+chain. A rebuilt binary with a different identity under that commit is rejected.
+Every retry uses fresh staging and evidence, preserves the latest authenticated
+snapshot and Kura prefix, and repeats all four-validator health checks. It never
+promotes a failed attempt to completed health or automatically restarts old code.
+
 Probe failures identify the validator, endpoint and native exit code. Process
 observations include PID, invocation and restart count so an unavailable listener
 can be distinguished from a restarted worker without exposing response bodies,

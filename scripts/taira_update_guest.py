@@ -19,6 +19,10 @@ import time
 # One isolated remote process serves one explicit deployment and operation.
 SNAPSHOT_ARTIFACTS = {'snapshot.data', 'snapshot.sha256', 'snapshot.sig',
                       'snapshot.fast.norito', 'snapshot.merkle.json'}
+FAILED_START_CHAIN_SCHEMA = 'taira.failed-start-chain.v1'
+MAX_FAILED_START_ATTEMPTS = 16
+MAX_FAILED_START_RECORD_BYTES = 8 * 1024 * 1024
+MAX_FAILED_START_CHAIN_BYTES = 32 * 1024 * 1024
 FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
                       'start-intent.json', 'failure.json')
 BOUND = False
@@ -60,7 +64,8 @@ def need(value, reason):
         raise RuntimeError(reason)
 
 
-def validate_failed_start_inputs(deployment, baseline, failed, records, operation):
+def validate_failed_start_inputs(deployment, baseline, failed, records, operation,
+                                previous_plan, previous_installed):
     """Authenticate public failed-start lineage without inventing a completed runtime."""
     current = deployment['current']
     roles = deployment['roles']
@@ -68,8 +73,8 @@ def validate_failed_start_inputs(deployment, baseline, failed, records, operatio
     need(failed.get('schema') == 'taira.daemon-update.plan.v1'
          and failed.get('deployment') == deployment
          and failed.get('network_id') == deployment['network_id']
-         and failed.get('renderer_sha256') == deployment['renderer_sha256']
-         and 'failed_start' not in failed, 'failed-start baseline or plan differs')
+         and failed.get('renderer_sha256') == deployment['renderer_sha256'],
+         'failed-start baseline or plan differs')
     commit, attempt = failed.get('commit', ''), failed.get('operation', '')
     need(re.fullmatch('[0-9a-f]{40}', commit) and commit != current['commit']
          and re.fullmatch('update-[0-9a-f]{32}', attempt) and attempt != operation
@@ -92,17 +97,17 @@ def validate_failed_start_inputs(deployment, baseline, failed, records, operatio
     need([row.get('role') for row in failed.get('units', [])] == roles
          and [row.get('role') for row in baseline.get('units', [])] == roles,
          'failed-start unit cohort differs')
-    for previous, row in zip(baseline['units'], failed['units'], strict=True):
+    for previous, row in zip(previous_plan['units'], failed['units'], strict=True):
         before = base64.b64decode(row['before'], validate=True)
         after = base64.b64decode(row['after'], validate=True)
-        old = current['daemon'].encode()
+        old = previous_installed['daemon'].encode()
         need(row['before'] == previous['after']
              and row['before_sha256'] == previous['after_sha256']
              and hashlib.sha256(before).hexdigest() == row['before_sha256']
              and hashlib.sha256(after).hexdigest() == row['after_sha256']
              and before.count(old) == 1
              and before.replace(old, installed['daemon'].encode(), 1) == after
-             and unit_command(before) == [current['daemon'], '--config',
+             and unit_command(before) == [previous_installed['daemon'], '--config',
                  str(Path(deployment['config_root']) / row['role'] / 'current/config/config.toml'), '--sora']
              and unit_command(after)[0] == installed['daemon'],
              'failed-start unit lineage differs')
@@ -133,6 +138,143 @@ def validate_failed_start_inputs(deployment, baseline, failed, records, operatio
              and re.fullmatch('[0-9a-f]{64}', checkpoint['kura_tip']['hash']),
              'failed-start checkpoint or historical observation differs')
     return installed
+
+
+class FailedStartRecordBudget:
+    """Bound public evidence before JSON decoding, including duplicate reference reads."""
+    def __init__(self):
+        self.consumed = 0
+
+    def consume(self, raw):
+        need(len(raw) <= MAX_FAILED_START_RECORD_BYTES,
+             'failed-start public record exceeds byte bound')
+        self.consumed += len(raw)
+        need(self.consumed <= MAX_FAILED_START_CHAIN_BYTES,
+             'failed-start chain exceeds aggregate byte bound')
+
+
+def artifact_identity(artifacts):
+    """Canonical identity ignores storage paths, never binary bytes or package identity."""
+    need(isinstance(artifacts, list) and len(artifacts) == 2,
+         'exact daemon and CLI artifacts required')
+    identity = []
+    for row, (name, package) in zip(artifacts,
+            (('iroha3d_taira', 'irohad'), ('iroha', 'iroha_cli')), strict=True):
+        need(row.get('name') == name and row.get('package') == package
+             and isinstance(row.get('sha256'), str)
+             and re.fullmatch('[0-9a-f]{64}', row['sha256'])
+             and type(row.get('size')) is int and 1_000_000 < row['size'] < 1024 ** 3,
+             'invalid ordered daemon or CLI artifact identity')
+        identity.append((name, package, row['sha256'], row['size']))
+    return tuple(identity)
+
+
+def validate_candidate_transition(commit, artifacts, completed_commit, installed_plan):
+    """A new operation may reuse the installed source only with identical artifacts."""
+    need(re.fullmatch('[0-9a-f]{40}', commit) and commit != completed_commit,
+         'candidate cannot repeat the completed runtime')
+    candidate = artifact_identity(artifacts)
+    if commit == installed_plan['commit']:
+        need(candidate == artifact_identity(installed_plan['artifacts']),
+             'same source commit has different prepared daemon or CLI bytes')
+
+
+def failed_attempt_reference_identity(reference):
+    """Validate reference shape and compare immutable bytes independently of capture paths."""
+    need(set(reference) == {'operation', 'plan', 'records'}
+         and re.fullmatch('update-[0-9a-f]{32}', reference['operation'])
+         and set(reference['records']) == set(FAILED_START_RECORDS),
+         'failed-start attempt reference fields differ')
+    for ref in (reference['plan'], *reference['records'].values()):
+        need(set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str)
+             and Path(ref['path']).is_absolute()
+             and isinstance(ref['sha256'], str)
+             and re.fullmatch('[0-9a-f]{64}', ref['sha256']),
+             'failed-start public record reference differs')
+    need(reference['plan']['sha256'] == reference['records']['intent.json']['sha256'],
+         'failed-start plan and installed intent bytes differ')
+    return (reference['operation'], reference['plan']['sha256'],
+            tuple((name, reference['records'][name]['sha256']) for name in FAILED_START_RECORDS))
+
+
+def validate_failed_start_prefix(failed, prefix, installed):
+    """Historical intents must authenticate exactly the earlier chain, without following paths."""
+    ancestry = failed.get('failed_start')
+    if not prefix:
+        need('failed_start' not in failed, 'first failed attempt has an unbound ancestor')
+        return
+    need(isinstance(ancestry, dict) and ancestry.get('installed') == installed,
+         'failed-start ancestor installed identity differs')
+    if ancestry.get('schema') == 'taira.failed-start-reference.v1':
+        # This is immutable incident evidence, not an accepted operator input.
+        need(len(prefix) == 1 and set(ancestry) == {'schema', 'plan', 'records', 'installed'},
+             'historical failed-start reference does not bind the complete prefix')
+        actual = [{'operation': installed['attempt_name'], 'plan': ancestry['plan'],
+                   'records': ancestry['records']}]
+    else:
+        need(set(ancestry) == {'schema', 'attempts', 'installed'}
+             and ancestry['schema'] == FAILED_START_CHAIN_SCHEMA
+             and isinstance(ancestry['attempts'], list)
+             and len(ancestry['attempts']) == len(prefix),
+             'failed-start ancestry does not bind the complete prefix')
+        actual = ancestry['attempts']
+    need([failed_attempt_reference_identity(ref) for ref in actual]
+         == [failed_attempt_reference_identity(ref) for ref in prefix],
+         'failed-start ancestor record identities differ')
+
+
+def validate_failed_start_chain(reference, deployment, baseline, operation, load_attempt,
+                                baseline_observations=None, candidate=None):
+    """Authenticate a bounded oldest-to-newest chain while keeping completed health separate."""
+    need(set(reference) == {'schema', 'attempts'}
+         and reference['schema'] == FAILED_START_CHAIN_SCHEMA
+         and isinstance(reference['attempts'], list)
+         and 1 <= len(reference['attempts']) <= MAX_FAILED_START_ATTEMPTS,
+         'bounded failed-start chain required')
+    current = deployment['current']
+    seen = {operation, current['attempt_name']}
+    installed, previous_plan = current, baseline
+    entries = []
+    source_artifacts = {}
+    previous_checkpoints = None
+    historical_health = baseline_observations
+    for index, ref in enumerate(reference['attempts']):
+        failed_attempt_reference_identity(ref)
+        need(ref['operation'] not in seen, 'failed-start chain repeats an operation')
+        seen.add(ref['operation'])
+        failed, records = load_attempt(ref)
+        need(failed.get('operation') == ref['operation'], 'failed-start operation differs')
+        validate_failed_start_prefix(failed, reference['attempts'][:index], installed)
+        next_installed = validate_failed_start_inputs(
+            deployment, baseline, failed, records, operation, previous_plan, installed)
+        validate_candidate_transition(failed['commit'], failed['artifacts'],
+                                      current['commit'], previous_plan)
+        identity = artifact_identity(failed['artifacts'])
+        need(source_artifacts.setdefault(failed['commit'], identity) == identity,
+             'failed-start ancestry reused a source with different binary bytes')
+        before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
+        if historical_health is None:
+            historical_health = before
+        for original, observed in zip(historical_health, before, strict=True):
+            compare_retained_identity(original, observed)
+            need(original['public'] == observed['public'],
+                 'failed-start historical health differs from completed predecessor')
+        if previous_checkpoints is not None:
+            for previous, checkpoint in zip(previous_checkpoints, checkpoints, strict=True):
+                old, new = previous['kura_tip'], checkpoint['kura_tip']
+                need(new['height'] >= old['height']
+                     and checkpoint['checkpoint_height'] >= previous['checkpoint_height']
+                     and (new['height'] != old['height'] or new['hash'] == old['hash']),
+                     'failed-start checkpoint ancestry regressed')
+        installed, previous_plan, previous_checkpoints = next_installed, failed, checkpoints
+        entries.append((failed, records))
+    if candidate is not None:
+        validate_candidate_transition(candidate['commit'], candidate['artifacts'],
+                                      current['commit'], previous_plan)
+        if candidate['commit'] in source_artifacts:
+            need(artifact_identity(candidate['artifacts']) == source_artifacts[candidate['commit']],
+                 'candidate source differs from its retained ancestry artifacts')
+    return installed, entries
 
 
 def stamp(path, directory=False):
@@ -651,7 +793,7 @@ def wait_for_cohort(rows, before, *, after, commit, retained_tip, timeout=600):
     raise RuntimeError('cohort observation deadline: ' + str(latest))
 
 
-def retained_public_record(directory, name, digest=None):
+def retained_public_record(directory, name, digest=None, budget=None):
     """Read a bounded root-owned public receipt, optionally pinned by captured bytes."""
     path = directory / name
     before = stamp(path)
@@ -661,6 +803,8 @@ def retained_public_record(directory, name, digest=None):
     if digest is not None:
         need(re.fullmatch('[0-9a-f]{64}', digest)
              and hashlib.sha256(raw).hexdigest() == digest, 'failed-start public record digest differs')
+    if budget is not None:
+        budget.consume(raw)
     return json.loads(raw)
 
 
@@ -679,7 +823,7 @@ def retained_attempt(plan):
     need(digest == prior['intent_sha256'], 'predecessor intent differs')
     need(intent.get('schema') == PREDECESSOR['plan_schema']
          and intent['network_id'] == plan['network_id'] and intent['commit'] == PREDECESSOR['commit']
-         and plan['commit'] not in (OLD, PREDECESSOR['commit']),
+         and plan['commit'] != PREDECESSOR['commit'],
          'installed predecessor source or candidate differs')
     need(tuple(row['role'] for row in intent['units']) == ROLES, 'predecessor plan lacks exact cohort')
     before = public_record('after.json')
@@ -703,47 +847,41 @@ def retained_attempt(plan):
     installed_plan = intent
     if 'failed_start' in plan:
         reference = plan['failed_start']
-        need(set(reference) == {'schema', 'plan', 'records', 'installed'}
-             and reference['schema'] == 'taira.failed-start-reference.v1'
-             and set(reference['records']) == set(FAILED_START_RECORDS)
+        need(set(reference) == {'schema', 'attempts', 'installed'}
              and set(reference['installed']) == {'commit', 'attempt_name', 'daemon'},
-             'failed-start reference fields differ')
-        attempt = reference['installed']['attempt_name']
-        need(re.fullmatch('update-[0-9a-f]{32}', attempt)
-             and attempt not in (prior['attempt_name'], plan['operation']),
-             'failed-start operation differs')
-        failed_directory = BASE / attempt
-        stamp(failed_directory, True)
-        # Startup observations may precede a later failed health check. They
-        # are diagnostic only and never replace the five digest-bound recovery
-        # records or completed predecessor's health. Only terminal outcomes
-        # exclude this explicitly failed installation from the recovery path.
-        for name in ('result.json', 'rollback.json'):
-            need(not os.path.lexists(failed_directory / name),
-                 'failed-start attempt has a success or rollback marker: ' + name)
-        for ref in (reference['plan'], *reference['records'].values()):
-            need(set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str)
-                 and Path(ref['path']).is_absolute()
-                 and re.fullmatch('[0-9a-f]{64}', ref['sha256']),
-                 'failed-start public record reference differs')
-        need(reference['plan']['sha256'] == reference['records']['intent.json']['sha256'],
-             'failed-start plan and installed intent bytes differ')
-        records = {name: retained_public_record(failed_directory, name, ref['sha256'])
-                   for name, ref in reference['records'].items()}
-        installed_plan = records['intent.json']
-        installed = validate_failed_start_inputs(plan['deployment'], intent, installed_plan,
-                                                records, plan['operation'])
+             'failed-start chain plan fields differ')
+        budget = FailedStartRecordBudget()
+
+        def load_attempt(ref):
+            directory = BASE / ref['operation']
+            stamp(directory, True)
+            # Partial observations never substitute for a terminal outcome.
+            for name in ('result.json', 'rollback.json'):
+                need(not os.path.lexists(directory / name),
+                     'failed-start attempt has a success or rollback marker: ' + name)
+            records = {name: retained_public_record(directory, name, value['sha256'], budget)
+                       for name, value in ref['records'].items()}
+            return records['intent.json'], records
+
+        public_reference = {key: value for key, value in reference.items() if key != 'installed'}
+        installed, entries = validate_failed_start_chain(
+            public_reference, plan['deployment'], intent, plan['operation'], load_attempt,
+            baseline_observations=before, candidate=plan)
         need(installed == reference['installed'] and installed['commit'] == OLD
              and installed['daemon'] == str(PREVIOUS_DAEMON), 'failed-start installed identity differs')
-        for baseline, failed_before in zip(before, records['before.json'], strict=True):
-            compare_retained_identity(baseline, failed_before)
-            need(baseline['public'] == failed_before['public'],
-                 'failed-start historical health differs from completed predecessor')
+        # Verify every retained ancestor prefix in the live journal. The final
+        # stop barrier independently freezes and verifies the newest prefix.
+        for failed, records in entries:
+            for checkpoint in records['checkpoint-stopped.json']:
+                require_retained_tip(checkpoint['role'], checkpoint['kura_tip'])
+        installed_plan, records = entries[-1]
         for artifact, path in zip(installed_plan['artifacts'],
                                   (PREVIOUS_DAEMON, PREVIOUS_DAEMON.with_name('iroha')), strict=True):
             need(native_digest(path) == artifact['sha256'] and stamp(path)[6] == artifact['size'],
                  'failed-start installed artifact differs')
         before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
+    validate_candidate_transition(plan['commit'], plan['artifacts'], PREDECESSOR['commit'],
+                                  installed_plan)
     for original, current in zip(installed_plan['units'], plan['units'], strict=True):
         need(original['after'] == current['before'] and original['after_sha256'] == current['before_sha256'],
              'successor changed installed predecessor unit')
@@ -753,7 +891,7 @@ def retained_attempt(plan):
 def apply(plan):
     configure(plan)
     need(os.geteuid() == 0 and plan['network_id'] == NETWORK, 'guest or network differs')
-    need(plan['commit'] != OLD, 'candidate must replace the current runtime')
+    need(plan['commit'] != PREDECESSOR['commit'], 'candidate cannot repeat the completed runtime')
     need(tuple(row['role'] for row in plan['units']) == ROLES, 'four ordered roles required')
     need([row['name'] for row in plan['artifacts']] == ['iroha3d_taira', 'iroha'],
          'exact candidate daemon and same-revision CLI required')

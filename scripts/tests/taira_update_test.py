@@ -121,8 +121,37 @@ def write_failed_reference(directory, records):
         raw = (json.dumps(value, sort_keys=True) + '\n').encode()
         path.write_bytes(raw)
         refs[name] = {'path': str(path), 'sha256': runner.sha(raw)}
-    return {'schema': 'taira.failed-start-reference.v1',
-            'plan': refs['intent.json'], 'records': refs}
+    return {'schema': 'taira.failed-start-chain.v1', 'attempts': [
+        {'operation': records['intent.json']['operation'],
+         'plan': refs['intent.json'], 'records': refs}]}
+
+
+def failed_chain_fixture(directory, commits=('a', 'c'), historical_second=False):
+    """Create actual sequential failed plans, retaining completed baseline health."""
+    build, prior = fixture()
+    _, template = failed_fixture()
+    chain = {'schema': 'taira.failed-start-chain.v1', 'attempts': []}
+    entries = []
+    for index, source in enumerate(commits):
+        build['commit'] = source * 40
+        failed = runner.make_plan(copy.deepcopy(build), deployment(), prior, fresh_guest(),
+            'update-' + f'{index + 2:032x}', copy.deepcopy(chain) if index else None)
+        if historical_second and index == 1:
+            first = chain['attempts'][0]
+            failed['failed_start'] = {'schema': 'taira.failed-start-reference.v1',
+                'plan': first['plan'], 'records': first['records'],
+                'installed': failed['failed_start']['installed']}
+        records = copy.deepcopy(template)
+        records['intent.json'] = failed
+        for before, checkpoint in zip(records['before.json'], records['checkpoint-stopped.json']):
+            before['systemd']['InvocationID'] = f'{index + 10:032x}'
+            checkpoint['invocation_id'] = before['systemd']['InvocationID']
+            # A failed startup may reuse the same authenticated checkpoint.
+            checkpoint['proof_invocation_id'] = 'e' * 32
+        ref = write_failed_reference(Path(directory) / failed['operation'], records)['attempts'][0]
+        chain['attempts'].append(ref)
+        entries.append((failed, records))
+    return build, prior, chain, entries
 
 
 def local_inputs(directory):
@@ -156,7 +185,7 @@ class CoordinatorTests(unittest.TestCase):
             result.write_text(json.dumps(build))
             output = descriptor.parent / 'corrective.json'
             with patch.object(sys, 'argv', cli_argv(descriptor, result, output) +
-                              ['--failed-start-reference', str(reference_path)]), \
+                              ['--failed-start-chain', str(reference_path)]), \
                  patch.object(runner.subprocess, 'check_output', return_value='optimizations\n'), \
                  patch.object(runner.retry, 'validate_ssh', return_value=['approved']), \
                  patch.object(runner.subprocess, 'run') as remote, \
@@ -167,14 +196,14 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(plan['deployment'], value)
             self.assertEqual(plan['retained_predecessor'], failed['retained_predecessor'])
             self.assertEqual(plan['failed_start']['installed']['commit'], failed['commit'])
-            self.assertEqual(plan['failed_start']['records'], reference['records'])
+            self.assertEqual(plan['failed_start']['attempts'][-1]['records'], reference['attempts'][-1]['records'])
             for previous, current in zip(failed['units'], plan['units'], strict=True):
                 self.assertEqual(current['before'], previous['after'])
                 self.assertEqual(current['before_sha256'], previous['after_sha256'])
             self.assertNotIn('accepted_health', plan['failed_start'])
             self.assertNotEqual(runner.release_name(plan), runner.release_name(failed))
             with patch.object(sys, 'argv', cli_argv(descriptor, result, output) +
-                              ['--failed-start-reference', str(reference_path)]), \
+                              ['--failed-start-chain', str(reference_path)]), \
                  patch.object(runner.subprocess, 'check_output', return_value='optimizations\n'), \
                  patch.object(runner.retry, 'validate_ssh', return_value=['approved']), \
                  patch.object(runner.subprocess, 'run') as remote:
@@ -199,9 +228,9 @@ class CoordinatorTests(unittest.TestCase):
                 if failure == 'same_operation': failed['operation'] = OPERATION
                 if failure == 'nested': failed['failed_start'] = {}
                 reference = write_failed_reference(temporary, records)
-                if failure == 'missing': Path(reference['records']['failure.json']['path']).unlink()
-                if failure == 'digest': reference['records']['failure.json']['sha256'] = 'd' * 64
-                if failure == 'intent': reference['plan'] = dict(reference['plan'], sha256='d' * 64)
+                if failure == 'missing': Path(reference['attempts'][-1]['records']['failure.json']['path']).unlink()
+                if failure == 'digest': reference['attempts'][-1]['records']['failure.json']['sha256'] = 'd' * 64
+                if failure == 'intent': reference['attempts'][-1]['plan'] = dict(reference['attempts'][-1]['plan'], sha256='d' * 64)
                 with patch.object(runner.subprocess, 'run') as remote:
                     with self.assertRaises((RuntimeError, FileNotFoundError)):
                         plan_for(build, prior, failed_start=reference)
@@ -774,9 +803,10 @@ class CoordinatorTests(unittest.TestCase):
                     if failure == 'health': records['before.json'][0]['public']['height'] = 198
                     else: records['before.json'][0]['state_root_identity'] = [8, 8]
                     rebound = write_failed_reference(failed_directory, records)
-                    plan['failed_start']['records'] = rebound['records']
+                    plan['failed_start']['attempts'][-1]['records'] = rebound['attempts'][-1]['records']
                 contents = {str(path): path.read_bytes() for path in root.rglob('*.json')}
                 with patch.object(guest, 'BASE', root), \
+                     patch.object(guest, 'native_kura_hash', return_value='c' * 64), \
                      patch.object(guest, 'stamp', return_value=[0] * 6 + [2_000_000]), \
                      patch.object(guest, 'native_digest', return_value=('d' if failure == 'artifact' else 'b') * 64), \
                      patch.object(guest, 'record') as record, \
@@ -813,13 +843,15 @@ class CoordinatorTests(unittest.TestCase):
                     record.assert_not_called(); stop.assert_not_called()
                 self.assertEqual(contents, {str(path): path.read_bytes() for path in root.rglob('*.json')})
 
-    def simulate(self, failure=None, *, recovery=False):
+    def simulate(self, failure=None, *, recovery=False, same_artifacts=False, failed_chain_depth=1):
         build, metadata = fixture()
         if recovery:
-            build['commit'] = 'c' * 40
-            _, failed_records = failed_fixture()
             with tempfile.TemporaryDirectory() as temporary:
-                reference = write_failed_reference(temporary, failed_records)
+                build, metadata, reference, entries = failed_chain_fixture(
+                    temporary, commits=('a',) + ('c',) * (failed_chain_depth - 1))
+                failed_records = entries[-1][1]
+                if not same_artifacts:
+                    build['commit'] = ('c' if failed_chain_depth == 1 else 'd') * 40
                 plan = plan_for(build, metadata, failed_start=reference)
         else:
             plan = plan_for(build, metadata)
@@ -1043,6 +1075,7 @@ class CoordinatorTests(unittest.TestCase):
                 for name, value in baseline_records.items():
                     (baseline / name).write_text(json.dumps(value))
                 with patch.object(recovery_guest, 'BASE', root), \
+                     patch.object(recovery_guest, 'native_kura_hash', return_value='c' * 64), \
                      patch.object(recovery_guest, 'stamp', return_value=[0] * 6 + [2_000_000]), \
                      patch.object(recovery_guest, 'native_digest', return_value='b' * 64), \
                      patch.object(recovery_guest, 'stop_all') as stop:
@@ -1132,6 +1165,228 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'one deployment'):
                 local_guest.configure({'deployment':value,'commit':commit,'operation':operation})
         self.assertEqual(len(set(paths)),2)
+
+
+class FailedStartChainTests(unittest.TestCase):
+    def rebind(self, directory, chain, entries):
+        """Re-pin deliberately changed public evidence without hiding structural tampering."""
+        result = copy.deepcopy(chain)
+        for index, (failed, records) in enumerate(entries):
+            records['intent.json'] = failed
+            result['attempts'][index] = write_failed_reference(
+                Path(directory) / failed['operation'], records)['attempts'][0]
+        return result
+
+    def completed_guest_records(self, directory, prior, first):
+        baseline = Path(directory) / deployment()['current']['attempt_name']
+        baseline.mkdir()
+        records = {'intent.json': prior, 'after.json': first['before.json'],
+            'checkpoint-stopped.json': first['checkpoint-stopped.json'],
+            'checkpoint-restored.json': [{'role': role, 'native_strict_checkpoint_verified': True}
+                for role in deployment()['roles']],
+            'result.json': {'schema': 'taira.daemon-update.result.v1',
+                'runtime_update_complete': True, 'state_preserved': True,
+                'retained_native_snapshot_verified': True,
+                'commit': deployment()['current']['commit'], 'network_id': deployment()['network_id']}}
+        for name, value in records.items():
+            (baseline / name).write_text(json.dumps(value))
+
+    def test_unchanged_artifacts_retry_a_failed_corrective_rollout(self):
+        for depth in (1, 2, 3):
+            with self.subTest(depth=depth):
+                events, records, units, plan = CoordinatorTests.simulate(
+                    self, recovery=True, same_artifacts=True, failed_chain_depth=depth)
+                self.assertEqual(plan['commit'], plan['failed_start']['installed']['commit'])
+                self.assertEqual(len(plan['failed_start']['attempts']), depth)
+                self.assertTrue(records['result.json']['runtime_update_complete'])
+                self.assertEqual(records['before.json'][0]['public']['commit'], deployment()['current']['commit'])
+                self.assertNotEqual(guest.DAEMON, guest.PREVIOUS_DAEMON)
+                for row in plan['units']:
+                    self.assertEqual(units[row['role']], base64.b64decode(row['after']))
+                self.assertLess(events.index('stop-all'), events.index('start'))
+                self.assertNotIn('rollback-start', events)
+
+    def test_chain_accepts_historical_reference_evidence_and_relocated_capture_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build, prior, chain, entries = failed_chain_fixture(temporary, historical_second=True)
+            # Embedded historical paths are not instructions or operational inputs.
+            historical = entries[1][0]['failed_start']
+            for ref in (historical['plan'], *historical['records'].values()):
+                ref['path'] = '/inert/historical/capture/' + Path(ref['path']).name
+            chain = self.rebind(temporary, chain, entries)
+            plan = plan_for(build, prior, failed_start=chain)
+            self.assertEqual(plan['failed_start']['installed']['attempt_name'], entries[-1][0]['operation'])
+            self.assertNotEqual(entries[-1][1]['checkpoint-stopped.json'][0]['invocation_id'],
+                                entries[-1][1]['checkpoint-stopped.json'][0]['proof_invocation_id'])
+
+    def test_same_commit_binary_identity_is_enforced_for_both_artifacts(self):
+        for index in (0, 1):
+            for field, value in (('sha256', 'd' * 64), ('size', 2_000_001), ('package', 'foreign')):
+                with self.subTest(index=index, field=field), tempfile.TemporaryDirectory() as temporary:
+                    build, prior, chain, _ = failed_chain_fixture(temporary)
+                    build['artifacts'][index][field] = value
+                    with patch.object(runner.subprocess, 'run') as remote:
+                        with self.assertRaises(RuntimeError): plan_for(build, prior, failed_start=chain)
+                    remote.assert_not_called()
+
+    def test_nonadjacent_source_reuse_cannot_change_binary_identity(self):
+        for artifact in (0, 1):
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
+                build, prior, chain, _ = failed_chain_fixture(temporary)
+                build['commit'] = 'a' * 40
+                build['artifacts'][artifact]['sha256'] = 'd' * 64
+                with self.assertRaisesRegex(RuntimeError, 'ancestry artifacts'):
+                    plan_for(build, prior, failed_start=chain)
+
+    def test_historical_nonadjacent_source_reuse_is_revalidated(self):
+        for artifact in (0, 1):
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as temporary:
+                build, prior, chain, entries = failed_chain_fixture(temporary, commits=('a', 'c', 'a'))
+                entries[-1][0]['artifacts'][artifact]['sha256'] = 'd' * 64
+                chain = self.rebind(temporary, chain, entries)
+                build['commit'] = 'd' * 40
+                with self.assertRaisesRegex(RuntimeError, 'ancestry reused a source'):
+                    plan_for(build, prior, failed_start=chain)
+
+    def test_artifact_order_and_each_intermediate_unit_are_authenticated(self):
+        for failure in ('artifact_order', 'unit_before', 'unit_after', 'baseline'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                build, prior, chain, entries = failed_chain_fixture(temporary)
+                failed = entries[-1][0]
+                if failure == 'artifact_order': failed['artifacts'].reverse()
+                if failure == 'unit_before': failed['units'][1]['before'] = failed['units'][0]['before']
+                if failure == 'unit_after': failed['units'][1]['after_sha256'] = 'd' * 64
+                if failure == 'baseline': failed['retained_predecessor']['intent_sha256'] = 'd' * 64
+                chain = self.rebind(temporary, chain, entries)
+                with self.assertRaises(RuntimeError): plan_for(build, prior, failed_start=chain)
+
+    def test_maximum_chain_is_bounded_and_remains_reusable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build, prior, chain, _ = failed_chain_fixture(temporary, commits=('a',) * 16)
+            plan = plan_for(build, prior, failed_start=chain)
+            self.assertEqual(len(plan['failed_start']['attempts']), 16)
+
+    def test_same_artifact_cli_plans_a_fresh_operation_without_building_or_contacting_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value, build, descriptor, result = local_inputs(temporary)
+            prior = json.loads(Path(value['current']['local_plan']).read_bytes())
+            failed, records = failed_fixture(value, prior)
+            reference = write_failed_reference(Path(temporary) / failed['operation'], records)
+            reference_path = Path(temporary).resolve() / 'failed-chain.json'
+            reference_path.write_text(json.dumps(reference))
+            output = Path(temporary).resolve() / 'retry-plan.json'
+            with patch.object(sys, 'argv', cli_argv(descriptor, result, output) +
+                              ['--failed-start-chain', str(reference_path)]), \
+                 patch.object(runner.subprocess, 'check_output', return_value='optimizations\n'), \
+                 patch.object(runner.retry, 'validate_ssh', return_value=['approved']), \
+                 patch.object(runner.subprocess, 'run') as remote, \
+                 patch.object(runner, 'apply_plan') as apply, redirect_stdout(io.StringIO()):
+                runner.main()
+            plan = json.loads(output.read_bytes())
+            self.assertEqual(plan['commit'], failed['commit'])
+            self.assertNotEqual(plan['operation'], failed['operation'])
+            self.assertEqual(plan['build_result_path'], str(result))
+            self.assertEqual(plan['build_result_sha256'], runner.sha(result.read_bytes()))
+            self.assertEqual(plan['artifacts'], failed['artifacts'])
+            remote.assert_not_called(); apply.assert_not_called()
+
+    def test_relocated_identical_prepared_binaries_are_not_a_new_source_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build, prior, chain, _ = failed_chain_fixture(temporary)
+            for row in build['artifacts']: row['path'] = '/new/retained/' + row['name']
+            plan = plan_for(build, prior, failed_start=chain)
+            self.assertEqual(plan['commit'], 'c' * 40)
+
+    def test_public_evidence_byte_budgets_precede_decode_and_host_mutation(self):
+        local_guest = fresh_guest()
+        with patch.object(local_guest, 'MAX_FAILED_START_RECORD_BYTES', 4), \
+             patch.object(local_guest, 'MAX_FAILED_START_CHAIN_BYTES', 6):
+            budget = local_guest.FailedStartRecordBudget()
+            budget.consume(b'1234')
+            budget.consume(b'56')
+            with self.assertRaisesRegex(RuntimeError, 'aggregate byte bound'):
+                budget.consume(b'7')
+            with self.assertRaisesRegex(RuntimeError, 'record exceeds byte bound'):
+                local_guest.FailedStartRecordBudget().consume(b'12345')
+        with tempfile.TemporaryDirectory() as temporary:
+            build, prior, chain, _ = failed_chain_fixture(temporary)
+            local_guest = fresh_guest()
+            with patch.object(local_guest, 'MAX_FAILED_START_CHAIN_BYTES', 1), \
+                 patch.object(runner.subprocess, 'run') as remote:
+                with self.assertRaisesRegex(RuntimeError, 'aggregate byte bound'):
+                    runner.make_plan(build, deployment(), prior, local_guest, OPERATION, chain)
+            remote.assert_not_called()
+
+    def test_completed_baseline_source_and_old_operational_reference_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            build, prior, chain, _ = failed_chain_fixture(temporary)
+            build['commit'] = deployment()['current']['commit']
+            with self.assertRaises(RuntimeError): plan_for(build, prior, failed_start=chain)
+            build['commit'] = 'c' * 40
+            old = dict(chain['attempts'][0], schema='taira.failed-start-reference.v1')
+            old.pop('operation')
+            with self.assertRaisesRegex(RuntimeError, 'bounded failed-start chain'):
+                plan_for(build, prior, failed_start=old)
+
+    def test_chain_rejects_missing_reordered_repeated_or_foreign_ancestry(self):
+        for failure in ('empty', 'overlong', 'drop', 'reorder', 'duplicate', 'operation',
+                        'current_operation', 'prefix', 'health', 'config', 'invocation',
+                        'tip_regression', 'tip_conflict', 'checkpoint_regression'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                build, prior, chain, entries = failed_chain_fixture(temporary, commits=('a', 'c', 'd'))
+                if failure == 'empty': chain['attempts'] = []
+                elif failure == 'overlong': chain['attempts'] *= 6
+                elif failure == 'drop': chain['attempts'].pop(1)
+                elif failure == 'reorder': chain['attempts'].reverse()
+                elif failure == 'duplicate': chain['attempts'][1] = chain['attempts'][0]
+                elif failure == 'operation': chain['attempts'][1]['operation'] = 'update-' + '9' * 32
+                elif failure == 'current_operation': chain['attempts'][1]['operation'] = OPERATION
+                else:
+                    failed, records = entries[1]
+                    if failure == 'prefix':
+                        failed['failed_start']['attempts'][0]['records']['failure.json']['sha256'] = 'd' * 64
+                    if failure == 'health': records['before.json'][0]['public']['height'] = 198
+                    if failure == 'config': records['before.json'][0]['config_stamp'] = [9, 9]
+                    if failure == 'invocation': records['before.json'][0]['systemd']['InvocationID'] = 'f' * 32
+                    if failure == 'tip_regression': records['checkpoint-stopped.json'][0]['kura_tip']['height'] = 199
+                    if failure == 'tip_conflict': records['checkpoint-stopped.json'][0]['kura_tip']['hash'] = 'd' * 64
+                    if failure == 'checkpoint_regression': records['checkpoint-stopped.json'][0]['checkpoint_height'] = 198
+                    chain = self.rebind(temporary, chain, entries)
+                with patch.object(runner.subprocess, 'run') as remote:
+                    with self.assertRaises(RuntimeError): plan_for(build, prior, failed_start=chain)
+                remote.assert_not_called()
+
+    def test_guest_rechecks_every_ancestor_before_mutation(self):
+        for failure in (None, 'ancestor_result', 'ancestor_rollback', 'ancestor_missing',
+                        'ancestor_digest', 'ancestor_kura', 'candidate_daemon', 'candidate_cli',
+                        'aggregate_bytes'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                build, prior, chain, entries = failed_chain_fixture(temporary)
+                plan = plan_for(build, prior, failed_start=chain)
+                self.completed_guest_records(temporary, prior, entries[0][1])
+                ancestor = Path(temporary) / entries[0][0]['operation']
+                if failure == 'ancestor_result': (ancestor / 'result.json').write_text('{}')
+                if failure == 'ancestor_rollback': (ancestor / 'rollback.json').write_text('{}')
+                if failure == 'ancestor_missing': (ancestor / 'failure.json').unlink()
+                if failure == 'ancestor_digest': (ancestor / 'failure.json').write_text('{}')
+                if failure == 'candidate_daemon': plan['artifacts'][0]['sha256'] = 'd' * 64
+                if failure == 'candidate_cli': plan['artifacts'][1]['sha256'] = 'd' * 64
+                with patch.object(guest, 'BASE', Path(temporary)), \
+                     patch.object(guest, 'stamp', return_value=[0] * 6 + [2_000_000]), \
+                     patch.object(guest, 'native_digest', return_value='b' * 64), \
+                     patch.object(guest, 'MAX_FAILED_START_CHAIN_BYTES',
+                                  1 if failure == 'aggregate_bytes' else 32 * 1024 * 1024), \
+                     patch.object(guest, 'native_kura_hash', return_value=('d' if failure == 'ancestor_kura' else 'c') * 64) as kura, \
+                     patch.object(guest, 'record') as record, patch.object(guest, 'stop_all') as stop:
+                    if failure is None:
+                        before, checkpoints = guest.retained_attempt(plan)
+                        self.assertEqual(before, entries[-1][1]['before.json'])
+                        self.assertEqual(checkpoints, entries[-1][1]['checkpoint-stopped.json'])
+                        self.assertEqual(kura.call_count, 8)
+                    else:
+                        with self.assertRaises((RuntimeError, FileNotFoundError)):
+                            guest.retained_attempt(plan)
+                    record.assert_not_called(); stop.assert_not_called()
 
 
 if __name__ == '__main__':
