@@ -76,6 +76,7 @@ const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-inten
 mod config;
 #[path = "taira_public_reset_host.rs"]
 mod host;
+pub(crate) use host::maintenance::StoppedOwnerMaintenance;
 #[path = "taira_public_reset_inputs.rs"]
 mod inputs;
 #[path = "taira_public_reset_source.rs"]

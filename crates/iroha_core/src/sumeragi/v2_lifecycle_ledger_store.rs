@@ -2554,19 +2554,38 @@ pub(crate) fn install_non_timeout_broadcast_before_current_control_for_test(
     root: &Path,
     context: LifecycleContext,
 ) -> bool {
+    install_proposal_broadcast_before_current_control_for_test(root, context, None)
+}
+
+/// Install an exact signed Proposal lineage beside an incumbent control Sign.
+#[cfg(all(test, feature = "bls"))]
+pub(crate) fn install_proposal_broadcast_before_current_control_for_test(
+    root: &Path,
+    context: LifecycleContext,
+    proposal: Option<(wire::Proposal, wire::Proposal)>,
+) -> bool {
     let Ok((store, ledger)) = LifecycleLedgerStoreV1::open(root, context) else {
         return false;
     };
     let [current] = ledger.records.as_slice() else {
         return false;
     };
-    let parent_replay =
-        super::replay_authority::exact_record_fixture(context, LifecycleStageKind::SignProposal, 0);
-    let child_replay = super::replay_authority::exact_record_fixture(
-        context,
-        LifecycleStageKind::BroadcastProposal,
-        0,
-    );
+    let [parent_replay, child_replay] = if let Some((unsigned, signed)) = proposal {
+        super::replay_authority::exact_proposal_sign_broadcast_fixture(context, unsigned, signed)
+    } else {
+        [
+            super::replay_authority::exact_record_fixture(
+                context,
+                LifecycleStageKind::SignProposal,
+                0,
+            ),
+            super::replay_authority::exact_record_fixture(
+                context,
+                LifecycleStageKind::BroadcastProposal,
+                0,
+            ),
+        ]
+    };
     let owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xD9; 32])), 1);
     let Ok(parent) = LifecycleLedgerRecordV1::new(
         parent_replay.key,

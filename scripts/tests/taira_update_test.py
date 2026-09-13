@@ -969,6 +969,17 @@ class CoordinatorTests(unittest.TestCase):
                         'argv': ['/usr/bin/python3', '-I', '-'],
                         'lock': {'device': 1, 'inode': 9}}
             stack.enter_context(patch.object(guest, 'cohort_observation_owner', side_effect=observing_owner))
+            def maintain_owners(operation):
+                events.append('stopped-owner-maintenance')
+                self.assertEqual(operation, plan['operation'])
+                self.assertEqual([row['role'] for row in records['checkpoint-stopped.json']],
+                                 list(guest.ROLES))
+                self.assertIn('cohort-retained-tip.json', records)
+                self.assertFalse(any(event.startswith('install-') for event in events))
+                self.assertNotIn('start', events)
+                if failure == 'stopped-owner-maintenance':
+                    raise RuntimeError('native stopped-owner maintenance failed')
+            stack.enter_context(patch.object(guest, 'stopped_owner_maintenance', side_effect=maintain_owners))
             prior = ([identity(row) for row in plan['units']],
                      failed_records['checkpoint-stopped.json'] if recovery else [{} for _ in guest.ROLES])
             stack.enter_context(patch.object(guest, 'retained_attempt', return_value=prior))
@@ -1013,7 +1024,9 @@ class CoordinatorTests(unittest.TestCase):
     def test_full_cohort_is_stopped_before_any_unit_replacement_and_readbacks_precede_success(self):
         events, records, _, _ = self.simulate()
         self.assertLess(events.index('verify-units'), events.index('stop-all'))
-        self.assertLess(events.index('stop-all'), events.index('install-taira-validator-1'))
+        self.assertEqual(events.count('stopped-owner-maintenance'), 1)
+        self.assertLess(events.index('stop-all'), events.index('stopped-owner-maintenance'))
+        self.assertLess(events.index('stopped-owner-maintenance'), events.index('install-taira-validator-1'))
         self.assertLess(events.index('install-taira-validator-4'), events.index('start'))
         self.assertIn('after.json', records)
         self.assertIn('retained-entry.json', records)
@@ -1030,6 +1043,19 @@ class CoordinatorTests(unittest.TestCase):
         self.assertFalse(records['result.json']['canary_applied_verified'])
         self.assertFalse(records['result.json']['application_ready'])
         self.assertNotIn('rollback-start', events)
+
+    def test_stopped_owner_maintenance_failure_keeps_all_units_stopped_and_unchanged(self):
+        events, records, units, plan = self.simulate('stopped-owner-maintenance')
+        self.assertEqual(events.count('stopped-owner-maintenance'), 1)
+        self.assertFalse(any(event.startswith('install-') for event in events))
+        self.assertNotIn('start', events)
+        self.assertNotIn('start-intent.json', records)
+        self.assertNotIn('result.json', records)
+        self.assertFalse(records['failure.json']['new_start_attempted'])
+        self.assertTrue(records['rollback.json']['restored_previous_stopped_cohort'])
+        self.assertFalse(records['rollback.json']['old_daemons_restarted'])
+        for row in plan['units']:
+            self.assertEqual(units[row['role']], base64.b64decode(row['before']))
 
     def test_partial_install_restores_every_old_unit_before_any_new_daemon_start(self):
         events, records, units, plan = self.simulate('partial-install')
@@ -1337,6 +1363,84 @@ class CohortProgressTests(unittest.TestCase):
         deadline = next(keyword.value for keyword in remote[0].keywords if keyword.arg == 'timeout')
         self.assertIsInstance(deadline, ast.Name)
         self.assertEqual(deadline.id, 'GUEST_OPERATION_TIMEOUT_SECONDS')
+
+
+class StoppedOwnerMaintenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.plan = plan_for()
+        self.owner = {'pid': 991, 'start_time_ticks': 1234,
+                      'argv': ['/usr/bin/python3', '-I', '-'],
+                      'lock': {'device': 1, 'inode': 9}}
+        self.report = {'schema': 'taira.stopped-owner-maintenance.result.v1',
+                       'operation': self.plan['operation'], 'all_four_stopped_owners_clean': True}
+
+    def invoke(self, raw=None, *, exit_code=0, timeout=False, error_type=None):
+        raw = json.dumps(self.report).encode() if raw is None else raw
+        descriptors = []
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(guest, 'ATTEMPT', Path(directory)), \
+             patch.object(guest, 'stamp'), \
+             patch.object(guest, 'cohort_observation_owner', return_value=self.owner) as owner:
+            native_result = Path(directory) / 'stopped-owner-maintenance-result.json'
+            def native(argv, **kwargs):
+                fd, = kwargs['pass_fds']
+                descriptors.append(fd)
+                self.assertEqual(argv, [str(guest.CLI), 'taira', 'stopped-owner-maintenance',
+                                        '--request-fd', str(fd)])
+                self.assertEqual(kwargs['timeout'], 150)
+                self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
+                self.assertTrue(kwargs['capture_output'])
+                self.assertEqual(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE, os.O_RDONLY)
+                info = os.fstat(fd)
+                self.assertTrue(stat.S_ISREG(info.st_mode))
+                self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
+                self.assertEqual(info.st_nlink, 1)
+                self.assertEqual(json.loads(os.read(fd, 16_385)), {
+                    'schema': 'taira.stopped-owner-maintenance.request.v1',
+                    'operation_directory': directory, 'owner': self.owner})
+                if timeout:
+                    raise subprocess.TimeoutExpired(argv, 150)
+                # The real native command owns this receipt. Python's command
+                # capture must use a distinct name and must not rewrite it.
+                native_result.write_bytes(b'native-owned-receipt\n')
+                return subprocess.CompletedProcess(argv, exit_code, raw, b'private-native-diagnostic')
+            with patch.object(guest.subprocess, 'run', side_effect=native) as run:
+                if error_type:
+                    with self.assertRaises(error_type) as caught:
+                        guest.stopped_owner_maintenance(self.plan['operation'])
+                    self.assertNotIn('private-native-diagnostic', str(caught.exception))
+                    self.assertNotIn('untrusted-body', str(caught.exception))
+                else:
+                    guest.stopped_owner_maintenance(self.plan['operation'])
+                run.assert_called_once()
+            owner.assert_called_once_with()
+            self.assertEqual(len(descriptors), 1)
+            with self.assertRaises(OSError):
+                os.fstat(descriptors[0])
+            if not timeout:
+                self.assertEqual(native_result.read_bytes(), b'native-owned-receipt\n')
+                self.assertEqual(json.loads((Path(directory) /
+                    'stopped-owner-maintenance-command.result.json').read_bytes()),
+                    {'exit_code': exit_code})
+
+    def test_candidate_cli_receives_only_readonly_public_request_and_preserves_native_receipt(self):
+        self.invoke()
+
+    def test_incomplete_foreign_or_malformed_native_report_cannot_authorize_installation(self):
+        reports = [b'untrusted-body', b'[]', b' ' * 16_385]
+        for field, value in (('schema', 'unknown'), ('operation', 'update-' + 'f' * 32),
+                             ('all_four_stopped_owners_clean', False),
+                             ('all_four_stopped_owners_clean', 1)):
+            reports.append(json.dumps(dict(self.report, **{field: value})).encode())
+        reports.extend((json.dumps({'schema': self.report['schema']}).encode(),
+                        json.dumps(dict(self.report, extra='untrusted-body')).encode()))
+        for raw in reports:
+            with self.subTest(raw=raw[:120]):
+                self.invoke(raw, error_type=RuntimeError)
+
+    def test_native_failure_or_timeout_closes_request_without_retry_or_diagnostic_disclosure(self):
+        self.invoke(exit_code=1, error_type=guest.NativeCommandFailure)
+        self.invoke(timeout=True, error_type=subprocess.TimeoutExpired)
 
 
 class CohortObservationOwnerTests(unittest.TestCase):

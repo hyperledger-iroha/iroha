@@ -229,6 +229,17 @@ readiness and verifies that the same processes are still running. An idle chain
 does not need to create another block to pass.
 `--plan-only` writes the concrete plan locally without contacting the host.
 
+After all four stopped checkpoints are recorded, the matching candidate CLI runs
+`iroha taira stopped-owner-maintenance` once before unit replacement or startup.
+It verifies the live updater parent and its update flock, the retained public plan,
+the exact stopped units and state roots, and acquires all four existing signer
+slot locks before cleaning stopped native owners. Python passes only public
+operation and process identities through a read-only descriptor; the native
+custody boundary owns cleanup. The operation retains a maintenance intent,
+per-slot receipts and `stopped-owner-maintenance-result.json`. Native maintenance
+has a 120-second deadline and its caller a 150-second timeout. Failure leaves
+the cohort stopped for inspection and prevents candidate installation or startup.
+
 Local and guest locks serialize updates. Each operation retains its own staging
 and evidence paths, so a failed transfer or lock conflict can use the same
 completed binaries in a fresh operation after inspection. Failed stages remain

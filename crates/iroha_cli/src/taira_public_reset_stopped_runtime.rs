@@ -33,40 +33,117 @@ pub(super) fn reconcile(admitted: &HostAdmission, cleanup: bool) -> Result<()> {
         return Ok(());
     };
     let slot = owner_slot(&validator.slug)?;
-    ensure_action_deadline(admitted)?;
+    let vacant = || require_vacant_unit(admitted, true);
+    let plan = preflight_stopped_owner(slot, cleanup, cleanup, admitted.action_deadline, &vacant)?;
+    apply_stopped_owner(&plan, cleanup, &vacant)
+}
+
+/// One authenticated stopped owner held across cohort preflight and mutation.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub(super) struct StoppedOwnerPlan {
+    slot: usize,
+    deadline: Instant,
+    _lock: File,
+    cgroups: StoppedCgroupPlan,
+    firewall: StoppedFirewallState,
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn stopped_owner_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(eyre!("stopped Inrou owner deadline elapsed"));
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn stopped_cgroup_custody(path: &Path) -> Result<()> {
+    require_root_directory(path, false, "stopped Inrou cgroup")?;
+    if rustix::fs::statfs(path)?.f_type as u64 != 0x6367_7270 {
+        return Err(eyre!(
+            "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
+        ));
+    }
+    Ok(())
+}
+
+/// Admit both worker and firewall state before either can be changed.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub(super) fn preflight_stopped_owner(
+    slot: usize,
+    cleanup: bool,
+    create_lock: bool,
+    deadline: Instant,
+    require_vacant: &impl Fn() -> Result<()>,
+) -> Result<StoppedOwnerPlan> {
+    if slot >= 4 {
+        return Err(eyre!("stopped Inrou owner slot is invalid"));
+    }
+    stopped_owner_deadline(deadline)?;
     let lock_path = PathBuf::from(format!("/run/iroha-inrou-firewall-v1-slot-{slot}.lock"));
     require_root_no_symlink_ancestors(&lock_path, "stopped Inrou owner lock")?;
-    let _lock = acquire_slot_lock(&lock_path, 0, cleanup)?;
-    // systemd only owns the supervisor's unit cgroup. Inrou's isolated workers
-    // are in another hierarchy, so a successful stop job is not their cleanup.
+    let lock = acquire_slot_lock(&lock_path, 0, create_lock)?;
+    require_vacant()?;
     let identity = iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE
         + u32::try_from(slot)?;
-    let subtree = Path::new("/sys/fs/cgroup/iroha-inrou-v1");
-    let custody = |path: &Path| {
-        require_root_directory(path, false, "stopped Inrou cgroup")?;
-        let stat = rustix::fs::statfs(path)?;
-        // Linux UAPI CGROUP2_SUPER_MAGIC; rustix does not export this constant.
-        if stat.f_type as u64 != 0x6367_7270 {
-            return Err(eyre!(
-                "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
-            ));
-        }
-        Ok(())
-    };
+    let check = || stopped_owner_deadline(deadline);
+    require_identity_absent(Path::new("/proc"), identity, &check)?;
+    let cgroups = preflight_cgroups(
+        Path::new("/sys/fs/cgroup/iroha-inrou-v1"),
+        slot,
+        cleanup,
+        &stopped_cgroup_custody,
+        &check,
+    )?;
+    let program = stopped_firewall_program()?;
+    let firewall = parse_stopped_firewall(
+        slot,
+        &run_host_command(program, &["-w", "5", "-S"], deadline)?,
+    )?;
+    if !cleanup && firewall.present {
+        return Err(eyre!("stopped Inrou owner retains its firewall chain"));
+    }
+    Ok(StoppedOwnerPlan {
+        slot,
+        deadline,
+        _lock: lock,
+        cgroups,
+        firewall,
+    })
+}
+
+/// Consume only the preflighted owner while retaining its exclusive slot lock.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+pub(super) fn apply_stopped_owner(
+    plan: &StoppedOwnerPlan,
+    cleanup: bool,
+    require_vacant: &impl Fn() -> Result<()>,
+) -> Result<()> {
+    let check = || stopped_owner_deadline(plan.deadline);
+    check()?;
+    let program = stopped_firewall_program()?;
+    if parse_stopped_firewall(
+        plan.slot,
+        &run_host_command(program, &["-w", "5", "-S"], plan.deadline)?,
+    )? != plan.firewall
+    {
+        return Err(eyre!(
+            "stopped Inrou firewall changed after cohort preflight"
+        ));
+    }
+    let identity = iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE
+        + u32::try_from(plan.slot)?;
     run_stopped_owner_boundary(
         &|| {
-            require_vacant_unit(admitted, true)?;
-            require_identity_absent(Path::new("/proc"), identity, &|| {
-                ensure_action_deadline(admitted)
-            })
+            require_vacant()?;
+            require_identity_absent(Path::new("/proc"), identity, &check)
         },
         &|| {
-            reconcile_cgroups(
-                subtree,
-                slot,
+            apply_cgroup_plan(
+                &plan.cgroups,
                 cleanup,
-                &custody,
-                &|| ensure_action_deadline(admitted),
+                &stopped_cgroup_custody,
+                &check,
                 &|parent, name| {
                     rustix::fs::unlinkat(parent, name, rustix::fs::AtFlags::REMOVEDIR)?;
                     Ok(())
@@ -75,7 +152,7 @@ pub(super) fn reconcile(admitted: &HostAdmission, cleanup: bool) -> Result<()> {
         },
         // The firewall remains closed until both the supervisor and every process
         // with its dedicated identity are absent and all own cgroups are released.
-        &|| reconcile_firewall(slot, cleanup, admitted.action_deadline),
+        &|| reconcile_firewall(plan.slot, cleanup, plan.deadline),
     )
 }
 
@@ -271,20 +348,32 @@ fn require_empty_cgroup(file: &File) -> Result<()> {
 }
 
 #[cfg(any(target_os = "linux", all(test, unix)))]
-fn reconcile_cgroups(
+struct StoppedCgroupPlan {
+    root: PathBuf,
+    slot: usize,
+    parent: Option<File>,
+    workers: Vec<(OsString, File)>,
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn preflight_cgroups(
     root: &Path,
     slot: usize,
     cleanup: bool,
     custody: &impl Fn(&Path) -> Result<()>,
     check: &impl Fn() -> Result<()>,
-    remove: &impl Fn(&File, &OsStr) -> Result<()>,
-) -> Result<()> {
+) -> Result<StoppedCgroupPlan> {
     match fs::symlink_metadata(root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             if let Some(parent) = root.parent() {
                 custody(parent)?;
             }
-            return Ok(());
+            return Ok(StoppedCgroupPlan {
+                root: root.to_path_buf(),
+                slot,
+                parent: None,
+                workers: Vec::new(),
+            });
         }
         Err(error) => return Err(error.into()),
         Ok(_) => {}
@@ -336,27 +425,62 @@ fn reconcile_cgroups(
         }
         workers.push((name, file));
     }
+    revalidate_directory(root, &parent)?;
+    Ok(StoppedCgroupPlan {
+        root: root.to_path_buf(),
+        slot,
+        parent: Some(parent),
+        workers,
+    })
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn apply_cgroup_plan(
+    plan: &StoppedCgroupPlan,
+    cleanup: bool,
+    custody: &impl Fn(&Path) -> Result<()>,
+    check: &impl Fn() -> Result<()>,
+    remove: &impl Fn(&File, &OsStr) -> Result<()>,
+) -> Result<()> {
+    let root = &plan.root;
+    let Some(parent) = &plan.parent else {
+        preflight_cgroups(root, plan.slot, false, custody, check)?;
+        return Ok(());
+    };
     // Admit the complete bounded census before the first mutation.
-    for (name, file) in workers {
+    for (name, file) in &plan.workers {
         check()?;
         custody(root)?;
-        revalidate_directory(root, &parent)?;
-        let path = root.join(&name);
+        revalidate_directory(root, parent)?;
+        let path = root.join(name);
         custody(&path)?;
-        revalidate_directory(&path, &file)?;
-        require_empty_cgroup(&file)?;
-        remove(&parent, &name)?;
+        revalidate_directory(&path, file)?;
+        require_empty_cgroup(file)?;
+        remove(parent, name)?;
     }
-    revalidate_directory(root, &parent)?;
+    revalidate_directory(root, parent)?;
     if cleanup {
-        reconcile_cgroups(root, slot, false, custody, check, remove)?;
+        preflight_cgroups(root, plan.slot, false, custody, check)?;
     }
     Ok(())
 }
 
+#[cfg(all(test, unix))]
+fn reconcile_cgroups(
+    root: &Path,
+    slot: usize,
+    cleanup: bool,
+    custody: &impl Fn(&Path) -> Result<()>,
+    check: &impl Fn() -> Result<()>,
+    remove: &impl Fn(&File, &OsStr) -> Result<()>,
+) -> Result<()> {
+    let plan = preflight_cgroups(root, slot, cleanup, custody, check)?;
+    apply_cgroup_plan(&plan, cleanup, custody, check, remove)
+}
+
 #[cfg(any(target_os = "linux", all(test, unix)))]
-fn reconcile_firewall(slot: usize, cleanup: bool, deadline: Instant) -> Result<()> {
-    let program = [
+fn stopped_firewall_program() -> Result<&'static str> {
+    [
         "/usr/sbin/iptables",
         "/sbin/iptables",
         "/usr/bin/iptables",
@@ -364,7 +488,12 @@ fn reconcile_firewall(slot: usize, cleanup: bool, deadline: Instant) -> Result<(
     ]
     .into_iter()
     .find(|path| validate_firewall_program(Path::new(path)).is_ok())
-    .ok_or_else(|| eyre!("stopped Inrou cleanup requires a fixed root-custodied iptables entry"))?;
+    .ok_or_else(|| eyre!("stopped Inrou cleanup requires a fixed root-custodied iptables entry"))
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn reconcile_firewall(slot: usize, cleanup: bool, deadline: Instant) -> Result<()> {
+    let program = stopped_firewall_program()?;
     reconcile_firewall_with(slot, cleanup, &mut |arguments| {
         validate_firewall_program(Path::new(program))?;
         let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
@@ -693,6 +822,33 @@ mod tests {
         fs::remove_file(path.join("cgroup.events"))?;
         fs::remove_file(path.join("cgroup.procs"))?;
         fs::remove_dir(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn stopped_owner_cohort_preflight_preserves_workers_until_every_slot_is_admitted() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let first = worker(root, 0, 'a');
+        let last = worker(root, 3, 'b');
+        let admitted = preflight_cgroups(root, 0, true, &custody, &|| Ok(()))?;
+        assert!(first.exists());
+        fs::write(last.join("cgroup.procs"), "123\n")?;
+        assert!(preflight_cgroups(root, 3, true, &custody, &|| Ok(())).is_err());
+        assert!(first.exists());
+        // A worker replaced between cohort admission and apply is never removed.
+        fs::rename(&first, root.join("retained"))?;
+        worker(root, 0, 'a');
+        let removed = Cell::new(false);
+        assert!(
+            apply_cgroup_plan(&admitted, true, &custody, &|| Ok(()), &|_, _| {
+                removed.set(true);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!removed.get());
         Ok(())
     }
 

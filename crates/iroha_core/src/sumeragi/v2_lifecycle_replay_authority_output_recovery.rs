@@ -182,9 +182,12 @@ impl AuthenticatedRecoveredLifecycleOutputV1 {
         match &self.effect {
             AdapterEffect::Broadcast(message) => {
                 let disposition_is_exact = match &message.payload {
-                    wire::ConsensusMessageV2Payload::Proposal(proposal) => self
-                        .proposal_cancellation
-                        .is_some_and(|frontier| frontier.proves_obsolete_proposal(proposal.round)),
+                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                        self.proposal_cancellation.is_some_and(|frontier| {
+                            frontier.proves_obsolete_proposal(proposal.round)
+                                || frontier.proves_retired_local_proposal(proposal)
+                        })
+                    }
                     _ => self.proposal_cancellation.is_none(),
                 };
                 disposition_is_exact && verified.verify_consensus_message(message).is_ok()
@@ -354,7 +357,8 @@ pub(super) fn authenticate_durable_lifecycle_output(
             match &message.payload {
                 wire::ConsensusMessageV2Payload::Proposal(proposal) => {
                     let (parent, parent_payload, frontier) = obsolete_proposal?;
-                    if !frontier.proves_obsolete_proposal(proposal.round)
+                    if !(frontier.proves_obsolete_proposal(proposal.round)
+                        || frontier.proves_retired_local_proposal(proposal))
                         || signed_broadcast_continuation_is_exact(
                             DurableContinuationEdge::SignProposalToBroadcast,
                             parent,

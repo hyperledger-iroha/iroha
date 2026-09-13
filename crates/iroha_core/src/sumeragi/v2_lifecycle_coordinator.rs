@@ -184,6 +184,7 @@ pub(in crate::sumeragi) use ledger::{
     control_timeout_supersession_persistence_failure_for_test,
     control_timeout_supersession_summary_for_test,
     install_non_timeout_broadcast_before_current_control_for_test,
+    install_proposal_broadcast_before_current_control_for_test,
     install_timeout_broadcasts_before_current_control_for_test,
 };
 pub(in crate::sumeragi) use open::AuthenticatedRecoveredReleasedValidateNoSuccessorV1;

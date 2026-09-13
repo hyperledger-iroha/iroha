@@ -265,6 +265,10 @@ STAGES = (
         "taira::tests::prepared_server_confirmation_rejects_malformed_status_without_resubmission",
     )),
     ("stopped owner runtime cleanup", (
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_binds_all_four_units_and_failed_installed_runtime",
+        "taira_public_reset::host::maintenance::tests::maintenance_flock_requires_one_exact_live_updater_owner",
+        "taira_public_reset::host::maintenance::tests::maintenance_process_identity_handles_names_and_rejects_dead_owner",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cohort_preflight_preserves_workers_until_every_slot_is_admitted",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_releases_only_empty_own_workers_and_replays",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_rejects_live_nested_forged_and_replaced_workers",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_keeps_barriers_when_process_absence_is_unproven",
@@ -744,6 +748,12 @@ CORE_ADMISSION_STARTUP_STAGES += (("bounded fair-ingress ownership projection wo
     "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers",
     "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("same-round timeout recovery and bounded frontier reads", (
+    "sumeragi::v2::tests::same_round_timeout_cancellation_uses_exact_durable_proposal_intent",
+    "sumeragi::v2::tests::same_round_timeout_cold_owner_cancels_exact_retained_proposal",
+    "sumeragi::lane_planner::tests::canonical_frontier_reads_scale_with_distinct_routes_including_absence",
+    "sumeragi::lane_planner::tests::canonical_frontier_reads_preserve_first_storage_failure_and_stop",
 )),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",

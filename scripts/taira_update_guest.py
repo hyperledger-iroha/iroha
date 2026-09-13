@@ -325,11 +325,12 @@ class NativeCommandFailure(RuntimeError):
         super().__init__(f'native command failed: {label} (exit {exit_code})')
 
 
-def command(argv, *, timeout=60, name=None):
+def command(argv, *, timeout=60, name=None, pass_fds=()):
     # Output may contain native configuration diagnostics; retain it privately,
     # never include arbitrary stderr/config-related output in the public report.
     result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL,
-                            capture_output=True, timeout=timeout, env=ENV)
+                            capture_output=True, timeout=timeout, env=ENV,
+                            pass_fds=pass_fds)
     if name:
         write_new(ATTEMPT / (name + '.stdout'), result.stdout)
         write_new(ATTEMPT / (name + '.stderr'), result.stderr)
@@ -894,6 +895,36 @@ def cohort_observation_owner(pid=None):
             'argv': ['/usr/bin/python3', '-I', '-'], 'lock': {'device': device, 'inode': inode}}
 
 
+def stopped_owner_maintenance(operation):
+    """Let the native custody owner retire only the proven stopped cohort."""
+    request_name = 'stopped-owner-maintenance-request.json'
+    record(request_name, {
+        'schema': 'taira.stopped-owner-maintenance.request.v1',
+        'operation_directory': str(ATTEMPT), 'owner': cohort_observation_owner()})
+    # The candidate verifies its direct parent, the held update flock, all four
+    # stopped units and retained roots before taking the existing slot locks.
+    # Only public process/plan identities cross this descriptor; Python never
+    # opens custody files or performs native owner cleanup itself.
+    request_fd = os.open(ATTEMPT / request_name, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        raw = command([CLI, 'taira', 'stopped-owner-maintenance',
+                       '--request-fd', str(request_fd)], timeout=150,
+                      name='stopped-owner-maintenance-command', pass_fds=(request_fd,))
+    finally:
+        os.close(request_fd)
+    need(len(raw) <= 16_384, 'native stopped-owner maintenance report exceeds bound')
+    try:
+        report = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('native stopped-owner maintenance report is not valid JSON') from None
+    need(isinstance(report, dict)
+         and set(report) == {'schema', 'operation', 'all_four_stopped_owners_clean'}
+         and report['schema'] == 'taira.stopped-owner-maintenance.result.v1'
+         and report['operation'] == operation
+         and report['all_four_stopped_owners_clean'] is True,
+         'native stopped-owner maintenance did not prove the exact stopped cohort')
+
+
 def verify_cohort_observation_owner(intent):
     """Read-only proof of an active observation owner; never acquire its lock."""
     need(intent.get('schema') == COHORT_OBSERVATION_SCHEMA
@@ -1075,6 +1106,7 @@ def apply(plan):
         record('checkpoint-stopped.json', checkpoints)
         retained_tip = cohort_retained_tip(checkpoints)
         record('cohort-retained-tip.json', retained_tip)
+        stopped_owner_maintenance(plan['operation'])
         for row, original in zip(plan['units'], before, strict=True):
             path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
             install_unit(path, base64.b64decode(row['after']), base64.b64decode(row['before']),

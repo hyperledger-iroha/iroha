@@ -3081,3 +3081,228 @@ impl SumeragiV2Adapter {
         .unwrap_or_else(|error| panic!("open exact CompleteTip successor factory: {error}"))
     }
 }
+
+#[cfg(feature = "bls")]
+#[test]
+fn same_round_timeout_cancellation_uses_exact_durable_proposal_intent() {
+    let (context, keys, proofs) = authenticated_context();
+    let local = context.leader(0);
+    let wire::ConsensusMessageV2Payload::Proposal(mut signed) =
+        proposal(&context, local, subject(0xD6)).payload
+    else {
+        unreachable!("signed Proposal fixture")
+    };
+    signed.signature = Signature::new(
+        keys[usize::try_from(local).expect("local proposer index")].private_key(),
+        &signed.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let mut unsigned = signed.clone();
+    unsigned.signature.clear();
+    let timeout = wire::TimeoutVote {
+        round: unsigned.round,
+        highest_prepare_qc: None,
+        signer: local,
+        signature: Vec::new(),
+    };
+    for with_timeout in [false, true] {
+        let directory = TempDir::new().expect("temporary exact retirement WAL");
+        let mut records = vec![WalRecordV2::ProposalIntent(unsigned.clone())];
+        if with_timeout {
+            records.push(WalRecordV2::TimeoutIntent(timeout.clone()));
+        }
+        let startup = write_and_reopen_authenticated_wal_startup(
+            &directory, &context, &proofs, local, [0xD6; 32], records,
+        );
+        let frontier = startup
+            .adapter
+            .leader_wire_recovery_authority()
+            .expect("actual replayed output frontier");
+        assert_eq!(
+            frontier.proves_retired_local_proposal(&signed),
+            with_timeout
+        );
+        assert!(
+            !frontier.proves_obsolete_proposal(signed.round),
+            "a local timeout intent does not install a TC or advance the view"
+        );
+        assert!(
+            !frontier.proves_superseded_body_execution(
+                context.id(),
+                reducer::EventTag::new(context.height, 0, reducer::Generation::INITIAL)
+            ),
+            "output retirement does not cancel ordinary body execution"
+        );
+        for mutation in 0..6 {
+            let mut other = signed.clone();
+            match mutation {
+                0 => other.round.view += 1,
+                1 => other.round.height += 1,
+                2 => {
+                    other.round.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
+                        Hash::new(b"foreign context"),
+                    ))
+                }
+                3 => other.subject.payload_hash = Hash::new(b"another payload"),
+                4 => other.manifest.payload_size_bytes ^= 1,
+                _ => other.proposer = (other.proposer + 1) % 4,
+            }
+            assert!(!frontier.proves_retired_local_proposal(&other));
+        }
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn same_round_timeout_cold_owner_cancels_exact_retained_proposal() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    use super::super::v2_lifecycle_coordinator::{
+        LifecycleOutputServiceDispositionV1, RecoveredLifecycleOutputSettlementV1,
+    };
+    let (context, keys, proofs) = authenticated_context();
+    let local = context.leader(0);
+    let wire::ConsensusMessageV2Payload::Proposal(mut signed) =
+        proposal(&context, local, subject(0xD7)).payload
+    else {
+        unreachable!("signed Proposal fixture")
+    };
+    signed.signature = Signature::new(
+        keys[usize::try_from(local).expect("local proposer index")].private_key(),
+        &signed.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let mut unsigned = signed.clone();
+    unsigned.signature.clear();
+    let timeout = wire::TimeoutVote {
+        round: unsigned.round,
+        highest_prepare_qc: None,
+        signer: local,
+        signature: Vec::new(),
+    };
+    // Each negative case is a real cold factory open against an exact durable
+    // Sign -> Broadcast lineage and authenticated current timeout WAL.
+    for case in 0..4 {
+        let safety = TempDir::new().expect("temporary retained Proposal WAL");
+        let storage = TempDir::new().expect("temporary retained Proposal stores");
+        let mut records = Vec::new();
+        if case != 1 {
+            let mut intent = unsigned.clone();
+            if case == 2 {
+                let wire::ConsensusMessageV2Payload::Proposal(other) =
+                    proposal(&context, local, subject(0xD8)).payload
+                else {
+                    unreachable!("other Proposal fixture")
+                };
+                intent = other;
+                intent.signature.clear();
+            }
+            records.push(WalRecordV2::ProposalIntent(intent));
+        }
+        records.push(WalRecordV2::TimeoutIntent(timeout.clone()));
+        drop(write_and_reopen_authenticated_wal_startup(
+            &safety, &context, &proofs, local, [0xD7; 32], records,
+        ));
+        let wal_path = safety.path().join("authenticated-fifo-safety.wal");
+        let wal_before = std::fs::read(&wal_path).expect("read authenticated WAL fixture");
+        let reopen = || {
+            let verified = VerifiedHeightContext::genesis(context.clone(), proofs.clone())
+                .expect("verify cold owner context");
+            let startup = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+                wal_path.clone(),
+                verified,
+                Some(local),
+                reducer::Generation::new(50),
+                [0xD7; 32],
+                fingerprints(),
+                Box::new(TestAggregator),
+                deferred_admission_ordinals(),
+            )
+            .expect("reopen exact Proposal + Timeout WAL");
+            let authenticated = startup
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|(error, _)| panic!("authenticate current timeout Sign: {error}"));
+            assert!(authenticated.has_recovered_control_sign_for_test());
+            authenticated.open_production_lifecycle_owner_v1_from_roots_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &storage.path().join("ledger"),
+                &storage.path().join("serve"),
+                &storage.path().join("body"),
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                &keys[usize::try_from(local).expect("local signer index")],
+            )
+        };
+        drop(reopen().unwrap_or_else(|error| panic!("stage current timeout owner: {error}")));
+        let mut observed_signed = signed.clone();
+        if case == 3 {
+            observed_signed.signature[0] ^= 1;
+        }
+        assert!(install_proposal_broadcast_before_current_control_for_test(
+            &storage.path().join("ledger"),
+            LifecycleContext::new(
+                LifecycleDigest::new(*context.id().0.as_ref()),
+                context.height
+            ),
+            Some((unsigned.clone(), observed_signed)),
+        ));
+        let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
+        let ledger_before = std::fs::read(&ledger_path).expect("read retained Proposal ledger");
+        let result = reopen();
+        if case != 0 {
+            let error = match result {
+                Ok(_) => panic!("unproved retained Proposal cancellation must fail"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("recovered control storage census assembly failed"));
+            assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_before);
+        } else {
+            let mut owner =
+                result.unwrap_or_else(|error| panic!("open same-round retired Proposal: {error}"));
+            assert!(owner.has_recovered_lifecycle_outputs());
+            assert_eq!(
+                std::fs::read(&ledger_path).unwrap(),
+                ledger_before,
+                "cold census does not terminalize before exact settlement"
+            );
+            assert_eq!(
+                owner
+                    .settle_next_recovered_lifecycle_output(
+                        |_| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
+                            panic!("retired local Proposal must never fan out")
+                        }
+                    )
+                    .expect("settle exact Proposal cancellation"),
+                RecoveredLifecycleOutputSettlementV1::Completed
+            );
+            assert!(!owner.has_recovered_lifecycle_outputs());
+            assert_eq!(
+                owner.recovered_control_row_summary_for_test(),
+                Some((3, 3)),
+                "the current Timeout Sign remains Ready at its exact ordinal"
+            );
+            let cancelled = std::fs::read(&ledger_path).expect("read cancelled Proposal ledger");
+            assert_ne!(cancelled, ledger_before);
+            drop(owner);
+            let mut repeated =
+                reopen().unwrap_or_else(|error| panic!("reopen cancelled Proposal: {error}"));
+            assert!(!repeated.has_recovered_lifecycle_outputs());
+            assert_eq!(
+                repeated.recovered_control_row_summary_for_test(),
+                Some((3, 3))
+            );
+            assert_eq!(
+                std::fs::read(&ledger_path).unwrap(),
+                cancelled,
+                "second cold open stutters without another publication"
+            );
+        }
+        assert_eq!(
+            std::fs::read(&wal_path).unwrap(),
+            wal_before,
+            "output cancellation neither signs nor publishes WAL authority"
+        );
+        crate::sumeragi::status::clear_v2_status();
+    }
+}
