@@ -696,6 +696,15 @@ CORE_ADMISSION_STARTUP_STAGES += (("recovered Decision Fetch and periodic runtim
     "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
     "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("cold Decision body publication and owner-open ledger recovery", (
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_commits_catalogs_and_marker_together",
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_partial_or_conflicting_catalogs",
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_overlapping_body_stage",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::cold_decision_fetch_publishes_first_network_body_through_completion_and_apply",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::owner_open_publication_chain_requires_every_exact_cas_and_is_consumed_once",
+)),)
 CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart recovery", (
     "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
     "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",

@@ -17224,8 +17224,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &mut self,
         authority: super::v2_lifecycle_coordinator::RecoveredDecisionFetchStoreAdapterAuthorityV1,
     ) -> Result<super::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'_>, AdapterError> {
+        // Queued ingress is inert, as in the ordinary Fetch-to-Store seam.
+        // Requiring it to drain first would park this completion ahead of an
+        // ordinary physical result which itself prevents a runtime step.
         if self.fail_closed
-            || self.ingress.len() != 0
             || self.pending_effect_ownership.is_some()
             || self.last_scheduler_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()

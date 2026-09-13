@@ -1086,6 +1086,10 @@ pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
     context: LifecycleContext,
     max_records: usize,
     max_frame_bytes: u64,
+    // Cloned handles share one startup publication chain. A separately opened
+    // handle cannot contribute a publication or manufacture an omitted prefix.
+    owner_open_publications:
+        std::sync::Arc<std::sync::Mutex<Option<(LifecycleDigest, LifecycleDigest)>>>,
     #[cfg(test)]
     fail_persistence_for_test: bool,
 }
@@ -1258,11 +1262,10 @@ impl LifecycleLedgerStoreV1 {
             && self.max_records == other.max_records
             && self.max_frame_bytes == other.max_frame_bytes
     }
-    /// Publish one exact timeout-supersession owner-open successor and mint its join proof.
+    /// Publish one exact timeout-supersession owner-open successor.
     ///
-    /// Keeping the staged proof, compare-and-swap, reload, and authenticated
-    /// witness mint inside one private store method prevents callers from
-    /// manufacturing the CompleteTip exception after an unrelated overwrite.
+    /// The specialized staging checks precede the shared exact publication
+    /// boundary, which retains its receipt in the owner's contiguous CAS chain.
     #[allow(clippy::too_many_arguments)]
     fn persist_recovered_timeout_supersession_successor(
         &self,
@@ -1272,7 +1275,7 @@ impl LifecycleLedgerStoreV1 {
         successor: &LifecycleLedgerV1,
         projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
         control_ordinal: u128,
-    ) -> Result<AuthenticatedRecoveredTimeoutSupersessionSuccessorV1, LifecycleLedgerError> {
+    ) -> Result<(), LifecycleLedgerError> {
         if !staged.exactly_matches_successor(
             self,
             opened,
@@ -1291,7 +1294,7 @@ impl LifecycleLedgerStoreV1 {
                 "timeout supersession successor changed after exact publication".to_owned(),
             ));
         }
-        Ok(staged.into_authenticated(self, successor))
+        Ok(())
     }
     /// Open a height-local ledger under the coordinator's sealed size bounds.
     pub(in crate::sumeragi) fn open(
@@ -1299,18 +1302,53 @@ impl LifecycleLedgerStoreV1 {
         context: LifecycleContext,
     ) -> Result<(Self, LifecycleLedgerV1), LifecycleLedgerError> {
         let directory = std::sync::Arc::new(BoundLifecycleLedgerDirectory::open_or_create(root)?);
-        let store = Self {
+        let mut store = Self {
             path: root.join(LEDGER_FILE),
             directory,
             context,
             max_records: MAX_LIFECYCLE_RECORDS_PER_HEIGHT,
             max_frame_bytes: MAX_LEDGER_FRAME_BYTES,
+            owner_open_publications: std::sync::Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             fail_persistence_for_test: false,
         };
         let ledger = store.load()?;
+        let frame = ledger.frame_identity();
+        store.owner_open_publications =
+            std::sync::Arc::new(std::sync::Mutex::new(Some((frame, frame))));
         Ok((store, ledger))
     }
+    /// Consume only the successful CAS chain made by this opened store family.
+    /// An unchanged open needs no successor proof; a broken chain can never be
+    /// repaired by a later reload or by a separately opened publication handle.
+    fn take_owner_open_successor(&self) -> Option<AuthenticatedRecoveredOwnerOpenSuccessorV1> {
+        let (predecessor_frame_identity, successor_frame_identity) =
+            self.owner_open_publications.lock().ok()?.take()?;
+        (predecessor_frame_identity != successor_frame_identity).then(|| {
+            AuthenticatedRecoveredOwnerOpenSuccessorV1 {
+                store: self.clone(),
+                context: self.context,
+                predecessor_frame_identity,
+                successor_frame_identity,
+            }
+        })
+    }
+
+    fn record_owner_open_publication(&self, current: LifecycleDigest, successor: LifecycleDigest) {
+        let Ok(mut lineage) = self.owner_open_publications.lock() else {
+            return;
+        };
+        if let Some((_, previous)) = lineage.as_mut() {
+            if *previous == current {
+                *previous = successor;
+            } else {
+                // A different handle published an omitted prefix. Normal CAS
+                // remains valid, but this handle cannot attest that history.
+                *lineage = None;
+            }
+        }
+    }
+
     pub(super) fn load(&self) -> Result<LifecycleLedgerV1, LifecycleLedgerError> {
         self.load_with_frame_presence().map(|(ledger, _)| ledger)
     }
@@ -1389,9 +1427,9 @@ impl LifecycleLedgerStoreV1 {
     /// it. When the logical empty frame has not yet been published, even an exact
     /// stutter writes it durably. Otherwise a successful return means `successor`
     /// is the exact fsynced V1 frame replacing `current`. Ordinary callers may
-    /// perform only infallible in-memory publication afterward. A specialized
-    /// fail-stop wrapper may immediately reload the exact frame to mint a sealed
-    /// receipt; any reload failure consumes startup and publishes no live owner.
+    /// perform only infallible in-memory publication afterward. During owner
+    /// open, successful publications extend the same store family's contiguous
+    /// startup chain. Owner construction consumes that chain before live use.
     pub(super) fn persist_exact_successor(
         &self,
         current: &LifecycleLedgerV1,
@@ -1407,10 +1445,19 @@ impl LifecycleLedgerStoreV1 {
                     "attached lifecycle ledger changed before successor publication".to_owned(),
                 ));
             }
-            if current == successor && frame_present {
-                return Ok(());
+            let publication = self
+                .owner_open_publications
+                .lock()
+                .ok()
+                .filter(|lineage| lineage.is_some())
+                .map(|_| (current.frame_identity(), successor.frame_identity()));
+            if current != successor || !frame_present {
+                self.persist_locked(&guard, successor)?;
             }
-            self.persist_locked(&guard, successor)
+            if let Some((current_identity, successor_identity)) = publication {
+                self.record_owner_open_publication(current_identity, successor_identity);
+            }
+            Ok(())
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {

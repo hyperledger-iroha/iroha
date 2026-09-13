@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 586
+EXPECTED_REGRESSION_COUNT = 593
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 405)
+        self.assertEqual(gate.selected_regression_count(), 412)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -74,6 +74,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "sumeragi::v2_effects::tests::recovered_decision_fetch_fences_later_ordinary_body_coordinates",
             "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
             "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
+            "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_commits_catalogs_and_marker_together",
+            "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_partial_or_conflicting_catalogs",
+            "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_overlapping_body_stage",
+            "sumeragi::v2_effects::tests::certified_body_fence_supersession::cold_decision_fetch_publishes_first_network_body_through_completion_and_apply",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness",
+            "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::owner_open_publication_chain_requires_every_exact_cas_and_is_consumed_once",
             "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers",
             "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
             "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",

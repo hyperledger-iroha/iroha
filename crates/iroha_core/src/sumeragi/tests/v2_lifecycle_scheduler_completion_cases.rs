@@ -2061,7 +2061,7 @@ impl ProductionLifecycleOwnerV1 {
                 adapter_startup: Some(
                     crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
                 ),
-                timeout_supersession_successor: None,
+                owner_open_successor: None,
             },
             broadcast_ordinal,
             paired_ordinal,
@@ -2517,7 +2517,7 @@ impl ProductionLifecycleOwnerV1 {
                 adapter_startup: Some(
                     crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
                 ),
-                timeout_supersession_successor: None,
+                owner_open_successor: None,
             },
             runtime_ordinal_authority,
         )
@@ -2800,7 +2800,7 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup: Some(
                 crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
             ),
-            timeout_supersession_successor: None,
+            owner_open_successor: None,
         }
     }
 
@@ -2923,7 +2923,7 @@ impl ProductionLifecycleOwnerV1 {
                 adapter_startup: Some(
                     crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
                 ),
-                timeout_supersession_successor: None,
+                owner_open_successor: None,
             },
             ordinal,
             source,

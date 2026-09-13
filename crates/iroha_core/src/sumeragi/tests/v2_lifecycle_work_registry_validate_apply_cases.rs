@@ -1549,7 +1549,7 @@ fn ready_validate_apply_actor_global_child_fixture(
         kura_binding: None,
         apply_service: None,
         adapter_startup: None,
-        timeout_supersession_successor: None,
+        owner_open_successor: None,
     };
     let runtime = match early_runtime.take() {
         Some(runtime) => runtime,
@@ -1758,7 +1758,9 @@ fn ready_validate_apply_actor_global_child_fixture(
         let malformed_owners = bind_adapter_effect_batch_ownership(
             &malformed_effects,
             (0..3)
-                .map(|_| RuntimeEffectOwnership::periodic_retransmit_for_test(tag, local_prediction))
+                .map(|_| {
+                    RuntimeEffectOwnership::periodic_retransmit_for_test(tag, local_prediction)
+                })
                 .collect(),
         )
         .expect("bind a real but unsupported three-Broadcast periodic batch");
@@ -1802,10 +1804,18 @@ fn ready_validate_apply_actor_global_child_fixture(
             );
             assert!(executor.install_pending_lifecycle_output_for_test(pending));
         }
-        let pending = executor.pending_lifecycle_output_admission_census().next()
+        let pending = executor
+            .pending_lifecycle_output_admission_census()
+            .next()
             .expect("one exact periodic output is pending");
-        assert_eq!(pending.binds_periodic_retransmit_apply_prefix(), retain_periodic_apply_suffix);
-        assert_eq!(pending.binds_single_periodic_retransmit_broadcast(), !retain_periodic_apply_suffix);
+        assert_eq!(
+            pending.binds_periodic_retransmit_apply_prefix(),
+            retain_periodic_apply_suffix
+        );
+        assert_eq!(
+            pending.binds_single_periodic_retransmit_broadcast(),
+            !retain_periodic_apply_suffix
+        );
         assert_eq!(
             owner.classify_completion_ready_work(fence),
             super::super::ProductionCompletionReadyWorkV1::CompletionIo
@@ -1969,7 +1979,10 @@ fn ready_validate_apply_actor_global_child_fixture(
             )
             .expect("attest the complete queued delayed-output census")
             .expect("the queued case retains one exact delayed successor");
-        assert_eq!(attestation.mode().retains_apply_suffix(), retain_periodic_apply_suffix);
+        assert_eq!(
+            attestation.mode().retains_apply_suffix(),
+            retain_periodic_apply_suffix
+        );
         let outer_ingress = &queued_ingress;
         let captured_at = std::time::Instant::now();
         let before = executor.runtime_queue_snapshot_for_test(captured_at);
@@ -2597,7 +2610,9 @@ fn recovered_decision_apply_validate_retry_retirement_fixture() {
     );
     assert!(executor.durable_finality().is_some());
     assert!(
-        executor.recovered_durable_validate_retry_keys_for_test().is_empty(),
+        executor
+            .recovered_durable_validate_retry_keys_for_test()
+            .is_empty(),
         "the published Apply successor consumes its recovered Validate retry owner"
     );
     assert_eq!(

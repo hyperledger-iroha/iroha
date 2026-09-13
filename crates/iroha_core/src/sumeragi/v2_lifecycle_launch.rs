@@ -688,8 +688,8 @@ impl LaunchedProductionLifecycleV1 {
         let Some(body) = completion.completion().project_store_body_authority() else {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Body);
         };
-        let retry_marker =
-            match executor.prepare_published_lifecycle_store_retry_marker(body.durable()) {
+        let body_publication =
+            match executor.prepare_recovered_decision_fetch_store_publication(&body) {
                 Ok(marker) => marker,
                 Err(_) => {
                     retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Executor)
@@ -772,7 +772,7 @@ impl LaunchedProductionLifecycleV1 {
                 retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Registry)
             }
         };
-        let retry_marker = match retry_marker
+        let body_publication = match body_publication
             .bind_store_successor(successor.store_effect(), successor.pending_effect_binding())
         {
             Ok(marker) => marker,
@@ -831,7 +831,7 @@ impl LaunchedProductionLifecycleV1 {
             return ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired;
         }
         transition.commit_after_publication();
-        executor.commit_published_lifecycle_store_retry_marker(retry_marker);
+        executor.commit_recovered_decision_fetch_store_publication(body_publication);
         request_output_retirement.commit_after_publication(operation.permit());
         executor.commit_recovered_decision_fetch_owner_retirement(retirement);
         locked_dequeue.commit();
@@ -2635,7 +2635,7 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             kura_binding,
             apply_service,
             adapter_startup,
-            timeout_supersession_successor: _,
+            owner_open_successor: _,
         } = owner;
         debug_assert!(
             recovered_lifecycle_outputs

@@ -2616,7 +2616,7 @@ mod tests {
                 kura_binding: None,
                 apply_service: None,
                 adapter_startup: None,
-                timeout_supersession_successor: None,
+                owner_open_successor: None,
             }
         }
         fn admit(

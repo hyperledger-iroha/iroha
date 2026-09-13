@@ -881,7 +881,7 @@ fn obsolete_proposal_reopen_owner(
         adapter_startup: Some(
             crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
         ),
-        timeout_supersession_successor: None,
+        owner_open_successor: None,
     }
 }
 

@@ -288,7 +288,12 @@ fn active_prepare_body_survives_decision_crash_fixture(
     // executable owner; cold startup authenticates both durable stores itself.
     drop(pending_decision);
     if timeout_before_commit {
-        recover_stale_prepare_decision_crash_fixture(fixture, snapshot, ordinal, expected_decision);
+        recover_stale_prepare_decision_crash_fixture(
+            fixture,
+            Some((snapshot, ordinal)),
+            expected_decision,
+            false,
+        );
         return;
     }
     let (mut fixture, _gate) =
@@ -447,18 +452,140 @@ fn finish_current_decision_validate_and_reopen(
     assert_active_prepare_linked_apply_cold_reopens(fixture, child_ordinal);
 }
 
+#[test]
+fn cold_decision_fetch_publishes_first_network_body_through_completion_and_apply() {
+    let result = crate::sumeragi::sumeragi_thread_builder("cold-decision-first-body")
+        .spawn(|| {
+            for fail_publication in [false, true] {
+                let mut transport =
+                    ProductionTransportFixture::new_with_local_role_and_queue_config(
+                        Some(crate::sumeragi::v2_core::CommitteeRole::Leader),
+                        RuntimeQueueConfig::default(),
+                    );
+                let local = transport
+                    .executor
+                    .local_validator
+                    .expect("the current leader");
+                let verified = VerifiedHeightContext::genesis(
+                    transport.context.clone(),
+                    transport
+                        .validator_keys
+                        .iter()
+                        .map(|key| {
+                            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                .expect("validator PoP")
+                        })
+                        .collect(),
+                )
+                .expect("verify all four validators");
+                let directory = TempDir::new().expect("body-free Decision lifecycle owner");
+                let mut owner = ProductionLifecycleOwnerV1::empty_owner_for_ingress_test(
+                    verified,
+                    &transport.validator_keys[usize::try_from(local).expect("local index")],
+                    directory.path(),
+                );
+                let ordinals = RuntimeLifecycleOrdinalSource::from_authority(
+                    owner.bind_empty_ingress_ordinal_authority_for_test(),
+                );
+                let adapter = transport.executor.runtime.into_driver();
+                let (runtime, startup) = SerializedV2Runtime::new_with_lifecycle_ordinals(
+                    adapter,
+                    Vec::new(),
+                    Instant::now(),
+                    Duration::from_secs(10),
+                    RuntimeQueueConfig::default(),
+                    ordinals.clone(),
+                )
+                .expect("pair the empty owner and real WAL adapter");
+                assert!(startup.is_empty());
+                transport.executor = V2EffectExecutor::with_runtime(
+                    runtime,
+                    BTreeMap::new(),
+                    transport.context.clone(),
+                    PeerId::new(transport.requester_key.public_key().clone()),
+                    Some(local),
+                    EffectQueueConfig::default(),
+                )
+                .expect("start with no recovered, durable or validated body catalog");
+                transport._lifecycle_ordinals = ordinals;
+                assert!(transport.executor.recovered_bodies.is_empty());
+                assert!(transport.executor.durable_bodies.is_empty());
+                let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+                let planner_io = owner.bind_body_store_to_planner_io_for_test(
+                    &mut services,
+                    local,
+                    Arc::clone(&transport.executor.output_guard),
+                    1,
+                );
+                let certificate = transport
+                    .quorum_certificate(wire::GlobalPhase::Prepare, transport.canonical_commitment);
+                let commit = transport
+                    .quorum_certificate(wire::GlobalPhase::Commit, transport.canonical_commitment);
+                let decision = Some((
+                    commit.round,
+                    commit.proposal_round,
+                    commit.subject,
+                    commit.execution_commitment,
+                ));
+                let driver = transport.executor.runtime.driver_mut_for_test();
+                let authenticated = driver
+                    .authenticate(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::QuorumCertificate(commit),
+                    ))
+                    .expect("authenticate the body-free Commit quorum");
+                let pending = driver
+                    .receive_authenticated(authenticated)
+                    .expect("fsync Commit before any body acquisition or ledger dispatch");
+                assert!(matches!(
+                    pending.effects(),
+                    [AdapterEffect::FetchBody { .. }]
+                ));
+                assert_eq!(transport.executor.runtime.decided_body().unwrap(), decision);
+                assert!(transport.executor.recovered_bodies.is_empty());
+                assert!(transport.executor.durable_bodies.is_empty());
+                drop(pending);
+                // No response was enqueued or persisted before this genuine crash.
+                // The common tail proves empty catalogs after both cold opens and
+                // after physical persistence, then drives outer Completion, Store,
+                // physical Validate, Apply publication and another cold reopen.
+                recover_stale_prepare_decision_crash_fixture(
+                    ReadyBodyFixture {
+                        transport,
+                        owner,
+                        planner_io,
+                        services,
+                        _owner_directory: directory,
+                        certificate,
+                        ordinal: 0,
+                    },
+                    None,
+                    decision,
+                    fail_publication,
+                );
+            }
+        })
+        .expect("production consensus stack")
+        .join();
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 // Reopen at two real crash boundaries before executing the fresh Decision's
 // signed-response persistence, then use the ordinary physical Validate tail.
 fn recover_stale_prepare_decision_crash_fixture(
     fixture: ReadyBodyFixture,
-    previous: crate::sumeragi::v2_lifecycle_coordinator::BodyOwnerSnapshotForTest,
-    previous_ordinal: u128,
+    previous: Option<(
+        crate::sumeragi::v2_lifecycle_coordinator::BodyOwnerSnapshotForTest,
+        u128,
+    )>,
     expected_decision: Option<(
         wire::ConsensusRound,
         wire::ConsensusRound,
         wire::BlockSubject,
         wire::ExecutionCommitment,
     )>,
+    fail_publication: bool,
 ) {
     use crate::sumeragi::v2_lifecycle_coordinator::{
         LaunchedProductionLifecycleV1, ProductionLifecycleIngressSelectionV1,
@@ -517,7 +644,17 @@ fn recover_stale_prepare_decision_crash_fixture(
         )
     };
     let mut first = reopen();
-    let fetch = first.assert_stale_body_owner_retired_for_test(&previous, directory.path());
+    let fetch = match &previous {
+        Some((previous, _)) => {
+            first.assert_stale_body_owner_retired_for_test(previous, directory.path())
+        }
+        None => {
+            first
+                .recovered_decision_fetch_row_summary_for_test()
+                .expect("the body-free Commit WAL must recover one Fetch")
+                .0
+        }
+    };
     assert_eq!(
         first.recovered_decision_fetch_row_summary_for_test(),
         Some((fetch, fetch))
@@ -530,10 +667,12 @@ fn recover_stale_prepare_decision_crash_fixture(
     let owner = reopen();
     owner
         .assert_active_body_owner_after_decision_cold_for_test(&current, LifecycleWorkClass::Fetch);
-    assert_eq!(
-        owner.assert_stale_body_owner_retired_for_test(&previous, directory.path()),
-        fetch
-    );
+    if let Some((previous, _)) = &previous {
+        assert_eq!(
+            owner.assert_stale_body_owner_retired_for_test(previous, directory.path()),
+            fetch
+        );
+    }
     assert_eq!(
         std::fs::read(&ledger_path).expect("second cold Fetch ledger"),
         after_retirement,
@@ -600,6 +739,11 @@ fn recover_stale_prepare_decision_crash_fixture(
     let mut next_timer = now;
     let request_hash =
         launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+            if previous.is_none() {
+                assert!(executor.recovered_bodies.is_empty());
+                assert!(executor.durable_bodies.is_empty());
+                assert!(executor.validated_bodies.is_empty());
+            }
             assert_eq!(
                 executor
                     .runtime
@@ -762,8 +906,117 @@ fn recover_stale_prepare_decision_crash_fixture(
     assert_eq!(after_claimed_timer.physical_admissions(), 1);
     assert_eq!(after_claimed_timer.command_depth(), 1);
     planner_io.execute_one_recovered_decision_fetch_for_test(Arc::clone(&output_guard));
+    launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+        if previous.is_none() {
+            assert!(executor.recovered_bodies.is_empty());
+            assert!(executor.durable_bodies.is_empty());
+            assert!(executor.published_lifecycle_store_retry_markers.is_empty());
+        }
+    });
+    if fail_publication {
+        assert!(previous.is_none());
+        let ledger_before = std::fs::read(&ledger_path).expect("pre-publication claimed Fetch");
+        let request_before = launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+            executor.recovered_decision_fetch_owner_for_test()
+        });
+        launched.fail_decision_fetch_store_publication_for_test(directory.path());
+        launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+            assert!(executor.recovered_bodies.is_empty());
+            assert!(executor.durable_bodies.is_empty());
+            assert!(executor.published_lifecycle_store_retry_markers.is_empty());
+            assert_eq!(
+                executor.recovered_decision_fetch_owner_for_test(),
+                request_before
+            );
+        });
+        assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_before);
+        let failed = planner_io.lifecycle_validate_io_snapshot();
+        assert_eq!(failed.physical_admissions(), 1);
+        assert_eq!(failed.command_depth(), 0);
+        assert_eq!(failed.completion_pending(), 0, "Validate has not begun");
+        assert_eq!(
+            failed.completion_owners(),
+            0,
+            "the parked Fetch owns the completion"
+        );
+        return;
+    }
+    let queued_completion_cycle = previous.is_none();
+    if queued_completion_cycle {
+        let duplicate_commit =
+            transport.quorum_certificate(wire::GlobalPhase::Commit, transport.canonical_commitment);
+        launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
+            assert_eq!(executor.runtime.queued_commands(), 0);
+            executor
+                .runtime
+                .enqueue_network(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(duplicate_commit),
+                ))
+                .expect("queue an authenticated duplicate Commit behind the physical Fetch");
+            assert_eq!(executor.runtime.queued_commands(), 1);
+        });
+        planner_io.publish_auxiliary_completion_fixture();
+        assert_eq!(
+            planner_io
+                .lifecycle_validate_io_snapshot()
+                .completion_owners(),
+            2
+        );
+    }
     launched.settle_decision_fetch_worker_for_test();
+    if queued_completion_cycle {
+        assert_eq!(
+            planner_io
+                .lifecycle_validate_io_snapshot()
+                .completion_owners(),
+            1
+        );
+    }
     launched.with_proposal_restart_fixture_for_test(|owner, executor, services| {
+        let key = (transport.round, transport.subject);
+        let (manifest, durable) = executor
+            .recovered_bodies
+            .get(&key)
+            .expect("the physical response publishes its recovered body catalog");
+        assert_eq!(manifest, &transport.manifest);
+        assert_eq!(executor.durable_bodies.get(&key), Some(durable));
+        assert!(
+            executor
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+        );
+        if queued_completion_cycle {
+            assert_eq!(
+                executor.runtime.queued_commands(),
+                1,
+                "Store publication must preserve the inert queued Commit"
+            );
+            assert!(matches!(
+                services.take_next_lifecycle_completion().unwrap(),
+                LifecycleCompletionTakeV1::PassThrough
+            ));
+            assert_eq!(
+                services
+                    .drain_one_ordinary_completion_after_lifecycle_pass_through(executor)
+                    .expect("drain the independently owned ordinary physical head"),
+                1
+            );
+            assert!(matches!(
+                executor
+                    .step(next_timer, services)
+                    .expect("drain the preserved duplicate Commit before advancing the body"),
+                EffectExecutorStep::Advanced { .. }
+            ));
+            assert_eq!(executor.runtime.queued_commands(), 0);
+            crate::sumeragi::v2_runner::reconcile_executor_locked_body_for_pending_kura_test(
+                executor, services,
+            )
+            .expect("reconcile the real queued Commit turn");
+            let directive = executor.local_proposal_directive().unwrap();
+            executor
+                .acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject())
+                .expect("acknowledge the unchanged Decision after queued ingress drains");
+        }
         assert_recovered_body_publication_timer(
             owner,
             executor,
@@ -813,9 +1066,11 @@ fn recover_stale_prepare_decision_crash_fixture(
         certificate,
         ordinal: fetch,
     };
-    fixture
-        .owner
-        .body_recovery_snapshot_for_test(previous_ordinal, validate);
+    if let Some((_, previous_ordinal)) = previous {
+        fixture
+            .owner
+            .body_recovery_snapshot_for_test(previous_ordinal, validate);
+    }
     fixture.planner_io.assert_owned_durable_body_for_test(
         &fixture.transport.executor.durable_bodies
             [&(fixture.transport.round, fixture.transport.subject)],

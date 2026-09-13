@@ -1281,8 +1281,8 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
     crate::sumeragi::status::clear_v2_status();
     let first_owner = open_control_owner_for_test(&safety, &storage, false);
     assert!(
-        !first_owner.has_timeout_supersession_successor_for_test(),
-        "ordinary pre-incident owner-open cannot mint a timeout-supersession witness"
+        first_owner.has_owner_open_successor_for_test(),
+        "the initial authenticated Sign repair retains its exact owner-open publication"
     );
     drop(first_owner);
     crate::sumeragi::status::clear_v2_status();
@@ -1336,7 +1336,7 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
 
     let repeated_owner = open_control_owner_for_test(&safety, &storage, false);
     assert!(
-        repeated_owner.has_timeout_supersession_successor_for_test(),
+        repeated_owner.has_owner_open_successor_for_test(),
         "the exact first cancellation CAS retains one move-only CompleteTip join witness"
     );
     drop(repeated_owner);
@@ -1357,7 +1357,7 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
     };
     let owner = open_control_owner_for_test(&safety, &storage, false);
     assert!(
-        !owner.has_timeout_supersession_successor_for_test(),
+        !owner.has_owner_open_successor_for_test(),
         "the byte-identical cold stutter cannot mint another successor witness"
     );
     drop(owner);
@@ -1390,8 +1390,8 @@ fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
     crate::sumeragi::status::clear_v2_status();
     let initial_owner = open_control_owner_for_test(&safety, &storage, false);
     assert!(
-        !initial_owner.has_timeout_supersession_successor_for_test(),
-        "ordinary pre-incident owner-open cannot mint a timeout-supersession witness"
+        initial_owner.has_owner_open_successor_for_test(),
+        "the initial authenticated Sign repair retains its exact owner-open publication"
     );
     drop(initial_owner);
     crate::sumeragi::status::clear_v2_status();
@@ -1407,7 +1407,7 @@ fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
     let incident = std::fs::read(&ledger_path).expect("read timeout-only incident frame");
     let owner = open_control_owner_for_test(&safety, &storage, false);
     assert!(
-        owner.has_timeout_supersession_successor_for_test(),
+        owner.has_owner_open_successor_for_test(),
         "the atomic cancellation-plus-missing-Sign successor retains one exact join witness"
     );
     drop(owner);
@@ -2934,5 +2934,150 @@ impl SumeragiV2Adapter {
             .unwrap_or_else(|error| {
                 panic!("recover exact cancelled and current body rows: {error}")
             })
+    }
+}
+
+impl SumeragiV2Adapter {
+    /// Open the real authenticated Decision factory under an exact CompleteTip
+    /// successor. Both the missing-body and semantically replayed Apply routes
+    /// share the production storage constructor and real signed safety WAL.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn open_complete_tip_decision_owner_for_test(
+        wal_path: &std::path::Path,
+        ledger_root: &std::path::Path,
+        body_root: &std::path::Path,
+        verified: VerifiedHeightContext,
+        keys: &[KeyPair],
+        validated_body: bool,
+    ) -> ProductionLifecycleOwnerV1 {
+        let context = verified.context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let leader = context.leader(0);
+        let header = BlockHeader::new(
+            NonZeroU64::new(context.height).expect("nonzero CompleteTip successor"),
+            context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            None,
+            None,
+            9_731,
+            0,
+        );
+        let signature =
+            SignatureOf::try_from_hash(keys[leader as usize].private_key(), header.hash())
+                .expect("sign CompleteTip successor body");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(leader), signature),
+            header,
+            Vec::new(),
+        );
+        let body = block
+            .encode_wire()
+            .expect("encode CompleteTip successor body");
+        let subject = wire::BlockSubject {
+            parent_block_hash: context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&body),
+        };
+        let commitment = execution_commitment(0xA9);
+        let mut decision = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut decision, keys);
+        let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            body_root,
+            context.clone(),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        )
+        .expect("open canonical CompleteTip successor body store");
+        if !wal_path.exists() {
+            if validated_body {
+                let chunks = wire::encode_payload_chunks(context.da_layout, &body)
+                    .expect("encode CompleteTip successor chunks");
+                let manifest = wire::PayloadManifest::derive(
+                    context,
+                    round,
+                    subject,
+                    body.len() as u64,
+                    &chunks,
+                )
+                .expect("derive CompleteTip successor manifest");
+                let durable = body_store
+                    .store(manifest, body)
+                    .expect("persist CompleteTip successor body");
+                body_store
+                    .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                        Ok::<_, String>(commitment)
+                    })
+                    .expect("persist CompleteTip successor validation outcome");
+            }
+            let (mut writer, effects) = Self::open_with_aggregator_and_publication(
+                wal_path,
+                verified.clone(),
+                Some(0),
+                reducer::Generation::INITIAL,
+                [0xA9; 32],
+                fingerprints(),
+                Box::<BlsNormalSignatureAggregator>::default(),
+                false,
+                DeferredAdmissionOrdinalSource::new(0),
+            )
+            .expect("open CompleteTip successor WAL writer");
+            assert!(effects.is_empty());
+            writer
+                .wal
+                .append(
+                    &WalEnvelopeV2 {
+                        protocol_version: wire::PROTOCOL_VERSION,
+                        persistence_id: 1,
+                        record: WalRecordV2::Decision(decision),
+                    }
+                    .encode(),
+                )
+                .expect("fsync actual CompleteTip successor Decision");
+            drop(writer);
+        }
+        body_store
+            .revalidate_recovered_markers(|_| Ok::<_, String>(commitment))
+            .expect("semantically replay CompleteTip successor markers");
+        let body_store = body_store
+            .into_revalidated_startup()
+            .expect("retain replayed CompleteTip successor body authority");
+        Self::open_recovered_startup_with_aggregator(
+            wal_path,
+            verified,
+            Some(0),
+            reducer::Generation::INITIAL,
+            [0xA9; 32],
+            fingerprints(),
+            Box::<BlsNormalSignatureAggregator>::default(),
+            DeferredAdmissionOrdinalSource::new(0),
+        )
+        .expect("reopen actual CompleteTip successor WAL")
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _)| panic!("authenticate CompleteTip successor Decision: {error}"))
+        .open_production_lifecycle_owner_v1_with_store_for_test(
+            &lifecycle_owner_config(),
+            4,
+            ledger_root,
+            ledger_root,
+            body_store,
+            &keys[0],
+        )
+        .unwrap_or_else(|error| panic!("open exact CompleteTip successor factory: {error}"))
     }
 }
