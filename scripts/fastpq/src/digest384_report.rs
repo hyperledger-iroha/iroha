@@ -396,7 +396,7 @@ fn validate_common_operation(entry: &Value, report: &Value, flattened: bool) -> 
     if flattened {
         if ["cpu", "gpu", "speedup", "gpu_recorded"]
             .iter()
-            .any(|key| entry.get(key).is_some())
+            .any(|key| entry.get(*key).is_some())
         {
             return Err("flat timing must not contain raw timing objects".into());
         }
@@ -423,7 +423,7 @@ fn validate_common_operation(entry: &Value, report: &Value, flattened: bool) -> 
             "speedup_delta_ms",
         ]
         .iter()
-        .any(|key| entry.get(key).is_some())
+        .any(|key| entry.get(*key).is_some())
         {
             return Err("raw timing must not contain flat timing fields".into());
         }

@@ -59,8 +59,8 @@ def _flattened_operation(entry: dict[str, Any], report: dict[str, Any], schema: 
             raise ValueError("flattened benchmark without GPU timing cannot contain speedup")
     elif not report["gpu_available"] or entry["speedup_ratio"] is None:
         raise ValueError("flattened benchmark GPU timing disagrees with availability or speedup")
-    elif schema == wrap_benchmark.METAL_FLAT_SCHEMA and entry["speedup_delta_ms"] is None:
-        raise ValueError("flattened Metal benchmark requires speedup_delta_ms")
+    elif entry["speedup_delta_ms"] is None:
+        raise ValueError("flattened GPU benchmark requires numeric speedup_delta_ms")
 
 
 def project_report(report: dict[str, Any], *, flattened: bool, producer_schema: str) -> dict[str, Any]:

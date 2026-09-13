@@ -28,7 +28,8 @@ fn main() {
 }
 #[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
 fn main() {
-    eprintln!("fastpq_metal_bench targets macOS with `fastpq-gpu`; skipping build.");
+    eprintln!("fastpq_metal_bench requires macOS with the `fastpq-gpu` feature enabled.");
+    std::process::exit(1);
 }
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {

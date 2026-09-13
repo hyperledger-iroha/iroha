@@ -756,6 +756,14 @@ pub mod executor {
 pub mod smart_contract {
     use super::*;
     permission! {
+        /// Genesis-rooted authority to grant and revoke contract code registration permission.
+        ///
+        /// This capability does not itself authorize deployment or alias management. An approved
+        /// registrar manager may sponsor builders without allowing registrars to delegate onward.
+        #[derive(Copy)]
+        pub struct CanManageSmartContractCodeRegistrars;
+    }
+    permission! {
         /// Permission to register smart contract code artifacts.
         #[derive(Copy)]
         pub struct CanRegisterSmartContractCode;

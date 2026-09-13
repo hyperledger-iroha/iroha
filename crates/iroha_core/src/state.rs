@@ -57457,12 +57457,6 @@ impl<'state> StateBlock<'state> {
                     &entrypoint,
                     entrypoint_index,
                 );
-                let contract_deployment_bootstrap =
-                    crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
-                        &transaction.world,
-                        tx.authority(),
-                        &tx,
-                    );
                 match tx.instructions() {
                     Executable::ContractCall(_)
                     | Executable::Batch(_)
@@ -57481,11 +57475,7 @@ impl<'state> StateBlock<'state> {
                             .expect("committed IVM transaction should replay without errors");
                     }
                     Executable::Instructions(_) => {
-                        transaction.apply_executable_with_contract_deployment_bootstrap(
-                            tx.instructions(),
-                            tx.authority(),
-                            contract_deployment_bootstrap.as_ref(),
-                        );
+                        transaction.apply_executable(tx.instructions(), tx.authority());
                     }
                 }
                 transaction
@@ -65758,17 +65748,15 @@ impl StateTransaction<'_, '_> {
                             .expect("block creation timestamp must fit into u64");
                     let default_nft_seq_base = self._curr_block.height().get().saturating_mul(256);
                     let mut nft_seq_base = nft_seq_base_override.unwrap_or(default_nft_seq_base);
-                    for (item_index, item) in items.iter().enumerate() {
+                    for item in items.iter() {
                         match item {
                             iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                                 instruction,
                             ) => {
-                                executor.execute_transaction_instruction(
+                                executor.execute_instruction(
                                     self,
                                     authority,
                                     instruction.clone(),
-                                    item_index,
-                                    None,
                                 )?;
                                 executed_instructions.push(instruction.clone());
                             }
@@ -66380,51 +66368,18 @@ impl StateTransaction<'_, '_> {
         instructions: ConstVec<InstructionBox>,
         authority: &AccountId,
     ) -> Result<ExecutionStep, ValidationFail> {
-        self.execute_instructions_with_contract_deployment_bootstrap(instructions, authority, None)
-    }
-    fn execute_instructions_with_contract_deployment_bootstrap(
-        &mut self,
-        instructions: ConstVec<InstructionBox>,
-        authority: &AccountId,
-        bootstrap_authorization: Option<
-            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
-        >,
-    ) -> Result<ExecutionStep, ValidationFail> {
-        if let Some(authorization) = bootstrap_authorization {
-            authorization.validate_instruction_sequence(authority, instructions.as_ref())?;
-        }
         let executor = self.world.executor.clone();
-        instructions.clone().into_iter().enumerate().try_for_each(
-            |(instruction_index, instruction)| {
-                executor.execute_transaction_instruction(
-                    self,
-                    authority,
-                    instruction,
-                    instruction_index,
-                    bootstrap_authorization,
-                )?;
-                Ok::<_, ValidationFail>(())
-            },
-        )?;
+        for instruction in instructions.iter() {
+            executor.execute_instruction(self, authority, instruction.clone())?;
+        }
         Ok(instructions.into())
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
-    fn apply_executable_with_contract_deployment_bootstrap(
-        &mut self,
-        executable: &Executable,
-        authority: &AccountId,
-        bootstrap_authorization: Option<
-            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
-        >,
-    ) {
+    fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
         match executable {
             Executable::Instructions(instructions) => {
-                self.execute_instructions_with_contract_deployment_bootstrap(
-                    instructions.clone(),
-                    authority,
-                    bootstrap_authorization,
-                )
-                .expect("should be no errors");
+                self.execute_instructions(instructions.clone(), authority)
+                    .expect("should be no errors");
             }
             Executable::ContractCall(_)
             | Executable::Batch(_)

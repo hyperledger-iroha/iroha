@@ -180,6 +180,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::governance::{CanManageConsensusKeys},
     iroha_executor_data_model::permission::governance::{CanManageConfidentialParams},
     iroha_executor_data_model::permission::smart_contract::{CanRegisterSmartContractCode},
+    iroha_executor_data_model::permission::smart_contract::{CanManageSmartContractCodeRegistrars},
     iroha_executor_data_model::permission::smart_contract::{CanInvokeContractEntrypoint},
     iroha_executor_data_model::permission::settlement::{CanExecuteSettlement},
     iroha_executor_data_model::permission::settlement::{CanManageFxCorridors},
@@ -246,7 +247,7 @@ impl AnyPermission {
                 | Self::CanManageKagemushaReserve(_)
                 | Self::CanManageRoles(_)
                 | Self::CanUpgradeExecutor(_)
-                | Self::CanRegisterSmartContractCode(_)
+                | Self::CanManageSmartContractCodeRegistrars(_)
                 | Self::CanManageFxCorridors(_)
         )
     }
@@ -259,6 +260,7 @@ impl AnyPermission {
             && !matches!(
                 self,
                 Self::CanReadAccountData(_)
+                    | Self::CanRegisterSmartContractCode(_)
                     | Self::CanResolveAccountAlias(_)
                     | Self::CanIssueSoranetVpnQuote(_)
                     | Self::CanExecuteSettlement(_)
@@ -432,9 +434,37 @@ mod governance {
 mod smart_contract {
     use super::*;
     use iroha_executor_data_model::permission::smart_contract::{
-        CanInvokeContractEntrypoint, CanRegisterSmartContractCode,
+        CanInvokeContractEntrypoint, CanManageSmartContractCodeRegistrars,
+        CanRegisterSmartContractCode,
     };
-    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanRegisterSmartContractCode);
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageSmartContractCodeRegistrars);
+    fn validate_registrar_management(
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        if context.curr_block.is_genesis()
+            || CanManageSmartContractCodeRegistrars.is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+        Err(ValidationFail::NotPermitted(
+            "granting or revoking CanRegisterSmartContractCode requires CanManageSmartContractCodeRegistrars".to_owned(),
+        ))
+    }
+    impl ValidateGrantRevoke for CanRegisterSmartContractCode {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            validate_registrar_management(authority, context, host)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            validate_registrar_management(authority, context, host)
+        }
+    }
     pub(super) fn validate_contract_entrypoint_payload(
         permission: &CanInvokeContractEntrypoint,
     ) -> Result {
@@ -2024,6 +2054,71 @@ mod tests {
                 .parse()
                 .unwrap();
         AccountId::new(public_key)
+    }
+    #[test]
+    fn registrar_management_is_separate_from_registration_and_genesis_rooted() {
+        use iroha_executor_data_model::permission::smart_contract::{
+            CanManageSmartContractCodeRegistrars, CanRegisterSmartContractCode,
+        };
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let registrar = PermissionObject::from(CanRegisterSmartContractCode);
+        let manager = PermissionObject::from(CanManageSmartContractCodeRegistrars);
+        let registrar_dispatch = AnyPermission::try_from(&registrar).expect("registrar type");
+        let manager_dispatch = AnyPermission::try_from(&manager).expect("manager type");
+        for (held, expected) in [(registrar.clone(), false), (manager.clone(), true)] {
+            let old = test_override::replace_permissions(vec![held]);
+            let grant = registrar_dispatch.validate_grant(&authority, &context, &Iroha);
+            let revoke = registrar_dispatch.validate_revoke(&authority, &context, &Iroha);
+            let grant_manager = manager_dispatch.validate_grant(&authority, &context, &Iroha);
+            let revoke_manager = manager_dispatch.validate_revoke(&authority, &context, &Iroha);
+            test_override::replace_permissions(old);
+            assert_eq!(grant.is_ok(), expected);
+            assert_eq!(revoke.is_ok(), expected);
+            assert!(grant_manager.is_err());
+            assert!(revoke_manager.is_err());
+        }
+        let genesis = make_context(&authority, 1);
+        assert!(
+            CanManageSmartContractCodeRegistrars
+                .validate_grant(&authority, &genesis, &Iroha)
+                .is_ok()
+        );
+        assert!(
+            CanRegisterSmartContractCode
+                .validate_grant(&authority, &genesis, &Iroha)
+                .is_ok()
+        );
+        for raw in [registrar, manager] {
+            let encoded = norito::json::to_json(&raw).expect("permission JSON");
+            let decoded: PermissionObject =
+                norito::json::from_str(&encoded).expect("permission roundtrip");
+            assert_eq!(decoded, raw);
+            let malformed = PermissionObject::new(raw.name().to_owned(), Json::new(true));
+            assert!(AnyPermission::try_from(&malformed).is_err());
+        }
+    }
+    #[test]
+    fn registrar_manager_role_requires_exact_assigned_membership() {
+        use iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCodeRegistrars;
+        let manager_role: RoleId = "contract_registrar_managers".parse().expect("role");
+        let other_role: RoleId = "builders".parse().expect("role");
+        let roles = vec![(
+            manager_role.clone(),
+            PermissionObject::from(CanManageSmartContractCodeRegistrars),
+        )];
+        assert!(permission_owned_in_sources(
+            &[],
+            &roles,
+            &[manager_role],
+            &CanManageSmartContractCodeRegistrars
+        ));
+        assert!(!permission_owned_in_sources(
+            &[],
+            &roles,
+            &[other_role],
+            &CanManageSmartContractCodeRegistrars
+        ));
     }
     #[test]
     fn operational_governance_permissions_require_canonical_unit_payloads() {

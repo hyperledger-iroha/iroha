@@ -284,12 +284,44 @@ impl RegistryPublicConfigImageV1 {
         let table = source
             .parse::<toml::Table>()
             .map_err(|_| invalid_public_config())?;
-        let network_id = table
-            .get("network_id")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(invalid_public_config)?
-            .parse::<NetworkId>()
-            .map_err(|_| invalid_public_config())?;
+        let network_id = match (table.get("network_id"), table.get("network_id_file")) {
+            (Some(value), None) => value
+                .as_str()
+                .ok_or_else(invalid_public_config)?
+                .parse::<NetworkId>()
+                .map_err(|_| invalid_public_config())?,
+            (None, Some(value)) => {
+                let selected = value
+                    .as_str()
+                    .filter(|path| !path.is_empty())
+                    .ok_or_else(invalid_public_config)?;
+                let selected = Path::new(selected);
+                let path = if selected.is_absolute() {
+                    selected.to_path_buf()
+                } else {
+                    self.path
+                        .parent()
+                        .ok_or_else(invalid_public_config)?
+                        .join(selected)
+                };
+                // Match the platform's canonical public identity record: exactly one checked
+                // identity followed by LF, with a 512-byte ceiling and no credential parsing.
+                let bytes = crate::local_file::read_bounded_single_link_regular_file_v1(&path, 512)
+                    .map_err(|_| invalid_public_config())?;
+                let record = std::str::from_utf8(&bytes).map_err(|_| invalid_public_config())?;
+                let text = record
+                    .strip_suffix('\n')
+                    .ok_or_else(invalid_public_config)?;
+                let network = text
+                    .parse::<NetworkId>()
+                    .map_err(|_| invalid_public_config())?;
+                if record != format!("{network}\n") {
+                    return Err(invalid_public_config());
+                }
+                network
+            }
+            _ => return Err(invalid_public_config()),
+        };
         Ok((network_id, self.account_chain_discriminant()?))
     }
     /// Return the original path used to resolve relative platform-owned files.
@@ -465,6 +497,10 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     #[must_use]
     pub const fn account_chain_discriminant(&self) -> u16 {
         self.account_chain_discriminant
+    }
+    /// Return the exact genesis identity used by authenticated registry reads.
+    pub(crate) fn network_id(&self) -> NetworkId {
+        *self.client.network_id()
     }
     /// Resolve canonical `namespace/package` text to its structural package identity.
     ///
@@ -2673,6 +2709,61 @@ private_key = "{}"
             assert_eq!(binding.0.to_string(), network_id.to_string());
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn public_registry_binding_supports_bounded_canonical_relative_identity_files() {
+        let temporary = tempdir().expect("public binding directory");
+        let path = temporary.path().join("client.toml");
+        let identity_path = temporary.path().join("network.id");
+        let network = test_network_id(0x28);
+        fs::write(
+            &path,
+            "network_id_file = 'network.id'\n[account]\nprofile = 'taira'\n",
+        )
+        .expect("public configuration");
+        let image = RegistryPublicConfigImageV1::load(Some(&path)).expect("retained configuration");
+        fs::write(&identity_path, format!("{network}\n")).expect("canonical identity record");
+        assert_eq!(
+            image.registry_binding().expect("relative public record"),
+            (network, 369)
+        );
+        for record in [
+            network.to_string(),
+            format!("{network}\r\n"),
+            format!("{network}\n{network}\n"),
+            "x".repeat(513),
+        ] {
+            fs::write(&identity_path, record).expect("invalid identity record");
+            assert_eq!(
+                image
+                    .registry_binding()
+                    .expect_err("record rejected")
+                    .code(),
+                "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
+            );
+        }
+        fs::write(&identity_path, format!("{network}\n")).expect("restore canonical record");
+        let link = temporary.path().join("alias.id");
+        std::os::unix::fs::symlink(&identity_path, &link).expect("symbolic identity alias");
+        fs::write(
+            &path,
+            "network_id_file = 'alias.id'\n[account]\nprofile = 'taira'\n",
+        )
+        .expect("linked identity config");
+        assert!(
+            RegistryPublicConfigImageV1::load(Some(&path))
+                .expect("config image")
+                .registry_binding()
+                .is_err()
+        );
+        fs::write(&path, format!("network_id = '{network}'\nnetwork_id_file = 'network.id'\n[account]\nprofile = 'taira'\n")).expect("ambiguous identity config");
+        assert!(
+            RegistryPublicConfigImageV1::load(Some(&path))
+                .expect("config image")
+                .registry_binding()
+                .is_err()
+        );
+    }
     #[test]
     fn public_registry_binding_rejects_missing_or_invalid_identity_without_disclosure() {
         let network_id = test_network_id(0x15).to_string();
@@ -2771,6 +2862,10 @@ private_key = "{}"
         fs::write(&path, &source).expect("write authenticated config fixture");
         let (client, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
             .expect("load signer and exact bounded image");
+        assert_eq!(
+            client.network_id(),
+            image.registry_binding().expect("public identity").0
+        );
         assert_eq!(
             client.torii_url().as_str(),
             "https://registry.example/iroha/"

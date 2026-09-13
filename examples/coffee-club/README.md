@@ -1,23 +1,22 @@
 # Coffee rewards: Kotodama + Musubi
 
-Each coffee earns ten points; negative counts return zero. `quote` is a read-only
-contract entrypoint. Four VM tests exercise its `points` helper with 0, 1, 3, and
--1 coffees.
+Each coffee quotes ten reward points; negative counts return zero. The calculator
+does not store or award points. `quote` is a read-only contract entrypoint. Four VM
+tests exercise its public argument and return boundary with 0, 1, 3, and -1 coffees.
 
 With `musubi` on `PATH`, run from this directory:
 
 ```sh
-musubi check --offline
-musubi tree
-musubi test --frozen
-musubi build --frozen
-musubi metadata
+musubi check
+musubi test
+musubi build
 ```
 
-`check` creates the local `Musubi.lock`; `--frozen` reuses that exact package graph
-offline. This example has no registry dependencies and needs no registry or
-signing configuration. Musubi compiles the contract to
-`target/kotodama/demo/coffee-club/debug/coffee-club.to`, alongside its interface
+`check` creates the local `Musubi.lock`. This example has no registry
+dependencies and needs no registry or signing configuration for local checks.
+Use `--frozen` on later checks, tests, or builds to require that exact graph
+offline. Musubi compiles the contract to
+`target/kotodama/demo/coffee-club/production/coffee-club.to`, alongside its interface
 and manifest. The tests execute against the declared contract in the IVM.
 
 To build Musubi from the Iroha workspace root:
@@ -34,9 +33,13 @@ The package was initially created with:
 musubi new coffee-club --namespace demo
 ```
 
-The supplied manifest declares the contract and standalone tests. The empty
-library module is intentional: this package has no exported library items.
+The default contract template creates the manifest, runnable contract, and four
+standalone tests shown here. No library module is needed. Use
+`--template library` when creating a reusable package instead.
 Registry publication and on-chain deployment are separate operations.
 
-Recorded validation: offline check, package tree, four passing VM tests, frozen
-bytecode build, and package metadata.
+For Taira, configure an exact native client and an authorized contract alias
+with `musubi network configure`, then use `musubi deploy` and `musubi view`.
+The [public Musubi guide](https://docs.iroha.tech/guide/tutorials/musubi.html)
+covers the supported workflow. Local VM tests do not qualify a live deployment;
+a successful deployment requires an Applied receipt and matching chain readback.

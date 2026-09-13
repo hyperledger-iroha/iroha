@@ -1185,7 +1185,9 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             payload,
             ..
         } => {
-            f(*actor);
+            if let Some(actor) = actor {
+                f(*actor);
+            }
             f(*entrypoint);
             f(*payload);
         }

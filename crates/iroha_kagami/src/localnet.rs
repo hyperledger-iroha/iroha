@@ -77,7 +77,7 @@ use iroha_executor_data_model::permission::{
     },
     parameter::{CanSetHijiriParameters, CanSetParameters},
     query::{CanReadAllLedgerData, CanReadRestrictedDataspace},
-    smart_contract::CanRegisterSmartContractCode,
+    smart_contract::{CanManageSmartContractCodeRegistrars, CanRegisterSmartContractCode},
 };
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
@@ -3893,11 +3893,14 @@ fn append_localnet_contract_permissions_for_client(
         }
     };
     push_unique(enact_governance, client_account_id.clone());
-    // This registered, funded runtime operator is the generated network's deployer.
-    // Registrar authority must be seeded in genesis; existing accounts cannot use
-    // the separate missing-authority deployment bootstrap after the network starts.
+    // Only the generated runtime operator controls registrar admission. Builders may receive
+    // deployment authority from this manager; registration never grants onward delegation.
     push_unique(
         CanRegisterSmartContractCode.into(),
+        client_account_id.clone(),
+    );
+    push_unique(
+        CanManageSmartContractCodeRegistrars.into(),
         client_account_id.clone(),
     );
     push_unique(CanSetParameters.into(), client_account_id.clone());
@@ -9835,6 +9838,19 @@ mod tests {
             vec![client_account_id.clone()],
             "only the generated client receives registrar authority, exactly once"
         );
+        let managers = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+            .filter_map(|grant| match grant {
+                GrantBox::Permission(grant)
+                    if CanManageSmartContractCodeRegistrars::try_from(grant.object()).is_ok() =>
+                {
+                    Some(grant.destination().clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(managers, vec![client_account_id.clone()]);
         assert!(manifest.instructions().any(|instruction| {
             matches!(
                 instruction.as_any().downcast_ref::<RegisterBox>(),

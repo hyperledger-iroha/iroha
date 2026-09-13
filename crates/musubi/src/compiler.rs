@@ -30,9 +30,8 @@ use ivm::{
             discover_source_link_request, discover_source_modules,
         },
         linker::{
-            ImportBinding, MAX_MODULE_GRAPH_SOURCE_BYTES, MAX_MODULE_GRAPH_SOURCES,
-            ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit, SourcePackageGraphRequest,
-            SourcePackageUnit,
+            ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit,
+            SourcePackageGraphRequest, SourcePackageUnit,
         },
         session::CompilerSession,
     },
@@ -57,12 +56,20 @@ pub enum CompilerActionV1 {
 pub struct CompilerArtifactV1 {
     /// Selected package declaring the contract target.
     pub package: MusubiPackageSelectorV1,
-    /// Manifest target name, with a deterministic ordinal for directory targets.
+    /// Exact manifest-declared contract target name.
     pub target: String,
     /// Canonical source path used in diagnostics.
     pub source: String,
     /// Published `.to` path.
     pub artifact: PathBuf,
+    /// Published compiler manifest path.
+    pub manifest: PathBuf,
+    /// Published public interface path.
+    pub interface: PathBuf,
+    /// Canonical advertised public entrypoint names.
+    pub entrypoints: Vec<String>,
+    /// Canonical ABI hash of the built artifact.
+    pub abi_hash: String,
     /// Canonical code hash.
     pub artifact_hash: String,
     /// Whether compilation ran or authenticated outputs were already fresh.
@@ -79,7 +86,7 @@ pub struct CompilerPackageInterfaceV1 {
 /// Successful compiler graph execution summary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerExecutionV1 {
-    /// Number of local reusable packages validated through the typed linker.
+    /// Number of local packages whose declared library and contract sources were validated.
     pub validated_packages: usize,
     /// Number of deployable contract roots checked or built.
     pub contract_targets: usize,
@@ -153,7 +160,6 @@ pub fn execute_compiler_graph(
     selected: &[MusubiPackageSelectorV1],
     lock: &LockfileV1,
     action: CompilerActionV1,
-    release: bool,
     chain_discriminant: u16,
 ) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
     execute_with_source(
@@ -162,7 +168,6 @@ pub fn execute_compiler_graph(
         selected,
         lock,
         action,
-        release,
         chain_discriminant,
     )
 }
@@ -220,30 +225,6 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
         &verification_lock.root_dependencies,
         &manifest.dependencies,
     )?;
-    let library = manifest.library.as_ref().ok_or_else(|| {
-        CompilerBridgeErrorV1::Package("clean publication manifest has no library".to_owned())
-    })?;
-    let mut modules = Vec::new();
-    for file in plan.files() {
-        let Some(source_name) = relative_library_source(file.path(), &library.source_dir) else {
-            continue;
-        };
-        let source = std::str::from_utf8(file.bytes()).map_err(|_| {
-            CompilerBridgeErrorV1::Package(format!(
-                "packaged Kotodama source `{}` is not UTF-8",
-                file.path()
-            ))
-        })?;
-        modules.push(SourceModuleUnit {
-            source_name,
-            source: source.to_owned(),
-        });
-    }
-    if modules.is_empty() {
-        return Err(CompilerBridgeErrorV1::Package(
-            "clean publication package has no declared Kotodama library sources".to_owned(),
-        ));
-    }
     let expected_abi = compute_abi_hash(SyscallPolicy::AbiV1);
     let mut dependencies = Vec::with_capacity(verification_lock.nodes.len());
     for node in &verification_lock.nodes {
@@ -272,13 +253,43 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
             package: registry_release(&edge.selected),
         })
         .collect::<Vec<_>>();
-    let root = SourcePackageUnit {
-        identity: registry_release(&verification_lock.root),
-        modules,
-        exports: library.exports.iter().map(ToString::to_string).collect(),
-        imports: imports.clone(),
-    };
-    let target_packages = std::iter::once(root.clone())
+    let root = manifest
+        .library
+        .as_ref()
+        .map(|library| {
+            let mut modules = Vec::new();
+            for file in plan.files() {
+                let Some(source_name) = relative_library_source(file.path(), &library.source_dir)
+                else {
+                    continue;
+                };
+                let source = std::str::from_utf8(file.bytes()).map_err(|_| {
+                    CompilerBridgeErrorV1::Package(format!(
+                        "packaged Kotodama source `{}` is not UTF-8",
+                        file.path()
+                    ))
+                })?;
+                modules.push(SourceModuleUnit {
+                    source_name,
+                    source: source.to_owned(),
+                });
+            }
+            if modules.is_empty() {
+                return Err(CompilerBridgeErrorV1::Package(
+                    "clean publication package has no declared Kotodama library sources".to_owned(),
+                ));
+            }
+            Ok(SourcePackageUnit {
+                identity: registry_release(&verification_lock.root),
+                modules,
+                exports: library.exports.iter().map(ToString::to_string).collect(),
+                imports: imports.clone(),
+            })
+        })
+        .transpose()?;
+    let target_packages = root
+        .iter()
+        .cloned()
         .chain(dependencies.iter().cloned())
         .collect::<Vec<_>>();
     let options = CompilerOptions {
@@ -294,13 +305,18 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
     .map_err(CompilerBridgeErrorV1::Cache)?;
     let driver = BuildDriver::for_current_executable(CompilerSession::new(options))
         .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
-    let validated = driver
-        .validate_package_project(SourcePackageGraphRequest {
-            package: root,
-            dependencies: dependencies.clone(),
-        })
-        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
-    let interface_digest = MusubiContentDigestV1::new(*validated.interface_fingerprint.as_ref());
+    let interface_digest = match root {
+        Some(root) => {
+            let validated = driver
+                .validate_package_project(SourcePackageGraphRequest {
+                    package: root,
+                    dependencies: dependencies.clone(),
+                })
+                .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+            MusubiContentDigestV1::new(*validated.interface_fingerprint.as_ref())
+        }
+        None => contract_only_interface_digest(),
+    };
     validate_packaged_contract_targets(
         &driver,
         plan,
@@ -317,6 +333,12 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
         chain_discriminant,
     )?;
     Ok(interface_digest)
+}
+/// Canonical commitment stating that a source package declares no reusable library interface.
+pub(crate) fn contract_only_interface_digest() -> MusubiContentDigestV1 {
+    MusubiContentDigestV1::new(
+        *iroha::crypto::Hash::new(b"musubi-contract-only-interface-v1\0").as_ref(),
+    )
 }
 /// Recompute every authenticated registry package interface against one exact source graph.
 ///
@@ -409,23 +431,20 @@ fn validate_packaged_contract_targets(
     dependencies: &[SourcePackageUnit],
 ) -> Result<(), CompilerBridgeErrorV1> {
     for target in targets {
-        for root in
-            packaged_target_source_units(plan, &target.path, PackagedTargetKindV1::Contract)?
-        {
-            let source_name = root.source_name.clone();
-            driver
-                .check_project(SourceLinkRequest {
-                    root,
-                    imports: imports.to_vec(),
-                    packages: dependencies.to_vec(),
-                })
-                .map_err(|error| {
-                    CompilerBridgeErrorV1::Compiler(format!(
-                        "packaged contract target `{}` source `{source_name}` failed clean validation: {error}",
-                        target.name
-                    ))
-                })?;
-        }
+        let root = packaged_contract_source_unit(plan, &target.path)?;
+        let source_name = root.source_name.clone();
+        driver
+            .check_project(SourceLinkRequest {
+                root,
+                imports: imports.to_vec(),
+                packages: dependencies.to_vec(),
+            })
+            .map_err(|error| {
+                CompilerBridgeErrorV1::Compiler(format!(
+                    "packaged contract target `{}` source `{source_name}` failed clean validation: {error}",
+                    target.name
+                ))
+            })?;
     }
     Ok(())
 }
@@ -440,14 +459,11 @@ fn validate_packaged_test_targets(
     let graph = ModuleBuildGraph::default();
     let mut contracts = BTreeMap::new();
     for target in contract_targets {
-        for source in
-            packaged_target_source_units(plan, &target.path, PackagedTargetKindV1::Contract)?
-        {
-            contracts.insert(source.source_name.clone(), source);
-        }
+        let source = packaged_contract_source_unit(plan, &target.path)?;
+        contracts.insert(source.source_name.clone(), source);
     }
     for target in targets {
-        for root in packaged_target_source_units(plan, &target.path, PackagedTargetKindV1::Test)? {
+        for root in packaged_test_source_units(plan, &target.path)? {
             let source_name = root.source_name.clone();
             let declared_target =
                 declared_test_target_source_v1(&root).map_err(CompilerBridgeErrorV1::Package)?;
@@ -493,26 +509,42 @@ fn validate_packaged_test_targets(
     }
     Ok(())
 }
-fn packaged_target_source_units(
+fn packaged_contract_source_unit(
     plan: &PackagePlan,
     target: &PortablePath,
-    kind: PackagedTargetKindV1,
+) -> Result<SourceModuleUnit, CompilerBridgeErrorV1> {
+    let path = target.as_str();
+    let file = plan.files().iter().find(|file| file.path() == path)
+        .filter(|file| has_kotodama_extension(file.path()))
+        .ok_or_else(|| CompilerBridgeErrorV1::Package(format!(
+            "packaged contract target `{path}` must identify one exact `.ko` source file; contract directory discovery is not supported"
+        )))?;
+    packaged_source_unit(path, path, file.bytes(), PackagedTargetKindV1::Contract)
+}
+fn packaged_test_source_units(
+    plan: &PackagePlan,
+    target: &PortablePath,
 ) -> Result<Vec<SourceModuleUnit>, CompilerBridgeErrorV1> {
     let target_path = target.as_str();
     if target_path != "."
         && let Some(file) = plan.files().iter().find(|file| file.path() == target_path)
     {
-        if kind == PackagedTargetKindV1::Test && !has_kotodama_extension(file.path()) {
+        if !has_kotodama_extension(file.path()) {
             return Err(CompilerBridgeErrorV1::Package(format!(
                 "packaged test target `{target_path}` must be a `.ko` file or directory"
             )));
         }
-        return packaged_source_unit(file.path(), file.path(), file.bytes(), kind)
-            .map(|unit| vec![unit]);
+        return packaged_source_unit(
+            file.path(),
+            file.path(),
+            file.bytes(),
+            PackagedTargetKindV1::Test,
+        )
+        .map(|unit| vec![unit]);
     }
     let prefix = (target_path != ".").then(|| format!("{target_path}/"));
-    let mut source_bytes = 0usize;
     let mut units = Vec::new();
+    // PackagePlan already bounds the entire retained source set and has bytewise-sorted paths.
     for file in plan.files() {
         let relative = match prefix.as_deref() {
             Some(prefix) => match file.path().strip_prefix(prefix) {
@@ -524,36 +556,16 @@ fn packaged_target_source_units(
         if relative.is_empty() || !has_kotodama_extension(relative) {
             continue;
         }
-        source_bytes = source_bytes
-            .checked_add(file.bytes().len())
-            .ok_or_else(|| {
-                CompilerBridgeErrorV1::Package(format!(
-                    "packaged {} target `{target_path}` source byte count overflowed",
-                    kind.label()
-                ))
-            })?;
-        let source_name = match kind {
-            PackagedTargetKindV1::Contract => relative,
-            PackagedTargetKindV1::Test => file.path(),
-        };
         units.push(packaged_source_unit(
             file.path(),
-            source_name,
+            file.path(),
             file.bytes(),
-            kind,
+            PackagedTargetKindV1::Test,
         )?);
     }
     if units.is_empty() {
         return Err(CompilerBridgeErrorV1::Package(format!(
-            "packaged {} target directory `{target_path}` contains no `.ko` sources",
-            kind.label()
-        )));
-    }
-    if kind == PackagedTargetKindV1::Contract
-        && (units.len() > MAX_MODULE_GRAPH_SOURCES || source_bytes > MAX_MODULE_GRAPH_SOURCE_BYTES)
-    {
-        return Err(CompilerBridgeErrorV1::Package(format!(
-            "packaged contract target directory `{target_path}` exceeds the V1 compiler graph bound of {MAX_MODULE_GRAPH_SOURCES} sources or {MAX_MODULE_GRAPH_SOURCE_BYTES} UTF-8 bytes"
+            "packaged test target directory `{target_path}` contains no `.ko` sources"
         )));
     }
     Ok(units)
@@ -585,7 +597,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     selected: &[MusubiPackageSelectorV1],
     lock: &LockfileV1,
     action: CompilerActionV1,
-    release: bool,
     chain_discriminant: u16,
 ) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
     if chain_discriminant == 0 {
@@ -629,7 +640,9 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     let mut local_units = BTreeMap::new();
     let mut package_interfaces = Vec::with_capacity(local_members.len());
     for member in &local_members {
-        let unit = local_source_package(member, lock, &local_identities)?;
+        let Some(unit) = local_source_package(member, lock, &local_identities)? else {
+            continue;
+        };
         if local_units.insert(unit.identity.clone(), unit).is_some() {
             return Err(CompilerBridgeErrorV1::Package(format!(
                 "duplicate local identity `{}`",
@@ -669,9 +682,9 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
     for member in &local_members {
         let identity = local_package(&member.package.selector, &member.package.version);
-        let package = local_units.get(&identity).cloned().ok_or_else(|| {
-            CompilerBridgeErrorV1::Package(format!("local package `{identity}` disappeared"))
-        })?;
+        let Some(package) = local_units.get(&identity).cloned() else {
+            continue;
+        };
         let dependencies = all_packages
             .iter()
             .filter(|candidate| candidate.identity != identity)
@@ -689,7 +702,7 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         });
     }
     package_interfaces.sort_by(|left, right| left.package.cmp(&right.package));
-    let profile = if release { "release" } else { "debug" };
+    let profile = "production";
     let mut result = CompilerExecutionV1 {
         validated_packages: local_members.len(),
         contract_targets: 0,
@@ -704,47 +717,63 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         let target_root = package_target_root(workspace, member);
         let imports = local_imports(member, lock, &local_identities)?;
         for target in &member.manifest.contracts {
-            let roots = target_source_units(member, &target.path)?;
-            for (ordinal, root) in roots.into_iter().enumerate() {
-                result.contract_targets += 1;
-                let graph = SourceLinkRequest {
-                    root: root.clone(),
-                    imports: imports.clone(),
-                    packages: all_packages.clone(),
-                };
-                match action {
-                    CompilerActionV1::Check => {
-                        result.warnings += driver
-                            .check_project(graph)
-                            .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?
-                            .len();
-                    }
-                    CompilerActionV1::Build => {
-                        let stem = if ordinal == 0 {
-                            target.name.to_string()
-                        } else {
-                            format!("{}-{ordinal}", target.name)
-                        };
-                        let layout = PublishLayout::standard(&target_root, profile, &stem, true)
-                            .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
-                        let outcome = driver
-                            .build_project(LinkedSourceBuildRequest {
-                                source_name: root.source_name.clone(),
-                                graph,
-                                profile: profile.to_owned(),
-                                layout,
-                                mode: PublishMode::Write,
-                            })
-                            .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
-                        result.artifacts.push(CompilerArtifactV1 {
-                            package: member.package.selector.clone(),
-                            target: stem,
-                            source: root.source_name,
-                            artifact: outcome.paths.artifact,
-                            artifact_hash: outcome.artifact_hash.to_string(),
-                            fresh: outcome.status == BuildStatus::Fresh,
-                        });
-                    }
+            let root = contract_source_unit(member, &target.path)?;
+            result.contract_targets += 1;
+            let graph = SourceLinkRequest {
+                root: root.clone(),
+                imports: imports.clone(),
+                packages: all_packages.clone(),
+            };
+            match action {
+                CompilerActionV1::Check => {
+                    result.warnings += driver
+                        .check_project(graph)
+                        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?
+                        .len();
+                }
+                CompilerActionV1::Build => {
+                    let stem = target.name.to_string();
+                    let layout = PublishLayout::standard(&target_root, profile, &stem, true)
+                        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+                    let outcome = driver
+                        .build_project(LinkedSourceBuildRequest {
+                            source_name: root.source_name.clone(),
+                            graph,
+                            profile: profile.to_owned(),
+                            layout,
+                            mode: PublishMode::Write,
+                        })
+                        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
+                    result.artifacts.push(CompilerArtifactV1 {
+                        package: member.package.selector.clone(),
+                        target: stem,
+                        source: root.source_name,
+                        manifest: outcome.paths.manifest,
+                        interface: outcome.paths.interface.ok_or_else(|| {
+                            CompilerBridgeErrorV1::Compiler(
+                                "compiler omitted the requested public interface".to_owned(),
+                            )
+                        })?,
+                        entrypoints: outcome
+                            .manifest
+                            .entrypoints
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|entrypoint| entrypoint.name)
+                            .collect(),
+                        abi_hash: outcome
+                            .manifest
+                            .abi_hash
+                            .ok_or_else(|| {
+                                CompilerBridgeErrorV1::Compiler(
+                                    "compiler omitted the canonical ABI hash".to_owned(),
+                                )
+                            })?
+                            .to_string(),
+                        artifact: outcome.paths.artifact,
+                        artifact_hash: outcome.artifact_hash.to_string(),
+                        fresh: outcome.status == BuildStatus::Fresh,
+                    });
                 }
             }
         }
@@ -771,13 +800,10 @@ fn local_source_package(
     member: &WorkspaceMember,
     lock: &LockfileV1,
     local_identities: &BTreeMap<PathBuf, String>,
-) -> Result<SourcePackageUnit, CompilerBridgeErrorV1> {
-    let library = member.manifest.library.as_ref().ok_or_else(|| {
-        CompilerBridgeErrorV1::Package(format!(
-            "local package `{}` has no library",
-            member.package.selector
-        ))
-    })?;
+) -> Result<Option<SourcePackageUnit>, CompilerBridgeErrorV1> {
+    let Some(library) = member.manifest.library.as_ref() else {
+        return Ok(None);
+    };
     let modules =
         discover_source_modules(&member.package_root.join(library.source_dir.to_path_buf()))
             .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
@@ -787,12 +813,12 @@ fn local_source_package(
             member.package.selector
         )));
     }
-    Ok(SourcePackageUnit {
+    Ok(Some(SourcePackageUnit {
         identity: local_package(&member.package.selector, &member.package.version),
         modules,
         exports: library.exports.iter().map(ToString::to_string).collect(),
         imports: local_imports(member, lock, local_identities)?,
-    })
+    }))
 }
 fn local_imports(
     member: &WorkspaceMember,
@@ -894,9 +920,20 @@ fn cached_source_package(
             node.release
         )));
     }
-    let library = manifest.library.as_ref().ok_or_else(|| {
-        CompilerBridgeErrorV1::Package(format!("cached release `{}` has no library", node.release))
-    })?;
+    let Some(library) = manifest.library.as_ref() else {
+        if !cached.semantic_release.exports.is_empty()
+            || node.interface_digest != contract_only_interface_digest()
+        {
+            return Err(CompilerBridgeErrorV1::Package(format!(
+                "contract-only release `{}` has an inconsistent absent-library interface commitment",
+                node.release
+            )));
+        }
+        return Err(CompilerBridgeErrorV1::Package(format!(
+            "dependency `{}` is a contract-only release and cannot be imported as a library",
+            node.release
+        )));
+    };
     let declared_exports = library
         .exports
         .iter()
@@ -998,10 +1035,10 @@ fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<Stri
 fn has_kotodama_extension(path: &str) -> bool {
     path.strip_suffix(".ko").is_some()
 }
-fn target_source_units(
+fn contract_source_unit(
     member: &WorkspaceMember,
     target: &PortablePath,
-) -> Result<Vec<SourceModuleUnit>, CompilerBridgeErrorV1> {
+) -> Result<SourceModuleUnit, CompilerBridgeErrorV1> {
     let path = member.package_root.join(target.to_path_buf());
     let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
         CompilerBridgeErrorV1::Package(format!(
@@ -1015,26 +1052,15 @@ fn target_source_units(
             path.display()
         )));
     }
-    if metadata.is_file() {
-        return discover_source_link_request(&path, &member.package_root, Vec::new(), Vec::new())
-            .map(|request| vec![request.root])
-            .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()));
+    if !metadata.is_file() || !has_kotodama_extension(target.as_str()) {
+        return Err(CompilerBridgeErrorV1::Package(format!(
+            "contract target `{}` must identify one regular `.ko` source file; directory targets are supported only for tests",
+            target.as_str()
+        )));
     }
-    if metadata.is_dir() {
-        let modules = discover_source_modules(&path)
-            .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
-        if modules.is_empty() {
-            return Err(CompilerBridgeErrorV1::Package(format!(
-                "contract target directory `{}` contains no `.ko` sources",
-                path.display()
-            )));
-        }
-        return Ok(modules);
-    }
-    Err(CompilerBridgeErrorV1::Package(format!(
-        "contract target `{}` is not a regular file or directory",
-        path.display()
-    )))
+    discover_source_link_request(&path, &member.package_root, Vec::new(), Vec::new())
+        .map(|request| request.root)
+        .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))
 }
 #[cfg(all(test, unix))]
 mod tests {
@@ -1152,7 +1178,6 @@ exports = ["value"]
             std::slice::from_ref(&selector),
             &lock,
             CompilerActionV1::Check,
-            false,
             1,
         )
         .expect("compiler graph");
@@ -1293,7 +1318,7 @@ dep = { package = "deps.sora/dep", version = "^1.0.0" }
         ));
     }
     #[test]
-    fn packaged_directory_targets_expand_deterministically_from_plan_paths() {
+    fn named_contract_targets_keep_one_source_and_artifact_while_tests_expand_directories() {
         let temp = TempDir::new().expect("temporary directory");
         write_clean_library(temp.path());
         for (path, source) in [
@@ -1319,8 +1344,11 @@ abi-version = 1
 source-dir = "src"
 exports = []
 [[contract]]
-name = "contracts"
-path = "contracts"
+name = "a"
+path = "contracts/nested/a.ko"
+[[contract]]
+name = "z"
+path = "contracts/z.ko"
 [[test]]
 name = "tests"
 path = "tests"
@@ -1328,28 +1356,30 @@ path = "tests"
         let lock = clean_verification_lock();
         let mut layout = PackageLayout::new(temp.path());
         layout.set_library("src");
-        layout.add_contract("contracts");
+        layout.add_contract("contracts/nested/a.ko");
+        layout.add_contract("contracts/z.ko");
         layout.add_test("tests");
         let plan = plan_package(&layout, manifest, &lock).expect("package plan");
-        let contracts = packaged_target_source_units(
-            &plan,
-            &PortablePath::new("contracts").expect("contract target"),
-            PackagedTargetKindV1::Contract,
-        )
-        .expect("contract roots");
-        assert_eq!(
-            contracts
-                .iter()
-                .map(|source| source.source_name.as_str())
-                .collect::<Vec<_>>(),
-            ["nested/a.ko", "z.ko"]
-        );
-        let tests = packaged_target_source_units(
-            &plan,
-            &PortablePath::new("tests").expect("test target"),
-            PackagedTargetKindV1::Test,
-        )
-        .expect("test roots");
+        for path in ["contracts/nested/a.ko", "contracts/z.ko"] {
+            let source = packaged_contract_source_unit(
+                &plan,
+                &PortablePath::new(path).expect("contract source path"),
+            )
+            .expect("exact contract root");
+            assert_eq!(source.source_name, path);
+        }
+        for invalid in ["contracts", "contracts/nested", "contracts/missing.ko"] {
+            assert!(
+                packaged_contract_source_unit(
+                    &plan,
+                    &PortablePath::new(invalid).expect("invalid target fixture")
+                )
+                .is_err()
+            );
+        }
+        let tests =
+            packaged_test_source_units(&plan, &PortablePath::new("tests").expect("test directory"))
+                .expect("test roots");
         assert_eq!(
             tests
                 .iter()
@@ -1357,6 +1387,57 @@ path = "tests"
                 .collect::<Vec<_>>(),
             ["tests/a.ko", "tests/nested/z.ko"]
         );
+        fs::write(temp.path().join("Musubi.toml"), manifest).expect("workspace manifest");
+        let workspace = load_workspace(temp.path()).expect("exact-target workspace");
+        let member = workspace.members().values().next().expect("package member");
+        let selected = vec![member.package.selector.clone()];
+        let local = resolve_workspace_local(&workspace, &selected, None, ResolveModeV1::UpdateLock)
+            .expect("local resolution")
+            .expect("local graph")
+            .lockfile;
+        let built = execute_with_source(
+            &EmptyRegistry,
+            &workspace,
+            &selected,
+            &local,
+            CompilerActionV1::Build,
+            1,
+        )
+        .expect("build exact named targets");
+        assert_eq!(built.contract_targets, 2);
+        assert_eq!(
+            built
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.target.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "z"]
+        );
+        for artifact in &built.artifacts {
+            assert_eq!(
+                artifact.artifact.file_stem().and_then(|stem| stem.to_str()),
+                Some(artifact.target.as_str())
+            );
+            assert!(artifact.artifact.is_file());
+        }
+        fs::create_dir_all(temp.path().join("contracts/directory.ko/nested"))
+            .expect("directory with .ko suffix");
+        fs::write(
+            temp.path().join("contracts/directory.ko/nested/extra.ko"),
+            "seiyaku Extra { hajimari() {} }",
+        )
+        .expect("nested source");
+        let directory_target =
+            PortablePath::new("contracts/directory.ko").expect("directory target");
+        assert!(
+            contract_source_unit(member, &directory_target)
+                .expect_err("a .ko directory is not one contract")
+                .to_string()
+                .contains("one regular `.ko` source file")
+        );
+        let mut directory_layout = PackageLayout::new(temp.path());
+        directory_layout.add_contract(directory_target.to_path_buf());
+        assert!(plan_package(&directory_layout, manifest, &lock).is_err());
     }
     #[test]
     fn invalid_packaged_contract_is_not_reopened_from_a_repaired_workspace() {
@@ -1654,5 +1735,48 @@ exports = ["value"]
         let digest = validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 1)
             .expect("clean package validation");
         assert!(!digest.is_zero());
+    }
+
+    #[test]
+    fn contract_only_publication_validates_real_sources_and_has_no_library_interface() {
+        let temp = TempDir::new().expect("contract package");
+        let manifest = include_str!("../../../examples/coffee-club/Musubi.toml")
+            .replace("namespace = \"demo\"", "namespace = \"apps.sora\"")
+            .replace("name = \"coffee-club\"", "name = \"demo\"")
+            .replace("version = \"0.1.0\"", "version = \"1.0.0\"");
+        fs::create_dir(temp.path().join("contracts")).expect("contract directory");
+        fs::create_dir(temp.path().join("tests")).expect("test directory");
+        fs::write(temp.path().join("Musubi.toml"), &manifest).expect("manifest");
+        fs::write(
+            temp.path().join("contracts/coffee-club.ko"),
+            include_str!("../templates/contract.ko"),
+        )
+        .expect("contract");
+        fs::write(
+            temp.path().join("tests/coffee-club.test.ko"),
+            include_str!("../templates/contract.test.ko"),
+        )
+        .expect("public tests");
+        let lock = clean_verification_lock();
+        let mut layout = PackageLayout::new(temp.path());
+        layout.add_contract("contracts/coffee-club.ko");
+        layout.add_test("tests/coffee-club.test.ko");
+        let plan = plan_package(&layout, &manifest, &lock).expect("contract-only package plan");
+        let interface = validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 369)
+            .expect("clean public contract validation");
+        assert_eq!(interface, contract_only_interface_digest());
+        assert!(!interface.is_zero());
+        fs::write(
+            temp.path().join("contracts/coffee-club.ko"),
+            "invalid ambient source",
+        )
+        .expect("replace ambient source");
+        assert_eq!(
+            validate_packaged_with_source(&EmptyRegistry, &plan, &lock, 369)
+                .expect("immutable source plan"),
+            interface
+        );
+        let invalid = plan_package(&layout, &manifest, &lock).expect("capture changed source");
+        assert!(validate_packaged_with_source(&EmptyRegistry, &invalid, &lock, 369).is_err());
     }
 }

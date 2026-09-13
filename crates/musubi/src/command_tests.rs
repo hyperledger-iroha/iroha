@@ -120,6 +120,8 @@ fn create_test_package(temp: &TempDir) -> (PathBuf, PathBuf) {
         OsString::from("musubi"),
         OsString::from("new"),
         root.as_os_str().to_owned(),
+        OsString::from("--template"),
+        OsString::from("library"),
         OsString::from("--namespace"),
         OsString::from("apps.sora"),
         OsString::from("--export"),
@@ -144,7 +146,6 @@ fn assert_scaffold_compiler_workflows(root: &Path, cache_root: &Path) {
             std::slice::from_ref(&selector),
             &lock,
             action,
-            false,
             753,
         )
         .expect("canonical scaffold compiler workflow");
@@ -178,6 +179,8 @@ fn new_and_init_scaffolds_check_and_build_with_exact_exports() {
                 OsString::from("musubi"),
                 OsString::from(command),
                 root.as_os_str().to_owned(),
+                OsString::from("--template"),
+                OsString::from("library"),
                 OsString::from("--namespace"),
                 OsString::from("apps.sora"),
             ];
@@ -235,6 +238,8 @@ fn scaffold_rejects_noncanonical_and_reserved_exports_before_writing() {
             OsString::from("musubi"),
             OsString::from("new"),
             new_root.as_os_str().to_owned(),
+            OsString::from("--template"),
+            OsString::from("library"),
             OsString::from("--namespace"),
             OsString::from("apps.sora"),
             OsString::from("--export"),
@@ -257,6 +262,8 @@ fn scaffold_rejects_noncanonical_and_reserved_exports_before_writing() {
             OsString::from("init"),
             root.as_os_str().to_owned(),
             OsString::from("--force"),
+            OsString::from("--template"),
+            OsString::from("library"),
             OsString::from("--namespace"),
             OsString::from("apps.sora"),
             OsString::from("--export"),
@@ -295,6 +302,8 @@ fn init_preserves_existing_type_exports_and_custom_source_directory() {
             OsString::from("musubi"),
             OsString::from("init"),
             root.as_os_str().to_owned(),
+            OsString::from("--template"),
+            OsString::from("library"),
             OsString::from("--namespace"),
             OsString::from("apps.sora"),
             OsString::from("--source-dir"),
@@ -329,6 +338,8 @@ fn new_source_rejects_function_only_reserved_exports_before_writing() {
             OsString::from("musubi"),
             OsString::from(command),
             root.as_os_str().to_owned(),
+            OsString::from("--template"),
+            OsString::from("library"),
             OsString::from("--namespace"),
             OsString::from("apps.sora"),
             OsString::from("--export"),
@@ -627,6 +638,8 @@ fn build_and_install_dependency_fixture(
         OsString::from("musubi"),
         OsString::from("new"),
         dependency_root.as_os_str().to_owned(),
+        OsString::from("--template"),
+        OsString::from("library"),
         OsString::from("--namespace"),
         OsString::from("deps.sora"),
         OsString::from("--name"),
@@ -1079,11 +1092,14 @@ fn write_test_lock_graph(
     nodes: Vec<MusubiVerificationNodeV1>,
 ) {
     let lock = LockfileV1::new(
-            LockContextV1::Registry { network_id: test_network_id(1), snapshot: MusubiRegistrySnapshotV1 {
-            finalized_height: 7,
-            finalized_block_hash: [2; 32],
-            index_revision: 3,
-        } },
+        LockContextV1::Registry {
+            network_id: test_network_id(1),
+            snapshot: MusubiRegistrySnapshotV1 {
+                finalized_height: 7,
+                finalized_block_hash: [2; 32],
+                index_revision: 3,
+            },
+        },
         vec![LockedRootV1 {
             package: "apps.sora/demo".parse().expect("root package selector"),
             dependencies: root_dependencies,
@@ -1110,12 +1126,20 @@ fn top_level_and_nested_command_inventory_is_exact() {
         command_names(&command),
         BTreeSet::from_iter(
             [
-                "add", "alias", "build", "cache", "check", "fetch", "info", "init", "metadata",
-                "new", "owner", "package", "publish", "remove", "search", "test", "tree", "unyank",
-                "update", "versions", "yank",
+                "add", "alias", "build", "cache", "check", "deploy", "fetch", "info", "init",
+                "metadata", "network", "new", "owner", "package", "publish", "remove", "search",
+                "test", "tree", "unyank", "update", "versions", "view", "yank",
             ]
             .map(str::to_owned)
         )
+    );
+    let network = command
+        .get_subcommands()
+        .find(|command| command.get_name() == "network")
+        .expect("network command");
+    assert_eq!(
+        command_names(network),
+        BTreeSet::from_iter(["configure", "list"].map(str::to_owned))
     );
     let owner = command
         .get_subcommands()
@@ -1849,12 +1873,12 @@ fn consumer_lock_is_not_used_as_package_or_cache_authentication() {
     let temp = TempDir::new().expect("temporary directory");
     let (root, manifest_path) = create_test_package(&temp);
     write_test_lock_with_registry_node(&root);
+    let consumer_lock = fs::read(root.join(LOCK_FILE_NAME)).expect("consumer lock evidence");
     let package = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
         manifest_path.as_os_str().to_owned(),
         OsString::from("package"),
-        OsString::from("--list"),
         OsString::from("--offline"),
     ]);
     assert_eq!(
@@ -1867,6 +1891,10 @@ fn consumer_lock_is_not_used_as_package_or_cache_authentication() {
         .expect("package diagnostic");
     assert!(rendered.stderr().contains("cached Musubi resolver index"));
     assert!(rendered.stderr().contains("resolver cache"));
+    assert_eq!(
+        fs::read(root.join(LOCK_FILE_NAME)).expect("unchanged consumer lock"),
+        consumer_lock
+    );
     let verify = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1900,11 +1928,14 @@ fn empty_cache_maintenance_is_signer_and_network_free() {
     assert_eq!(repaired.message, "repaired 0 cached archive(s)");
     let graph = ResolvedWorkspaceGraphV1 {
         lock: LockfileV1::new(
-            LockContextV1::Registry { network_id: test_network_id(1), snapshot: MusubiRegistrySnapshotV1 {
-                finalized_height: 1,
-                finalized_block_hash: [2; 32],
-                index_revision: 1,
-            } },
+            LockContextV1::Registry {
+                network_id: test_network_id(1),
+                snapshot: MusubiRegistrySnapshotV1 {
+                    finalized_height: 1,
+                    finalized_block_hash: [2; 32],
+                    index_revision: 1,
+                },
+            },
             vec![LockedRootV1 {
                 package: "apps.sora/demo".parse().expect("root package"),
                 dependencies: Vec::new(),
@@ -2816,108 +2847,6 @@ fn publication_compiler_evidence_and_nonce_are_domain_bound() {
     assert_ne!(first, second);
 }
 
-#[test]
-fn cold_local_demo_checks_builds_and_tests_without_registry_configuration() {
-    let temporary = TempDir::new().expect("local demo directory");
-    let root = temporary.path();
-    for (name, source) in [
-        ("Musubi.toml", include_str!("../../../examples/coffee-club/Musubi.toml")),
-        ("src/lib.ko", include_str!("../../../examples/coffee-club/src/lib.ko")),
-        ("contracts/coffee-club.ko", include_str!("../../../examples/coffee-club/contracts/coffee-club.ko")),
-        ("tests/coffee-rewards.test.ko", include_str!("../../../examples/coffee-club/tests/coffee-rewards.test.ko")),
-    ] {
-        let path = root.join(name);
-        fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
-        fs::write(path, source).expect("fixture source");
-    }
-    let manifest = root.join(MANIFEST_FILE_NAME);
-    for (command, mode) in [("check", "--offline"), ("build", "--frozen"), ("test", "--frozen"), ("fetch", "--frozen")] {
-        let result = invoke([
-            OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
-            OsString::from(command), OsString::from(mode),
-        ]);
-        let rendered = result.output.render(OutputFormat::Human).expect("render output");
-        assert_eq!(rendered.exit_code(), 0, "{command}: {}", rendered.stderr());
-        if command == "test" {
-            assert!(rendered.stdout().contains("4 passed; 0 failed"));
-        }
-    }
-    let lock = LockfileV1::read(&root.join(LOCK_FILE_NAME)).expect("local lock");
-    assert!(matches!(lock.context, LockContextV1::Local { .. }));
-    assert!(lock.nodes.is_empty());
-    assert!(lock.registry_context().is_err(), "a local build is not registry evidence");
-    let before = fs::read(root.join(LOCK_FILE_NAME)).expect("original lock");
-    let output = invoke([
-        OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
-        OsString::from("metadata"),
-    ]).output.render(OutputFormat::Json).expect("metadata JSON");
-    assert_eq!(output.exit_code(), 0);
-    assert!(output.stdout().contains("\"kind\":\"local\""));
-    assert!(!output.stdout().contains("network_id"));
-    assert_eq!(fs::read(root.join(LOCK_FILE_NAME)).expect("unchanged lock"), before);
-}
-
-#[test]
-fn cold_local_locked_rejects_missing_lock_and_graph_edits() {
-    let temp = TempDir::new().expect("local workspace");
-    let (root, manifest) = create_test_package(&temp);
-    let call = |command: &str, mode: &str| invoke([
-        OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
-        OsString::from(command), OsString::from(mode),
-    ]);
-    assert_eq!(call("check", "--frozen").output.exit_code(), ErrorCode::Locked.exit_code());
-    assert!(!root.join(LOCK_FILE_NAME).exists());
-    assert_eq!(call("check", "--offline").output.exit_code(), 0);
-    let bytes = fs::read(root.join(LOCK_FILE_NAME)).expect("original lock");
-    let source = fs::read_to_string(&manifest).expect("manifest");
-    fs::write(&manifest, source.replace("version = \"0.1.0\"", "version = \"0.2.0\""))
-        .expect("edit package version");
-    assert_eq!(call("check", "--locked").output.exit_code(), ErrorCode::Locked.exit_code());
-    assert_eq!(fs::read(root.join(LOCK_FILE_NAME)).expect("retained lock"), bytes);
-    assert_eq!(call("check", "--offline").output.exit_code(), 0);
-    assert_ne!(fs::read(root.join(LOCK_FILE_NAME)).expect("updated lock"), bytes);
-}
-
-#[test]
-fn local_compiler_profile_uses_only_explicit_public_configuration() {
-    let temp = TempDir::new().expect("local profile directory");
-    let (_, manifest) = create_test_package(&temp);
-    let config = temp.path().join("public.toml");
-    fs::write(&config, "[account]\nchain_discriminant = 369\n").expect("public-only config");
-    for (discriminant, expected) in [(369, 0), (753, ErrorCode::Usage.exit_code())] {
-        let output = invoke([
-            OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
-            OsString::from("check"), OsString::from("--offline"),
-            OsString::from("--config"), config.as_os_str().to_owned(),
-            OsString::from("--chain-discriminant"), OsString::from(discriminant.to_string()),
-        ]).output.render(OutputFormat::Human).expect("render output");
-        assert_eq!(output.exit_code(), expected, "{}", output.stderr());
-    }
-    assert!(Cli::try_parse_from(["musubi", "check", "--chain-discriminant", "0"]).is_err());
-}
-
-#[test]
-fn invalid_local_profile_does_not_create_a_lock() {
-    for config_contents in ["[account]\nchain_discriminant = 0\n", "[account]\nchain_discriminant = 369\n"] {
-        let temp = TempDir::new().expect("invalid profile directory");
-        let (root, manifest) = create_test_package(&temp);
-        let config = temp.path().join("public.toml");
-        fs::write(&config, config_contents).expect("public config");
-        let output = invoke([
-            OsString::from("musubi"), OsString::from("--manifest-path"), manifest.as_os_str().to_owned(),
-            OsString::from("check"), OsString::from("--offline"),
-            OsString::from("--config"), config.as_os_str().to_owned(),
-            OsString::from("--chain-discriminant"), OsString::from("753"),
-        ]).output;
-        assert_ne!(output.exit_code(), 0);
-        assert!(!root.join(LOCK_FILE_NAME).exists(), "invalid options must not publish a lock");
-    }
-}
-
-#[test]
-fn compiler_profile_selection_requires_an_exact_configured_match() {
-    assert_eq!(select_compiler_chain_discriminant(753, None, false).unwrap(), 753);
-    assert_eq!(select_compiler_chain_discriminant(753, Some(369), false).unwrap(), 369);
-    assert_eq!(select_compiler_chain_discriminant(369, Some(369), true).unwrap(), 369);
-    assert_eq!(select_compiler_chain_discriminant(753, Some(369), true).unwrap_err().code(), ErrorCode::Usage);
+mod local_workflows {
+    include!("command_local_tests.rs");
 }

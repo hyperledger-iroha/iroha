@@ -7,19 +7,16 @@ from pathlib import Path
 import pytest
 
 from scripts.fastpq import geometry_matrix, wrap_benchmark
-from scripts.fastpq.tests.test_digest384_evidence import primitive_report
+from scripts.fastpq.tests.report_fixtures import complete_flat_report
 
 
 def _timed_entry() -> dict:
-    entries = {"fft": {"gpu_mean_ms": 1.0}, "lde": {"gpu_mean_ms": 1.0}}
-    for name in ("digest384_trace_columns", "digest384_merkle_pairs"):
-        report = primitive_report(name, rows=8)
-        projected, _ = wrap_benchmark.summarize_operations(report, wrap_benchmark.METAL_FLAT_SCHEMA)
-        entries[name] = projected[0]
-    return {
-        "producer_schema": "metal_flat", "status": "ok", "execution_mode": "gpu", "rows": 8, "padded_rows": 8,
-        "column_count": 2, "iterations": 2, "warmups": 1, "operations": entries,
-    }
+    report = complete_flat_report("metal", rows=8, iterations=2, warmups=1)
+    report["operations"] = {entry["operation"]: entry for entry in report["operations"]}
+    # Absence is intentional: the first test exercises accelerator metadata.
+    report.pop("gpu_available")
+    report.pop("gpu_backend")
+    return {**report, "producer_schema": "metal_flat", "status": "ok"}
 
 
 def test_classify_entry_requires_accelerator_metadata() -> None:

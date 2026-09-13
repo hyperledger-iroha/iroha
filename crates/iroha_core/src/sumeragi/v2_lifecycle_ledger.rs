@@ -1041,6 +1041,30 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
     }
 }
 impl LifecycleLedgerRecordV1 {
+    /// Authenticate an exact terminal-row claim against its retained source and
+    /// the actual closed WAL frontier without exposing the replay envelope.
+    /// This proves only historical coverage, never execution or retry authority.
+    pub(super) fn authenticates_retired_terminal_validate_source(
+        &self,
+        claim: &super::open::TerminalValidateNoSuccessorClaim,
+        verified: &VerifiedHeightContext,
+        frontier: crate::sumeragi::v2::LeaderWireRecoveryAuthority,
+        store: &V2BodyStore,
+    ) -> bool {
+        let (Some(key), Some(stage), Some(payload)) =
+            (self.key(), self.stage(), self.durable_payload())
+        else {
+            return false;
+        };
+        claim.context() == projection::lifecycle_context(verified.context())
+            && claim.exactly_matches_ledger_record(self)
+            && self
+                .replay_authority
+                .authenticates_retired_terminal_validate_source(
+                    verified, key, stage, payload, frontier, store,
+                )
+    }
+
     /// Decode one live signed Broadcast only as an inert recovered-WAL child.
     ///
     /// This keeps the replay envelope inside its checksummed LedgerV1 row.
@@ -1372,30 +1396,6 @@ impl LifecycleLedgerRecordV1 {
     pub(super) fn with_terminal_for_test(mut self, terminal: Option<TerminalOutcome>) -> Self {
         self.terminal = terminal.map(PersistedTerminalV1::from_schema);
         self
-    }
-    /// Authenticate this exact terminal Validate's retired source and body frame.
-    /// The replay envelope stays ledger-owned and grants no executable authority.
-    pub(super) fn authenticates_retired_terminal_validate_source(
-        &self,
-        verified: &VerifiedHeightContext,
-        frontier: crate::sumeragi::v2::LeaderWireRecoveryAuthority,
-        store: &crate::sumeragi::v2_body_store::V2BodyStore,
-    ) -> bool {
-        if self.work_class() != Some(LifecycleWorkClass::Validate)
-            || self.terminal() != Some(Some(TerminalOutcome::Advanced))
-            || self.continuation() != Some(DurableContinuation::AdvancedNoSuccessor)
-        {
-            return false;
-        }
-        let (Some(key), Some(stage), Some(payload)) =
-            (self.key(), self.stage(), self.durable_payload())
-        else {
-            return false;
-        };
-        self.replay_authority
-            .authenticates_retired_terminal_validate_source(
-                verified, key, stage, payload, frontier, store,
-            )
     }
     /// Compare an ordinary body's execution generation without exposing its
     /// stored replay envelope. Authentication remains owned by the body census.

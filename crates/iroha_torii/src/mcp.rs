@@ -46,6 +46,7 @@ use std::{
 };
 use tower::ServiceExt as _;
 mod connect_session_tools;
+mod contract_view_tools;
 mod governance_ballot_tools;
 mod protocol;
 mod registry;
@@ -53,6 +54,7 @@ mod resources;
 mod response;
 mod transaction_artifacts;
 use connect_session_tools::{build_connect_session_create_body, decode_canonical, required_string};
+use contract_view_tools::{dispatch_contract_view, iroha_contracts_view_tool};
 use governance_ballot_tools::{
     governance_selector_v1_schema, iroha_gov_ballots_plain_tool,
     iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,
@@ -1124,6 +1126,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_contracts_code_get_tool());
     tools.push(iroha_contracts_code_bytes_get_tool());
     tools.push(iroha_contracts_call_tool());
+    tools.push(iroha_contracts_view_tool());
     tools.push(iroha_contracts_call_and_wait_tool());
     tools.push(iroha_contracts_state_get_tool());
     tools.push(iroha_accounts_list_tool());
@@ -1566,6 +1569,7 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
     matches!(
         name,
         "iroha.connect.session.status"
+            | "iroha.contracts.view"
             | "iroha.vpn.profile"
             | "iroha.vpn.sessions.get"
             | "iroha.vpn.receipts.list"
@@ -3001,6 +3005,12 @@ async fn handle_named_tool_call(
         }
         "iroha.contracts.call" => {
             match dispatch_iroha_contracts_call(&app, inbound_headers, arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.contracts.view" => {
+            match dispatch_contract_view(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -9601,6 +9611,7 @@ const INLINE_PURPOSE_BUILT_DISPATCH_ROUTES: &[(&str, &str, &str)] = &[
     ("iroha.gov.unlocks.stats", "GET", "/v1/gov/unlocks/stats"),
     ("iroha.gov.citizens.count", "GET", "/v1/gov/citizens"),
     ("iroha.contracts.call", "POST", "/v1/contracts/call"),
+    ("iroha.contracts.view", "POST", "/v1/contracts/view"),
     (
         "iroha.accounts.faucet.prepare",
         "POST",

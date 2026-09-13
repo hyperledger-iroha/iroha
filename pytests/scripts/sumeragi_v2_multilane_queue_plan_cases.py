@@ -1206,3 +1206,44 @@ def test_queue_plan_publication_scoped_contract_keeps_native_control_anchors() -
         assert all(token in owners[0] for token in tokens), (symbol, [token for token in tokens if token not in owners[0]])
         checked.add(symbol)
     assert checked == symbols
+
+
+@pytest.mark.parametrize(
+    ("relative", "symbol", "old", "new"),
+    [
+        (
+            "crates/iroha_core/src/state.rs",
+            "authenticate_pending_queue_plan_admission",
+            "&self.network_id,",
+            "&NetworkId::from(\"wrong-network\"),",
+        ),
+        (
+            "crates/iroha_core/src/state.rs",
+            "validate_authenticated_queue_plan_admission_for_carrier_in_view",
+            "exact_predecessor != context.predecessor_block_hash",
+            "false",
+        ),
+        (
+            "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+            "persist",
+            "QueuePlanAdmissionPersistenceScope::Admission,",
+            "QueuePlanAdmissionPersistenceScope::Carrier { height: 1 },",
+        ),
+        (
+            "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+            "publication_overlap_height",
+            "expected_durable_height.checked_add(1) == Some(*actual_durable_height)",
+            "expected_durable_height < actual_durable_height",
+        ),
+    ],
+    ids=("authenticated-network", "exact-history", "admission-scope", "one-ahead-wait"),
+)
+def test_queue_plan_pending_membership_contract_rejects_current_owner_drift(
+    tmp_path: Path, relative: str, symbol: str, old: str, new: str,
+) -> None:
+    """Authentication, historical authority, and deadline retries retain their owners."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    replace_once_after(tmp_path / relative, f"fn {symbol}(", old, new)
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(symbol in error and old in error for error in errors), errors

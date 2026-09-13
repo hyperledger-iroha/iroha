@@ -13062,7 +13062,7 @@
           "symbol": "persist_queue_plan_admission_certificate",
           "required_tokens": [
             "QueuePlanAdmissionCertificateStrengthV1::Quorum",
-            ".persist_classified_queue_plan_admission(&snapshot.body)",
+            "deadline.persist(&app.state, &snapshot.body).await",
             "PendingQueuePlanAdmissionPersistenceOutcome::Applied",
             "PendingQueuePlanAdmissionPersistenceOutcome::Rejected",
             "PendingQueuePlanAdmissionPersistenceOutcome::Durable",
@@ -13070,7 +13070,7 @@
             "snapshot.body = durable_certificate;",
             "disseminate_queue_plan_admission_publication",
             "notify_pending_queue_plan_admission",
-            "torii_proxy_snapshot_to_response"
+            "queue_plan_completed_admission_response(snapshot, expected_binding, &deadline)"
           ]
         },
         {
@@ -13970,8 +13970,10 @@
           "kind": "fn",
           "symbol": "classify_pending_queue_plan_admission",
           "required_tokens": [
+            "let admission = self.authenticate_pending_queue_plan_admission(bytes)?;",
             "let state_view = self.view();",
-            "Self::classify_pending_queue_plan_admission_in_view(&state_view, bytes, carrier_height)"
+            "Self::classify_pending_queue_plan_admission_in_view(\n            &state_view,\n            &admission,\n            carrier_height,",
+            "Ok((admission, disposition))"
           ]
         },
         {
@@ -13979,7 +13981,8 @@
           "kind": "fn",
           "symbol": "classify_pending_queue_plan_admission_in_view",
           "required_tokens": [
-            "Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?",
+            "admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1",
+            "Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, admission)?",
             "QueuePlanAdmissionApplicationState::PendingStale",
             "PendingQueuePlanAdmissionDisposition::Stale",
             "QueuePlanAdmissionApplicationState::Pending",
@@ -13989,7 +13992,9 @@
             "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
             "Queue::classify_plan_admission_context_in_view(",
             "PendingQueuePlanAdmissionDisposition::Future",
-            "Self::validate_queue_plan_admissions_for_carrier_in_view(",
+            "Self::validate_authenticated_queue_plan_admission_for_carrier_in_view(",
+            "carrier_height.max(current_proposal_height)",
+            "PendingQueuePlanAdmissionDisposition::DeferredCarrier",
             "PendingQueuePlanAdmissionDisposition::EligibleAbsent"
           ]
         },
@@ -13998,13 +14003,14 @@
           "kind": "fn",
           "symbol": "pending_queue_plan_admission_registry_lookup_in_view",
           "required_tokens": [
-            "decode_and_validate_queue_plan_admission_certificate_v1(",
-            "state_view.network_id()",
+            "admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1",
             "Self::queue_plan_admission_registry_match_in_view(",
             "admission.registry_key.entrypoint_hash.clone()",
             "admission.registry_value.binding_hash",
             "map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?",
-            "Self::queue_plan_admission_application_state(state_view, &admission)?"
+            "if lookup == QueuePlanAdmissionRegistryMatch::Exact",
+            "Self::queue_plan_admission_application_state(state_view, admission)?",
+            "Ok(lookup)"
           ]
         },
         {
@@ -14176,13 +14182,12 @@
           "symbol": "validate_queue_plan_admissions_for_carrier_in_view",
           "required_tokens": [
             "state_view: &impl StateReadOnly",
+            "!queue_plan_admissions_within_limits(admissions)",
             "decode_and_validate_queue_plan_admission_certificate_v1(",
             "state_view.network_id()",
-            "state_view.block_hashes().get(index).copied()",
-            "exact_predecessor != context.predecessor_block_hash",
-            "queue_plan_authoritative_peers_in_view_at_height(",
-            "state_view,",
-            "authority.as_ref().ok() != Some(&route.validator_set)"
+            ".is_some_and(|previous| previous >= &admission.registry_key)",
+            "Self::validate_authenticated_queue_plan_admission_for_carrier_in_view(\n                state_view,\n                &admission,\n                active_lanes,\n                carrier_height,",
+            "validated.push(admission)"
           ]
         },
         {
@@ -14806,6 +14811,74 @@
           "symbol": "KuraQueuePlanPublicationGuard<'_>::persist",
           "required_tokens": [
             ".persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "authenticate_pending_queue_plan_admission",
+          "required_tokens": [
+            "bytes: &[u8]",
+            "crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(\n            &self.network_id,\n            bytes,",
+            "MergeLedgerCommitError::ExecutionBatchInvalid(format!(",
+            "pending queue-plan admission certificate is invalid: {error}"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "validate_authenticated_queue_plan_admission_for_carrier_in_view",
+          "required_tokens": [
+            "state_view: &impl StateReadOnly",
+            "admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1",
+            "context.proposal_height > carrier_height",
+            "state_view.block_hashes().get(index).copied()",
+            "exact_predecessor != context.predecessor_block_hash",
+            "let source_proposal_height = if context.authority_height < committed_height {\n            current_proposal_height\n        } else {\n            context.proposal_height\n        };",
+            "binding.lane_id == route.leg.route.lane_id",
+            "binding.dataspace_id == route.leg.route.dataspace_id",
+            "active.incarnation != route.lane_incarnation",
+            "context.proposal_height < active.activation_height",
+            "queue_plan_authoritative_peers_in_view_at_height(\n                state_view,\n                route.leg.route,\n                source_proposal_height,",
+            "authority.as_ref().ok() != Some(&route.validator_set)"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+          "kind": "method",
+          "symbol": "PersistenceDeadline::persist",
+          "required_tokens": [
+            "runtime.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread",
+            "self.remaining().map_err(str::to_owned)?;",
+            "let outcome = tokio::task::block_in_place(|| {",
+            "state.persist_classified_queue_plan_admission(\n                    certificate,\n                    QueuePlanAdmissionPersistenceScope::Admission,",
+            "Ok(outcome) => return Ok(outcome)",
+            "let Some(required_height) = publication_overlap_height(&error) else {",
+            "return Err(error.to_string())",
+            "let remaining = self.remaining().map_err(str::to_owned)?;",
+            "tokio::time::timeout(remaining, state.wait_for_committed_height(required_height))"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+          "kind": "fn",
+          "symbol": "publication_overlap_height",
+          "required_tokens": [
+            "MergeLedgerCommitError::Persistence(",
+            "iroha_core::kura::Error::QueuePlanAdmissionDurableHeightMismatch",
+            "expected_durable_height.checked_add(1) == Some(*actual_durable_height)",
+            "Some(*actual_durable_height)",
+            "_ => None"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/lib.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_completed_admission_response",
+          "required_tokens": [
+            "if let Err(error) = deadline.remaining()",
+            "return queue_plan_outcome_unknown_response(",
+            "torii_proxy_snapshot_to_response(snapshot)"
           ]
         }
       ]

@@ -1,0 +1,34 @@
+[package]
+name = "iroha_contract_deploy"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Durable native contract deployment orchestration using the Iroha SDK"
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha = { workspace = true }
+iroha_crypto = { workspace = true, features = ["json"] }
+iroha_executor_data_model = { workspace = true }
+iroha_model_base = { workspace = true }
+iroha_primitives = { workspace = true }
+iroha_torii_shared = { workspace = true }
+iroha_version = { workspace = true }
+ivm_abi = { workspace = true }
+ivm_artifact_admission = { path = "../ivm_artifact_admission" }
+norito = { workspace = true, features = ["json"] }
+eyre = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+iroha_config = { workspace = true }
+kotodama_lang = { workspace = true }

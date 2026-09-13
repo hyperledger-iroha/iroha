@@ -4214,12 +4214,6 @@ pub(crate) mod valid {
         state_tx.world.current_dataspace_id = Some(routing.dataspace_id);
         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(entrypoint_hash));
         state_tx.current_tx_hash = Some(signed_hash);
-        let contract_deployment_bootstrap =
-            crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
-                &state_tx.world,
-                authority,
-                tx,
-            );
         if missing_authority_requires_rejection(
             &state_tx,
             tx,
@@ -4238,12 +4232,7 @@ pub(crate) mod valid {
         let confidential_gas =
             crate::gas::sum_confidential_gas_costs(overlay.instruction_slice().iter());
         state_tx.record_confidential_gas_delta(confidential_gas);
-        if let Err(error) = overlay.apply_signed_transaction_with_chunk(
-            &mut state_tx,
-            authority,
-            chunk_size,
-            contract_deployment_bootstrap.as_ref(),
-        ) {
+        if let Err(error) = overlay.apply_with_chunk(&mut state_tx, authority, chunk_size) {
             let rejection_reason = TransactionRejectionReason::Validation(error);
             let gas_used = state_tx.last_tx_gas_used;
             let confidential_work = ConfidentialWorkV1::capture(&state_tx);

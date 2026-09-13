@@ -1501,6 +1501,9 @@ fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         .map(|function| function.display_name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["run"]);
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute public wrapper");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
 }
 #[test]
 fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
@@ -2473,4 +2476,81 @@ fn collect_tests_rejects_duplicate_test_names() {
     let err = collect_tests_into(&program, &mut names, &mut tests)
         .expect_err("duplicate test names should fail");
     assert!(err.contains("duplicate test function"));
+}
+
+#[test]
+fn current_caller_public_invocation_executes_nested_helpers_and_typed_returns() {
+    let temp = TestTempDir::new();
+    let path = temp.write("current_caller.ko", r#"
+seiyaku Rewards {
+    fn points(int coffees) -> int {
+        if coffees < 0 { return 0; }
+        return coffees * 10;
+    }
+    view fn quote(int coffees) -> int { return points(coffees: coffees); }
+    view fn pair(int coffees) -> (int, int) { return (coffees, points(coffees: coffees)); }
+    #[test]
+    fn negative_quote() {
+        let result = test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{\"coffees\":\"-1\"}"));
+        test::assert_eq(actual: result, expected: 0);
+    }
+    #[test]
+    fn repeated_quote_and_tuple() {
+        let first = test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{\"coffees\":\"3\"}"));
+        let second = test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{\"coffees\":\"1\"}"));
+        let quoted_pair = test::invoke_kotoage(kotoage: "pair", arguments: Json::parse("{\"coffees\":\"3\"}"));
+        test::assert_eq(actual: first, expected: 30);
+        test::assert_eq(actual: second, expected: 10);
+        test::assert_eq(actual: quoted_pair.0, expected: 3);
+        test::assert_eq(actual: quoted_pair.1, expected: 30);
+    }
+}
+"#);
+    let suite = discover_suite(&path).expect("discover current-caller tests");
+    let compiled = compile_suite(&suite, false).expect("compile current-caller tests");
+    let results =
+        execute_suite(&compiled, TraceMode::Off, 1).expect("execute current-caller tests");
+    assert_eq!(results.len(), 2);
+    for result in results {
+        assert!(result.passed, "{}: {:?}", result.name, result.failure);
+    }
+}
+
+#[test]
+fn current_caller_public_invocation_enforces_arguments_and_declared_permissions() {
+    for (name, source, expected) in [
+        (
+            "arguments.ko",
+            r#"seiyaku Arguments {
+                view fn quote(int count) -> int { return count; }
+                #[test] fn malformed() {
+                    test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{}"));
+                }
+            }"#,
+            "arguments that do not match the kotoage schema",
+        ),
+        (
+            "permissions.ko",
+            r#"seiyaku Permissions {
+                kotoage fn restricted() authorize("UnrequestedBoundaryPermission") {}
+                #[test] fn denied() {
+                    test::invoke_kotoage(kotoage: "restricted", arguments: Json::parse("{}"));
+                }
+            }"#,
+            "lacks declared `UnrequestedBoundaryPermission` permission",
+        ),
+    ] {
+        let temp = TestTempDir::new();
+        let path = temp.write(name, source);
+        let suite = discover_suite(&path).expect("discover rejected public invocation");
+        let compiled = compile_suite(&suite, false).expect("compile rejected public invocation");
+        let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute rejection probe");
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert!(
+            results[0].failure.as_deref().unwrap().contains(expected),
+            "{:?}",
+            results[0].failure
+        );
+    }
 }

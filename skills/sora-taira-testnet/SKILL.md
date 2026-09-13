@@ -16,6 +16,10 @@ API contracts in shell scripts.
   `https://taira.sora.org/v1/mcp`.
 - For public endpoint diagnostics, use the same-revision compiled
   `iroha taira doctor --public-root https://taira.sora.org --json`.
+- For explicitly authorized ordinary account onboarding or funding, use the
+  same-revision `iroha taira account onboard` or `iroha taira account faucet`
+  workflow with its separate `prepare`, `submit`, and read-only `resume` actions.
+  Obtain the trusted issuer and any onboarding token from the deployment operator.
 - For a public write canary, require explicit user authorization and use the
   same-revision `iroha taira public-reset apply` coordinator. Its
   `write-canary` child is a low-level singular prepared-operation surface, not
@@ -248,8 +252,71 @@ target/release/iroha \
   taira doctor --public-root https://taira.sora.org --json
 ```
 
-For explicitly authorized mutation, use the admitted same-revision
-`iroha taira public-reset apply` workflow. It owns the ordered onboarding,
+The `mcp_discovery` check validates native stateless `server/discover`. The
+public-reset verifier consumes that same scoped diagnostic contract.
+
+## Ordinary account onboarding and funding
+
+Use `iroha taira account onboard prepare|submit|resume` for one account and alias,
+or `iroha taira account faucet prepare|submit|resume` for one funding claim. These
+ordinary workflows do not require a public reset. Use a same-revision native CLI
+and a populated client configuration in an owner-only runtime workspace. Pin the
+canonical Taira chain, exact genesis network identity, and address profile 369.
+Obtain the onboarding issuer, onboarding token, and faucet issuer/asset/amount
+policy independently from the operator; never trust a response to supply its own
+issuer or funding policy.
+
+Prepare a new operation in a previously absent journal directory whose parent
+already exists. For example:
+
+```bash
+iroha --config /private/runtime/taira/client.toml --fee-payer authority \
+  taira account onboard prepare --alias "<account-alias>" \
+  --issuer "<trusted-onboarding-account>" \
+  --token-file /private/runtime/taira/onboarding.token \
+  --journal /private/runtime/taira/onboarding
+iroha --config /private/runtime/taira/client.toml \
+  taira account onboard submit --journal /private/runtime/taira/onboarding \
+  --token-file /private/runtime/taira/onboarding.token
+iroha --config /private/runtime/taira/client.toml \
+  taira account onboard resume --journal /private/runtime/taira/onboarding
+
+iroha --config /private/runtime/taira/client.toml --fee-payer authority \
+  taira account faucet prepare --issuer "<trusted-faucet-account>" \
+  --asset-definition "<canonical-faucet-asset>" --amount "<authorized-amount>" \
+  --journal /private/runtime/taira/funding
+iroha --config /private/runtime/taira/client.toml \
+  taira account faucet submit --journal /private/runtime/taira/funding
+iroha --config /private/runtime/taira/client.toml \
+  taira account faucet resume --journal /private/runtime/taira/funding
+```
+
+Choose the explicit fee intent during preparation; submission reuses the retained
+intent. The CLI generates a fresh public request ID unless `--request-id` supplies
+one canonical 64-character lowercase hexadecimal ID. The public
+`PreparedOperationBindingV1` binds that request and its execution deadline to the
+verified receipt or claim. Preparation verifies the native SDK contract, solves
+faucet PoW with bounded native code, and durably saves the exact signed envelope
+before any submission. Journals contain public evidence, never private keys or
+onboarding tokens. Keep the token in an owner-only runtime file or an explicitly
+inherited descriptor; do not put it in command arguments or repository files.
+
+After an ambiguous submission, use read-only `resume` with the same journal.
+Never reconstruct, re-sign, or replace the retained transaction. Successful
+transaction recovery requires its exact global, state-resolved `Applied` status
+and the same committed signed wire envelope. Cached `Applied`, `Pending`, `Absent`,
+or a successful submit response is not completion. If onboarding requires a
+current-state proof instead of a transaction, the SDK atomically verifies the
+account and alias and reports `AlreadyPresent`; this is not an `Applied`
+transaction or proof of requested permissions. Follow up separately on any
+reported owner auto-renew instruction. Funding and deployment authorization are
+separate: verify the exact registrar, alias, or other permission needed for the
+next write with the operator.
+
+## Public reset and canary qualification
+
+For explicitly authorized public reset or write-canary qualification, use the
+admitted same-revision `iroha taira public-reset apply` workflow. It owns the ordered onboarding,
 faucet, and final-canary prepare/persist/submit/recover sequence. Its low-level
 `iroha taira write-canary` child handles exactly one operation and exactly one
 action over inherited numeric descriptors; there is no aggregate or one-shot
@@ -292,19 +359,21 @@ cached or previously funded signers as suspect until rechecked.
 
 When the deployed writer profile advertises
 `iroha.accounts.faucet.prepare` and `iroha.accounts.faucet.submit`, use them as
-one exact two-step workflow: send the typed PoW claim, public-reset mutation
-binding, and fee intent to `prepare`, persist its returned prepared envelope
-unchanged, then send that entire envelope to `submit`. Never reconstruct the
+one exact two-step workflow: send the typed PoW claim, public
+`PreparedOperationBindingV1` request/deadline binding, and explicit fee intent to
+`prepare`, verify its response through the native SDK against the independently
+trusted faucet policy, persist its returned prepared envelope unchanged, then
+send that entire envelope to `submit`. Never reconstruct the
 faucet-signed transaction or place keys, bearer tokens, or runtime authorization
 material inside tool arguments. New prepared envelopes carry a
 signature-bound marker version; consensus consumes the authority-scoped claim
 marker atomically with successful execution, so a duplicate claim through a
 different binding, peer, generic transaction ingress, or restart must be
 treated as a deterministic rejection rather than retried as another payout.
-The first release uses a fresh public reset and newly prepared envelopes bound
-to that reset. Expose the writer tools only after the reset coordinator has
-validated their current authority, fee intent, and durable prepared-operation
-protocol.
+Use writer tools only when the deployed profile advertises the current verified
+prepared-operation contract and the operator has admitted their authority and fee
+policy. Ordinary account operations use their own public request bindings; the
+public-reset coordinator retains its separate durable reset/canary protocol.
 
 For a pre-signed transaction envelope, prefer
 `iroha.transactions.submit_and_wait`:

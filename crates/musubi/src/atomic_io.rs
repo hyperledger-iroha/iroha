@@ -299,6 +299,95 @@ impl AtomicWriteRoot {
     pub fn path(&self) -> &Path {
         &self.canonical_root
     }
+    /// Hold one nonblocking exclusive process lock beneath this exact anchored directory.
+    ///
+    /// The lock name must be a single normal component. The retained file remains locked until
+    /// dropped, allowing a caller to serialize an entire read/prepare/replace sequence.
+    ///
+    /// # Errors
+    /// Rejects unsafe files, linked paths, changed directories, unsupported platforms and an
+    /// already held lock. Lock records are empty owner-only regular files.
+    pub(crate) fn lock_exclusive(&self, name: &Path) -> Result<File, AtomicWriteError> {
+        validate_relative_path(name)?;
+        if name.components().count() != 1 {
+            return Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::InvalidRelativePath,
+                name,
+                "lock one direct child",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            self.validate_root()?;
+            let file = File::from(
+                rustix::fs::openat(
+                    &self.root_handle,
+                    name,
+                    OFlags::RDWR
+                        | OFlags::CREATE
+                        | OFlags::NOFOLLOW
+                        | OFlags::NONBLOCK
+                        | OFlags::CLOEXEC,
+                    Mode::RUSR | Mode::WUSR,
+                )
+                .map_err(|error| AtomicWriteError::io(name, "open process lock", error.into()))?,
+            );
+            let metadata = file
+                .metadata()
+                .map_err(|error| AtomicWriteError::io(name, "inspect process lock", error))?;
+            let root = self
+                .root_handle
+                .metadata()
+                .map_err(|error| AtomicWriteError::io(name, "inspect lock directory", error))?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.len() != 0
+                || metadata.uid() != root.uid()
+                || metadata.mode() & 0o777 != 0o600
+            {
+                return Err(AtomicWriteError::new(
+                    AtomicWriteErrorCode::UnsafeTarget,
+                    name,
+                    "validate owner-only process lock",
+                ));
+            }
+            rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+                .map_err(|error| {
+                    AtomicWriteError::io(
+                        name,
+                        "acquire process lock; another command may be active",
+                        error.into(),
+                    )
+                })?;
+            let linked = rustix::fs::statat(&self.root_handle, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| {
+                    AtomicWriteError::io(name, "reinspect process lock path", error.into())
+                })?;
+            let opened = rustix::fs::fstat(&file).map_err(|error| {
+                AtomicWriteError::io(name, "reinspect held process lock", error.into())
+            })?;
+            if !same_descriptor_identity(&linked, &opened) {
+                return Err(AtomicWriteError::new(
+                    AtomicWriteErrorCode::ConcurrentModification,
+                    name,
+                    "bind held lock to its directory entry",
+                ));
+            }
+            self.validate_root()?;
+            file.sync_all()
+                .map_err(|error| AtomicWriteError::io(name, "persist process lock", error))?;
+            self.root_handle.sync_all().map_err(|error| {
+                AtomicWriteError::io(name, "persist process lock directory", error)
+            })?;
+            Ok(file)
+        }
+        #[cfg(not(unix))]
+        Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::UnsupportedPlatform,
+            name,
+            "acquire process lock",
+        ))
+    }
     /// Durably replace one root-relative regular file.
     ///
     /// The destination parent must already exist. The method rejects absolute paths, traversal,
@@ -2084,6 +2173,35 @@ const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = Some(secure_no_follow_nonblockin
 const PLATFORM_SECURE_OPEN_FLAGS: Option<i32> = None;
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn process_lock_serializes_writers_and_rejects_unsafe_records() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = super::AtomicWriteRoot::new(temporary.path()).expect("anchor");
+        let name = std::path::Path::new("deployment.lock");
+        let held = root.lock_exclusive(name).expect("first lock");
+        assert!(root.lock_exclusive(name).is_err());
+        drop(held);
+        drop(root.lock_exclusive(name).expect("released lock"));
+        assert!(
+            root.lock_exclusive(std::path::Path::new("nested/lock"))
+                .is_err()
+        );
+        let path = temporary.path().join(name);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("unsafe mode");
+        assert!(root.lock_exclusive(name).is_err());
+        std::fs::remove_file(&path).expect("remove lock");
+        let target = temporary.path().join("other");
+        std::fs::write(&target, "do not touch").expect("target");
+        symlink(&target, &path).expect("symlink");
+        assert!(root.lock_exclusive(name).is_err());
+        assert_eq!(
+            std::fs::read_to_string(target).expect("unchanged target"),
+            "do not touch"
+        );
+    }
     use super::*;
     #[cfg(unix)]
     struct DirectorySyncFailureReset;

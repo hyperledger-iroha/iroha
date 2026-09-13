@@ -1014,8 +1014,7 @@ koto lsp --zk --project zk.project.json
 
 `--zk` is an explicit build capability, not source metadata. It is required for
 `Secret<T>` and the approved proof/commitment operations; ordinary builds reject
-those constructs. `koto check|build|doc|lsp`, `musubi build`, and
-`iroha contract dev` pass this policy to the same in-process compiler session.
+those constructs. `koto check|build|doc|lsp` and `musubi build` pass this policy to the same in-process compiler session.
 It does not make ABI, vector, or pointer policy selectable.
 
 `koto fmt` and LSP formatting consume the compiler's lossless token stream.
@@ -1082,7 +1081,7 @@ retain canonical structured ranges and do not embed source contents.
 Compiler lint locations come from the same parser-owned declaration, binding,
 statement, and expression ranges. Warnings from one source share its immutable
 text and use the same diagnostic projection in `koto`, LSP, and
-`iroha contract dev check`, including dependencies that are not open in the editor.
+`musubi check`, including dependencies that are not open in the editor.
 
 The local-only test helper requires
 `test::expect_reject_as(actor:, kotoage:, arguments:, expected:)`. The expected
@@ -1096,17 +1095,13 @@ r14 and r15 are zero. Production admission does not enable test syscalls.
 Nested execution checkpoints are restored before accepting a rejection or
 reporting a mismatch.
 
-`iroha contract dev new <directory> --name <SeiyakuName>` stages and validates
-an offline project before publishing into a new or empty directory. Validation
-checks both manifests and the complete source graph, then compiles and executes
-every declared standalone test suite. A compilation failure or failed assertion
-leaves the destination untouched. It emits
-the contract, three standalone tests, explicit source graph, app manifest,
-README, ignore rules, and editor settings. The fixture contains only a public
-local identity; no signing material is generated. Local debugging and deployment
-continue through the existing `iroha contract` commands. The first-project guide
-is maintained at
-<https://docs.iroha.tech/blockchain/smart-contracts#first-project>.
+`musubi new <directory> --namespace <namespace>` creates a contract package
+with `Musubi.toml`, a contract, four standalone tests, README, and ignore rules.
+`musubi check`, `musubi build`, and `musubi test` consume the package's exact
+declared source and dependency graph. Network bindings select the exact client
+context and contract alias for deployment and views. These package declarations
+are distinct from the lower-level compiler source graph below; no additional
+app manifest participates in package builds.
 
 The project graph is canonical Norito JSON. Every field is explicit, version 1
 is the only accepted schema, source paths are relative to and contained by the
@@ -1159,8 +1154,8 @@ koto test run --junit target/kotodama-tests.xml seiyaku.test.ko
 koto test run --zk zk_seiyaku.test.ko
 ```
 
-The Rust compiler library behind `koto` is canonical. `iroha contract dev` and
-Musubi call that library in process. Their physical paths are normalized to
+The Rust compiler library behind `koto` is canonical. Musubi calls that library
+in process. Their physical paths are normalized to
 project-relative `/` names. In the absence of an explicit project manifest, the
 deterministic V1 default is the selected root with no inferred imports,
 wildcard exports, or sibling modules. Content-addressed build

@@ -363,13 +363,20 @@ metadata, a configurable library directory, explicit exports, optional local
 contract targets, tests, readme, license, repository, keywords, and positive
 include additions.
 
-`musubi new` creates a compilable library module with a TODO-marked unit-returning
+`musubi new` creates a contract package with one rewards quote and four tests.
+`--template library` creates a library module with a TODO-marked unit-returning
 function for each requested export. Export names must be canonical Kotodama
 identifiers permitted for those generated declarations. `musubi init` preserves
-existing library source and its function or type exports; it generates a library
-only when none exists. A conflicting source created concurrently is never
+existing source; it generates the selected template sources only when absent.
+A conflicting source created concurrently is never
 overwritten, and a source selected for preservation cannot silently become a
 generated replacement if it disappears.
+
+Each named `[[contract]]` target identifies one regular `.ko` source file and
+one `.to` artifact. The declared name is retained across check, build, network
+binding, deploy, and view. Contract directory discovery and generated ordinal
+target names are not supported. Packaging and publication enforce the same
+exact-file source identity as local compilation.
 
 A declared test target may name one `.ko` file or a directory. Directory
 targets expand to a bytewise-sorted, portable set of direct `.ko` roots under
