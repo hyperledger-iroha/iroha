@@ -106,6 +106,120 @@ use std::{
 };
 use thiserror::Error;
 
+/// Fixed-size local diagnostics; no samples enter consensus or persisted state.
+struct ApplyStageTimings<const N: usize> {
+    height: u64,
+    scope: &'static str,
+    started: Instant,
+    samples: ApplyStageSamples<N>,
+}
+
+struct ApplyStageSamples<const N: usize> {
+    stages: [(&'static str, Option<u64>); N],
+    completed: usize,
+    last_elapsed: Duration,
+}
+
+impl<const N: usize> ApplyStageSamples<N> {
+    fn new(labels: [&'static str; N]) -> Self {
+        Self {
+            stages: labels.map(|label| (label, None)),
+            completed: 0,
+            last_elapsed: Duration::ZERO,
+        }
+    }
+
+    fn record_elapsed(&mut self, elapsed: Duration) -> bool {
+        let Some(duration) = elapsed.checked_sub(self.last_elapsed) else {
+            return false;
+        };
+        let Some(stage) = self.stages.get_mut(self.completed) else {
+            return false;
+        };
+        stage.1 = Some(u64::try_from(duration.as_micros()).unwrap_or(u64::MAX));
+        self.completed += 1;
+        self.last_elapsed = elapsed;
+        true
+    }
+}
+
+impl<const N: usize> ApplyStageTimings<N> {
+    fn new(height: u64, scope: &'static str, labels: [&'static str; N]) -> Self {
+        Self {
+            height,
+            scope,
+            started: Instant::now(),
+            samples: ApplyStageSamples::new(labels),
+        }
+    }
+
+    fn record(&mut self) {
+        let _ = self.samples.record_elapsed(self.started.elapsed());
+    }
+}
+
+impl<const N: usize> Drop for ApplyStageTimings<N> {
+    fn drop(&mut self) {
+        // Capture before logging. Inner-scope logging remains included in the
+        // outer scope; these nested summaries must never be added together.
+        let total = self.started.elapsed();
+        iroha_logger::info!(
+            height = self.height,
+            scope = self.scope,
+            stage_durations_us = ?self.samples.stages,
+            recorded_stages = self.samples.completed,
+            all_stages_recorded = self.samples.completed == N,
+            tail_elapsed_us = total.saturating_sub(self.samples.last_elapsed).as_micros(),
+            total_elapsed_us = total.as_micros(),
+            "Sumeragi v2 local application stage timing"
+        );
+    }
+}
+
+#[cfg(test)]
+mod application_stage_timing_tests {
+    use super::{ApplyStageSamples, ApplyStageTimings};
+    use std::time::Duration;
+
+    #[test]
+    fn stage_samples_are_disjoint_and_keep_missing_stages_explicit() {
+        let mut samples = ApplyStageSamples::new(["authenticate", "persist", "publish"]);
+        assert!(samples.record_elapsed(Duration::from_micros(7)));
+        assert!(samples.record_elapsed(Duration::from_micros(19)));
+        assert_eq!(
+            samples.stages,
+            [
+                ("authenticate", Some(7)),
+                ("persist", Some(12)),
+                ("publish", None)
+            ]
+        );
+        assert_eq!(samples.completed, 2);
+        assert_eq!(samples.last_elapsed, Duration::from_micros(19));
+    }
+
+    #[test]
+    fn stage_samples_reject_clock_regression_and_excess_samples() {
+        let mut samples = ApplyStageSamples::new(["first", "second"]);
+        assert!(samples.record_elapsed(Duration::from_micros(5)));
+        assert!(!samples.record_elapsed(Duration::from_micros(4)));
+        assert_eq!(samples.completed, 1);
+        assert!(samples.record_elapsed(Duration::from_micros(5)));
+        assert!(!samples.record_elapsed(Duration::from_micros(6)));
+        assert_eq!(samples.stages, [("first", Some(5)), ("second", Some(0))]);
+    }
+
+    #[test]
+    fn local_stage_timer_records_monotonic_elapsed_and_drops_with_partial_samples() {
+        let mut timing = ApplyStageTimings::new(1, "test", ["completed", "unreached"]);
+        timing.record();
+        assert_eq!(timing.samples.completed, 1);
+        assert!(timing.samples.stages[0].1.is_some());
+        assert_eq!(timing.samples.stages[1].1, None);
+        drop(timing);
+    }
+}
+
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 fn private_settlement_carrier_bundle_source_v1(
     transaction: &iroha_data_model::transaction::SignedTransaction,
@@ -4384,6 +4498,24 @@ impl V2ApplyService {
         body_store: &mut V2BodyStore,
         task: ExactApplyTaskRef<'_>,
     ) -> Result<ExactApplyExecutionMaterial, V2ApplyError> {
+        let mut timings = ApplyStageTimings::new(
+            context.height,
+            "exact_apply",
+            [
+                "authenticate_body_finality",
+                "bind_carrier",
+                "validate_publish_state_queue",
+                "confirm_finality",
+                "publish_lane_relays",
+                "publish_metadata",
+                "repair_native_amx",
+                "publish_merge",
+                "promote_kagemusha",
+                "publish_mint_outbox",
+                "finalize_reservations",
+                "completion_material",
+            ],
+        );
         context.validate()?;
         if task.subject() != task.certificate().subject
             || task.certificate().phase != wire::GlobalPhase::Commit
@@ -4426,6 +4558,7 @@ impl V2ApplyService {
             .map_err(V2ApplyError::FinalityCryptography)?;
         let artifact = verified_artifact.artifact();
         artifact.validate_for_header(&body.header())?;
+        timings.record();
         let (ordinary_projection, live_lifecycle_projection) = match task {
             ExactApplyTaskRef::Ordinary(task) => {
                 let prospective_application = prospective_application_refinement_projection(
@@ -4552,6 +4685,7 @@ impl V2ApplyService {
                 )?;
             }
         }
+        timings.record();
         let committed_block = if state_height < height.get() {
             self.validate_and_apply(
                 context,
@@ -4595,6 +4729,7 @@ impl V2ApplyService {
             self.kura.store_block(Arc::clone(&committed))?;
             committed
         };
+        timings.record();
         let committed_block_hash = committed_block.hash();
         let executed_block_wire_hash = committed_block
             .executed_block_wire_hash()
@@ -4609,7 +4744,9 @@ impl V2ApplyService {
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
             })?;
+        timings.record();
         self.publish_finalized_lane_relays(committed_block.as_ref(), artifact)?;
+        timings.record();
         // The strict restart-repair path authenticates Native AMX evidence
         // against both finality and the post-WSV Kura metadata join. Publish
         // that join first on every fresh or recovery attempt, then repair or
@@ -4619,6 +4756,7 @@ impl V2ApplyService {
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("post-apply metadata", &error)
             })?;
+        timings.record();
         if committed_block
             .execution_context()
             .and_then(|bundle| bundle.merge_entry.as_ref())
@@ -4638,7 +4776,9 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
+        timings.record();
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
+        timings.record();
         self.kura
             .promote_kagemusha_finality_sidecar(artifact, &receipt)
             .map_err(|error| {
@@ -4647,7 +4787,9 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
+        timings.record();
         self.publish_kagemusha_mint_outbox_v1(artifact)?;
+        timings.record();
         // Queue ownership is the final durable boundary after Kura, WSV, and
         // every post-carrier evidence repair. An exact retry reaches this point
         // even when State already crossed its commit boundary, so a crash
@@ -4675,8 +4817,9 @@ impl V2ApplyService {
                 "autonomous carrier reached terminal Queue reservation stage"
             );
         }
+        timings.record();
         let artifact_hash = HashOf::new(artifact);
-        Ok(ExactApplyExecutionMaterial {
+        let material = ExactApplyExecutionMaterial {
             context: context.clone(),
             commit_qc: task.certificate().clone(),
             subject: task.subject(),
@@ -4694,7 +4837,9 @@ impl V2ApplyService {
             state_height_after: self.state.committed_height(),
             ordinary_projection,
             live_lifecycle_projection,
-        })
+        };
+        timings.record();
+        Ok(material)
     }
     fn finish_durable_apply_completion_against(
         &self,
@@ -4982,6 +5127,22 @@ impl V2ApplyService {
         verified_artifact: VerifiedV2FinalityArtifact,
         checked_carrier_applications: CheckedCarrierApplications,
     ) -> Result<(), V2ApplyError> {
+        let mut timings = ApplyStageTimings::new(
+            context.height,
+            "validate_and_apply",
+            [
+                "validate_candidate",
+                "validate_execution_and_persist_finality",
+                "prepublish_and_stage_metadata",
+                "hash_and_persist_staged_checkpoint",
+                "capture_archives",
+                "commit_state",
+                "submit_witness_and_test_checks",
+                "cleanup_queue",
+                "reconfigure_queue",
+                "publish_events",
+            ],
+        );
         let artifact = verified_artifact.artifact();
         if !body.is_resultless_proposal() {
             return Err(V2ApplyError::ResultBearingProposal);
@@ -5017,6 +5178,7 @@ impl V2ApplyService {
                     error.as_ref(),
                 )
             })?;
+        timings.record();
         self.validate_prospective_autoscale_retirement_queue(valid_block.as_ref(), &state_block)?;
         let witness = state_block
             .take_exec_witness()
@@ -5115,6 +5277,7 @@ impl V2ApplyService {
                 );
             }
         }
+        timings.record();
         let native_amx_prepublication = if store_block {
             Some(
                 self.kura
@@ -5196,6 +5359,7 @@ impl V2ApplyService {
         // manifest. A crash before State commit replays the overlay and must
         // reproduce this byte-identical hash; a crash after State commit can
         // authenticate the already-applied tip directly.
+        timings.record();
         #[cfg(test)]
         let staged_snapshot_bytes_for_test = store_block
             .then(|| crate::snapshot::canonical_staged_state_snapshot_bytes(&state_block));
@@ -5218,6 +5382,7 @@ impl V2ApplyService {
                     V2ApplyError::committed_recovery_required("pre-WSV recovery checkpoint", &error)
                 })?;
         }
+        timings.record();
         #[cfg(test)]
         self.inject_test_crash(tests::CrashPoint::WsvCheckpoint)?;
         // TODO: Add an automatic governed retention controller and deployment
@@ -5272,6 +5437,7 @@ impl V2ApplyService {
                 }
             }
         }
+        timings.record();
         let carries_scale_in = state_block
             .pending_autoscale_retirement_binding()
             .map_err(|error| {
@@ -5306,6 +5472,7 @@ impl V2ApplyService {
         commit_result.map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
+        timings.record();
         #[cfg(feature = "test-network-native-amx-fault-injection")]
         for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref()) {
             crate::native_amx_fault_injection::maybe_abort(
@@ -5348,6 +5515,7 @@ impl V2ApplyService {
                 );
             }
         }
+        timings.record();
         let committed_queue_hashes = committed_block
             .as_ref()
             .external_entrypoints_cloned()
@@ -5402,6 +5570,7 @@ impl V2ApplyService {
                     &error,
                 )
             })?;
+        timings.record();
         let nexus = self.state.nexus_snapshot();
         let compliance = self.queue.lane_compliance_engine();
         let queue_reconfiguration_started = Instant::now();
@@ -5417,12 +5586,14 @@ impl V2ApplyService {
                 "autonomous carrier completed Queue Nexus revalidation"
             );
         }
+        timings.record();
         for event in pipeline_events {
             let _ = self.events_sender.send(EventBox::Pipeline(event));
         }
         for event in state_events {
             let _ = self.events_sender.send(event);
         }
+        timings.record();
         Ok(())
     }
     fn persist_post_apply_metadata(

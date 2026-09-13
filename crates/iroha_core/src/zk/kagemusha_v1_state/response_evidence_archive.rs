@@ -122,6 +122,7 @@ struct RetainedIdentity {
 pub struct KagemushaResponseEvidenceArchiveV1 {
     wal: PrivateJournal,
     lane: KagemushaLaneIdV1,
+    asset_incarnation: AxtAssetIncarnationV1,
     retained: BTreeMap<ResponseKey, RetainedIdentity>,
 }
 
@@ -135,6 +136,7 @@ impl KagemushaResponseEvidenceArchiveV1 {
         let mut archive = Self {
             wal: PrivateJournal::create_new(path, FORMAT).map_err(storage_error)?,
             lane: lane.clone(),
+            asset_incarnation,
             retained: BTreeMap::new(),
         };
         archive
@@ -156,6 +158,7 @@ impl KagemushaResponseEvidenceArchiveV1 {
         let mut archive = Self {
             wal: PrivateJournal::open_existing(path, FORMAT).map_err(storage_error)?,
             lane: lane.clone(),
+            asset_incarnation,
             retained: BTreeMap::new(),
         };
         while let Some((sequence, payload)) = archive.wal.replay_next().map_err(storage_error)? {
@@ -202,6 +205,25 @@ impl KagemushaResponseEvidenceArchiveV1 {
     /// Rejects a poisoned owner, replaced or modified file, or incomplete replay.
     pub fn recovery_prefix(&self) -> Result<KagemushaRecoveryJournalPrefixV1> {
         self.wal.recovery_prefix().map_err(storage_error)
+    }
+
+    pub(super) fn validate_recovery_prefix(
+        &self,
+        lane: &KagemushaLaneIdV1,
+        asset_incarnation: AxtAssetIncarnationV1,
+        selected: KagemushaRecoveryJournalPrefixV1,
+    ) -> Result<()> {
+        if &self.lane != lane || self.asset_incarnation != asset_incarnation {
+            return Err(Error::InvalidBinding);
+        }
+        if !self
+            .wal
+            .contains_recovery_prefix(selected)
+            .map_err(storage_error)?
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
     }
 
     /// Retain both complete correlated frames, including the original response authenticator.

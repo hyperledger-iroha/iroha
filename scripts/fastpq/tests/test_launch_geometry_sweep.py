@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from scripts.fastpq import launch_geometry_sweep
+from scripts.fastpq.tests.test_wrap_benchmark import current_metal_report
+from scripts.fastpq.tests.test_digest384_evidence import primitive_report
 
 
 def test_wrap_helpers_load_with_package_relative_dependencies():
@@ -37,6 +39,10 @@ def _run_report_payload(payload: object, tmp_path: Path, monkeypatch) -> dict:
             str(tmp_path),
             "--bench-prefix",
             "fake-benchmark",
+            "--rows", str(payload.get("rows", 20_000) if isinstance(payload, dict) else 20_000),
+            "--iterations", str(payload.get("iterations", 2) if isinstance(payload, dict) else 2),
+            "--warmups", str(payload.get("warmups", 1) if isinstance(payload, dict) else 1),
+            "--operation", payload.get("operation_filter", "all") if isinstance(payload, dict) else "all",
         ]
     )
     assert result == 0
@@ -247,28 +253,20 @@ def test_malformed_report_payload_becomes_error_entry(
 def test_report_requires_literal_true_gpu_availability(
     gpu_available: object, expected_stable: bool, tmp_path: Path, monkeypatch
 ) -> None:
-    entry = _run_report_payload(
-        {
-            "gpu_available": gpu_available,
-            "gpu_backend": "metal",
-            "operations": [
-                {
-                    "operation": "fft",
-                    "gpu": {"mean_ms": 1.0},
-                    "cpu": {"mean_ms": 2.0},
-                    "speedup": {"ratio": 2.0},
-                }
-            ],
-            "metal_dispatch_queue": {"busy_ratio": 1.0, "dispatch_count": 1},
-        },
-        tmp_path,
-        monkeypatch,
+    payload = current_metal_report()
+    payload.update(gpu_available=gpu_available, gpu_backend="metal", execution_mode="gpu")
+    payload["operations"][0].update(
+        gpu_recorded=True, gpu={"mean_ms": 0.1, "min_ms": 0.1, "max_ms": 0.1},
+        speedup={"ratio": 2.0, "delta_ms": 0.1},
     )
-
-    assert entry["gpu_available"] is (gpu_available is True)
-    assert entry["classification"]["stable"] is expected_stable
-    if not expected_stable:
-        assert "gpu_unavailable" in entry["classification"]["reasons"]
+    payload["metal_dispatch_queue"] = {"busy_ratio": 1.0, "dispatch_count": 1}
+    entry = _run_report_payload(payload, tmp_path, monkeypatch)
+    if expected_stable:
+        assert entry["gpu_available"] is True
+        assert entry["classification"]["stable"] is True
+    else:
+        assert entry["status"] == "error"
+        assert "gpu_available" in entry["error"]
 
 
 def test_timeout_captures_byte_output(tmp_path: Path, monkeypatch) -> None:
@@ -317,3 +315,27 @@ def test_timeout_rejects_integer_too_large_for_finite_check() -> None:
         launch_geometry_sweep.main(["--timeout-seconds", "9" * 400])
 
     assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize("retired", [["--poseidon-lanes", "128"], ["--allow-cpu-fallback"]])
+def test_sweep_rejects_retired_scalar_geometry_and_fallback_flags(retired):
+    with pytest.raises(SystemExit):
+        launch_geometry_sweep.build_parser().parse_args(retired)
+
+
+def test_six_lane_sweep_preserves_exact_work_without_scalar_queue_telemetry(tmp_path, monkeypatch):
+    payload = primitive_report()
+    entry = _run_report_payload(payload, tmp_path, monkeypatch)
+    assert entry["classification"]["stable"] is True
+    assert entry["operations"]["digest384_trace_columns"]["digest384"] == payload["operations"][0]["digest384"]
+    assert entry["rows"] == 8
+    assert "--require-gpu" in entry["command"]
+
+
+def test_sweep_refuses_partial_lane_parity_even_with_scalar_queue_stats(tmp_path, monkeypatch):
+    payload = primitive_report()
+    payload["operations"][0]["digest384"]["gpu"]["parity_checked_lanes"] = 6
+    payload["metal_dispatch_queue"] = {"busy_ratio": 1.0, "dispatch_count": 100}
+    entry = _run_report_payload(payload, tmp_path, monkeypatch)
+    assert entry["status"] == "error"
+    assert "parity_checked_lanes" in entry["error"]

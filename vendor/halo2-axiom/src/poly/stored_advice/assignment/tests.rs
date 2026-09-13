@@ -9,6 +9,7 @@ use ff::Field;
 
 use super::*;
 use crate::poly::batch_invert_assigned;
+use crate::poly::stored_advice::{StoredLookupSideV1, StoredPolynomialRoleV1};
 
 #[derive(Default)]
 struct Recording {
@@ -16,15 +17,15 @@ struct Recording {
     failure_chunk: Option<u64>,
     panic_chunk: Option<u64>,
     seal_error: bool,
-    changed_writer_layout: Option<StoredAdviceLayoutV1>,
-    changed_snapshot_layout: Option<StoredAdviceLayoutV1>,
+    changed_writer_layout: Option<StoredPolynomialLayoutV1>,
+    changed_snapshot_layout: Option<StoredPolynomialLayoutV1>,
     writer_drops: usize,
     snapshot_drops: usize,
     seals: usize,
 }
 
 struct Writer {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     recording: Rc<RefCell<Recording>>,
 }
 
@@ -35,7 +36,7 @@ impl Drop for Writer {
 }
 
 struct Snapshot {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     recording: Rc<RefCell<Recording>>,
 }
 
@@ -45,21 +46,25 @@ impl Drop for Snapshot {
     }
 }
 
-impl StoredAdviceWriterV1 for Writer {
+impl StoredPolynomialWriterV1 for Writer {
     type Snapshot = Snapshot;
 
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.recording
             .borrow()
             .changed_writer_layout
             .unwrap_or(self.layout)
     }
 
-    fn write_chunk(&mut self, chunk: u64, scalars: &[[u8; 32]]) -> Result<(), StoredAdviceErrorV1> {
+    fn write_chunk(
+        &mut self,
+        chunk: u64,
+        scalars: &[[u8; 32]],
+    ) -> Result<(), StoredPolynomialErrorV1> {
         let mut recording = self.recording.borrow_mut();
         assert_ne!(recording.panic_chunk, Some(chunk), "injected write unwind");
         if recording.failure_chunk == Some(chunk) {
-            return Err(StoredAdviceErrorV1::Storage);
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         assert_eq!(chunk as usize, recording.chunks.len());
         assert_eq!(
@@ -75,11 +80,11 @@ impl StoredAdviceWriterV1 for Writer {
         Ok(())
     }
 
-    fn seal(self) -> Result<Snapshot, StoredAdviceErrorV1> {
+    fn seal(self) -> Result<Snapshot, StoredPolynomialErrorV1> {
         let mut recording = self.recording.borrow_mut();
         recording.seals += 1;
         if recording.seal_error {
-            return Err(StoredAdviceErrorV1::Storage);
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         assert_eq!(recording.chunks.len(), self.layout.chunk_count());
         Ok(Snapshot {
@@ -89,36 +94,36 @@ impl StoredAdviceWriterV1 for Writer {
     }
 }
 
-impl StoredAdviceSnapshotV1 for Snapshot {
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+impl StoredPolynomialSnapshotV1 for Snapshot {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
 
     fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         if expected != self.layout {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         let recording = self.recording.borrow();
         consume(
             recording
                 .chunks
                 .get(chunk as usize)
-                .ok_or(StoredAdviceErrorV1::ChunkIndex)?,
+                .ok_or(StoredPolynomialErrorV1::ChunkIndex)?,
         )
     }
 
     fn with_column<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        expected: StoredPolynomialLayoutV1,
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         if expected != self.layout {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         let values = self
             .recording
@@ -132,20 +137,19 @@ impl StoredAdviceSnapshotV1 for Snapshot {
     }
 }
 
-fn layout<F: StoredAssignmentFieldV1>(k: u32, column: u32) -> StoredAdviceLayoutV1 {
-    StoredAdviceLayoutV1::new(
+fn layout<F: StoredAssignmentFieldV1>(k: u32, column: u32) -> StoredPolynomialLayoutV1 {
+    StoredPolynomialLayoutV1::new(
         [31; 32],
         column as u64,
         F::STORED_FIELD,
         StoredPolynomialBasisV1::Lagrange,
         k,
-        column,
-        1,
+        StoredPolynomialRoleV1::Advice { column, phase: 1 },
     )
     .unwrap()
 }
 
-fn writer(layout: StoredAdviceLayoutV1) -> (Writer, Rc<RefCell<Recording>>) {
+fn writer(layout: StoredPolynomialLayoutV1) -> (Writer, Rc<RefCell<Recording>>) {
     let recording = Rc::new(RefCell::new(Recording::default()));
     (
         Writer {
@@ -278,67 +282,81 @@ fn admission_rejects_layout_field_basis_and_usable_range_substitution() {
         layout::<Fp>(9, 5),
         layout::<Fp>(10, 6),
         layout::<Fq>(10, 5),
-        StoredAdviceLayoutV1::new(
+        StoredPolynomialLayoutV1::new(
             [32; 32],
             5,
             StoredPastaFieldV1::Fp,
             StoredPolynomialBasisV1::Lagrange,
             10,
-            5,
-            1,
+            StoredPolynomialRoleV1::Advice {
+                column: 5,
+                phase: 1,
+            },
         )
         .unwrap(),
-        StoredAdviceLayoutV1::new(
+        StoredPolynomialLayoutV1::new(
             [31; 32],
             6,
             StoredPastaFieldV1::Fp,
             StoredPolynomialBasisV1::Lagrange,
             10,
-            5,
-            1,
+            StoredPolynomialRoleV1::Advice {
+                column: 5,
+                phase: 1,
+            },
         )
         .unwrap(),
-        StoredAdviceLayoutV1::new(
+        StoredPolynomialLayoutV1::new(
             [31; 32],
             5,
             StoredPastaFieldV1::Fp,
             StoredPolynomialBasisV1::Lagrange,
             10,
-            5,
-            2,
+            StoredPolynomialRoleV1::Advice {
+                column: 5,
+                phase: 2,
+            },
         )
         .unwrap(),
     ] {
         let (writer, recording) = writer(actual);
         assert!(matches!(
             StoredAdviceAssignmentV1::<Fp, _>::new(writer, expected, 1000),
-            Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Context))
+            Err(StoredAssignmentErrorV1::Store(
+                StoredPolynomialErrorV1::Context
+            ))
         ));
         assert_eq!(recording.borrow().writer_drops, 1);
     }
     for actual in [
         layout::<Fq>(10, 5),
-        StoredAdviceLayoutV1::new(
+        StoredPolynomialLayoutV1::new(
             [31; 32],
             5,
             StoredPastaFieldV1::Fp,
             StoredPolynomialBasisV1::Coefficient,
             10,
-            5,
-            1,
+            StoredPolynomialRoleV1::Advice {
+                column: 5,
+                phase: 1,
+            },
         )
         .unwrap(),
     ] {
         let (writer, _) = writer(actual);
         assert!(matches!(
             StoredAdviceAssignmentV1::<Fp, _>::new(writer, actual, 1000),
-            Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Context))
+            Err(StoredAssignmentErrorV1::Store(
+                StoredPolynomialErrorV1::Context
+            ))
         ));
     }
     let (writer, _) = writer(expected);
     assert!(matches!(
         StoredAdviceAssignmentV1::<Fp, _>::new(writer, expected, 1025),
-        Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Layout))
+        Err(StoredAssignmentErrorV1::Store(
+            StoredPolynomialErrorV1::Layout
+        ))
     ));
 }
 
@@ -384,7 +402,9 @@ fn late_gap_write_failure_destroys_owner_and_cannot_seal_or_retry() {
         .unwrap();
     assert_eq!(
         column.assign_discarding_value(900, Assigned::Trivial(Fp::from(6))),
-        Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Storage))
+        Err(StoredAssignmentErrorV1::Store(
+            StoredPolynomialErrorV1::Storage
+        ))
     );
     assert!(column.active.is_none());
     assert_eq!(recording.borrow().chunks.len(), 2);
@@ -430,14 +450,16 @@ fn tail_failure_and_seal_failure_return_no_snapshot() {
     let result = column.finish_with_tail(|row| {
         rows.push(row);
         if row == 510 {
-            Err(StoredAdviceErrorV1::Backend.into())
+            Err(StoredPolynomialErrorV1::Backend.into())
         } else {
             Ok(Fp::from(12))
         }
     });
     assert!(matches!(
         result,
-        Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Backend))
+        Err(StoredAssignmentErrorV1::Store(
+            StoredPolynomialErrorV1::Backend
+        ))
     ));
     assert_eq!(rows, [508, 509, 510]);
     assert_eq!(recording.borrow().chunks.len(), 1);
@@ -447,7 +469,9 @@ fn tail_failure_and_seal_failure_return_no_snapshot() {
     recording.borrow_mut().seal_error = true;
     assert!(matches!(
         column.finish_with_tail(|_| Ok(Fp::ONE)),
-        Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Storage))
+        Err(StoredAssignmentErrorV1::Store(
+            StoredPolynomialErrorV1::Storage
+        ))
     ));
     assert_eq!(recording.borrow().writer_drops, 1);
     assert_eq!(recording.borrow().snapshot_drops, 0);
@@ -465,7 +489,9 @@ fn backend_identity_changes_are_rejected_before_write_and_after_seal() {
         .unwrap();
     assert!(matches!(
         column.finish_with_tail(|_| Ok(Fp::ONE)),
-        Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Context))
+        Err(StoredAssignmentErrorV1::Store(
+            StoredPolynomialErrorV1::Context
+        ))
     ));
     assert!(recording.borrow().chunks.is_empty());
     assert_eq!(recording.borrow().writer_drops, 1);
@@ -473,7 +499,9 @@ fn backend_identity_changes_are_rejected_before_write_and_after_seal() {
     recording.borrow_mut().changed_snapshot_layout = Some(layout::<Fp>(8, 1));
     assert!(matches!(
         column.finish_with_tail(|_| Ok(Fp::ONE)),
-        Err(StoredAssignmentErrorV1::Store(StoredAdviceErrorV1::Context))
+        Err(StoredAssignmentErrorV1::Store(
+            StoredPolynomialErrorV1::Context
+        ))
     ));
     assert_eq!(recording.borrow().snapshot_drops, 1);
 }
@@ -492,4 +520,30 @@ fn successful_flush_clears_owned_field_slots_and_debug_exposes_no_values() {
     assert!(!debug.contains("numerator"));
     assert!(!debug.contains("denominator"));
     assert!(!debug.contains("recording"));
+}
+
+#[test]
+fn advice_assignment_rejects_self_consistent_lookup_roles_before_any_write() {
+    for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+        let expected = StoredPolynomialLayoutV1::new(
+            [31; 32],
+            5,
+            StoredPastaFieldV1::Fp,
+            StoredPolynomialBasisV1::Lagrange,
+            4,
+            StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side },
+        )
+        .unwrap();
+        let (writer, recording) = writer(expected);
+        assert!(matches!(
+            StoredAdviceAssignmentV1::<Fp, _>::new(writer, expected, 10),
+            Err(StoredAssignmentErrorV1::Store(
+                StoredPolynomialErrorV1::Context
+            ))
+        ));
+        let recording = recording.borrow();
+        assert_eq!(recording.writer_drops, 1);
+        assert_eq!(recording.seals, 0);
+        assert!(recording.chunks.is_empty());
+    }
 }

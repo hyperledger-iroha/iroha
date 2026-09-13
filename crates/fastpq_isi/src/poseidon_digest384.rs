@@ -102,36 +102,31 @@ impl<'a> GoldilocksDigest384FrameV1<'a> {
     /// limit, or the total framed word count cannot be represented by `usize`.
     #[must_use]
     pub fn new(domain: GoldilocksDigestDomainV1<'a>, fields: &'a [&'a [u8]]) -> Option<Self> {
-        if fields.len() > MAX_FRAMED_FIELD_BYTES_V1 {
-            return None;
-        }
-        let mut word_count = 0_usize;
-        for field in [
-            MESSAGE_FRAME_DOMAIN_V1,
-            domain.catalog,
-            domain.protocol,
-            domain.profile,
-            domain.role,
-            domain.phase,
-        ] {
-            word_count = word_count.checked_add(framed_byte_word_count_v1(field.len())?)?;
-        }
-        // Level, index, and counter precede the lane's eight-byte field.
-        word_count = word_count.checked_add(3 * framed_byte_word_count_v1(8)?)?;
-        let lane_word_index = word_count.checked_add(2)?;
-        word_count = word_count.checked_add(framed_byte_word_count_v1(8)?)?;
-        word_count = word_count.checked_add(2)?; // Field-count tag and value.
-        for field in fields {
-            word_count = word_count.checked_add(framed_byte_word_count_v1(field.len())?)?;
-        }
-        word_count = word_count.checked_add(1)?; // Final frame terminator.
-        word_count = word_count.checked_add(word_count % RATE)?;
+        let (word_count, lane_word_index) = canonical_frame_geometry_v1(
+            domain,
+            fields.len(),
+            fields.iter().map(|field| field.len()),
+        )?;
         Some(Self {
             domain,
             fields,
             word_count,
             lane_word_index,
         })
+    }
+
+    /// Exact canonical word count from public field lengths, without allocating payloads.
+    ///
+    /// Uses the same domain, field-count, field-size and rate-padding checks as
+    /// [`Self::new`]. Domain integer values do not change their fixed-width encoding.
+    /// Returns `None` if canonical length bounds or checked arithmetic fail.
+    #[must_use]
+    pub fn word_count_for_field_lengths_v1(
+        domain: GoldilocksDigestDomainV1<'_>,
+        field_lengths: &[usize],
+    ) -> Option<usize> {
+        canonical_frame_geometry_v1(domain, field_lengths.len(), field_lengths.iter().copied())
+            .map(|(word_count, _)| word_count)
     }
 
     /// Exact number of canonical words, including complete rate padding.
@@ -169,6 +164,52 @@ impl<'a> GoldilocksDigest384FrameV1<'a> {
         });
         debug_assert_eq!(position, output.len());
         true
+    }
+
+    /// Test a leading-zero target of at most 63 bits on the canonical digest bytes.
+    ///
+    /// Such a target depends only on the first eight little-endian digest bytes.
+    /// Compute that exact lane once; the other five coordinates cannot change
+    /// this predicate. This is a predicate, never a shortened commitment digest.
+    /// Returns `None` for targets outside the supported 0..=63 range.
+    #[must_use]
+    pub fn matches_leading_zero_bits_v1(&self, target_bits: u8) -> Option<bool> {
+        if target_bits > 63 {
+            return None;
+        }
+        let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[0]);
+        self.emit_lane_words(0, &mut |word| sponge.absorb(word));
+        debug_assert_eq!(sponge.pending_len, 0);
+        // The wire is little endian; its leading bit count is that of the
+        // byte-reversed integer, not the native numerical leading-zero count.
+        Some(sponge.state[0].swap_bytes().leading_zeros() >= u32::from(target_bits))
+    }
+
+    /// Prepare a reusable first-coordinate predicate with only the domain index varying.
+    ///
+    /// The cached permutation state ends at a complete rate block before the
+    /// first index byte. All other domain fields and payload fields stay bound
+    /// to this frame. No witness bytes are copied into the cache.
+    #[must_use]
+    pub fn indexed_predicate_v1(&self) -> GoldilocksDigest384IndexedPredicateV1<'a> {
+        // Index and counter are both framed eight-byte fields, each four words.
+        let index_word = self.lane_word_index
+            - 2 * framed_byte_word_count_v1(8).expect("fixed-size index frame");
+        let prefix_words = index_word - index_word % RATE;
+        let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[0]);
+        let mut position = 0;
+        self.emit_lane_words(0, &mut |word| {
+            if position < prefix_words {
+                sponge.absorb(word);
+            }
+            position += 1;
+        });
+        debug_assert_eq!(sponge.pending_len, 0);
+        GoldilocksDigest384IndexedPredicateV1 {
+            frame: *self,
+            prefix_state: sponge.state,
+            prefix_words,
+        }
     }
 
     /// Compute all six lanes with the canonical CPU permutation.
@@ -213,6 +254,110 @@ impl<'a> GoldilocksDigest384FrameV1<'a> {
             emit(0);
         }
     }
+}
+
+/// Reusable canonical first-coordinate predicate for a frame with a varying index.
+///
+/// This is a bounded leading-bit predicate, never a replacement commitment digest.
+/// It borrows the fixed payload and caches only the public domain prefix state.
+pub struct GoldilocksDigest384IndexedPredicateV1<'a> {
+    frame: GoldilocksDigest384FrameV1<'a>,
+    prefix_state: [u64; STATE_WIDTH],
+    prefix_words: usize,
+}
+impl GoldilocksDigest384IndexedPredicateV1<'_> {
+    /// Exact bounded-device cache length: three prefix-state words, index offset,
+    /// suffix length, then every canonical lane-zero suffix word.
+    #[must_use]
+    pub fn staged_word_count_v1(&self) -> Option<usize> {
+        self.frame
+            .word_count
+            .checked_sub(self.prefix_words)?
+            .checked_add(5)
+    }
+    /// Write the exact indexed cache into a caller-owned, exact-length buffer.
+    /// Invalid lengths return false before any write. The caller must wipe this
+    /// buffer if the original frame contains private fields.
+    #[must_use]
+    pub fn write_staged_words_v1(&self, output: &mut [u64]) -> bool {
+        if self.staged_word_count_v1() != Some(output.len()) {
+            return false;
+        }
+        let index_word = self.frame.lane_word_index
+            - 2 * framed_byte_word_count_v1(8).expect("fixed index frame");
+        output[..3].copy_from_slice(&self.prefix_state);
+        output[3] = (index_word - self.prefix_words) as u64;
+        output[4] = (self.frame.word_count - self.prefix_words) as u64;
+        let mut position = 0;
+        self.frame.emit_lane_words(0, &mut |word| {
+            if position >= self.prefix_words {
+                output[5 + position - self.prefix_words] = word;
+            }
+            position += 1;
+        });
+        true
+    }
+    /// Check the identical canonical digest predicate after changing only its index.
+    ///
+    /// Targets 0–63 have the same meaning as the complete digest bytes; larger
+    /// targets return `None`. Every nonce retains its complete eight-byte framing.
+    #[must_use]
+    pub fn matches_index_v1(&self, index: u64, target_bits: u8) -> Option<bool> {
+        if target_bits > 63 {
+            return None;
+        }
+        Some(self.first_coordinate_v1(index).swap_bytes().leading_zeros() >= u32::from(target_bits))
+    }
+    /// Exact first coordinate of the full canonical digest after replacing only its index.
+    /// This value is not a commitment digest; only a bounded leading-bit predicate may use it.
+    #[must_use]
+    pub fn first_coordinate_v1(&self, index: u64) -> u64 {
+        let mut frame = self.frame;
+        frame.domain.index = index;
+        let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[0]);
+        sponge.state = self.prefix_state;
+        let mut position = 0;
+        frame.emit_lane_words(0, &mut |word| {
+            if position >= self.prefix_words {
+                sponge.absorb(word);
+            }
+            position += 1;
+        });
+        debug_assert_eq!(sponge.pending_len, 0);
+        sponge.state[0]
+    }
+}
+
+fn canonical_frame_geometry_v1(
+    domain: GoldilocksDigestDomainV1<'_>,
+    field_count: usize,
+    field_lengths: impl Iterator<Item = usize>,
+) -> Option<(usize, usize)> {
+    if field_count > MAX_FRAMED_FIELD_BYTES_V1 {
+        return None;
+    }
+    let mut word_count = 0_usize;
+    for field in [
+        MESSAGE_FRAME_DOMAIN_V1,
+        domain.catalog,
+        domain.protocol,
+        domain.profile,
+        domain.role,
+        domain.phase,
+    ] {
+        word_count = word_count.checked_add(framed_byte_word_count_v1(field.len())?)?;
+    }
+    // Level, index, and counter precede the lane's eight-byte field.
+    word_count = word_count.checked_add(3 * framed_byte_word_count_v1(8)?)?;
+    let lane_word_index = word_count.checked_add(2)?;
+    word_count = word_count.checked_add(framed_byte_word_count_v1(8)?)?;
+    word_count = word_count.checked_add(2)?; // Field-count tag and value.
+    for length in field_lengths {
+        word_count = word_count.checked_add(framed_byte_word_count_v1(length)?)?;
+    }
+    word_count = word_count.checked_add(1)?; // Final frame terminator.
+    word_count = word_count.checked_add(word_count % RATE)?;
+    Some((word_count, lane_word_index))
 }
 
 fn framed_byte_word_count_v1(byte_count: usize) -> Option<usize> {
@@ -1254,6 +1399,65 @@ mod tests {
     }
 
     #[test]
+    fn length_only_frame_geometry_matches_real_frames_across_boundaries() {
+        for length in [0, 1, 6, 7, 8, 13, 14, 15, 48, 63, 64, 65, 4448] {
+            let payload = patterned_bytes(length);
+            let domain_bytes = patterned_bytes(length % 16);
+            let mut changed_domain = domain();
+            changed_domain.catalog = &domain_bytes;
+            changed_domain.role = &domain_bytes;
+            changed_domain.phase = &domain_bytes;
+            changed_domain.level = u64::MAX;
+            changed_domain.index = u64::MAX;
+            changed_domain.counter = u64::MAX;
+            for digest_domain in [domain(), changed_domain] {
+                for fields in [
+                    vec![],
+                    vec![payload.as_slice()],
+                    vec![b"".as_slice(), b"1234567", payload.as_slice()],
+                ] {
+                    let lengths: Vec<_> = fields.iter().map(|field| field.len()).collect();
+                    let frame = GoldilocksDigest384FrameV1::new(digest_domain, &fields).unwrap();
+                    let predicted = GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(
+                        digest_domain,
+                        &lengths,
+                    )
+                    .unwrap();
+                    assert_eq!(predicted, frame.word_count());
+                    assert_eq!(predicted % RATE, 0);
+                    let mut words = vec![0; predicted];
+                    assert!(frame.write_lane_words(0, &mut words));
+                    assert_eq!(words[frame.lane_word_index()], 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn length_only_frame_geometry_preserves_limits_without_allocating_payloads() {
+        assert!(
+            GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(
+                domain(),
+                &[MAX_FRAMED_FIELD_BYTES_V1],
+            )
+            .is_some()
+        );
+        if let Some(over_limit) = MAX_FRAMED_FIELD_BYTES_V1.checked_add(1) {
+            assert_eq!(
+                GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(
+                    domain(),
+                    &[over_limit],
+                ),
+                None
+            );
+            assert_eq!(
+                canonical_frame_geometry_v1(domain(), over_limit, core::iter::empty()),
+                None
+            );
+        }
+    }
+
+    #[test]
     fn prepared_frames_match_streaming_and_lane_parameter_replay() {
         for length in (0..=16).chain([27, 28, 29, 48, 63, 64, 65]) {
             let payload = patterned_bytes(length);
@@ -1782,5 +1986,136 @@ mod tests {
             GoldilocksDigest384V1::from_le_bytes(digest.to_le_bytes()),
             Some(digest)
         );
+    }
+}
+
+#[cfg(test)]
+mod grinding_prefix_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_grinding_predicate_matches_full_digest_at_all_targets() {
+        let mut passing_nonzero = 0;
+        let mut failing = 0;
+        for (ordinal, length) in [0, 1, 6, 7, 8, 13, 14, 48, 952, 4448]
+            .into_iter()
+            .enumerate()
+        {
+            let payload: Vec<u8> = (0..length).map(|i| (i * 73 + length) as u8).collect();
+            let fields: &[&[u8]] = &[b"", &payload];
+            let frame = GoldilocksDigest384FrameV1::new(
+                GoldilocksDigestDomainV1 {
+                    catalog: b"iroha-privacy-exact12-v1",
+                    protocol: b"test-protocol-v1",
+                    profile: b"stark-fri-poseidon-x7-goldilocks-6x64-v1",
+                    role: b"iroha:privacy:transparent-stark:grinding:v1",
+                    phase: b"proof-of-work-nonce",
+                    level: 0,
+                    index: ordinal as u64,
+                    counter: 0,
+                },
+                fields,
+            )
+            .unwrap();
+            let digest = frame.hash().to_le_bytes();
+            let mut bits = 0;
+            for byte in digest {
+                bits += byte.leading_zeros();
+                if byte != 0 {
+                    break;
+                }
+            }
+            for target in 0..=63 {
+                let expected = bits >= u32::from(target);
+                assert_eq!(frame.matches_leading_zero_bits_v1(target), Some(expected));
+                passing_nonzero += usize::from(expected && target > 0);
+                failing += usize::from(!expected);
+            }
+            for target in 64..=255 {
+                assert_eq!(frame.matches_leading_zero_bits_v1(target), None);
+            }
+        }
+        assert!(passing_nonzero > 0 && failing > 0);
+    }
+}
+
+#[cfg(test)]
+mod indexed_predicate_tests {
+    #[test]
+    fn indexed_staging_is_exact_and_invalid_lengths_do_not_write() {
+        use super::*;
+        let domain = GoldilocksDigestDomainV1 {
+            catalog: b"catalog",
+            protocol: b"protocol",
+            profile: b"profile",
+            role: b"grinding",
+            phase: b"nonce",
+            level: 0,
+            index: 0,
+            counter: 7,
+        };
+        let fields: &[&[u8]] = &[b"public seed"];
+        let frame = GoldilocksDigest384FrameV1::new(domain, fields).unwrap();
+        let cached = frame.indexed_predicate_v1();
+        let mut words = vec![0; cached.staged_word_count_v1().unwrap()];
+        assert!(cached.write_staged_words_v1(&mut words));
+        let mut complete = vec![0; frame.word_count()];
+        assert!(frame.write_lane_words(0, &mut complete));
+        let prefix = complete.len() - words[4] as usize;
+        assert_eq!(prefix % RATE, 0);
+        assert_eq!(&words[..3], &cached.prefix_state);
+        assert_eq!(&words[5..], &complete[prefix..]);
+        assert_eq!(words[3] as usize + prefix, frame.lane_word_index() - 8);
+        let mut invalid = vec![0x1234; words.len() - 1];
+        assert!(!cached.write_staged_words_v1(&mut invalid));
+        assert!(invalid.iter().all(|word| *word == 0x1234));
+    }
+    use super::*;
+    #[test]
+    fn indexed_prefix_matches_full_digest_at_byte_and_rate_boundaries() {
+        for role_len in [1, 6, 7, 8, 13, 14, 15, 41] {
+            let role = vec![b'x'; role_len];
+            let seed = [0x91; 48];
+            let fields: &[&[u8]] = &[&seed];
+            let mut domain = GoldilocksDigestDomainV1 {
+                catalog: b"test-catalog",
+                protocol: b"test-protocol",
+                profile: b"test-profile",
+                role: &role,
+                phase: b"proof-of-work-nonce",
+                level: 19,
+                index: 0,
+                counter: 23,
+            };
+            let frame = GoldilocksDigest384FrameV1::new(domain, fields).unwrap();
+            let cached = frame.indexed_predicate_v1();
+            for index in [
+                0,
+                1,
+                127,
+                128,
+                255,
+                256,
+                65535,
+                65536,
+                (1 << 56) - 1,
+                1 << 56,
+                u64::MAX,
+            ] {
+                domain.index = index;
+                let reference = GoldilocksDigest384FrameV1::new(domain, fields)
+                    .unwrap()
+                    .hash();
+                assert_eq!(cached.first_coordinate_v1(index), reference.words()[0]);
+                for target in 0..=63 {
+                    let expected =
+                        reference.words()[0].swap_bytes().leading_zeros() >= u32::from(target);
+                    assert_eq!(cached.matches_index_v1(index, target), Some(expected));
+                }
+                for target in [64, 255] {
+                    assert_eq!(cached.matches_index_v1(index, target), None);
+                }
+            }
+        }
     }
 }

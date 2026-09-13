@@ -2437,6 +2437,7 @@ struct Digest384MetalPipelinesV1 {
     device: Device,
     queues: QueuePool,
     pipeline: ComputePipelineState,
+    indexed_pipeline: ComputePipelineState,
     // Serialize this bounded primitive path. On uncertain completion, retaining
     // these exact allocations prevents wiping/recycling memory still in use.
     quarantine: Mutex<Option<Vec<(PooledBuffer, Buffer)>>>,
@@ -2447,11 +2448,14 @@ fn digest384_metal_context_v1() -> MetalResult<&'static Digest384MetalPipelinesV
         let device = select_metal_device().ok_or(GpuError::Unsupported(GpuBackend::Metal))?;
         let library = load_metal_library(&device)?;
         let pipeline = load_pipeline(&device, &library, "digest384_hash_frames_v1")?;
+        let indexed_pipeline =
+            load_pipeline(&device, &library, "digest384_indexed_first_coordinate_v1")?;
         let queues = QueuePool::new(&device, resolve_queue_policy(&device))?;
         Ok(Digest384MetalPipelinesV1 {
             device,
             queues,
             pipeline,
+            indexed_pipeline,
             quarantine: Mutex::new(None),
         })
     }) {
@@ -2527,6 +2531,75 @@ pub(crate) fn digest384_hash_frames_v1(
     buffers[3].0.copy_to_slice(output);
     // GPU completion is known. The last retained backing owner wipes complete
     // sensitive pages before they can re-enter the shared pool.
+    Ok(())
+}
+
+pub(crate) fn digest384_indexed_coordinates_v1(
+    staged: &crate::digest384_indexed_gpu::StagedDigest384IndexedV1,
+    output: &mut [u64],
+) -> MetalResult<()> {
+    use crate::digest384_gpu::digest384_gpu_parameters_v1;
+    if output.len() != staged.count
+        || staged.count == 0
+        || staged.count > crate::digest_executor::MAX_DIGEST384_INDEXED_BATCH_V1
+    {
+        return Err(GpuError::InvalidInput(
+            "indexed Metal output shape mismatch",
+        ));
+    }
+    let context = digest384_metal_context_v1()?;
+    let mut quarantine = context.quarantine.lock().map_err(|_| GpuError::Execution {
+        backend: GpuBackend::Metal,
+        message: "indexed dispatch lock poisoned".to_owned(),
+    })?;
+    if quarantine.is_some() {
+        return Err(GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: "indexed backend quarantined after uncertain completion".to_owned(),
+        });
+    }
+    for len in [
+        staged.words.len(),
+        digest384_gpu_parameters_v1().len(),
+        output.len(),
+    ] {
+        validate_metal_pooled_word_len(&context.device, len)?;
+    }
+    let mut buffers = Vec::with_capacity(3);
+    for mut pool in [
+        PooledBuffer::sensitive_from_slice(&staged.words)?,
+        PooledBuffer::from_slice(digest384_gpu_parameters_v1())?,
+        PooledBuffer::sensitive_zeroed(output.len())?,
+    ] {
+        let buffer = shared_pooled_buffer(&context.device, &mut pool)?;
+        buffers.push((pool, buffer));
+    }
+    let args = [staged.start, staged.count as u64];
+    let (queue, queue_index) = context.queues.select(staged.count as u32, 0);
+    let ticket = submit_compute_with_geometry(
+        queue,
+        queue_index,
+        &context.indexed_pipeline,
+        None,
+        staged.count as u64,
+        None,
+        false,
+        |encoder| {
+            for (index, (_, buffer)) in buffers.iter().enumerate() {
+                encoder.set_buffer(index as u64, Some(buffer), 0);
+            }
+            encoder.set_bytes(
+                3,
+                mem::size_of_val(&args) as u64,
+                ptr::from_ref(&args).cast(),
+            );
+        },
+    )?;
+    if let Err(error) = wait_for_ticket(ticket) {
+        *quarantine = Some(buffers);
+        return Err(error);
+    }
+    buffers[2].0.copy_to_slice(output);
     Ok(())
 }
 
@@ -6012,7 +6085,7 @@ mod tests {
     use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
     use iroha_crypto::Hash;
     use std::{thread, time::Duration};
-    const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
+    const SCALAR_PAIR_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:test:scalar-two-word-arithmetic";
     const REQUIRED_PIPELINES: &[&str] = &[
         POSEIDON_PERMUTE_KERNEL,
         POSEIDON_HASH_KERNEL,
@@ -6024,6 +6097,8 @@ mod tests {
         BN254_LDE_KERNEL,
         BN254_POSEIDON_HASH_KERNEL,
         digest384::KERNEL,
+        "digest384_hash_frames_v1",
+        "digest384_indexed_first_coordinate_v1",
     ];
     #[test]
     fn embedded_metal_source_is_self_contained() {
@@ -6035,9 +6110,10 @@ mod tests {
             "runtime Metal source must not depend on repository-relative includes"
         );
         for name in REQUIRED_PIPELINES {
-            assert!(
-                source.contains(&format!("kernel void {name}")),
-                "runtime Metal source is missing {name}"
+            assert_eq!(
+                source.matches(&format!("kernel void {name}(")).count(),
+                1,
+                "runtime Metal source must define {name} exactly once"
             );
         }
     }
@@ -6517,7 +6593,7 @@ mod tests {
         ensure_multi_queue_env();
         let _gpu_lane = crate::backend::acquire_gpu_lane();
         let domain_names = (0..8usize)
-            .map(|idx| format!("fastpq:v1:trace:column:vectorized:{idx}"))
+            .map(|idx| format!("fastpq:test:scalar-column:vectorized:{idx}"))
             .collect::<Vec<_>>();
         let domains = domain_names.iter().map(String::as_str).collect::<Vec<_>>();
         let columns = (0..domains.len())
@@ -6573,7 +6649,7 @@ mod tests {
         );
     }
     #[test]
-    fn poseidon_hash_columns_batches_merkle_pairs() {
+    fn poseidon_hash_columns_batches_two_word_inputs() {
         ensure_multi_queue_env();
         let _gpu_lane = crate::backend::acquire_gpu_lane();
         let pairs = (0..16usize)
@@ -6587,11 +6663,12 @@ mod tests {
                 [left, right]
             })
             .collect::<Vec<_>>();
-        let batch = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN_FOR_TESTS, &pairs)
-            .expect("batch");
+        let batch =
+            PoseidonColumnBatch::from_domain_and_pairs(SCALAR_PAIR_DOMAIN_FOR_TESTS, &pairs)
+                .expect("batch");
         let expected = pairs
             .iter()
-            .map(|pair| hash_with_domain_for_tests(TRACE_NODE_DOMAIN_FOR_TESTS, pair))
+            .map(|pair| hash_with_domain_for_tests(SCALAR_PAIR_DOMAIN_FOR_TESTS, pair))
             .collect::<Vec<_>>();
         super::adaptive_scheduler()
             .poseidon
@@ -6599,7 +6676,7 @@ mod tests {
         super::enable_kernel_stats(true);
         let Some(actual) = unwrap_or_skip(
             super::poseidon_hash_columns(&batch),
-            "poseidon_hash_columns merkle pairs",
+            "poseidon_hash_columns two-word arithmetic",
         ) else {
             super::enable_kernel_stats(false);
             return;

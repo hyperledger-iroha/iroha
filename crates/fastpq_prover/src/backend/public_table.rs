@@ -5,15 +5,17 @@
 //! allocating only in proportion to public rows and columns, never the padded
 //! trace or LDE domain. These are public-input operations, not witness checks.
 //!
-//! TODO: Bind the canonical public bytes, count, schema and geometry before phase
-//! challenges, and use these evaluations in the complete pair/binding AIR. This
-//! helper does not authenticate caller-provided rows or replace mandatory replay.
+//! The typed transfer AIR and its profile own statement/geometry binding. This
+//! helper validates the bounded supplied table and evaluates its exact polynomial;
+//! it does not authenticate the table's source or establish a proof opening.
 
 #[cfg(test)]
 use super::GoldilocksFp4V1;
+#[cfg(test)]
+use super::add_mod;
 use super::{
-    GOLDILOCKS_MODULUS, add_mod, field_inverse, field_pow, fixed_domain::FixedTraceDomain, mul_mod,
-    sub_mod,
+    GOLDILOCKS_MODULUS, field_inverse, field_pow, fixed_domain::FixedTraceDomain, mul_mod,
+    polynomial_field::PolynomialField,
 };
 use crate::{Error, Result, trace::DEFAULT_MAX_TRACE_COLUMNS};
 use fastpq_isi::StarkParameterSet;
@@ -137,36 +139,46 @@ impl<'a> PublicTablePolynomial<'a> {
         })
     }
 
-    /// Evaluate every public column at a canonical base-field point.
+    /// Evaluate every public column at a canonical base or extension field point.
     ///
     /// Work is O(public rows × width + log(trace rows)); temporary storage is
     /// O(public rows + width). Subgroup points, including every implicit zero, are
     /// handled exactly without attempting to invert zero.
-    pub(super) fn evaluate(&self, point: u64) -> Result<Vec<u64>> {
-        validate_base(point, "public_table_evaluation_point", &[])?;
-        if let Some(index) = self.points.iter().position(|&known| known == point) {
-            return Ok(self.rows[index].clone());
+    pub(super) fn evaluate<F: PolynomialField>(&self, point: F) -> Result<Vec<F>> {
+        point.validate("public_table_evaluation_point", &[])?;
+        if let Some(index) = self
+            .points
+            .iter()
+            .position(|&known| F::embed_base(known) == point)
+        {
+            return Ok(self.rows[index]
+                .iter()
+                .copied()
+                .map(F::embed_base)
+                .collect());
         }
-        let mut values = vec![0; self.width];
-        let zerofier = sub_mod(field_pow(point, self.trace_rows as u64), 1);
-        if zerofier == 0 || self.rows.is_empty() {
+        let mut values = vec![F::ZERO; self.width];
+        let zerofier = point.power(self.trace_rows as u64).sub(F::ONE);
+        if zerofier == F::ZERO || self.rows.is_empty() {
             return Ok(values);
         }
         let mut prefixes = Vec::with_capacity(self.rows.len());
-        let mut product = 1;
+        let mut product = F::ONE;
         for &known in &self.points {
             prefixes.push(product);
-            product = mul_mod(product, sub_mod(point, known));
+            product = product.mul(point.sub(F::embed_base(known)));
         }
-        // Known subgroup points were handled above, so every denominator is nonzero.
-        let mut inverse_product = field_inverse(product);
-        let common = mul_mod(zerofier, self.inverse_order);
+        // Known subgroup points were handled above, so no denominator is zero.
+        let mut inverse_product = product
+            .inverse()
+            .ok_or_else(|| shape_error("public table denominator is not invertible"))?;
+        let common = zerofier.scale_base(self.inverse_order);
         for row in (0..self.rows.len()).rev() {
-            let inverse_denominator = mul_mod(inverse_product, prefixes[row]);
-            inverse_product = mul_mod(inverse_product, sub_mod(point, self.points[row]));
-            let weight = mul_mod(common, mul_mod(self.points[row], inverse_denominator));
+            let inverse_denominator = inverse_product.mul(prefixes[row]);
+            inverse_product = inverse_product.mul(point.sub(F::embed_base(self.points[row])));
+            let weight = common.mul(inverse_denominator).scale_base(self.points[row]);
             for (value, &entry) in values.iter_mut().zip(&self.rows[row]) {
-                *value = add_mod(*value, mul_mod(weight, entry));
+                *value = value.add(weight.scale_base(entry));
             }
         }
         Ok(values)
@@ -400,8 +412,11 @@ mod tests {
         let moved =
             PublicTablePolynomial::new_sparse(&FASTPQ_FINAL_V1, 16, 2, &rows, &[1, 7, 15], 256)
                 .unwrap();
-        assert_ne!(public.evaluate(1).unwrap(), moved.evaluate(1).unwrap());
-        assert_eq!(moved.evaluate(1).unwrap(), [0, 0]);
+        assert_ne!(
+            public.evaluate(1_u64).unwrap(),
+            moved.evaluate(1_u64).unwrap()
+        );
+        assert_eq!(moved.evaluate(1_u64).unwrap(), [0, 0]);
     }
 
     #[test]
@@ -411,10 +426,96 @@ mod tests {
         assert_eq!(public.points.len(), rows.len());
         assert_eq!(public.points.capacity(), rows.len());
         assert!(core::ptr::eq(public.rows, rows.as_slice()));
-        assert_eq!(public.evaluate(1).unwrap(), rows[0]);
+        assert_eq!(public.evaluate(1_u64).unwrap(), rows[0]);
         assert_eq!(
             public.evaluate(FASTPQ_FINAL_V1.omega_coset).unwrap().len(),
             2
         );
+    }
+
+    #[test]
+    fn extension_public_tables_match_independent_horner_sparse_and_full_domain() {
+        use super::super::polynomial_reference as reference;
+        type F = GoldilocksFp4V1;
+        let rows = vec![vec![7, 11], vec![19, 31], vec![0, GOLDILOCKS_MODULUS - 1]];
+        for order in [4, 8, 16, 65_536] {
+            let positions = [0, order / 2, order - 1];
+            let public =
+                PublicTablePolynomial::new_sparse(&FASTPQ_FINAL_V1, order, 2, &rows, &positions, 3)
+                    .unwrap();
+            let mut points = reference::points();
+            let generator = FixedTraceDomain::new(&FASTPQ_FINAL_V1, order)
+                .unwrap()
+                .generator;
+            for row in [0, 1, order / 2, order - 1] {
+                points.push(F::embed_base(field_pow(generator, row as u64)));
+            }
+            for point in points {
+                let actual = public.evaluate(point).unwrap();
+                for column in 0..2 {
+                    let expected =
+                        positions
+                            .iter()
+                            .zip(&rows)
+                            .fold(F::ZERO, |sum, (&row, values)| {
+                                sum.add(
+                                    reference::lagrange(order, row, point).mul_base(values[column]),
+                                )
+                            });
+                    assert_eq!(actual[column], expected);
+                    if order <= 16 {
+                        let mut values = vec![0; order];
+                        for (&row, values_at_row) in positions.iter().zip(&rows) {
+                            values[row] = values_at_row[column];
+                        }
+                        assert_eq!(
+                            expected,
+                            reference::horner(&reference::interpolate(&values), point)
+                        );
+                    }
+                }
+            }
+        }
+        let empty =
+            PublicTablePolynomial::new_sparse(&FASTPQ_FINAL_V1, 65_536, 2, &[], &[], 0).unwrap();
+        for point in reference::points() {
+            assert_eq!(empty.evaluate(point).unwrap(), vec![F::ZERO; 2]);
+        }
+    }
+
+    #[test]
+    fn extension_public_tables_bind_sparse_positions_values_and_full_point() {
+        use super::super::polynomial_reference as reference;
+        let rows = vec![vec![3, 7], vec![11, 13]];
+        let original =
+            PublicTablePolynomial::new_sparse(&FASTPQ_FINAL_V1, 16, 2, &rows, &[0, 15], 2).unwrap();
+        let moved =
+            PublicTablePolynomial::new_sparse(&FASTPQ_FINAL_V1, 16, 2, &rows, &[1, 15], 2).unwrap();
+        let changed_rows = vec![vec![5, 7], vec![11, 13]];
+        let changed =
+            PublicTablePolynomial::new_sparse(&FASTPQ_FINAL_V1, 16, 2, &changed_rows, &[0, 15], 2)
+                .unwrap();
+        let point = *reference::points().last().unwrap();
+        assert_ne!(
+            original.evaluate(point).unwrap(),
+            moved.evaluate(point).unwrap()
+        );
+        assert_ne!(
+            original.evaluate(point).unwrap(),
+            changed.evaluate(point).unwrap()
+        );
+        assert_ne!(
+            original.evaluate(point).unwrap(),
+            original
+                .evaluate(GoldilocksFp4V1::embed_base(point.coefficients()[0]))
+                .unwrap()
+        );
+        for lane in 0..4 {
+            let mut words = [0; 4];
+            words[lane] = GOLDILOCKS_MODULUS;
+            assert!(
+                matches!(original.evaluate(GoldilocksFp4V1::from_coefficients_unchecked_for_test(words)), Err(Error::NonCanonicalGoldilocksElement { context: "public_table_evaluation_point", indices }) if indices == [lane])
+            );
+        }
     }
 }

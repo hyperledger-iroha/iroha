@@ -3,17 +3,16 @@ const path = require("path");
 const assert = require("assert");
 const crypto = require("crypto");
 const REPO = path.join(__dirname, "..", "..", "..", "..");
-const solc = process.env.SCCP_SOLJSON_PATH
-  ? require(path.join(REPO, "scripts", "contract_tooling", "authenticated-solc"))
-  : require("solc");
-const { createHardhatProvider } = require(path.join(
+const { compileNativeSolidity } = require(path.join(REPO, "scripts/contract_native_solc.js"));
+const { createNativeEdrProvider } = require(path.join(
   REPO,
   "scripts",
   "contract_tooling",
   "evm-runtime",
-  "hardhat-provider.js",
+  "edr-provider.js",
 ));
 const { ethers } = require("ethers");
+const { rejectedWith } = require(path.join(REPO, "scripts/contract_tooling/evm-runtime/evm-errors.js"));
 
 const BSC_MAINNET_PROFILE = 0x42;
 const ETHEREUM_MAINNET_PROFILE = 0x41;
@@ -44,7 +43,7 @@ const MAX_RUNTIME_BYTES = 24_576;
 const MAX_INITCODE_BYTES = 49_152;
 const ZERO_BOOL_RUNTIME = "0x600060005260206000f3";
 // Stay below the EIP-7825 per-transaction gas cap enforced by the locked
-// Hardhat runtime while retaining ample headroom for the largest constructor.
+// native EDR runtime while retaining ample headroom for the largest constructor.
 const MAX_DEPLOYMENT_GAS = 16_000_000n;
 const TOKEN_CALL_GAS_LIMIT = 100_000n;
 
@@ -185,12 +184,7 @@ const GROTH16_PROOF_ABI_TYPES = [
   "uint256[4]",
   "uint256[2]",
 ];
-const PINNED_EVM_SOLC_BUILD = "0.7.4+commit.3f05b770.Emscripten.clang";
-const PINNED_EVM_SOLJSON_SHA256 =
-  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
-const PINNED_TRON_SOLC_BUILD = "0.7.4+commit.3f05b770.Emscripten.clang";
-const PINNED_TRON_SOLJSON_SHA256 =
-  "2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2";
+const EXPECTED_NATIVE_COMPILERS = require(path.join(REPO, "scripts/contract_tooling/compiler-lock.json")).compilers;
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 
 function source(file) {
@@ -332,31 +326,12 @@ function loadAuthenticatedProductionArtifacts(manifestPayload, lockPayload) {
     "compiler lock binding drift",
   );
   assert.deepEqual(Object.keys(manifest.targets).sort(), ["evm", "tron"]);
-  const expectedCompilers = {
-    evm: {
-      build: PINNED_EVM_SOLC_BUILD,
-      digest: PINNED_EVM_SOLJSON_SHA256,
-    },
-    tron: {
-      build: PINNED_TRON_SOLC_BUILD,
-      digest: PINNED_TRON_SOLJSON_SHA256,
-    },
-  };
   const nested = {};
   const runtimeSizes = [];
   for (const target of ["evm", "tron"]) {
     const targetManifest = manifest.targets[target];
     assert.equal(targetManifest.target, target, `${target} target role drift`);
-    assert.equal(
-      targetManifest.compiler.reported_version,
-      expectedCompilers[target].build,
-      `${target} compiler version drift`,
-    );
-    assert.equal(
-      targetManifest.compiler.soljson_sha256_hex,
-      expectedCompilers[target].digest,
-      `${target} compiler digest drift`,
-    );
+    assert.deepEqual(targetManifest.compiler, EXPECTED_NATIVE_COMPILERS[target], `${target} native compiler identity drift`);
     const limits = lock.targets[target].contract_sizes;
     const byFile = {};
     const seen = new Set();
@@ -406,10 +381,6 @@ function compilerArtifact(value, fullyQualifiedName, target = "evm-test-harness"
 }
 
 function compile() {
-  const expectedCompilerBuild = process.env.SCCP_EXPECTED_SOLC_BUILD || PINNED_EVM_SOLC_BUILD;
-  assert.strictEqual(expectedCompilerBuild, PINNED_EVM_SOLC_BUILD, "SCCP V1 requires the locked EVM compiler build");
-  assert.strictEqual(solc.version(), PINNED_EVM_SOLC_BUILD, "unexpected Solidity compiler build");
-
   const manifestPath = process.env.SCCP_CONTRACT_ARTIFACT_MANIFEST;
   const artifactLockPath = process.env.SCCP_CONTRACT_ARTIFACT_LOCK;
   assert(manifestPath && artifactLockPath, "authenticated artifact manifest and lock are required");
@@ -444,7 +415,7 @@ function compile() {
   ];
   const mocks = `
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.7.4;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 import "contracts/evm/sccp/SccpExactTransferCodec.sol";
 import "contracts/evm/sccp/TairaXorExactEvmSccpBridge.sol";
@@ -689,7 +660,7 @@ contract CodeAliasedVerifier {
     sources,
     settings: production.manifest.targets.evm.settings,
   });
-  const output = JSON.parse(solc.compile(input));
+  const output = compileNativeSolidity(input);
   if (output.errors) {
     const rejected = output.errors.filter(
       (entry) => entry.severity === "error" || entry.severity === "warning",
@@ -741,14 +712,14 @@ contract CodeAliasedVerifier {
   const compatibilityRoute = tronCompatibilityByFile[
     "contracts/tron/sccp/TairaXorSccpBridge.sol"
   ].TairaXorSccpBridge;
-  assert.equal(
+  assert.notEqual(
     compatibilityRoute.bytecode,
     exactTvmRoute.bytecode,
-    "the shared pinned 0.7.4 compiler must reproduce the exact TRON route bytecode",
+    "EVM diagnostic code must never alias the distinct native TRON compiler output",
   );
   return {
     evmContracts: production.targets.evm,
-    tvmContracts: production.targets.tron,
+    tronDiagnosticContracts: tronCompatibilityByFile,
     mockContracts: mocksByFile,
     runtimeSizes: production.runtimeSizes,
   };
@@ -1819,46 +1790,6 @@ function mutateGroth16Proof(abi, proofBytes, overrides) {
   ]);
 }
 
-function rejectedWith(reason) {
-  return (error) => {
-    const candidates = [
-      error,
-      error?.error,
-      error?.info,
-      error?.info?.error,
-      error?.cause,
-      error?.cause?.error,
-    ].filter((value) => value && typeof value === "object");
-    const text = candidates
-      .flatMap((value) => [value.reason, value.shortMessage, value.message])
-      .filter(Boolean)
-      .join("\n");
-    const codes = candidates.map((value) => value.code).filter(Boolean);
-    const revertData = candidates
-      .map((value) => value.data)
-      .find((value) => typeof value === "string" && /^0x[0-9a-fA-F]*$/.test(value));
-    const isRevert =
-      codes.includes("CALL_EXCEPTION") ||
-      (codes.some((code) => code === 3 || code === "3") &&
-        (/revert|VM Exception/i.test(text) || revertData !== undefined));
-    if (!isRevert) return false;
-    if (!reason) return true;
-    if (text.includes(reason)) return true;
-    if (revertData?.startsWith("0x08c379a0")) {
-      try {
-        const [decoded] = ethers.AbiCoder.defaultAbiCoder().decode(
-          ["string"],
-          `0x${revertData.slice(10)}`,
-        );
-        return decoded === reason;
-      } catch (_error) {
-        return false;
-      }
-    }
-    return false;
-  };
-}
-
 async function waitForMined(label, transactionPromise) {
   try {
     const transaction = await transactionPromise;
@@ -1872,15 +1803,15 @@ async function waitForMined(label, transactionPromise) {
 async function main() {
   const {
     evmContracts: contracts,
-    tvmContracts,
+    tronDiagnosticContracts,
     mockContracts,
     runtimeSizes,
   } = compile();
-  const bscEip1193Provider = createHardhatProvider({
+  const bscEip1193Provider = createNativeEdrProvider({
     chainId: 56,
     blockGasLimit: Number(MAX_DEPLOYMENT_GAS + 5_000_000n),
   });
-  const provider = new ethers.BrowserProvider(bscEip1193Provider);
+  const provider = new ethers.BrowserProvider(bscEip1193Provider, undefined, { cacheTimeout: -1 });
   assert.equal((await provider.getNetwork()).chainId, 56n);
   const signer = await provider.getSigner(0);
   const outsider = await provider.getSigner(1);
@@ -1917,22 +1848,22 @@ async function main() {
     "TairaXorEthereumSccpBridge",
   );
   const tronVerifierArtifact = artifact(
-    tvmContracts,
+    tronDiagnosticContracts,
     "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
     "SccpTronGroth16Bn254MessageVerifier",
   );
   const tronTokenArtifact = artifact(
-    tvmContracts,
+    tronDiagnosticContracts,
     "contracts/tron/sccp/TairaXOR.sol",
     "TairaXOR",
   );
   const tronBridgeArtifact = artifact(
-    tvmContracts,
+    tronDiagnosticContracts,
     "contracts/tron/sccp/TairaXorSccpBridge.sol",
     "TairaXorSccpBridge",
   );
   const tronMintBreakerArtifact = artifact(
-    tvmContracts,
+    tronDiagnosticContracts,
     "contracts/tron/sccp/TairaXorSccpBridge.sol",
     "SccpTronMintBreaker",
   );
@@ -2516,11 +2447,11 @@ async function main() {
   );
 
   {
-  const tronEip1193Provider = createHardhatProvider({
+  const tronEip1193Provider = createNativeEdrProvider({
     chainId: 0x2b6653dc,
     blockGasLimit: Number(MAX_DEPLOYMENT_GAS + 5_000_000n),
   });
-  const provider = new ethers.BrowserProvider(tronEip1193Provider);
+  const provider = new ethers.BrowserProvider(tronEip1193Provider, undefined, { cacheTimeout: -1 });
   assert.equal((await provider.getNetwork()).chainId, 0x2b6653dcn);
   const signer = await provider.getSigner(0);
   const tronOutsider = await provider.getSigner(1);
@@ -4641,11 +4572,11 @@ async function main() {
   const bscRouteConfigHash = await bridge.routeConfigHash();
   await bscEip1193Provider.disconnect();
 
-  const ethereumEip1193Provider = createHardhatProvider({
+  const ethereumEip1193Provider = createNativeEdrProvider({
     chainId: 1,
     blockGasLimit: Number(MAX_DEPLOYMENT_GAS + 5_000_000n),
   });
-  const ethereumProvider = new ethers.BrowserProvider(ethereumEip1193Provider);
+  const ethereumProvider = new ethers.BrowserProvider(ethereumEip1193Provider, undefined, { cacheTimeout: -1 });
   assert.equal((await ethereumProvider.getNetwork()).chainId, 1n);
   const ethereumSigner = await ethereumProvider.getSigner(0);
   const ethereumVerifier = await deploy(ethereumSigner, verifierArtifact, [

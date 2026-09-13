@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.7.4;
+pragma solidity 0.7.6;
 pragma experimental ABIEncoderV2;
 
 import "../../evm/sccp/SccpExactTransferCodec.sol";
@@ -405,7 +405,7 @@ contract TairaXorSccpBridge {
         returns (bytes32)
     {
         // Every field is one static ABI word. Splitting the encoder input keeps
-        // the exact preimage while avoiding Solidity 0.7.4's 16-slot codegen
+        // the exact preimage while avoiding Solidity 0.7.6's 16-slot codegen
         // limit for one large `abi.encode` expression.
         bytes memory prefix = abi.encode(
             DESTINATION_BINDING_SEPARATOR,

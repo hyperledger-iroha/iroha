@@ -31,11 +31,6 @@ SUCCESS_RESULT_FIELDS = frozenset({
     "signed_rs16_da_observations", "authenticated_message_control",
     "process_inventory", "payload",
 })
-ADAPTER_OUTCOME_FIELDS = frozenset({
-    "version", "protocol", "request_id", "invocation_nonce", "request_sha256",
-    "commit", "participants", "elapsed_ms", "phase", "exit_code", "rust_terminal",
-    "status", "reason",
-})
 DEADLINE_STAGES = frozenset({
     "coordinator_ack", "state_convergence", "transparent_consents",
     "transparent_balances", "native_amx_receipt", "canonical_carrier",
@@ -67,149 +62,8 @@ def unsigned_milliseconds(value: Any, label: str, *, positive: bool = False) -> 
     return value
 
 
-def validate_benchmark_terminal(
-    value: Any,
-    *,
-    request: Mapping[str, Any],
-    request_sha256: str,
-    exit_code: int,
-) -> dict[str, Any]:
-    """Bind a Rust terminal to its request and authentic process exit.
-
-    Successful result semantics remain the responsibility of the canonical
-    measurement validator. This boundary requires that full result; unsuccessful
-    variants cannot smuggle metrics into the success-conditioned population.
-    """
-
-    terminal = exact_fields(value, RUST_TERMINAL_FIELDS, "Rust benchmark terminal")
-    if (
-        type(terminal["version"]) is not int or terminal["version"] != VERSION
-        or terminal["protocol"] != PROTOCOL or request.get("kind") != "benchmark"
-        or type(terminal["participants"]) is not int
-        or terminal["participants"] not in (2, 3, 4, 8, 16)
-        or type(exit_code) is not int
-        or not isinstance(request_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", request_sha256) is None
-        or terminal["request_sha256"] != request_sha256
-        or any(terminal[field] != request.get(field) for field in (
-            "request_id", "invocation_nonce", "commit", "participants",
-        ))
-    ):
-        raise AccountingError("Rust terminal does not bind the exact benchmark invocation")
-    for field in ("request_id", "invocation_nonce"):
-        if not isinstance(terminal[field], str) or re.fullmatch(
-            r"[0-9a-f]{64}", terminal[field]
-        ) is None:
-            raise AccountingError("Rust terminal identity is malformed")
-    if not isinstance(terminal["commit"], str) or re.fullmatch(
-        r"(?:[0-9a-f]{40}|[0-9a-f]{64})", terminal["commit"]
-    ) is None:
-        raise AccountingError("Rust terminal source identity is malformed")
-    elapsed = unsigned_milliseconds(terminal["elapsed_ms"], "terminal elapsed_ms")
-    outcome = terminal["outcome"]
-    if not isinstance(outcome, dict):
-        raise AccountingError("Rust terminal outcome is not an object")
-    kind = outcome.get("kind")
-    if kind == "succeeded":
-        exact_fields(outcome, frozenset({"kind", "result"}), "successful outcome")
-        result = exact_fields(outcome["result"], SUCCESS_RESULT_FIELDS, "successful result")
-        if (exit_code != 0 or type(result["version"]) is not int
-                or type(result["participants"]) is not int
-                or any(result[key] != terminal[key] for key in (
-            "version", "protocol", "request_id", "invocation_nonce", "request_sha256",
-            "commit", "participants",
-        ))):
-            raise AccountingError("successful Rust terminal contradicts its process exit or result")
-    elif kind == "failed":
-        exact_fields(outcome, frozenset({"kind", "stage", "reason"}), "failed outcome")
-        if (
-            exit_code <= 0 or outcome["stage"] != "benchmark_worker"
-            or not isinstance(outcome["reason"], str)
-            or outcome["reason"] not in WORKER_FAILURE_REASONS
-        ):
-            raise AccountingError("failed Rust terminal has an invalid reason or process exit")
-    elif kind == "timed_out":
-        exact_fields(outcome, frozenset({
-            "kind", "stage", "budget_ms", "elapsed_ms",
-        }), "timed-out outcome")
-        if (
-            exit_code <= 0 or not isinstance(outcome["stage"], str)
-            or outcome["stage"] not in DEADLINE_STAGES
-        ):
-            raise AccountingError("Rust deadline has an undeclared stage or contradictory exit")
-        budget = unsigned_milliseconds(outcome["budget_ms"], "deadline budget_ms", positive=True)
-        duration = unsigned_milliseconds(outcome["elapsed_ms"], "deadline elapsed_ms")
-        if duration < budget or duration > elapsed:
-            raise AccountingError("Rust deadline was not exhausted within the observed invocation")
-    else:
-        raise AccountingError("Rust terminal has an unknown outcome kind")
-    return terminal
 
 
-def validate_adapter_outcome(
-    value: Any, *, request: Mapping[str, Any], request_sha256: str,
-) -> dict[str, Any]:
-    """Validate the adapter's bounded transport observation without inferring success."""
-
-    result = exact_fields(value, ADAPTER_OUTCOME_FIELDS, "benchmark adapter outcome")
-    if (
-        type(result["version"]) is not int or result["version"] != VERSION
-        or result["protocol"] != PROTOCOL
-        or result["request_sha256"] != request_sha256
-        or type(result["participants"]) is not int
-        or any(result[key] != request.get(key) for key in (
-            "request_id", "invocation_nonce", "commit", "participants",
-        ))
-        or (result["exit_code"] is not None and type(result["exit_code"]) is not int)
-    ):
-        raise AccountingError("adapter outcome does not bind the benchmark invocation")
-    unsigned_milliseconds(result["elapsed_ms"], "adapter elapsed_ms")
-    binding = result["rust_terminal"]
-    if binding is not None:
-        exact_fields(binding, frozenset({"sha256", "bytes"}), "retained Rust terminal binding")
-        if (
-            not isinstance(binding["sha256"], str)
-            or re.fullmatch(r"[0-9a-f]{64}", binding["sha256"]) is None
-            or type(binding["bytes"]) is not int or not 0 < binding["bytes"] <= 16 * 1024 * 1024
-        ):
-            raise AccountingError("retained Rust terminal binding is malformed")
-    shape = (result["status"], result["reason"], result["phase"])
-    if not all(isinstance(item, str) for item in shape):
-        raise AccountingError("adapter outcome codes are malformed")
-    exit_code = result["exit_code"]
-    if shape == ("succeeded", "rust_succeeded", "measurement_validation"):
-        valid = exit_code == 0 and binding is not None
-    elif shape in {
-        ("failed", "rust_failed", "terminal_validation"),
-        ("timed_out", "rust_timed_out", "terminal_validation"),
-    }:
-        valid = exit_code is not None and exit_code > 0 and binding is not None
-    elif shape == ("failed", "validator_build_failed", "validator_build"):
-        valid = exit_code is not None and exit_code != 0 and binding is None
-    elif shape in {
-        ("failed", "validator_build_spawn_failed", "validator_build"),
-        ("failed", "benchmark_process_spawn_failed", "benchmark_process"),
-    }:
-        valid = exit_code is None and binding is None
-    elif shape == ("incomplete", "rust_terminal_missing", "terminal_validation"):
-        valid = exit_code is not None and binding is None
-    elif result["status"] == "incomplete" and result["reason"] == "adapter_interrupted":
-        valid = result["phase"] in {
-            "validator_build", "validator_identity", "benchmark_process",
-            "terminal_validation", "measurement_validation",
-        }
-    elif shape in {
-        ("invalid", "rust_terminal_invalid", "terminal_validation"),
-        ("invalid", "request_changed", "terminal_validation"),
-        ("invalid", "measurement_invalid", "measurement_validation"),
-        ("invalid", "validator_identity_invalid", "validator_identity"),
-    }:
-        valid = exit_code is not None
-    else:
-        valid = False
-    if not valid:
-        raise AccountingError("adapter outcome contradicts its phase, reason, exit or terminal")
-    return result
 
 
 # Registered-scope reduction consumes authenticated retained bytes. These names
@@ -346,17 +200,37 @@ def validate_deadline_policy(value: Any) -> dict[str, Any]:
     return policy
 
 
-# TODO: Wire this pure plan only together with persistent benchmark process
-# ownership and its mandatory evidence contract; it is not an execution selector.
+# The canonical runner uses this plan with retained process ownership and the
+# mandatory session evidence contract; planning alone grants no execution claim.
 BENCHMARK_SESSION_PARTICIPANTS = (2, 3, 4, 8, 16)
 BENCHMARK_SESSION_PROFILES = ("private", "transparent_control")
 # Preserve the existing planner's maximum benchmark inventory before allocation.
 MAX_PLANNED_BENCHMARK_ATTEMPTS = 20_000
 
 
+def build_benchmark_workload_policy(participants: int) -> dict[str, Any]:
+    """Declare the exact shared payment policy; no private party IDs are exported."""
+    if type(participants) is not int or participants not in BENCHMARK_SESSION_PARTICIPANTS:
+        raise AccountingError("workload policy has an unsupported participant count")
+    return {
+        "version": 1, "protocol": PROTOCOL, "kind": "matched_benchmark_payment_policy",
+        "participants": participants, "primary_amount_base": 42, "primary_amount_step": 1,
+        "sponsor_reimbursement_amount": 5, "private_change_amount": 7, "reserve_note_amount": 1,
+        "sponsor": "genesis_alice", "derivation_domain": "iroha:matched-benchmark-workload:v1",
+        "attempt_coordinates": ["participants", "seed", "session_attempt_index", "warmup"],
+        "prefunding_policy": "session_union_of_disjoint_attempts",
+    }
+
+
+def validate_benchmark_workload_policy(value: Any, participants: int) -> dict[str, Any]:
+    """Reject policy substitution, including omitted mandatory reimbursement."""
+    expected = build_benchmark_workload_policy(participants)
+    _same(value, expected, "matched economic policy")
+    return expected
+
 def build_benchmark_session_plan(
     configuration_sha256: Mapping[int, str], seeds: Sequence[int],
-    workload_sha256: Mapping[int, str], *, warmups_per_session: int,
+    workload_manifest_sha256: Mapping[int, str], *, warmups_per_session: int,
     measured_per_profile: int,
 ) -> dict[str, list[dict[str, Any]]]:
     """Derive immutable network sessions and their ordered settlement jobs.
@@ -368,7 +242,7 @@ def build_benchmark_session_plan(
     Matched profile sessions are adjacent; the first profile alternates by seed
     index. This function does not construct a network or attest executed warmups.
     """
-    for label, value in (("configuration", configuration_sha256), ("workload", workload_sha256)):
+    for label, value in (("configuration", configuration_sha256), ("workload", workload_manifest_sha256)):
         if (not isinstance(value, Mapping)
                 or any(type(key) is not int for key in value)
                 or set(value) != set(BENCHMARK_SESSION_PARTICIPANTS)):
@@ -400,7 +274,7 @@ def build_benchmark_session_plan(
                 coordinates = {
                     "profile": profile, "participants": participants, "seed": seed,
                     "configuration_sha256": configuration_sha256[participants],
-                    "workload_sha256": workload_sha256[participants],
+                    "workload_manifest_sha256": workload_manifest_sha256[participants],
                     "warmup_attempts": warmups_per_session, "measured_attempts": measured,
                 }
                 session_id = hashlib.sha256(accounting_canonical_bytes({
@@ -413,7 +287,7 @@ def build_benchmark_session_plan(
                         "seed": seed, "session_id": session_id, "session_attempt_index": index,
                         "warmup": index < warmups_per_session,
                         "configuration_sha256": configuration_sha256[participants],
-                        "workload_sha256": workload_sha256[participants],
+                        "workload_manifest_sha256": workload_manifest_sha256[participants],
                     }
                     jobs.append({"request_id": hashlib.sha256(accounting_canonical_bytes(body)).hexdigest(), **body})
     return {"sessions": sessions, "jobs": jobs}
@@ -421,12 +295,12 @@ def build_benchmark_session_plan(
 
 def validate_benchmark_session_plan(
     value: Any, configuration_sha256: Mapping[int, str], seeds: Sequence[int],
-    workload_sha256: Mapping[int, str], *, warmups_per_session: int,
+    workload_manifest_sha256: Mapping[int, str], *, warmups_per_session: int,
     measured_per_profile: int,
 ) -> dict[str, list[dict[str, Any]]]:
     """Require the exact regenerated session and attempt inventory, not counters."""
     expected = build_benchmark_session_plan(
-        configuration_sha256, seeds, workload_sha256,
+        configuration_sha256, seeds, workload_manifest_sha256,
         warmups_per_session=warmups_per_session, measured_per_profile=measured_per_profile)
     _same(value, expected, "canonical benchmark session plan")
     return expected
@@ -434,7 +308,7 @@ def validate_benchmark_session_plan(
 
 def validate_benchmark_session_dispatch_prefix(
     configuration_sha256: Mapping[int, str], seeds: Sequence[int],
-    workload_sha256: Mapping[int, str], *, warmups_per_session: int,
+    workload_manifest_sha256: Mapping[int, str], *, warmups_per_session: int,
     measured_per_profile: int, full_jobs: Sequence[Mapping[str, Any]],
     started_request_ids: Sequence[str], job_states: Sequence[Mapping[str, str]],
 ) -> None:
@@ -447,7 +321,7 @@ def validate_benchmark_session_dispatch_prefix(
     collector, the real typed reducer, or authoritative quiescent closure.
     """
     expected = build_benchmark_session_plan(
-        configuration_sha256, seeds, workload_sha256,
+        configuration_sha256, seeds, workload_manifest_sha256,
         warmups_per_session=warmups_per_session, measured_per_profile=measured_per_profile)
     if not isinstance(full_jobs, (list, tuple)) or not full_jobs:
         raise AccountingError("session dispatch requires the complete campaign job inventory")
@@ -626,7 +500,7 @@ def _response_record(raw: bytes | None, response_raw: bytes | None) -> dict[str,
 
 
 def _terminal_without_exit(value: Any, request: Mapping[str, Any], request_sha: str) -> None:
-    """Reject malformed orphan terminals without inventing a process exit observation."""
+    """Validate an attempt terminal without inventing a per-attempt process exit."""
 
     terminal = exact_fields(value, RUST_TERMINAL_FIELDS, "orphan Rust terminal")
     _header(terminal, "orphan Rust terminal")
@@ -656,301 +530,754 @@ def _terminal_without_exit(value: Any, request: Mapping[str, Any], request_sha: 
         raise AccountingError("orphan terminal has an unknown outcome kind")
 
 
-def _successful_join(packet: Mapping[str, Any], request: Mapping[str, Any], result: Mapping[str, Any],
-                     validation: Mapping[str, Any], identity: Mapping[str, Any], plan: Mapping[str, Any],
-                     job: Mapping[str, Any]) -> dict[str, Any]:
-    response = _document(packet["response"], "response")
-    _header(response, "response")
-    for key in ("request_id", "invocation_nonce", "commit", "participants", "hardware_sha256",
-                "hardware_profile_sha256", "configuration_sha256"):
-        _same(response.get(key), request[key], f"response.{key}")
-    if response.get("kind") != "benchmark" or response.get("passed") is not True:
-        raise AccountingError("successful response has a contradictory header")
-    for key in ("payload", "process_inventory", "mandatory_signed_rs16_da_rbc",
-                "signed_rs16_da_observations", "authenticated_message_control"):
-        _same(response.get(key), result[key], f"successful response.{key}")
-    _same(_binding(validation["response"], "validation.response"), accounting_file_binding(packet["response"]), "validated response")
-    sample = _document(packet["sample"], "successful sample")
-    _same(_binding(validation["sample"], "validation.sample"), accounting_file_binding(packet["sample"]), "validated sample")
-    _header(sample, "sample")
-    coordinates = {"attempt_id": identity["attempt_id"], "commit": plan["commit"],
-                   "hardware_sha256": plan["hardware"]["sha256"],
-                   "hardware_profile_sha256": plan["hardware"]["profile_sha256"],
-                   **{key: job[key] for key in ("profile", "participants", "seed", "run", "warmup", "configuration_sha256")}}
-    for key, expected in coordinates.items():
-        _same(sample.get(key), expected, f"sample.{key}")
-    payload = result["payload"]
-    if not isinstance(payload, dict) or not isinstance(payload.get("stages_ms"), dict):
-        raise AccountingError("successful result lacks its measurement payload")
-    metric_fields = frozenset({"stages_ms", "throughput_bundles_per_second", "cpu_seconds", "peak_rss_bytes",
-                               "network_bytes", "proof_bytes", "receipt_bytes", "storage_growth_bytes"})
-    exact_fields(sample, frozenset({"version", "protocol", *coordinates, *metric_fields}), "sample")
-    # The canonical runner normalizes every measured stage/resource to f64.
-    def normalized(value: Any) -> float:
-        if type(value) not in (int, float) or value < 0:
-            raise AccountingError("successful measurement is not a nonnegative number")
-        result = float(value)
-        accounting_canonical_bytes(result)
-        return result
-    expected_metrics = {key: normalized(payload[key]) for key in metric_fields if key != "stages_ms"}
-    expected_metrics["stages_ms"] = {key: normalized(value) for key, value in payload["stages_ms"].items()}
-    for key, expected in expected_metrics.items():
-        _same(sample[key], expected, f"normalized sample.{key}")
-    return sample
+# A retained benchmark has one NativeWorker lifetime. The in-process adapter
+# does not acquire a fictitious child exit, and attempts do not own process groups.
+SESSION_CLOSURE_FIELDS = frozenset({
+    "session_started", "worker_terminal", "adapter_lifecycle", "ready",
+    "process_observation", "closed_ns", "bindings_unchanged", "adapter_thread_joined",
+})
 
 
-def _reduce_attempt(packet: Mapping[str, Any], *, scope_sha: str, campaign_id: str, plan_sha: str,
-                    plan: Mapping[str, Any], job: Mapping[str, Any], ordinal: int, closure: Mapping[str, Any],
-                    registered_ns: int, policy: Mapping[str, Any], nonces: set[str]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    exact_fields(packet, PACKET_FIELDS, "attempt packet")
-    attempt_id = registered_attempt_id(scope_sha, campaign_id, plan_sha, job["request_id"])
-    identity = {"scope_sha256": scope_sha, "campaign_id": campaign_id, "plan_sha256": plan_sha,
-                "attempt_id": attempt_id, "request_id": job["request_id"]}
-    row = {**identity, **{key: job[key] for key in ("profile", "participants", "warmup")}}
-    def finish(state: str, reason: str, sample: dict[str, Any] | None = None):
-        return {**row, "state": state, "reason": reason}, sample
-    if packet["started"] is None:
-        if any(packet[key] is not None for key in PACKET_FIELDS - {"request_id", "request", "started"}):
-            raise AccountingError("attempt evidence exists without a durable start")
-        if packet["request"] is not None:
-            _document(packet["request"], "unstarted request")
-        return finish("not_started", "closed_without_durable_start")
-    if packet["request"] is None:
-        raise AccountingError("durable start lacks its bound request bytes")
-    start = exact_fields(_document(packet["started"], "start"), START_FIELDS, "start")
-    identity["invocation_nonce"] = _digest(start["invocation_nonce"], "invocation nonce")
-    if identity["invocation_nonce"] in nonces:
-        raise AccountingError("an invocation nonce is reused within the registered scope")
-    nonces.add(identity["invocation_nonce"])
-    _record_identity(start, identity, "start")
-    started_ns = unsigned_milliseconds(start["started_ns"], "start time", positive=True)
-    if not registered_ns <= started_ns <= closure["closed_ns"]:
-        raise AccountingError("dispatch precedes registration or follows campaign closure")
-    if (type(start["timeout_seconds"]) is not int or start["timeout_seconds"] * 1_000 != policy["outer_timeout_ms"]
-            or not isinstance(start["command"], list) or not start["command"]
-            or not all(isinstance(value, str) for value in start["command"])):
-        raise AccountingError("durable start differs from the frozen invocation contract")
-    request = _document(packet["request"], "request")
-    _request_join(request, start, plan, job, packet["request"])
-    process = None if packet["process"] is None else _process_record(
-        _document(packet["process"], "process"), identity, start, closure["closed_ns"], policy)
-    validation = None if packet["validation"] is None else _validation_record(
-        _document(packet["validation"], "validation"), identity, ordinal, start, closure["closed_ns"])
-    if process is not None and validation is not None and validation["finished_ns"] < process["finished_ns"]:
-        raise AccountingError("semantic validation precedes runner process completion")
-    response_record = _response_record(packet["response_outcome"], packet["response"])
-    adapter = None if packet["adapter"] is None else validate_adapter_outcome(
-        _document(packet["adapter"], "adapter"), request=request, request_sha256=start["request"]["sha256"])
-    terminal = None
-    if packet["rust_terminal"] is not None:
-        if adapter is None:
-            _terminal_without_exit(_document(packet["rust_terminal"], "Rust terminal"), request, start["request"]["sha256"])
-        else:
-            if adapter["rust_terminal"] is None:
-                raise AccountingError("adapter denies a retained Rust terminal")
-            _same(adapter["rust_terminal"], accounting_file_binding(packet["rust_terminal"]), "Rust terminal binding")
-            terminal = validate_benchmark_terminal(_document(packet["rust_terminal"], "Rust terminal"),
-                request=request, request_sha256=start["request"]["sha256"], exit_code=adapter["exit_code"])
-            if adapter["elapsed_ms"] < terminal["elapsed_ms"]:
-                raise AccountingError("adapter duration is shorter than its Rust worker")
-            if terminal["outcome"]["kind"] == "timed_out":
-                outcome = terminal["outcome"]
-                if outcome["budget_ms"] != policy["rust_deadline_budgets_ms"][outcome["stage"]]:
-                    raise AccountingError("Rust deadline differs from the registered budget")
-    if adapter is not None and adapter["status"] == "invalid":
-        raise AccountingError("adapter rejected the retained transport or measurement")
-    if process is None:
-        return finish("incomplete", "process_terminal_missing")
-    if adapter is not None and adapter["elapsed_ms"] > process["elapsed_ms"]:
-        raise AccountingError("adapter duration exceeds the observed runner invocation")
-    if not process["owned_process_group_gone"]:
-        return finish("incomplete", "owned_processes_unfinished")
-    if process["completion_kind"] == "outer_deadline":
-        if validation is not None and validation["validation_kind"] == "accepted":
-            raise AccountingError("outer deadline contradicts completed semantic validation")
-        return finish("timed_out", "outer_deadline")
-    if process["completion_kind"] == "interrupted":
-        return finish("incomplete", "runner_interrupted")
-    if process["completion_kind"] == "spawn_failed":
-        if adapter is not None or terminal is not None or packet["response"] is not None or response_record is not None:
-            raise AccountingError("spawn failure contradicts downstream process evidence")
-        return finish("failed", "harness_spawn_failed")
-    if validation is not None and validation["validation_kind"] == "interrupted":
-        return finish("incomplete", "validation_interrupted")
-    if adapter is None:
-        return finish("incomplete", "adapter_terminal_missing")
-    if adapter["rust_terminal"] is not None and packet["rust_terminal"] is None:
-        if validation is not None and validation["validation_kind"] == "accepted":
-            raise AccountingError("accepted validation omitted its bound Rust terminal")
-        return finish("incomplete", "rust_terminal_missing")
-    if adapter["status"] == "incomplete":
-        return finish("incomplete", adapter["reason"])
-    if adapter["status"] in {"failed", "timed_out"}:
-        if process["exit_code"] == 0 or process["passed"] or (response_record is not None and response_record["passed"]):
-            raise AccountingError("unsuccessful transport contradicts successful runner completion")
-        if validation is not None and validation["validation_kind"] == "accepted":
-            raise AccountingError("unsuccessful transport has accepted validation")
-        if adapter["reason"] in {"rust_failed", "rust_timed_out"}:
-            if terminal is None or terminal["outcome"]["kind"] != adapter["status"]:
-                raise AccountingError("adapter cause disagrees with the typed Rust outcome")
-        elif terminal is not None:
-            raise AccountingError("pre-worker failure carries a Rust terminal")
-        return finish(adapter["status"], adapter["reason"])
-    if terminal is None or terminal["outcome"]["kind"] != "succeeded" or process["exit_code"] != 0:
-        raise AccountingError("successful transport contradicts worker or runner completion")
-    if not process["passed"]:
-        return finish("incomplete", "runner_completion_unaccepted")
-    if validation is None or validation["validation_kind"] == "not_validated" or response_record is None:
-        return finish("incomplete", "semantic_validation_missing")
-    if validation["validation_kind"] == "publication_failed":
-        return finish("failed", "publication_failed")
-    if not response_record["passed"]:
-        raise AccountingError("successful transport has a rejected response")
-    if packet["sample"] is None or packet["response"] is None:
-        raise AccountingError("accepted validation omitted bound successful bytes")
-    sample = _successful_join(packet, request, terminal["outcome"]["result"], validation, identity, plan, job)
-    return finish("succeeded", "validated_measurement", sample)
+class _SessionRecords:
+    """Consume a mandatory authenticated lazy provider, with no raw-dict fallback."""
+
+    def __init__(self, provider):
+        import private_settlement_session_control as control
+        if not callable(getattr(provider, "inventory", None)) or not callable(getattr(provider, "read", None)):
+            raise AccountingError("session records require an authenticated inventory/read provider")
+        self.control, self.provider = control, provider
+        inventory = provider.inventory()
+        if type(inventory) is not dict:
+            raise AccountingError("record provider has no complete path inventory")
+        self.inventory = {}
+        for path, reference in inventory.items():
+            self._reference(reference)
+            if path != reference["path"]:
+                raise AccountingError("inventory key differs from its located record")
+            self.inventory[path] = dict(reference)
+
+    def _reference(self, reference):
+        exact_fields(reference, frozenset({"path", "sha256", "bytes"}), "physical file binding")
+        # Physical inventory includes empty/large opaque logs. Protocol record
+        # consumers independently enforce control.reference's nonempty limit.
+        self.control.reference({**reference, "bytes": 1})
+        unsigned_milliseconds(reference["bytes"], "physical file bytes")
+
+    def locate(self, path):
+        if path not in self.inventory:
+            raise AccountingError("required retained session record is absent")
+        return dict(self.inventory[path])
+
+    def read(self, reference):
+        self._reference(reference)
+        _same(self.locate(reference["path"]), reference, "retained record locator and bytes")
+        raw = self.provider.read(reference)
+        if (type(raw) is not bytes or len(raw) != reference["bytes"]
+                or hashlib.sha256(raw).hexdigest() != reference["sha256"]):
+            raise AccountingError("lazy provider returned substituted or shortened record bytes")
+        return raw
+
+    def validate(self):
+        """Require the final complete physical inventory to match its initial cut."""
+        _same(self.provider.inventory(), self.inventory, "physical record inventory changed during reduction")
+
+    def object(self, reference):
+        return _document(self.read(reference), "retained session record")
 
 
-def reduce_registered_scope(scope_raw: bytes, campaigns: Sequence[Mapping[str, Any]],
-                            successful_rows: Sequence[bytes]) -> dict[str, Any]:
-    """Fold a complete registered, quiescent scope into public benchmark counts.
+def _session_chain_inventory(records, identity, started):
+    """Replay each actual endpoint journal, including unconsumed sender suffixes."""
+    control = records.control
+    prefix = f"sessions/{identity['session_id']}/control/"
+    pattern = re.compile(r"(runner|adapter|worker)\.(runner_adapter|adapter_worker)\."
+                         r"(owner_to_child|child_to_owner)\.([0-9]{20})\.frame")
+    chains = {}
+    for path in records.inventory:
+        if not path.startswith(prefix) or not path.endswith(".frame"):
+            continue
+        match = pattern.fullmatch(path[len(prefix):])
+        if match is None:
+            raise AccountingError("control journal has an unknown owner or filename")
+        observer, channel, direction, ordinal = match.groups()
+        key = observer, channel, direction
+        chains.setdefault(key, []).append((int(ordinal), path))
+    frames = {}
+    for (observer, channel, direction), rows in chains.items():
+        chain = control.ControlChain(identity, started["sha256"], channel, direction, records,
+            observer=observer, journal_prefix=prefix[:-1])
+        observed = []
+        for ordinal, path in sorted(rows):
+            if ordinal != len(observed):
+                raise AccountingError("control journal omits or repeats a sequence")
+            wire = control.RetainedMessage(records.read(records.locate(path)), records.locate(path))
+            chain._check(wire.decoded())
+            chain._advance(wire.raw)
+            observed.append(wire)
+            frames[path] = wire
+        chains[observer, channel, direction] = observed
+    for channel in control.CHANNELS:
+        owner, child = control.CHANNEL_ENDPOINTS[channel]
+        for direction in control.DIRECTIONS:
+            sender, receiver = (owner, child) if direction == "owner_to_child" else (child, owner)
+            sent = chains.get((sender, channel, direction), [])
+            received = chains.get((receiver, channel, direction), [])
+            if len(received) > len(sent) or any(a.raw != b.raw for a, b in zip(sent, received)):
+                raise AccountingError("receiver journal differs from the sender's exact prefix")
+    for wire in frames.values():
+        reference = wire.decoded()["forwarded_from"]
+        if reference is not None:
+            upstream = control.RetainedMessage(records.read(reference), reference)
+            control.verify_forwarded(wire, upstream)
+    return chains
 
-    Packets contain original retained JSON bytes (or explicit None), not trusted
-    counters. File authentication and source/measurement qualification remain
-    caller responsibilities. This function never reads files or launches work.
-    Every campaign, planned benchmark job, and successful measurement must occur
-    exactly once. Missing authoritative terminals remain incomplete; absence of
-    a quiescent closure cannot establish a not-started denominator.
+
+def _session_lifetime(records, closure, identity, started, accepted, active, expected_worker, *, unready_attempts_absent):
+    """Join the one real worker to its birth inventory, natural wait and absence."""
+    control = records.control
+    lifecycle = records.object(closure["adapter_lifecycle"])
+    fields = control.IDENTITY_FIELDS | {
+        "kind", "worker_terminal", "worker_process_start", "worker_pid", "worker_exit_code",
+        "worker_wait_completed", "group_before", "kernel_absences", "group_after",
+        "worker_sha256", "worker_image_unchanged",
+    }
+    exact_fields(lifecycle, fields, "session worker lifecycle")
+    _record_identity(lifecycle, identity, "session worker lifecycle")
+    if (lifecycle["kind"] != "benchmark_session_worker_lifecycle"
+            or lifecycle["worker_terminal"] != closure["worker_terminal"]
+            or lifecycle["worker_wait_completed"] is not True
+            or lifecycle["worker_image_unchanged"] is not True
+            or lifecycle["worker_sha256"] != expected_worker["sha256"]
+            or type(lifecycle["worker_exit_code"]) is not int):
+        raise AccountingError("session has no exact completed native worker wait")
+    _same(lifecycle["worker_process_start"]["path"], f"sessions/{identity['session_id']}/worker-process-start.json", "native process start path")
+    process = records.object(lifecycle["worker_process_start"])
+    exact_fields(process, frozenset({"command", "pid", "parent_pid", "process_group",
+                                    "started_ns", "worker_sha256"}), "worker process start")
+    pid = process["pid"]
+    if (type(pid) is not int or not 1 < pid < 1 << 31
+            or lifecycle["worker_pid"] != pid or process["process_group"] != pid
+            or type(process["parent_pid"]) is not int or process["parent_pid"] <= 1
+            or process["worker_sha256"] != expected_worker["sha256"]
+            or process["command"] != started["command"]
+            or not started["started_ns"] <= unsigned_milliseconds(process["started_ns"], "worker start", positive=True) <= closure["closed_ns"]):
+        raise AccountingError("worker process start differs from its unique session owner")
+    terminal = records.object(closure["worker_terminal"])
+    exact_fields(terminal, control.IDENTITY_FIELDS | {
+        "kind", "reason", "accepted_request_ids", "active_attempt_id", "last_owner_message_sha256",
+        "last_worker_message_sha256", "network_shutdown_observed", "coordinator_reaped_observed",
+    }, "session worker terminal")
+    _record_identity(terminal, identity, "session worker terminal")
+    unready_setup_failure = (unready_attempts_absent and closure["ready"] is None
+        and closure["process_observation"] is None and terminal["kind"] == "failed"
+        and terminal["reason"] == "setup_failed" and accepted == [] and active is None
+        and terminal["network_shutdown_observed"] is False
+        and terminal["coordinator_reaped_observed"] is False)
+    cleanup_observed = (terminal["network_shutdown_observed"] is True
+                        and terminal["coordinator_reaped_observed"] is True)
+    if (terminal["kind"] not in {"completed", "failed", "timed_out", "incomplete"}
+            or terminal["accepted_request_ids"] != accepted or terminal["active_attempt_id"] != active
+            or not (cleanup_observed or unready_setup_failure)
+            or (lifecycle["worker_exit_code"] == 0) != (terminal["kind"] == "completed")
+            or (terminal["reason"] is not None if terminal["kind"] == "completed"
+                else terminal["reason"] not in control.STOP_REASONS)):
+        raise AccountingError("session terminal contradicts accepted attempts or observed cleanup")
+    pids = {pid}
+    worker_generation = None
+    if closure["ready"] is not None:
+        ready = records.object(closure["ready"])
+        exact_fields(ready, control.IDENTITY_FIELDS | {"network_id", "genesis_sha256", "configuration_sha256",
+            "workload_manifest_sha256", "activated_height", "process_inventory", "worker_pid", "network_ports"}, "session ready")
+        _record_identity(ready, identity, "session ready")
+        requested = records.object(started["request"])
+        if (ready["worker_pid"] != pid or type(ready["activated_height"]) is not int or ready["activated_height"] < 301
+                or any(ready[key] != requested[key] for key in ("configuration_sha256", "workload_manifest_sha256"))):
+            raise AccountingError("ready belongs to a different worker")
+        _digest(ready["genesis_sha256"], "native genesis")
+        _same(ready["network_ports"]["path"], f"sessions/{identity['session_id']}/network-ports.json", "session port manifest")
+        records.read(ready["network_ports"])
+        observed = records.object(closure["process_observation"])
+        exact_fields(observed, control.IDENTITY_FIELDS | {"kind", "ready", "process_scope", "listeners", "network_ports"}, "session kernel readiness")
+        _record_identity(observed, identity, "session process observation")
+        if (observed["ready"] != closure["ready"] or observed["kind"] != "benchmark_session_process_ready"
+                or observed["network_ports"] != ready["network_ports"] or type(observed["listeners"]) is not dict):
+            raise AccountingError("kernel inventory does not bind the actual ready record")
+        processes = observed["process_scope"]["processes"]
+        if type(processes) is not list or not processes:
+            raise AccountingError("session has no admitted kernel generation inventory")
+        declarations = ready["process_inventory"]
+        if (type(declarations) is not list or len(declarations) != (requested["participants"]+1)*4+1
+                or len({row["pid"] for row in declarations}) != len(declarations)):
+            raise AccountingError("native readiness omits a validator/coordinator owner")
+        declared = {row["pid"] for row in declarations} | {pid}
+        identities = [row["identity"] for row in processes]
+        if len({row["pid"] for row in identities}) != len(identities) or {row["pid"] for row in identities} != declared:
+            raise AccountingError("kernel inventory omits or repeats a declared session process")
+        for value in identities:
+            if type(value.get("birth")) is not dict or not value["birth"] or value.get("pgid") != pid:
+                raise AccountingError("session process lacks its exact birth or owned group")
+            birth = value["birth"]
+            if birth.get("kind") == "darwin_bsdinfo":
+                exact_fields(birth, frozenset({"kind", "started_seconds", "started_microseconds", "start_abstime"}), "Darwin birth")
+                for key in ("started_seconds", "start_abstime"):
+                    unsigned_milliseconds(birth[key], "native birth", positive=True)
+                if type(birth["started_microseconds"]) is not int or not 0 <= birth["started_microseconds"] < 1_000_000:
+                    raise AccountingError("native microsecond birth is malformed")
+                if re.fullmatch(r"[0-9a-f]{32}", value.get("loaded_image_uuid", "")) is None:
+                    raise AccountingError("native loaded image identity is missing")
+            elif birth.get("kind") == "linux_proc":
+                exact_fields(birth, frozenset({"kind", "boot_id", "start_ticks"}), "Linux birth")
+                unsigned_milliseconds(birth["start_ticks"], "native birth", positive=True)
+                if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", birth["boot_id"]) is None:
+                    raise AccountingError("native boot identity is malformed")
+            else:
+                raise AccountingError("unsupported native birth owner")
+            if value["pid"] == pid and (value.get("executable_sha256") != expected_worker["sha256"]
+                                       or value.get("ppid") != process["parent_pid"]):
+                raise AccountingError("admitted worker generation differs from actual process start")
+            if value["pid"] == pid:
+                worker_generation = hashlib.sha256(accounting_canonical_bytes(value)).hexdigest()
+        pids = declared
+    elif closure["process_observation"] is not None:
+        raise AccountingError("kernel readiness exists without native readiness")
+    for group in (lifecycle["group_before"], lifecycle["group_after"]):
+        exact_fields(group, frozenset({"process_group", "members", "utility_sha256", "observed_monotonic_ns"}), "group absence")
+        if group["process_group"] != pid or group["members"] != []:
+            raise AccountingError("session still owns a process group")
+        _digest(group["utility_sha256"], "group observation utility")
+    _same(lifecycle["group_before"]["utility_sha256"], lifecycle["group_after"]["utility_sha256"], "group observation utility")
+    previous = unsigned_milliseconds(lifecycle["group_before"]["observed_monotonic_ns"], "group observation", positive=True)
+    absences = lifecycle["kernel_absences"]
+    if type(absences) is not list or [row.get("pid") for row in absences] != sorted(pids):
+        raise AccountingError("session closure omits an owned process absence")
+    for row in absences:
+        exact_fields(row, frozenset({"pid", "kernel_absence_observed", "observed_monotonic_ns"}), "kernel absence")
+        stamp = unsigned_milliseconds(row["observed_monotonic_ns"], "kernel absence time", positive=True)
+        if row["kernel_absence_observed"] is not True or stamp < previous:
+            raise AccountingError("process absence is unobserved or outside its bracket")
+        previous = stamp
+    if unsigned_milliseconds(lifecycle["group_after"]["observed_monotonic_ns"], "group observation", positive=True) < previous:
+        raise AccountingError("kernel absence observations have a reversed bracket")
+    return terminal, worker_generation
+
+
+def _ordered_session_attempt_controls(frames):
+    """Require the one-active-attempt dispatch/accept order on an owner chain."""
+    import private_settlement_session_control as control
+    kinds = [wire.decoded()["kind"] for wire in frames
+             if wire.decoded()["kind"] not in control.LOCAL_MEASUREMENT_KINDS]
+    if kinds and kinds[-1] == "stop": kinds = kinds[:-1]
+    if kinds != ["dispatch", "accept"] * (len(kinds)//2) + (["dispatch"] if len(kinds)%2 else []):
+        raise AccountingError("session owner reused an active attempt or reordered dispatch/accept")
+
+
+def reduce_retained_session(descriptor, packet, *, records, campaign_identity, jobs,
+                            registered_ns, closed_ns, policy, worker_command, worker_image,
+                            validate_success):
+    """Reduce one retained network, with no per-attempt process-exit fiction.
+
+    The collector authenticates complete record inventories and native process
+    observations. validate_success must independently replay the existing native
+    economics/resource/packet owners and return exact recomputed sample bytes.
+    This pure boundary cannot substitute a claimed metric or a supplied count.
     """
+    if not callable(validate_success):
+        raise AccountingError("retained samples require their canonical semantic replay owner")
+    control = records.control
+    sid = _digest(descriptor["session_id"], "session id")
+    indexed = [(ordinal, job) for ordinal, job in jobs if job["session_id"] == sid]
+    coordinates = {key: descriptor[key] for key in ("profile", "participants", "seed",
+        "configuration_sha256", "workload_manifest_sha256", "warmup_attempts", "measured_attempts")}
+    _same(sid, hashlib.sha256(accounting_canonical_bytes({
+        "domain": "iroha:private-settlement:benchmark-session-plan:v1", **coordinates})).hexdigest(), "session plan identity")
+    if len(indexed) != descriptor["warmup_attempts"] + descriptor["measured_attempts"]:
+        raise AccountingError("session planned attempt count differs")
+    rows = [{**campaign_identity, "attempt_id": registered_attempt_id(
+                campaign_identity["scope_sha256"], campaign_identity["campaign_id"], campaign_identity["plan_sha256"], job["request_id"]),
+             **{key: job[key] for key in ("request_id", "profile", "participants", "warmup", "session_id", "session_attempt_index")},
+             "state": "not_started", "reason": "closed_without_durable_start"} for _, job in indexed]
+    if packet is None:
+        if any(path.startswith(f"sessions/{sid}/") and path.endswith("started.json") for path in records.inventory):
+            raise AccountingError("unstarted session contains an owner start")
+        for ordinal, job in indexed:
+            if f"attempts/{ordinal:05}-{job['request_id']}/started.json" in records.inventory:
+                raise AccountingError("attempt start exists without its session owner")
+        return rows, [], None
+    exact_fields(packet, frozenset({"session_id", "closure"}), "retained session packet")
+    _same(packet["session_id"], sid, "session packet")
+    closure = records.object(packet["closure"])
+    exact_fields(closure, control.IDENTITY_FIELDS | SESSION_CLOSURE_FIELDS, "retained session closure")
+    identity = control.identity({key: closure[key] for key in control.IDENTITY_FIELDS})
+    _record_identity(identity, {**campaign_identity, "session_id": sid}, "session closure")
+    for key, leaf in (("session_started", "started.json"), ("worker_terminal", "worker-terminal.json"),
+                      ("adapter_lifecycle", "adapter-lifecycle.json"), ("ready", "ready.json"),
+                      ("process_observation", "process-ready.json")):
+        if closure[key] is not None:
+            _same(closure[key]["path"], f"sessions/{sid}/{leaf}", "session record path")
+    if (closure["bindings_unchanged"] is not True or closure["adapter_thread_joined"] is not True
+            or not registered_ns <= unsigned_milliseconds(closure["closed_ns"], "session cut", positive=True) <= closed_ns):
+        raise AccountingError("session has no authoritative unchanged closure in the campaign cut")
+    started = records.object(closure["session_started"])
+    exact_fields(started, control.IDENTITY_FIELDS | {"request", "command", "harness", "started_ns"}, "session start")
+    _record_identity(started, identity, "session start")
+    _same(started["harness"], worker_image, "source-admitted native session executable")
+    _same(started["command"], worker_command, "source-admitted native session command")
+    if not registered_ns <= unsigned_milliseconds(started["started_ns"], "session start", positive=True) <= closure["closed_ns"]:
+        raise AccountingError("session starts outside its registered cut")
+    request = records.object(started["request"])
+    _same(started["request"]["path"], f"sessions/{sid}/request.json", "session request path")
+    if started["request"]["sha256"] != identity["session_request_sha256"]:
+        raise AccountingError("session request generation changed")
+    for key, value in {**campaign_identity, "session_id": sid,
+        "session_invocation_nonce": identity["session_invocation_nonce"], "profile": descriptor["profile"],
+        "participants": descriptor["participants"], "seed": descriptor["seed"],
+        "configuration_sha256": descriptor["configuration_sha256"],
+        "workload_manifest_sha256": descriptor["workload_manifest_sha256"], "warmups": descriptor["warmup_attempts"]}.items():
+        _same(request.get(key), value, "session request coordinate")
+    validate_benchmark_workload_policy(request["workload_manifest"], descriptor["participants"])
+    _same(hashlib.sha256(accounting_canonical_bytes(request["workload_manifest"])).hexdigest(),
+          descriptor["workload_manifest_sha256"], "session workload manifest")
+    attempts = request["attempts"]
+    if type(attempts) is not list or len(attempts) != len(indexed):
+        raise AccountingError("session request omits planned attempts")
+    chains = _session_chain_inventory(records, identity, closure["session_started"])
+    ra_owner = chains.get(("runner", "runner_adapter", "owner_to_child"), [])
+    ra_child = chains.get(("runner", "runner_adapter", "child_to_owner"), [])
+    aw_owner = chains.get(("worker", "adapter_worker", "owner_to_child"), [])
+    aw_child = chains.get(("worker", "adapter_worker", "child_to_owner"), [])
+    _ordered_session_attempt_controls(ra_owner)
+    _ordered_session_attempt_controls(aw_owner)
+    by_kind = lambda frames, kind: [wire for wire in frames if wire.decoded()["kind"] == kind]
+    dispatched, acknowledged = by_kind(ra_owner, "dispatch"), by_kind(ra_owner, "accept")
+    worker_dispatched = by_kind(aw_owner, "dispatch")
+    consumed = by_kind(aw_owner, "accept")
+    completions = by_kind(ra_child, "attempt_completed")
+    owner_kinds = [wire.decoded()["kind"] for wire in ra_owner]
+    if any(kind not in {"dispatch", "accept", "stop"} for kind in owner_kinds) or (
+        "stop" in owner_kinds and (owner_kinds.count("stop") != 1 or owner_kinds[-1] != "stop")):
+        raise AccountingError("owner continued after stop or emitted an unexpected control")
+    if [wire.decoded()["kind"] for wire in ra_child] != (
+        (["ready"] if closure["ready"] is not None else []) + ["attempt_completed"] * len(completions) + ["session_completed"]):
+        raise AccountingError("runner did not consume the ordered session completion chain")
+    _same(ra_child[-1].decoded()["payload"], {"worker_terminal": closure["worker_terminal"],
+        "adapter_lifecycle": closure["adapter_lifecycle"]}, "consumed session closure")
+    if len(dispatched) > len(attempts) or len(consumed) > len(acknowledged):
+        raise AccountingError("session control exceeds the planned attempts")
+    if closure["ready"] is None and dispatched:
+        raise AccountingError("attempt dispatch precedes native and kernel readiness")
+    if closure["ready"] is not None:
+        ready = by_kind(ra_child, "ready")
+        if len(ready) != 1 or ready[0].decoded()["payload"] != {
+            "ready": closure["ready"], "process_observation": closure["process_observation"]}:
+            raise AccountingError("session ready is not the consumed authenticated control")
+    samples, started_ids, nonces = [], [], set()
+    for index, ((ordinal, job), attempt, row) in enumerate(zip(indexed, attempts, rows)):
+        exact_fields(attempt, control.ATTEMPT_FIELDS | {"request", "output_directory"}, "planned session attempt")
+        aid = {key: attempt[key] for key in control.ATTEMPT_FIELDS}
+        control.attempt(aid)
+        if (attempt["attempt_id"] != row["attempt_id"] or attempt["request_id"] != job["request_id"]
+                or attempt["session_attempt_index"] != index or attempt["invocation_nonce"] in nonces
+                or attempt["output_directory"] != f"attempts/{ordinal:05}-{job['request_id']}"):
+            raise AccountingError("session attempt changes full-plan coordinates or generation")
+        nonces.add(attempt["invocation_nonce"])
+        raw_request = records.read(attempt["request"])
+        single = _document(raw_request, "attempt request")
+        for key, value in {**{key: aid[key] for key in aid if key != "attempt_id"},
+                           "session_id": sid, "session_invocation_nonce": identity["session_invocation_nonce"]}.items():
+            _same(single.get(key), value, "attempt request identity")
+        for key in ("participants", "seed", "configuration_sha256", "workload_manifest_sha256"):
+            _same(single.get(key), job[key], "attempt workload coordinates")
+        _same(single.get("payload", {}).get("profile"), job["profile"], "attempt profile")
+        _same(single.get("payload", {}).get("warmup"), job["warmup"], "attempt warmup")
+        path = attempt["output_directory"] + "/started.json"
+        if path not in records.inventory:
+            if index < len(dispatched) or any(p.startswith(attempt["output_directory"] + "/")
+                and p != attempt["request"]["path"] for p in records.inventory):
+                raise AccountingError("attempt evidence exists without its durable start")
+            continue
+        start_ref = records.locate(path)
+        start = records.object(start_ref)
+        exact_fields(start, control.IDENTITY_FIELDS | control.ATTEMPT_FIELDS | {
+            "ordinal", "session_started", "request", "outer_timeout_ms", "started_ns", "preceding_acceptance"}, "attempt start")
+        _record_identity(start, {**identity, **aid}, "attempt start")
+        if (start["ordinal"] != ordinal or start["session_started"] != closure["session_started"]
+                or start["request"] != attempt["request"] or start["outer_timeout_ms"] != policy["outer_timeout_ms"]
+                or type(start["ordinal"]) is not int or type(start["outer_timeout_ms"]) is not int
+                or not started["started_ns"] <= unsigned_milliseconds(start["started_ns"], "attempt start", positive=True) <= closure["closed_ns"]):
+            raise AccountingError("attempt start changes its owner, request, budget or cut")
+        expected_previous = None if index == 0 else acknowledged[index-1].binding if index <= len(acknowledged) else None
+        if start["preceding_acceptance"] != expected_previous or (index and index > len(acknowledged)):
+            raise AccountingError("attempt start lacks its preceding runner acceptance")
+        if index:
+            predecessor = attempts[index-1]
+            for phase in ("proposed", "validated", "pipe-written"):
+                proof = records.object(records.locate(f"sessions/{sid}/control/ack-{index-1:06d}-{phase}.json"))
+                _same(proof, {**identity, **{key: predecessor[key] for key in control.ATTEMPT_FIELDS},
+                    "acknowledgement": acknowledged[index-1].binding, "phase": phase}, "predecessor acknowledgement barrier")
+        if len(started_ids) != index:
+            raise AccountingError("session start inventory is not the exact attempt prefix")
+        started_ids.append(job["request_id"])
+        row.update(state="incomplete", reason="attempt_terminal_missing")
+        if index >= len(dispatched):
+            continue
+        _same(dispatched[index].decoded()["payload"], {**aid, "request": attempt["request"], "attempt_started": start_ref}, "dispatched attempt")
+        if index >= len(completions):
+            continue
+        if index >= len(worker_dispatched) or (index and index > len(consumed)):
+            raise AccountingError("native completion lacks worker dispatch and consumed predecessor")
+        _same(worker_dispatched[index].decoded()["payload"], dispatched[index].decoded()["payload"], "worker received dispatch")
+        completion = completions[index].decoded()["payload"]
+        for key in control.ATTEMPT_FIELDS:
+            _same(completion[key], aid[key], "completed attempt")
+        _same(completion["rust_terminal"]["path"], attempt["output_directory"] + "/evidence/benchmark-protocol/rust-result.json", "native result path")
+        _same(completion["adapter_outcome"]["path"], attempt["output_directory"] + "/evidence/benchmark-protocol/adapter-outcome.json", "adapter outcome path")
+        native_raw = records.read(completion["rust_terminal"])
+        native = _document(native_raw, "native attempt terminal")
+        _terminal_without_exit(native, single, attempt["request"]["sha256"])
+        kind = native["outcome"]["kind"]
+        adapter = records.object(completion["adapter_outcome"])
+        exact_fields(adapter, control.IDENTITY_FIELDS | control.ATTEMPT_FIELDS | {
+            "request_sha256", "rust_terminal", "kind", "status", "measurement_window", "native_economic_verification", "response"}, "session adapter outcome")
+        _record_identity(adapter, {**identity, **aid}, "session adapter outcome")
+        if (adapter["kind"] != "benchmark_session_attempt_validation" or adapter["status"] != kind
+                or adapter["request_sha256"] != attempt["request"]["sha256"]
+                or adapter["rust_terminal"] != completion["rust_terminal"]
+                or adapter["response"] != completion["response"]):
+            raise AccountingError("adapter contradicts native attempt terminal")
+        if kind != "succeeded":
+            if index < len(acknowledged) or completion["response"] is not None:
+                raise AccountingError("unsuccessful native attempt was accepted")
+            if kind == "timed_out":
+                timeout = native["outcome"]
+                _same(timeout["budget_ms"], policy["rust_deadline_budgets_ms"][timeout["stage"]], "registered Rust deadline")
+            row.update(state=kind, reason="typed_native_" + kind)
+            continue
+        validation_path = attempt["output_directory"] + "/validation-outcome.json"
+        sample_path = attempt["output_directory"] + "/benchmark-sample.json"
+        if validation_path not in records.inventory or sample_path not in records.inventory:
+            row["reason"] = "semantic_acceptance_missing"
+            continue
+        payload = {**completion, "validation": records.locate(validation_path), "sample": records.locate(sample_path)}
+        _same(payload["response"]["path"], attempt["output_directory"] + "/response.json", "native response path")
+        ack = None if index >= len(acknowledged) else acknowledged[index]
+        if ack is not None:
+            _same(ack.decoded()["payload"], payload, "acceptance substituted a completed result")
+        validation = records.object(payload["validation"])
+        exact_fields(validation, control.IDENTITY_FIELDS | control.ATTEMPT_FIELDS | {
+            "passed", "validation_kind", "response", "sample"}, "semantic acceptance")
+        _record_identity(validation, {**identity, **aid}, "semantic acceptance")
+        if validation["passed"] is not True or validation["validation_kind"] != "accepted" or any(
+            validation[key] != payload[key] for key in ("response", "sample")):
+            raise AccountingError("semantic acceptance contradicts its retained records")
+        for phase in ("proposed", "validated", "pipe-written"):
+            path = f"sessions/{sid}/control/ack-{index:06d}-{phase}.json"
+            if path in records.inventory:
+                if ack is None:
+                    raise AccountingError("acknowledgement phase lacks its exact frame")
+                proof = records.object(records.locate(path))
+                _same(proof, {**identity, **aid, "acknowledgement": ack.binding, "phase": phase}, "acknowledgement publication phase")
+        if index < len(consumed):
+            _same(consumed[index].decoded()["payload"], payload, "worker consumed acceptance")
+        bound = {key: records.read(payload[key]) for key in payload.keys() - control.ATTEMPT_FIELDS}
+        computed = validate_success(identity, attempt, bound, records)
+        if type(computed) is not bytes or computed != bound["sample"]:
+            raise AccountingError("published sample differs from independently replayed measurements")
+        sample = _document(computed, "accepted sample")
+        _record_identity(sample, {**identity, **aid}, "accepted sample")
+        for key in ("profile", "participants", "seed", "warmup", "configuration_sha256", "workload_manifest_sha256"):
+            _same(sample.get(key), job[key], "accepted sample cohort")
+        samples.append(computed)
+        row.update(state="succeeded", reason="validated_measurement")
+    if (len(dispatched) > len(started_ids) or len(worker_dispatched) > len(dispatched)
+            or len(completions) > len(dispatched) or len(acknowledged) > len(completions)):
+        raise AccountingError("session controls overrun their durable starts or completions")
+    accepted = [attempts[i]["request_id"] for i in range(len(consumed))]
+    active = None if len(worker_dispatched) == len(consumed) else attempts[len(worker_dispatched)-1]["attempt_id"]
+    terminal, worker_generation = _session_lifetime(records, closure, identity, started, accepted, active, worker_image,
+        unready_attempts_absent=not (started_ids or dispatched or worker_dispatched or completions or consumed))
+    terminals = by_kind(aw_child, "session_completed")
+    if len(terminals) != 1 or terminals[0] != aw_child[-1] or terminals[0].decoded()["payload"] != {"worker_terminal": closure["worker_terminal"]}:
+        raise AccountingError("worker terminal lacks its exact final control record")
+    _same(terminal["last_worker_message_sha256"], terminals[0].decoded()["previous_message_sha256"], "worker terminal predecessor")
+    owner_head = (aw_owner[-1].binding["sha256"] if aw_owner else hashlib.sha256(control.canonical({
+        "domain": "iroha:private-settlement:session-control-chain:v1", "session_started_sha256": closure["session_started"]["sha256"],
+        "channel": "adapter_worker", "direction": "owner_to_child"})).hexdigest())
+    _same(terminal["last_owner_message_sha256"], owner_head, "worker consumed owner frontier")
+    if terminal["kind"] == "completed" and (len(accepted) != len(attempts) or any(row["state"] != "succeeded" for row in rows)):
+        raise AccountingError("completed session omits an accepted attempt")
+    stopped = False
+    for row in rows:
+        if stopped and row["state"] != "not_started":
+            raise AccountingError("session dispatched after an unsuccessful attempt")
+        if row["state"] != "succeeded":
+            stopped = True
+    return rows, samples, {"session_id": sid, "session_invocation_nonce": identity["session_invocation_nonce"],
+        "session_request_sha256": identity["session_request_sha256"], "started_request_ids": started_ids,
+        "attempt_nonces": sorted(nonces), "terminal_kind": terminal["kind"],
+        "started_ns": started["started_ns"], "closed_ns": closure["closed_ns"],
+        "worker_generation_sha256": worker_generation, "closure": packet["closure"], "counts": _counter(rows),
+        "setup_outcome": "failed_before_readiness" if (closure["ready"] is None
+            and terminal["kind"] == "failed" and terminal["reason"] == "setup_failed") else None,
+        "network_cleanup_claimed": terminal["network_shutdown_observed"] is True
+                                   and terminal["coordinator_reaped_observed"] is True}
 
+
+def _retained_plan(plan):
+    """Regenerate every first-release session, including all warmup cohorts."""
+    exact_fields(plan, PLAN_FIELDS | {"benchmark_sessions", "workload_manifests"}, "retained benchmark plan")
+    _header(plan, "retained benchmark plan")
+    if plan["worktree_clean"] is not True or plan["publication_evidence"] is not False or plan["execution_required"] is not True:
+        raise AccountingError("plan lacks its source/execution contract")
+    descriptors = plan["benchmark_sessions"]
+    if type(descriptors) is not list or not descriptors:
+        raise AccountingError("retained benchmark sessions must be registered upfront")
+    configuration = {}; workloads = {}
+    for descriptor in descriptors:
+        exact_fields(descriptor, frozenset({"session_id", "profile", "participants", "seed",
+            "configuration_sha256", "workload_manifest_sha256", "warmup_attempts", "measured_attempts"}), "session descriptor")
+        n = descriptor["participants"]
+        configuration.setdefault(n, descriptor["configuration_sha256"])
+        workloads.setdefault(n, descriptor["workload_manifest_sha256"])
+    seeds = [row["seed"] for row in descriptors if row["profile"] == "private" and row["participants"] == 2]
+    measured = sum(row["measured_attempts"] for row in descriptors if row["profile"] == "private" and row["participants"] == 2)
+    expected = build_benchmark_session_plan(configuration, seeds, workloads,
+        warmups_per_session=descriptors[0]["warmup_attempts"], measured_per_profile=measured)
+    _same(descriptors, expected["sessions"], "complete registered retained session inventory")
+    indexed = []
+    all_ids = []
+    for ordinal, job in enumerate(plan["jobs"], 1):
+        if type(job) is not dict or job.get("kind") not in {"benchmark", "fault", "leakage"}:
+            raise AccountingError("full plan has an unknown job")
+        _same(job.get("request_id"), hashlib.sha256(accounting_canonical_bytes({
+            key: value for key, value in job.items() if key != "request_id"})).hexdigest(), "planned request identity")
+        all_ids.append(job["request_id"])
+        if job["kind"] == "benchmark": indexed.append((ordinal, job))
+    if len(set(all_ids)) != len(all_ids):
+        raise AccountingError("full plan repeats a request")
+    _same([job for _, job in indexed], expected["jobs"], "complete registered benchmark jobs")
+    if [ordinal for ordinal, _ in indexed] != list(range(indexed[0][0], indexed[0][0] + len(indexed))):
+        raise AccountingError("nonbenchmark job interrupts retained benchmark sessions")
+    return indexed
+
+
+def _retained_scope_inputs(scope_raw, worker_command, worker_image, validate_success):
+    """Share exact registration/native admission across campaign and scope cuts."""
     scope = exact_fields(_document(scope_raw, "scope"), SCOPE_FIELDS, "scope")
     _header(scope, "scope")
     scope_binding = accounting_file_binding(scope_raw)
-    scope_sha = scope_binding["sha256"]
-    _digest(scope["scope_id"], "scope_id")
-    if scope["previous_scope_sha256"] is not None:
-        raise AccountingError("V1 requires the complete scope upfront, without an unauthenticated predecessor")
-    registered_ns = unsigned_milliseconds(scope["registered_ns"], "registration time", positive=True)
-    if scope["stopping_policy"] != "fail_fast":
-        raise AccountingError("scope has an undeclared stopping policy")
+    _digest(scope["scope_id"], "scope id")
+    if scope["previous_scope_sha256"] is not None or scope["stopping_policy"] != "fail_fast":
+        raise AccountingError("scope must register its complete first-release fail-fast inventory")
+    registered = unsigned_milliseconds(scope["registered_ns"], "registration", positive=True)
     policy = validate_deadline_policy(scope["deadline_policy"])
+    _binding(worker_image, "source-admitted native worker")
+    if type(worker_command) is not list or not worker_command or any(type(x) is not str or not x for x in worker_command):
+        raise AccountingError("native worker command is missing")
+    if not callable(validate_success):
+        raise AccountingError("canonical retained semantic replay is mandatory")
     slots = scope["campaigns"]
-    if not isinstance(slots, list) or not slots or not isinstance(campaigns, (list, tuple)):
-        raise AccountingError("scope must declare its complete ordered campaign inventory")
+    if type(slots) is not list or not slots:
+        raise AccountingError("registered campaign inventory is incomplete")
     ids = []
     for slot in slots:
         exact_fields(slot, frozenset({"campaign_id", "plan"}), "campaign registration")
         ids.append(_campaign_id(slot["campaign_id"]))
         _binding(slot["plan"], "registered plan")
-    if ids != sorted(set(ids)) or any(not isinstance(packet, dict) for packet in campaigns) or [packet.get("campaign_id") for packet in campaigns] != ids:
-        raise AccountingError("campaign inventory omits, duplicates or reorders a registered slot")
-    rows, expected_samples, summaries, nonces = [], {}, [], set()
-    campaign_environment = None
-    for slot, packet in zip(slots, campaigns):
-        exact_fields(packet, frozenset({"campaign_id", "plan", "closure", "attempts"}), "campaign packet")
-        _same(accounting_file_binding(packet["plan"]), slot["plan"], "registered plan bytes")
-        plan = exact_fields(_document(packet["plan"], "plan"), PLAN_FIELDS, "plan")
-        _header(plan, "plan")
-        _same(validate_deadline_policy(plan["benchmark_accounting"]), policy, "plan accounting policy")
-        if (not isinstance(plan["commit"], str) or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", plan["commit"]) is None
-                or plan["worktree_clean"] is not True or plan["publication_evidence"] is not False or plan["execution_required"] is not True):
-            raise AccountingError("registered plan has an invalid source/execution header")
-        _binding(plan["harness"], "plan harness")
-        if not isinstance(plan["hardware"], dict):
-            raise AccountingError("plan hardware binding is absent")
-        for key in ("sha256", "profile_sha256"):
-            _digest(plan["hardware"].get(key), f"hardware.{key}")
-        environment = {key: plan[key] for key in ("commit", "hardware", "benchmark_accounting")}
-        if campaign_environment is None:
-            campaign_environment = environment
+    if ids != sorted(set(ids)):
+        raise AccountingError("campaign inventory omits or reorders a registered slot")
+    return scope, scope_binding, registered, policy, ids
+
+
+def validate_serial_owner_lifetimes(intervals, registered_ns):
+    """Require exact full-plan process/session lifetimes to be serial."""
+    previous = unsigned_milliseconds(registered_ns, "owner registration", positive=True)
+    for started, finished in intervals:
+        started = unsigned_milliseconds(started, "owner start", positive=True)
+        finished = unsigned_milliseconds(finished, "owner finish", positive=True)
+        if started < previous or finished < started:
+            raise AccountingError("full-plan process/session owner lifetimes overlap or reorder")
+        previous = finished
+
+
+def _reduce_retained_campaign(slot, packet, *, scope_binding, registered, policy,
+                              worker_command, worker_image, validate_success,
+                              generations, nonces, workers):
+    """Single owner of session, process, prefix and campaign closure predicates."""
+    samples = []
+    exact_fields(packet, frozenset({"campaign_id", "plan", "closure", "sessions", "records", "nonbenchmark"}), "retained campaign packet")
+    _same(accounting_file_binding(packet["plan"]), slot["plan"], "registered plan bytes")
+    plan = _document(packet["plan"], "plan")
+    indexed = _retained_plan(plan)
+    _same(validate_deadline_policy(plan["benchmark_accounting"]), policy, "registered deadline policy")
+    current_environment = {key: plan[key] for key in ("commit", "hardware", "benchmark_accounting")}
+    identity = {"scope_sha256": scope_binding["sha256"], "campaign_id": slot["campaign_id"], "plan_sha256": slot["plan"]["sha256"]}
+    closure = exact_fields(_document(packet["closure"], "campaign closure"), CLOSURE_FIELDS | {
+        "started_session_ids", "session_closures"}, "retained campaign closure")
+    _record_identity(closure, identity, "campaign closure")
+    closed = unsigned_milliseconds(closure["closed_ns"], "campaign cut", positive=True)
+    if closure["quiescent"] is not True or closed < registered or closure["reason"] not in {
+        "completed", "fail_fast", "preparation_failed", "recovered_interruption", "not_run"}:
+        raise AccountingError("campaign has no authoritative quiescent cut")
+    records = _SessionRecords(packet["records"])
+    if type(packet["sessions"]) is not list or len(packet["sessions"]) != len(plan["benchmark_sessions"]):
+        raise AccountingError("campaign omits a planned session")
+    campaign_rows, session_summaries, session_refs, session_ids = [], [], [], []
+    stopped = False
+    preceding_closed = registered
+    for descriptor, session in zip(plan["benchmark_sessions"], packet["sessions"]):
+        if stopped and session is not None:
+            raise AccountingError("campaign started a session after unsuccessful or unstarted predecessor")
+        reduced, measured, summary = reduce_retained_session(descriptor, session, records=records,
+            campaign_identity=identity, jobs=indexed, registered_ns=registered, closed_ns=closed,
+            policy=policy, worker_command=worker_command, worker_image=worker_image,
+            validate_success=validate_success)
+        campaign_rows.extend(reduced); samples.extend(measured)
+        if summary is None:
+            stopped = True
         else:
-            _same(environment, campaign_environment, "scope campaign source/hardware/deadline identity")
-        closure = exact_fields(_document(packet["closure"], "closure"), CLOSURE_FIELDS, "closure")
-        _record_identity(closure, {"scope_sha256": scope_sha, "campaign_id": slot["campaign_id"],
-                                  "plan_sha256": slot["plan"]["sha256"]}, "closure")
-        closed_ns = unsigned_milliseconds(closure["closed_ns"], "closure time", positive=True)
-        if (closure["quiescent"] is not True or closed_ns < registered_ns
-                or closure["reason"] not in {"completed", "fail_fast", "preparation_failed", "recovered_interruption", "not_run"}):
-            raise AccountingError("campaign lacks an authoritative quiescent closure")
-        jobs = plan["jobs"]
-        if not isinstance(jobs, list) or not jobs:
-            raise AccountingError("plan job inventory is empty or malformed")
-        job_ids, benchmark_jobs = [], []
-        for ordinal, job in enumerate(jobs, 1):
-            if not isinstance(job, dict) or "request_id" not in job:
-                raise AccountingError("plan job is malformed")
-            job_id = _digest(job["request_id"], "job request_id")
-            if hashlib.sha256(accounting_canonical_bytes({key: value for key, value in job.items() if key != "request_id"})).hexdigest() != job_id:
-                raise AccountingError("job request identity does not bind its exact planned coordinates")
-            job_ids.append(job_id)
-            if job.get("kind") == "benchmark":
-                exact_fields(job, BENCHMARK_JOB_FIELDS, "benchmark job")
-                if (job["profile"] not in {"private", "transparent_control"} or type(job["participants"]) is not int
-                        or job["participants"] not in (2, 3, 4, 8, 16) or type(job["warmup"]) is not bool):
-                    raise AccountingError("benchmark cohort is malformed")
-                _digest(job["configuration_sha256"], "job configuration")
-                unsigned_milliseconds(job["seed"], "job seed")
-                unsigned_milliseconds(job["run"], "job run")
-                benchmark_jobs.append((ordinal, job))
-            elif job.get("kind") not in {"fault", "leakage"}:
-                raise AccountingError("plan contains an unknown job kind")
-        started_ids = closure["started_request_ids"]
-        if (len(job_ids) != len(set(job_ids)) or not isinstance(started_ids, list)
-                or not all(isinstance(value, str) for value in started_ids)
-                or len(started_ids) != len(set(started_ids)) or not set(started_ids) <= set(job_ids)):
-            raise AccountingError("closure has a duplicate or unplanned durable start")
-        if started_ids != job_ids[:len(started_ids)]:
-            raise AccountingError("fail-fast campaign skipped an earlier planned dispatch")
-        attempts = packet["attempts"]
-        if (not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts)
-                or [item.get("request_id") for item in attempts] != [job["request_id"] for _, job in benchmark_jobs]):
-            raise AccountingError("campaign omits, duplicates or reorders a planned benchmark job")
-        actual_benchmark_starts = [item["request_id"] for item in attempts if item.get("started") is not None]
-        if actual_benchmark_starts != [value for value in started_ids if value in {job["request_id"] for _, job in benchmark_jobs}]:
-            raise AccountingError("closure inventory differs from retained durable starts")
-        campaign_rows = []
-        stopped = False
-        for (ordinal, job), attempt in zip(benchmark_jobs, attempts):
-            if stopped and attempt["started"] is not None:
-                raise AccountingError("campaign dispatched a later benchmark after fail-fast termination")
-            row, sample = _reduce_attempt(attempt, scope_sha=scope_sha, campaign_id=slot["campaign_id"],
-                plan_sha=slot["plan"]["sha256"], plan=plan, job=job, ordinal=ordinal, closure=closure,
-                registered_ns=registered_ns, policy=policy, nonces=nonces)
-            if row["state"] != "succeeded" and len(started_ids) > ordinal:
-                raise AccountingError("campaign dispatched a later full-plan job after fail-fast termination")
-            campaign_rows.append(row)
-            rows.append(row)
-            if sample is not None:
-                if row["attempt_id"] in expected_samples:
-                    raise AccountingError("a planned attempt was reused")
-                expected_samples[row["attempt_id"]] = sample
-            if row["state"] in {"failed", "timed_out", "not_started"}:
-                stopped = True
-        if closure["reason"] == "completed" and (len(started_ids) != len(jobs) or any(row["state"] != "succeeded" for row in campaign_rows)):
-            raise AccountingError("completed campaign has unstarted or unsuccessful jobs")
-        if closure["reason"] == "not_run" and started_ids:
-            raise AccountingError("unused campaign contains a durable start")
-        summaries.append({"campaign_id": slot["campaign_id"], "plan_sha256": slot["plan"]["sha256"],
-                          "counts": _counter(campaign_rows)})
-    observed_samples = {}
+            generation = summary["session_invocation_nonce"]
+            if generation in generations or nonces.intersection(summary["attempt_nonces"]):
+                raise AccountingError("scope reuses a session or attempt generation")
+            generations.add(generation); nonces.update(summary.pop("attempt_nonces"))
+            if summary["started_ns"] < preceding_closed:
+                raise AccountingError("retained sessions overlap their exact owner lifetimes")
+            preceding_closed = summary["closed_ns"]
+            worker_generation = summary["worker_generation_sha256"]
+            if worker_generation is not None:
+                if worker_generation in workers:
+                    raise AccountingError("distinct sessions reuse the same native worker generation")
+                workers.add(worker_generation)
+            session_summaries.append(summary); session_ids.append(descriptor["session_id"])
+            session_refs.append(summary["closure"])
+            stopped = summary["terminal_kind"] != "completed"
+    _same(closure["started_session_ids"], session_ids, "campaign session starts")
+    _same(closure["session_closures"], session_refs, "campaign session closures")
+    actual_starts = {row["request_id"] for row in campaign_rows if row["state"] != "not_started"}
+    benchmark_states = {row["request_id"]: row["state"] for row in campaign_rows}
+    nonbenchmark_jobs = [(i, job) for i, job in enumerate(plan["jobs"], 1) if job["kind"] != "benchmark"]
+    if type(packet["nonbenchmark"]) is not list or len(packet["nonbenchmark"]) != len(nonbenchmark_jobs):
+        raise AccountingError("full-plan nonbenchmark closure inventory differs")
+    states = dict(benchmark_states)
+    owner_intervals = {next(i for i, job in enumerate(plan["jobs"], 1)
+        if job.get("session_id") == summary["session_id"]):
+        (summary["started_ns"], summary["closed_ns"]) for summary in session_summaries}
+    for (ordinal, job), other in zip(nonbenchmark_jobs, packet["nonbenchmark"]):
+        exact_fields(other, frozenset({"request_id", "started", "request", "process"}), "nonbenchmark packet")
+        _same(other["request_id"], job["request_id"], "nonbenchmark request")
+        if other["started"] is None:
+            if other["process"] is not None: raise AccountingError("nonbenchmark process lacks a durable start")
+            states[job["request_id"]] = "not_started"; continue
+        start = exact_fields(_document(other["started"], "nonbenchmark start"), START_FIELDS, "nonbenchmark start")
+        owner = {**identity, "attempt_id": registered_attempt_id(**identity, request_id=job["request_id"]),
+                 "request_id": job["request_id"], "invocation_nonce": _digest(start["invocation_nonce"], "invocation nonce")}
+        _record_identity(start, owner, "nonbenchmark start")
+        if not registered <= start["started_ns"] <= closed or start["timeout_seconds"] * 1000 != policy["outer_timeout_ms"]:
+            raise AccountingError("nonbenchmark start differs from registered cut or deadline")
+        _same(start["request"], accounting_file_binding(other["request"]), "nonbenchmark request bytes")
+        _same(start["harness"], plan["harness"], "nonbenchmark harness")
+        if owner["invocation_nonce"] in nonces: raise AccountingError("full plan repeats an invocation nonce")
+        nonces.add(owner["invocation_nonce"])
+        process = _process_record(_document(other["process"], "nonbenchmark process"), owner, start, closed, policy)
+        if process["owned_process_group_gone"] is not True:
+            raise AccountingError("nonbenchmark process is not quiescent")
+        states[job["request_id"]] = ("succeeded" if process["completion_kind"] == "exited"
+            and process["exit_code"] == 0 and process["passed"] is True else "incomplete")
+        actual_starts.add(job["request_id"])
+        owner_intervals[ordinal] = (start["started_ns"], process["finished_ns"])
+    validate_serial_owner_lifetimes([owner_intervals[key] for key in sorted(owner_intervals)], registered)
+    expected_starts = [job["request_id"] for job in plan["jobs"] if job["request_id"] in actual_starts]
+    _same(closure["started_request_ids"], expected_starts, "full-plan durable start inventory")
+    _same(expected_starts, [job["request_id"] for job in plan["jobs"][:len(expected_starts)]], "full-plan dispatch prefix")
+    for summary in session_summaries:
+        first = next(i for i, job in enumerate(plan["jobs"]) if job.get("session_id") == summary["session_id"])
+        if any(states[job["request_id"]] != "succeeded" for job in plan["jobs"][:first]):
+            raise AccountingError("session owner started after an unsuccessful full-plan predecessor")
+    stopped = False
+    for job in plan["jobs"]:
+        state = states[job["request_id"]]
+        if stopped and state != "not_started":
+            raise AccountingError("full campaign continued after its first unsuccessful attempt")
+        stopped |= state != "succeeded"
+    if closure["reason"] == "completed" and (stopped or any(s["terminal_kind"] != "completed" for s in session_summaries)):
+        raise AccountingError("completed campaign has an unfinished attempt or session")
+    if closure["reason"] == "not_run" and (actual_starts or session_ids):
+        raise AccountingError("unstarted campaign contains a session owner")
+    summary = {"campaign_id": slot["campaign_id"], "plan_sha256": slot["plan"]["sha256"],
+                      "counts": _counter(campaign_rows), "sessions": session_summaries}
+    records.validate()
+    return campaign_rows, samples, summary, current_environment
+
+
+def _retained_sample_inventory(successful_rows, samples):
+    """Join the complete retained sample inventory to independent replay."""
+    observed = {}
     for raw in successful_rows:
-        sample = _document(raw, "published sample")
-        attempt_id = _digest(sample.get("attempt_id"), "sample attempt_id")
-        if attempt_id in observed_samples or attempt_id not in expected_samples:
-            raise AccountingError("published sample is duplicate, unplanned or unsuccessful")
-        _same(sample, expected_samples[attempt_id], "published successful row")
-        observed_samples[attempt_id] = sample
-    if set(observed_samples) != set(expected_samples):
-        raise AccountingError("a retained successful measurement was omitted")
+        value = _document(raw, "published successful sample")
+        key = _digest(value.get("attempt_id"), "sample attempt id")
+        if key in observed: raise AccountingError("duplicate published successful sample")
+        observed[key] = raw
+    expected = {_document(raw, "retained sample")["attempt_id"]: raw for raw in samples}
+    if len(expected) != len(samples) or observed != expected:
+        raise AccountingError("successful sample inventory omits, changes or adds an attempt")
+
+
+def _retained_cohorts(rows):
+    """Count every registered cohort including untouched closed tails."""
     cohorts = []
-    for profile, participants, warmup in sorted({(row["profile"], row["participants"], row["warmup"]) for row in rows}):
-        cohort = [row for row in rows if (row["profile"], row["participants"], row["warmup"]) == (profile, participants, warmup)]
-        cohorts.append({"profile": profile, "participants": participants, "warmup": warmup, "counts": _counter(cohort)})
+    for profile, n, warmup in sorted({(r["profile"], r["participants"], r["warmup"]) for r in rows}):
+        cohorts.append({"profile": profile, "participants": n, "warmup": warmup,
+            "counts": _counter([r for r in rows if (r["profile"], r["participants"], r["warmup"]) == (profile, n, warmup)])})
+    return cohorts
+
+
+def reduce_retained_campaign(scope_raw, packet, successful_rows, *, worker_command,
+                             worker_image, validate_success):
+    """Validate one actual campaign cut without inventing other scope closures."""
+    scope, binding, registered, policy, ids = _retained_scope_inputs(
+        scope_raw, worker_command, worker_image, validate_success)
+    if packet.get('campaign_id') not in ids:
+        raise AccountingError('campaign is absent from the complete registered scope')
+    slot = scope['campaigns'][ids.index(packet['campaign_id'])]
+    rows, samples, summary, _ = _reduce_retained_campaign(slot, packet, scope_binding=binding,
+        registered=registered, policy=policy, worker_command=worker_command, worker_image=worker_image,
+        validate_success=validate_success, generations=set(), nonces=set(), workers=set())
+    _retained_sample_inventory(successful_rows, samples)
+    return {'campaign': summary, 'counts': _counter(rows), 'rows': rows,
+            'accounting_complete': all(row['state'] != 'incomplete' for row in rows),
+            'registered_scope_complete': False}
+
+
+def reduce_registered_scope(scope_raw, campaigns, successful_rows, *, worker_command,
+                            worker_image, validate_success):
+    """Reduce closed retained sessions; one-shot benchmark packets are rejected.
+
+    File inventories, native image admission and semantic replay are mandatory
+    caller-owned inputs. Fault/leakage jobs retain their existing process record
+    contract and never enter benchmark counts. No reads, execution or metrics
+    fabrication occur here; unclosed sessions cannot establish missing tails.
+    """
+    scope, scope_binding, registered, policy, ids = _retained_scope_inputs(
+        scope_raw, worker_command, worker_image, validate_success)
+    slots = scope['campaigns']
+    if (type(campaigns) not in (list, tuple) or len(campaigns) != len(slots)
+            or [packet.get('campaign_id') for packet in campaigns] != ids):
+        raise AccountingError('registered campaign inventory is incomplete or reordered')
+    rows, samples, summaries, generations, nonces, workers = [], [], [], set(), set(), set()
+    environment = None
+    for slot, packet in zip(slots, campaigns):
+        campaign_rows, measured, summary, current_environment = _reduce_retained_campaign(slot, packet,
+            scope_binding=scope_binding, registered=registered, policy=policy, worker_command=worker_command,
+            worker_image=worker_image, validate_success=validate_success,
+            generations=generations, nonces=nonces, workers=workers)
+        if environment is not None:
+            _same(current_environment, environment, 'scope campaign environment')
+        environment = current_environment
+        rows.extend(campaign_rows); samples.extend(measured); summaries.append(summary)
+    _retained_sample_inventory(successful_rows, samples)
+    cohorts = _retained_cohorts(rows)
     return {"version": VERSION, "protocol": PROTOCOL, "scope_id": scope["scope_id"], "scope": scope_binding,
-            "previous_scope_sha256": scope["previous_scope_sha256"], "timeout_scope": TIMEOUT_SCOPE,
-            "deadline_policy": policy, "counts": _counter(rows), "cohorts": cohorts, "campaigns": summaries,
-            "rows": rows, "accounting_complete": all(row["state"] != "incomplete" for row in rows)}
+        "previous_scope_sha256": None, "timeout_scope": TIMEOUT_SCOPE, "deadline_policy": policy,
+        "counts": _counter(rows), "cohorts": cohorts, "campaigns": summaries, "rows": rows,
+        "accounting_complete": all(row["state"] != "incomplete" for row in rows)}
 
 
 if __name__ == "__main__":

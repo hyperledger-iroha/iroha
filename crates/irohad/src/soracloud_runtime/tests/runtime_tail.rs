@@ -143,7 +143,8 @@ fn execute_local_read_fails_closed_when_runtime_snapshot_is_behind() -> Result<(
     let mut bundle = load_deployment_bundle_fixture()?;
     let bundle_bytes = b"ivm bundle bytes".to_vec();
     bundle.container.bundle_hash = Hash::new(&bundle_bytes);
-    let temp_dir = tempfile::tempdir()?;
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    let temp_dir = canonical_runtime_fixture_tempdir()?;
     let artifacts_root = temp_dir.path().join("artifacts");
     fs::create_dir_all(&artifacts_root)?;
     fs::write(

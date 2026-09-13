@@ -25106,6 +25106,23 @@ let_row! { active_envelope = sample_lane_relay_envelope_for_state(&state, 1, Lan
    let candidates = restarted.merge_entry_candidates_from_lane_relays(); assert_eq!( restarted.lane_relay_snapshot(), vec![active_envelope.clone()], "restart hydration must admit only relays for active Nexus catalog lanes" ); assert_eq!(candidates.len(), 1); let_row! { snapshot = candidates[0] .lane_snapshots .iter() .find(|snapshot| snapshot.lane_id == LaneId::SINGLE) .expect("active lane snapshot") }; assert_eq!(snapshot.dataspace_id, DataSpaceId::UNIVERSAL); assert_eq!(snapshot.lane_block_height, active_envelope.block_height); assert_eq!(snapshot.tip_hash, active_envelope.block_header.hash()); let contract_state = restarted.world.smart_contract_state.view(); assert!( contract_state.get(&active_key).is_some(), "active relay record should remain persisted after restart hydration" ); assert!( contract_state.get(&stale_unknown_key).is_some(), "unknown-lane relay state should remain persisted but inert after restart hydration" ); assert!( contract_state.get(&future_created_key).is_some(), "future-created relay state should remain persisted but inert after restart hydration" ); }
 #[test]
 fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarnation() {
+    let hydration_checkpoint = |state: &State| {
+        let bytes = crate::snapshot::canonical_state_snapshot_bytes(state);
+        let hash = crate::snapshot::canonical_state_snapshot_hash(state);
+        assert_eq!(hash, iroha_crypto::Hash::new(&bytes));
+        let storage_json = norito::json::to_json(&state.world.smart_contract_state)
+            .expect("serialize both committed storage values and undo history");
+        let storage: norito::json::Value =
+            norito::json::from_str(&storage_json).expect("storage JSON");
+        assert!(
+            storage
+                .get("revert")
+                .and_then(norito::json::Value::as_object)
+                .is_some_and(|undo| !undo.is_empty()),
+            "fixture must retain nonempty undo history before and after hydration"
+        );
+        (bytes, hash, storage_json)
+    };
     let (state, validator_keypairs) = setup_lane_relay_burn_state();
     let_row! { validator_ids: Vec<_> = validator_keypairs .iter() .map(|keypair| AccountId::new(keypair.public_key().clone())) .collect() };
     let lane_id = LaneId::new(1);
@@ -25130,9 +25147,14 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
     let_row! { old_map_key = State::verified_lane_relay_contract_map_state_key(&old_key) .expect("old contract map state key") };
     seed_committed_height_for_state_test(&state, 1);
     insert_verified_lane_relay_record_state(&state, old_key.clone(), &old_record);
+    let initial_checkpoint = hydration_checkpoint(&state);
     assert!(
         !state.merge_entry_candidates_from_lane_relays().is_empty(),
         "test setup should prove the old verified relay can hydrate before lane reset"
+    );
+    assert!(
+        hydration_checkpoint(&state) == initial_checkpoint,
+        "valid hydration must preserve canonical bytes, hash, and storage undo history"
     );
     seed_committed_height_for_state_test(&state, 2);
     state
@@ -25146,6 +25168,15 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
         .expect("recreate lane");
     let_row! { recreated_incarnation = state .lane_incarnation(lane_id) .expect("recreated lane has an active incarnation") };
     assert_ne!(recreated_incarnation, old_envelope.lane_incarnation);
+    assert!(
+        state
+            .world
+            .smart_contract_state
+            .view()
+            .get(&old_key)
+            .is_none(),
+        "the authoritative lane lifecycle transition still prunes the old relay"
+    );
     insert_verified_lane_relay_record_state(&state, old_key.clone(), &old_record);
     insert_smart_contract_state_payload(
         &state,
@@ -25168,27 +25199,25 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
             && expected == recreated_incarnation
             && actual == old_envelope.lane_incarnation
     ));
-    assert!(
-        state.merge_entry_candidates_from_lane_relays().is_empty(),
-        "old-incarnation verified relay must not hydrate after lane reset"
-    );
-    assert!(state.lane_relay_snapshot().is_empty());
-    assert!(
-        state
-            .verified_lane_relay_records_from_contract_state()
-            .is_empty(),
-        "stale replay should be pruned after failed hydration"
-    );
-    {
+    let before_hydration = hydration_checkpoint(&state);
+    for _ in 0..3 {
+        assert!(
+            state.merge_entry_candidates_from_lane_relays().is_empty(),
+            "old-incarnation verified relay must not hydrate after lane reset"
+        );
+        assert!(state.lane_relay_snapshot().is_empty());
+        assert!(
+            hydration_checkpoint(&state) == before_hydration,
+            "repeated stale hydration must preserve canonical bytes, hash, and storage undo history"
+        );
+        assert_eq!(
+            state.verified_lane_relay_records_from_contract_state(),
+            vec![old_record.clone()],
+            "read-side rejection leaves stale canonical records persisted but inert"
+        );
         let contract_state = state.world.smart_contract_state.view();
-        assert!(
-            contract_state.get(&old_key).is_none(),
-            "stale canonical replay key should be pruned after failed hydration"
-        );
-        assert!(
-            contract_state.get(&old_map_key).is_none(),
-            "stale contract-map replay key should be pruned after failed hydration"
-        );
+        assert!(contract_state.get(&old_key).is_some());
+        assert!(contract_state.get(&old_map_key).is_some());
     }
     seed_autoscale_sample_history_for_snapshot_test(&state);
     let json_value = norito::json::to_value(&state).expect("serialize state snapshot");
@@ -25238,29 +25267,27 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
             && expected == restarted_incarnation
             && actual == old_envelope.lane_incarnation
     ));
-    assert!(
-        restarted
-            .merge_entry_candidates_from_lane_relays()
-            .is_empty(),
-        "restart hydration must keep old-incarnation verified relays inert"
-    );
-    assert!(restarted.lane_relay_snapshot().is_empty());
-    assert!(
-        restarted
-            .verified_lane_relay_records_from_contract_state()
-            .is_empty(),
-        "restart stale replay should be pruned after failed hydration"
-    );
-    {
+    let before_hydration = hydration_checkpoint(&restarted);
+    for _ in 0..3 {
+        assert!(
+            restarted
+                .merge_entry_candidates_from_lane_relays()
+                .is_empty(),
+            "restart hydration must keep old-incarnation verified relays inert"
+        );
+        assert!(restarted.lane_relay_snapshot().is_empty());
+        assert!(
+            hydration_checkpoint(&restarted) == before_hydration,
+            "repeated stale hydration must preserve canonical bytes, hash, and storage undo history"
+        );
+        assert_eq!(
+            restarted.verified_lane_relay_records_from_contract_state(),
+            vec![old_record.clone()],
+            "read-side rejection leaves stale canonical records persisted but inert"
+        );
         let contract_state = restarted.world.smart_contract_state.view();
-        assert!(
-            contract_state.get(&old_key).is_none(),
-            "restart stale canonical replay key should be pruned after failed hydration"
-        );
-        assert!(
-            contract_state.get(&old_map_key).is_none(),
-            "restart stale contract-map replay key should be pruned after failed hydration"
-        );
+        assert!(contract_state.get(&old_key).is_some());
+        assert!(contract_state.get(&old_map_key).is_some());
     }
     seed_committed_height_for_state_test(&restarted, 3);
     let_row! { mut fresh_envelope = sample_lane_relay_envelope_for_state_at_heights_with_view( &restarted, 3, 1, lane_id, 0, &validator_keypairs, ) .with_manifest_root(Some([0x52; 32])) };
@@ -25271,7 +25298,12 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
         State::verified_lane_relay_state_key(&fresh_envelope).expect("fresh state key"),
         &fresh_record,
     );
+    let before_fresh_hydration = hydration_checkpoint(&restarted);
     let candidates = restarted.merge_entry_candidates_from_lane_relays();
+    assert!(
+        hydration_checkpoint(&restarted) == before_fresh_hydration,
+        "fresh successor hydration must preserve canonical bytes, hash, and storage undo history"
+    );
     assert_eq!(
         restarted.lane_relay_snapshot(),
         vec![fresh_envelope.clone()],
@@ -25885,7 +25917,7 @@ state_test! { sync oversubscribed_lane_authority_still_requires_verified_beacon_
             LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             1,
         ),
-        Err(LaneAuthorityError::InvalidAuthoritySource {
+        Err(LaneAuthorityError::SelectionEntropyUnavailable {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
             authority_height: 1,

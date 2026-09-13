@@ -322,6 +322,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindLaneRelayEnvelopeByRef(_)
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
+        | SingularQueryBox::FindSettlementReceiptById(_)
         | SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_)
         | SingularQueryBox::FindSorafsCitizenBondSnapshot(_)
         | SingularQueryBox::FindNftById(_)
@@ -9087,6 +9088,47 @@ mod tests {
     }
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+    #[test]
+    fn native_settlement_receipt_query_requires_all_ledger_access() {
+        let query = SingularQueryBox::from(
+            iroha_data_model::query::settlement::FindSettlementReceiptById::new(
+                "business_receipt".parse().expect("settlement id"),
+            ),
+        );
+        assert_eq!(
+            native_singular_query_access(&query),
+            NativeQueryAccess::AllLedger
+        );
+        let fixture = initial_batch_fixture();
+        let authority = fixture.source.clone();
+        let state = state_for_testing(fixture.world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        let request = QueryRequest::Singular(query);
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &authority, &request).is_err()
+        );
+        tx.world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([executor_permission::query::CanReadAccountData {
+                account: authority.clone(),
+            }
+            .into()]),
+        );
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &authority, &request).is_err()
+        );
+        tx.world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([executor_permission::query::CanReadAllLedgerData.into()]),
+        );
+        validate_builtin_native_query_permission(tx.world(), &authority, &request)
+            .expect("ledger-wide receipt reader");
+        tx.world.account_permissions.remove(authority.clone());
+        assert!(
+            validate_builtin_native_query_permission(tx.world(), &authority, &request).is_err()
+        );
     }
     #[test]
     fn native_sorafs_citizen_bond_queries_require_all_ledger_access() {

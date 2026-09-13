@@ -1286,6 +1286,28 @@ impl PreparedPublishedLifecycleStoreRetryMarkerV1 {
     }
 }
 
+/// Inert executor publication prepared from one authenticated, fsynced recovered
+/// response. The body catalogs and its exact Store marker publish together only
+/// after the recovered Fetch-to-Store LedgerV1 transition commits.
+#[must_use = "the recovered body catalogs and Store marker have not crossed publication"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchStorePublicationV1 {
+    body: super::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1,
+    catalog_was_present: bool,
+    retry_marker: PreparedPublishedLifecycleStoreRetryMarkerV1,
+}
+
+impl PreparedRecoveredDecisionFetchStorePublicationV1 {
+    /// Bind the body publication to the registry's exact durable Store child.
+    pub(in crate::sumeragi) fn bind_store_successor(
+        mut self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<Self, String> {
+        self.retry_marker = self.retry_marker.bind_store_successor(effect, pending)?;
+        Ok(self)
+    }
+}
+
 /// Move-only preflight for installing one direct lifecycle Validate marker
 /// after its LedgerV1 successor is durable.
 #[must_use = "the direct lifecycle Validate marker has not crossed publication"]
@@ -1469,6 +1491,121 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         }
         Ok(census)
+    }
+
+    /// Preflight the body catalogs and retry marker for a recovered network
+    /// response. Worker persistence owns the receipt, but cannot mutate these
+    /// executor catalogs. An exact cold catalog is reusable; partial or foreign
+    /// catalogs and overlapping body stages never authorize this publication.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_store_publication(
+        &self,
+        body: &super::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1,
+    ) -> Result<PreparedRecoveredDecisionFetchStorePublicationV1, EffectExecutorError> {
+        self.ensure_open()?;
+        let durable = body.durable();
+        let manifest = body.manifest();
+        let key = (durable.round(), durable.subject());
+        if !store_completion_matches(&self.context, manifest, durable)
+            || self.body_pipeline_owners.contains_key(&key)
+            || self.ready_bodies.contains_key(&key)
+            || self.validated_bodies.contains_key(&key)
+            || self.rejected_bodies.contains_key(&key)
+            || self.retired_rejected_bodies.contains_key(&key)
+            || self.pending_durable_validate_admissions.contains_key(&key)
+            || self.durable_validate_retry_seals.contains_key(&key)
+            || self
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+            || self
+                .published_lifecycle_validate_retry_markers
+                .contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "recovered lifecycle Store publication overlaps a foreign executor body owner"
+                    .to_owned(),
+            ));
+        }
+        let catalog_was_present = match (
+            self.recovered_bodies.get(&key),
+            self.durable_bodies.get(&key),
+        ) {
+            (None, None) => false,
+            (Some((retained_manifest, retained)), Some(stored))
+                if retained_manifest == manifest && retained == durable && stored == durable =>
+            {
+                true
+            }
+            _ => {
+                return Err(EffectExecutorError::Contract(
+                    "recovered lifecycle Store publication changed its exact executor body catalogs"
+                        .to_owned(),
+                ));
+            }
+        };
+        Ok(PreparedRecoveredDecisionFetchStorePublicationV1 {
+            body: body.clone(),
+            catalog_was_present,
+            retry_marker: PreparedPublishedLifecycleStoreRetryMarkerV1 {
+                durable_receipt: durable.clone(),
+                marker: None,
+            },
+        })
+    }
+
+    /// Publish the preflighted recovered body catalogs and Store marker under
+    /// the caller's fail-stop operation after the exact LedgerV1 successor.
+    pub(in crate::sumeragi) fn commit_recovered_decision_fetch_store_publication(
+        &mut self,
+        prepared: PreparedRecoveredDecisionFetchStorePublicationV1,
+    ) {
+        assert!(prepared.retry_marker.marker.is_some());
+        let key = (
+            prepared.body.durable().round(),
+            prepared.body.durable().subject(),
+        );
+        assert!(!self.body_pipeline_owners.contains_key(&key));
+        assert!(!self.ready_bodies.contains_key(&key));
+        assert!(!self.validated_bodies.contains_key(&key));
+        assert!(!self.rejected_bodies.contains_key(&key));
+        assert!(!self.retired_rejected_bodies.contains_key(&key));
+        assert!(!self.pending_durable_validate_admissions.contains_key(&key));
+        assert!(!self.durable_validate_retry_seals.contains_key(&key));
+        assert!(
+            !self
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+        );
+        assert!(
+            !self
+                .published_lifecycle_validate_retry_markers
+                .contains_key(&key)
+        );
+        if prepared.catalog_was_present {
+            assert_eq!(
+                self.recovered_bodies.get(&key),
+                Some(&(
+                    prepared.body.manifest().clone(),
+                    prepared.body.durable().clone(),
+                ))
+            );
+            assert_eq!(self.durable_bodies.get(&key), Some(prepared.body.durable()));
+        } else {
+            assert!(!self.recovered_bodies.contains_key(&key));
+            assert!(!self.durable_bodies.contains_key(&key));
+            let previous = self.recovered_bodies.insert(
+                key,
+                (
+                    prepared.body.manifest().clone(),
+                    prepared.body.durable().clone(),
+                ),
+            );
+            assert!(previous.is_none());
+            let previous = self
+                .durable_bodies
+                .insert(key, prepared.body.durable().clone());
+            assert!(previous.is_none());
+        }
+        self.commit_published_lifecycle_store_retry_marker(prepared.retry_marker);
     }
 
     /// Preflight one inert retry marker before the direct Fetch-to-Store
@@ -2378,7 +2515,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 ),
             )
         };
-        for replacement in [VecDeque::new(), foreign_subject, extra_effect, foreign_ownership] {
+        for replacement in [
+            VecDeque::new(),
+            foreign_subject,
+            extra_effect,
+            foreign_ownership,
+        ] {
             self.retained_effect_batch
                 .as_mut()
                 .expect("retained fixture")

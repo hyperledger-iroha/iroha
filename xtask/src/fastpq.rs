@@ -1,3 +1,6 @@
+//! Source-coupled FASTPQ benchmark capture and release manifest tooling.
+#[path = "../../scripts/fastpq/src/digest384_report.rs"]
+mod digest384_report;
 use crate::workspace_root;
 use blake3::hash as blake3_hash;
 use eyre::{Context, Result, bail, ensure, eyre};
@@ -100,42 +103,8 @@ struct BenchEntry {
     matrix_operation_filters: Option<Vec<String>>,
     gpu_backend: Option<String>,
     gpu_available: Option<bool>,
-    poseidon_microbench: Option<PoseidonMicrobenchSummary>,
     metadata: BenchMetadata,
     hashes: BenchHashes,
-}
-#[derive(Serialize, Default, JsonSerialize, JsonDeserialize)]
-struct PoseidonMicrobenchSample {
-    mean_ms: Option<f64>,
-    min_ms: Option<f64>,
-    max_ms: Option<f64>,
-    columns: Option<u64>,
-    trace_log2: Option<u64>,
-    states: Option<u64>,
-    warmups: Option<u64>,
-    iterations: Option<u64>,
-    threadgroup_lanes: Option<u32>,
-    states_per_lane: Option<u32>,
-}
-impl PoseidonMicrobenchSample {
-    fn is_empty(&self) -> bool {
-        self.mean_ms.is_none()
-            && self.min_ms.is_none()
-            && self.max_ms.is_none()
-            && self.columns.is_none()
-            && self.trace_log2.is_none()
-            && self.states.is_none()
-            && self.warmups.is_none()
-            && self.iterations.is_none()
-            && self.threadgroup_lanes.is_none()
-            && self.states_per_lane.is_none()
-    }
-}
-#[derive(Serialize, Default, JsonSerialize, JsonDeserialize)]
-struct PoseidonMicrobenchSummary {
-    default: Option<PoseidonMicrobenchSample>,
-    scalar_lane: Option<PoseidonMicrobenchSample>,
-    speedup_vs_scalar: Option<f64>,
 }
 #[derive(Serialize, JsonSerialize, JsonDeserialize)]
 struct ConstraintSummary {
@@ -235,6 +204,8 @@ struct MatrixDeviceEntry {
 fn apply_matrix_manifest(options: &mut BenchManifestOptions, manifest_path: &Path) -> Result<()> {
     let bytes = fs::read(manifest_path)
         .with_context(|| format!("read matrix manifest {}", manifest_path.display()))?;
+    digest384_report::retired_fields(&json::from_slice::<Value>(&bytes)?)
+        .map_err(|error| eyre!(error))?;
     let manifest: MatrixManifest = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse matrix manifest {}", manifest_path.display()))?;
     ensure!(
@@ -243,6 +214,26 @@ fn apply_matrix_manifest(options: &mut BenchManifestOptions, manifest_path: &Pat
         manifest_path.display(),
         manifest.version
     );
+    for operation in manifest
+        .max_operation_ms
+        .keys()
+        .chain(manifest.min_operation_speedup.keys())
+        .chain(manifest.devices.iter().flat_map(|device| {
+            device
+                .max_operation_ms
+                .keys()
+                .chain(device.min_operation_speedup.keys())
+        }))
+    {
+        digest384_report::require_operation(operation).map_err(|error| eyre!(error))?;
+    }
+    for filter in manifest
+        .devices
+        .iter()
+        .flat_map(|device| &device.operation_filters)
+    {
+        digest384_report::require_filter(filter).map_err(|error| eyre!(error))?;
+    }
     if options.require_rows.is_none() {
         options.require_rows = manifest.require_rows;
     }
@@ -276,6 +267,32 @@ pub fn write_bench_manifest(mut options: BenchManifestOptions) -> Result<()> {
     if let Some(path) = options.matrix_manifest.clone() {
         apply_matrix_manifest(&mut options, &path)?;
     }
+    for operation in options
+        .max_operation_ms
+        .keys()
+        .chain(options.min_operation_speedup.keys())
+        .chain(
+            options
+                .label_max_operation_ms
+                .values()
+                .flat_map(|map| map.keys()),
+        )
+        .chain(
+            options
+                .label_min_operation_speedup
+                .values()
+                .flat_map(|map| map.keys()),
+        )
+    {
+        digest384_report::require_operation(operation).map_err(|error| eyre!(error))?;
+    }
+    for filter in options
+        .label_operation_filters
+        .values()
+        .flat_map(|set| set.iter())
+    {
+        digest384_report::require_filter(filter).map_err(|error| eyre!(error))?;
+    }
     if options.benches.is_empty() {
         bail!("fastpq-bench-manifest requires at least one --bench label=path argument");
     }
@@ -295,6 +312,8 @@ pub fn write_bench_manifest(mut options: BenchManifestOptions) -> Result<()> {
             min_operation_speedup: options.min_operation_speedup.clone(),
         },
     };
+    validate_manifest_payload(&payload)?;
+    digest384_report::retired_fields(&json::to_value(&payload)?).map_err(|error| eyre!(error))?;
     let payload_bytes = serde_json::to_vec(&payload).context("serialize bench manifest payload")?;
     let signature = if let Some(key_path) = options.signing_key.as_ref() {
         Some(sign_manifest(&payload_bytes, key_path)?)
@@ -322,6 +341,7 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
     let sha256_hex = hex::encode(Sha256::digest(&bytes));
     let bundle: Value = json::from_slice(&bytes)
         .with_context(|| format!("decode JSON from {}", bench.path.display()))?;
+    digest384_report::report_from_root(&bundle).map_err(|error| eyre!(error))?;
     let metadata_value = bundle
         .get("metadata")
         .and_then(|v| v.as_object())
@@ -407,19 +427,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         .get("operation_filter")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
-    let poseidon_microbench =
-        parse_poseidon_microbench_summary(benchmarks_value.get("poseidon_microbench"));
-    if gpu_backend.as_deref() == Some("metal")
-        && (metal_filter_requires_poseidon_microbench(operation_filter.as_deref())
-            || operation_map.contains_key("poseidon_hash_columns"))
-        && poseidon_microbench.is_none()
-    {
-        bail!(
-            "bench `{}` (label {}) missing `benchmarks.poseidon_microbench`; rerun scripts/fastpq/wrap_benchmark.py so Poseidon microbench evidence is captured",
-            bench.path.display(),
-            bench.label
-        );
-    }
     validate_declared_operation_filter(
         &bench.label,
         operation_filter.as_deref(),
@@ -442,7 +449,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         gpu_available: benchmarks_value
             .get("gpu_available")
             .and_then(|v| v.as_bool()),
-        poseidon_microbench,
         metadata,
         hashes: BenchHashes {
             blake3_hex,
@@ -450,37 +456,22 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         },
     })
 }
-fn metal_filter_requires_poseidon_microbench(operation_filter: Option<&str>) -> bool {
-    !matches!(
-        operation_filter,
-        Some("fft" | "ifft" | "lde" | "poseidon_merkle_pairs" | "bn254_poseidon_words")
-    )
-}
 fn validate_declared_operation_filter(
     label: &str,
     operation_filter: Option<&str>,
     operation_entry_count: usize,
     operations: &BTreeMap<String, OperationStats>,
 ) -> Result<()> {
-    let Some(operation_filter) = operation_filter else {
-        return Ok(());
-    };
+    let operation_filter = operation_filter
+        .ok_or_else(|| eyre!("bench `{label}` requires canonical operation_filter"))?;
     ensure!(
         operation_entry_count == operations.len(),
         "bench `{label}` contains malformed or duplicate operation rows"
     );
-    const CANONICAL_OPERATIONS: [&str; 6] = [
-        "fft",
-        "ifft",
-        "lde",
-        "poseidon_hash_columns",
-        "poseidon_merkle_pairs",
-        "bn254_poseidon_words",
-    ];
     if operation_filter == "all" {
         ensure!(
-            operations.len() == CANONICAL_OPERATIONS.len()
-                && CANONICAL_OPERATIONS
+            operations.len() == digest384_report::OPERATIONS.len()
+                && digest384_report::OPERATIONS
                     .iter()
                     .all(|operation| operations.contains_key(*operation)),
             "bench `{label}` declares operation_filter `all` but does not contain every canonical operation"
@@ -488,7 +479,7 @@ fn validate_declared_operation_filter(
         return Ok(());
     }
     ensure!(
-        CANONICAL_OPERATIONS.contains(&operation_filter),
+        digest384_report::OPERATIONS.contains(&operation_filter),
         "bench `{label}` declares unknown operation_filter `{operation_filter}`"
     );
     ensure!(
@@ -496,52 +487,6 @@ fn validate_declared_operation_filter(
         "bench `{label}` declares operation_filter `{operation_filter}` but its operation rows do not match"
     );
     Ok(())
-}
-fn parse_poseidon_microbench_summary(value: Option<&Value>) -> Option<PoseidonMicrobenchSummary> {
-    let obj = value?.as_object()?;
-    let default_sample = obj
-        .get("default")
-        .and_then(parse_poseidon_microbench_sample);
-    let scalar_sample = obj
-        .get("scalar_lane")
-        .and_then(parse_poseidon_microbench_sample);
-    let speedup = obj.get("speedup_vs_scalar").and_then(|v| v.as_f64());
-    if default_sample.is_none() && scalar_sample.is_none() && speedup.is_none() {
-        return None;
-    }
-    Some(PoseidonMicrobenchSummary {
-        default: default_sample,
-        scalar_lane: scalar_sample,
-        speedup_vs_scalar: speedup,
-    })
-}
-fn parse_poseidon_microbench_sample(value: &Value) -> Option<PoseidonMicrobenchSample> {
-    let obj = value.as_object()?;
-    let sample = PoseidonMicrobenchSample {
-        mean_ms: obj.get("mean_ms").and_then(|v| v.as_f64()),
-        min_ms: obj.get("min_ms").and_then(|v| v.as_f64()),
-        max_ms: obj.get("max_ms").and_then(|v| v.as_f64()),
-        columns: obj.get("columns").and_then(|v| v.as_u64()),
-        trace_log2: obj.get("trace_log2").and_then(|v| v.as_u64()),
-        states: obj.get("states").and_then(|v| v.as_u64()),
-        warmups: obj.get("warmups").and_then(|v| v.as_u64()),
-        iterations: obj.get("iterations").and_then(|v| v.as_u64()),
-        threadgroup_lanes: obj
-            .get("tuning")
-            .and_then(|t| t.get("threadgroup_lanes"))
-            .and_then(|v| v.as_u64())
-            .and_then(|v| u32::try_from(v).ok()),
-        states_per_lane: obj
-            .get("tuning")
-            .and_then(|t| t.get("states_per_lane"))
-            .and_then(|v| v.as_u64())
-            .and_then(|v| u32::try_from(v).ok()),
-    };
-    if sample.is_empty() {
-        None
-    } else {
-        Some(sample)
-    }
 }
 fn build_operation_map(entries: &[Value]) -> BTreeMap<String, OperationStats> {
     let mut map = BTreeMap::new();
@@ -610,6 +555,38 @@ fn sign_manifest(payload: &[u8], key_path: &Path) -> Result<SignatureEnvelope> {
     })
 }
 
+fn validate_manifest_payload(payload: &BenchManifestPayload) -> Result<()> {
+    ensure!(
+        payload.version == 1,
+        "unsupported benchmark manifest version"
+    );
+    ensure!(
+        !payload.benches.is_empty(),
+        "benchmark manifest benches must not be empty"
+    );
+    for operation in payload
+        .constraints
+        .max_operation_ms
+        .keys()
+        .chain(payload.constraints.min_operation_speedup.keys())
+    {
+        digest384_report::require_operation(operation).map_err(|error| eyre!(error))?;
+    }
+    for bench in &payload.benches {
+        let filter = bench
+            .operation_filter
+            .as_deref()
+            .ok_or_else(|| eyre!("benchmark manifest requires canonical operation_filter"))?;
+        digest384_report::require_filter(filter).map_err(|error| eyre!(error))?;
+        if let Some(filters) = &bench.matrix_operation_filters {
+            for filter in filters {
+                digest384_report::require_filter(filter).map_err(|error| eyre!(error))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Authenticate a benchmark manifest with an independently supplied Ed25519 key.
 ///
 /// The manifest's claimed public key is never a trust anchor. Re-encoding the
@@ -618,12 +595,11 @@ fn sign_manifest(payload: &[u8], key_path: &Path) -> Result<SignatureEnvelope> {
 pub fn verify_bench_manifest(manifest_path: &Path, trusted_public_key_hex: &str) -> Result<()> {
     let content = fs::read(manifest_path)
         .with_context(|| format!("read benchmark manifest {}", manifest_path.display()))?;
+    let raw: Value = json::from_slice(&content).context("decode benchmark manifest object")?;
+    digest384_report::retired_fields(&raw).map_err(|error| eyre!(error))?;
     let signed: SignedBenchManifest =
         json::from_slice(&content).context("decode signed benchmark manifest")?;
-    ensure!(
-        signed.payload.version == 1,
-        "unsupported benchmark manifest version"
-    );
+    validate_manifest_payload(&signed.payload)?;
     let envelope = signed
         .signature
         .ok_or_else(|| eyre!("benchmark manifest requires a release signature"))?;
@@ -704,7 +680,11 @@ impl Default for StageProfileOptions {
             trace_template: None,
             trace_seconds: None,
             gpu_probe: true,
-            stages: vec![StageKind::Fft, StageKind::Lde, StageKind::Poseidon],
+            stages: vec![
+                StageKind::Fft,
+                StageKind::Lde,
+                StageKind::Digest384TraceColumns,
+            ],
         }
     }
 }
@@ -713,21 +693,19 @@ pub enum StageKind {
     Fft,
     Ifft,
     Lde,
-    Poseidon,
-    PoseidonMerklePairs,
+    Digest384TraceColumns,
+    Digest384MerklePairs,
     Bn254PoseidonWords,
 }
 impl StageKind {
     pub fn from_str(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
+        match raw {
             "fft" => Some(Self::Fft),
             "ifft" => Some(Self::Ifft),
             "lde" => Some(Self::Lde),
-            "poseidon" | "poseidon_hash_columns" | "poseidon-hash" => Some(Self::Poseidon),
-            "poseidon_merkle_pairs" | "poseidon-merkle-pairs" | "merkle-pairs" => {
-                Some(Self::PoseidonMerklePairs)
-            }
-            "bn254_poseidon_words" | "bn254-poseidon-words" => Some(Self::Bn254PoseidonWords),
+            "digest384_trace_columns" => Some(Self::Digest384TraceColumns),
+            "digest384_merkle_pairs" => Some(Self::Digest384MerklePairs),
+            "bn254_poseidon_words" => Some(Self::Bn254PoseidonWords),
             _ => None,
         }
     }
@@ -748,15 +726,15 @@ impl StageKind {
                 operation: "lde",
                 dir: "lde",
             },
-            StageKind::Poseidon => StageSpec {
-                label: "poseidon",
-                operation: "poseidon_hash_columns",
-                dir: "poseidon",
+            StageKind::Digest384TraceColumns => StageSpec {
+                label: "digest384_trace_columns",
+                operation: "digest384_trace_columns",
+                dir: "digest384_trace_columns",
             },
-            StageKind::PoseidonMerklePairs => StageSpec {
-                label: "poseidon_merkle_pairs",
-                operation: "poseidon_merkle_pairs",
-                dir: "poseidon_merkle_pairs",
+            StageKind::Digest384MerklePairs => StageSpec {
+                label: "digest384_merkle_pairs",
+                operation: "digest384_merkle_pairs",
+                dir: "digest384_merkle_pairs",
             },
             StageKind::Bn254PoseidonWords => StageSpec {
                 label: "bn254_poseidon_words",
@@ -786,12 +764,16 @@ struct StageProfileSummary {
 }
 #[derive(JsonSerialize)]
 struct StageSummary {
+    // Full validated input retains producer, context and every operation claim for independent revalidation.
+    validated_report: Value,
     stage: String,
     operation: String,
     benchmark_json: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     trace_artifact: Option<String>,
     stats: StageStats,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    digest384: Option<Value>,
     #[norito(skip_serializing_if = "Option::is_none")]
     metal_dispatch_queue: Option<Value>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -874,7 +856,15 @@ fn run_stage(spec: StageSpec, options: &StageProfileOptions) -> Result<StageSumm
     if options.release {
         command.arg("--release");
     }
-    command.args(["-p", "fastpq_prover", "--bin", "fastpq_metal_bench", "--"]);
+    command.args([
+        "-p",
+        "fastpq_prover",
+        "--features",
+        "dev-tools,fastpq-gpu",
+        "--bin",
+        "fastpq_metal_bench",
+        "--",
+    ]);
     command.arg("--rows").arg(options.rows.to_string());
     command.arg("--warmups").arg(options.warmups.to_string());
     command
@@ -921,10 +911,8 @@ fn build_stage_summary(
     payload: &Value,
     bench_path: &Path,
 ) -> Result<StageSummary> {
-    let report = payload
-        .get("report")
-        .and_then(|value| value.as_object())
-        .ok_or_else(|| eyre!("bench {} missing report block", bench_path.display()))?;
+    let validated = digest384_report::report_from_root(payload).map_err(|error| eyre!(error))?;
+    let report = validated.as_object().expect("validated report object");
     let operations = report
         .get("operations")
         .and_then(|value| value.as_array())
@@ -942,11 +930,13 @@ fn build_stage_summary(
         .map(PathBuf::from)
         .map(|path| display_path(&path));
     Ok(StageSummary {
+        validated_report: payload.clone(),
         stage: spec.label.to_string(),
         operation: spec.operation.to_string(),
         benchmark_json: display_path(bench_path),
         trace_artifact,
         stats,
+        digest384: op_value.get("digest384").cloned(),
         metal_dispatch_queue: report.get("metal_dispatch_queue").cloned(),
         column_staging: report.get("column_staging").cloned(),
         kernel_profiles: report.get("kernel_profiles").cloned(),
@@ -1015,7 +1005,7 @@ pub struct CudaSuiteOptions {
     pub wrap_output: bool,
     pub wrapper: PathBuf,
     pub require_lde_mean_ms: f64,
-    pub require_poseidon_mean_ms: f64,
+    pub require_digest384_mean_ms: f64,
     pub labels: BTreeMap<String, String>,
     pub row_usage: Option<PathBuf>,
     pub device: Option<String>,
@@ -1043,7 +1033,7 @@ impl Default for CudaSuiteOptions {
             wrap_output: true,
             wrapper: default_wrapper_path(),
             require_lde_mean_ms: 950.0,
-            require_poseidon_mean_ms: 1_000.0,
+            require_digest384_mean_ms: 1_000.0,
             labels: BTreeMap::new(),
             row_usage: None,
             device: None,
@@ -1086,7 +1076,7 @@ struct CudaSuiteSummary {
     #[norito(skip_serializing_if = "Option::is_none")]
     require_lde_mean_ms: Option<f64>,
     #[norito(skip_serializing_if = "Option::is_none")]
-    require_poseidon_mean_ms: Option<f64>,
+    require_digest384_mean_ms: Option<f64>,
     #[norito(skip_serializing_if = "Option::is_none")]
     row_usage: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -1110,8 +1100,8 @@ impl CudaSuiteOptions {
     fn requires_lde_threshold(&self) -> bool {
         self.operation.is_none() || self.operation == Some(StageKind::Lde)
     }
-    fn requires_poseidon_threshold(&self) -> bool {
-        self.operation.is_none() || self.operation == Some(StageKind::Poseidon)
+    fn requires_digest384_threshold(&self) -> bool {
+        self.operation.is_none() || self.operation == Some(StageKind::Digest384TraceColumns)
     }
 }
 fn validate_cuda_suite_options(options: &CudaSuiteOptions) -> Result<()> {
@@ -1140,10 +1130,11 @@ fn validate_cuda_suite_options(options: &CudaSuiteOptions) -> Result<()> {
             "fastpq-cuda-suite requires finite non-negative --require-lde-mean-ms"
         );
     }
-    if options.wrap_output && options.requires_poseidon_threshold() {
+    if options.wrap_output && options.requires_digest384_threshold() {
         ensure!(
-            options.require_poseidon_mean_ms.is_finite() && options.require_poseidon_mean_ms >= 0.0,
-            "fastpq-cuda-suite requires finite non-negative --require-poseidon-mean-ms"
+            options.require_digest384_mean_ms.is_finite()
+                && options.require_digest384_mean_ms >= 0.0,
+            "fastpq-cuda-suite requires finite non-negative --require-digest384-mean-ms"
         );
     }
     Ok(())
@@ -1232,9 +1223,9 @@ fn write_cuda_suite_summary(
         require_lde_mean_ms: options
             .requires_lde_threshold()
             .then_some(options.require_lde_mean_ms),
-        require_poseidon_mean_ms: options
-            .requires_poseidon_threshold()
-            .then_some(options.require_poseidon_mean_ms),
+        require_digest384_mean_ms: options
+            .requires_digest384_threshold()
+            .then_some(options.require_digest384_mean_ms),
         row_usage: options.row_usage.as_deref().map(display_path),
         device: options.device.clone(),
         notes: options.notes.clone(),
@@ -1265,6 +1256,8 @@ fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
         "fastpq_prover".to_owned(),
         "--bin".to_owned(),
         "fastpq_cuda_bench".to_owned(),
+        "--features".to_owned(),
+        "dev-tools,fastpq-gpu".to_owned(),
         "--".to_owned(),
         "--rows".to_owned(),
         options.rows.to_string(),
@@ -1320,9 +1313,9 @@ fn build_wrap_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
         args.push("--require-lde-mean-ms".to_owned());
         args.push(options.require_lde_mean_ms.to_string());
     }
-    if options.requires_poseidon_threshold() {
-        args.push("--require-poseidon-mean-ms".to_owned());
-        args.push(options.require_poseidon_mean_ms.to_string());
+    if options.requires_digest384_threshold() {
+        args.push("--require-digest384-mean-ms".to_owned());
+        args.push(options.require_digest384_mean_ms.to_string());
     }
     if let Some(row_usage) = &options.row_usage {
         args.push("--row-usage".to_owned());
@@ -1416,73 +1409,52 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
     fn sample_bundle(rows: u64) -> Value {
-        norito::json!({
-            "metadata": {
-                "generated_at": "2026-02-01T12:00:00Z",
-                "host": "ci-host",
-                "platform": "macOS-15-arm64",
-                "machine": "arm64",
-                "command": "FASTPQ_METAL_LIB=... fastpq_metal_bench --rows 20000",
-                "notes": "Metal backend active"
-            },
-            "benchmarks": {
-                "rows": rows,
-                "padded_rows": 32768,
-                "iterations": 3,
-                "warmups": 1,
-                "operation_filter": "all",
-                "gpu_backend": "metal",
-                "gpu_available": true,
-                "poseidon_microbench": {
-                    "default": {
-                        "mean_ms": 1.0,
-                        "iterations": 1,
-                        "warmups": 0,
-                        "columns": 1,
-                        "trace_log2": 1,
-                        "states": 1
-                    }
-                },
-                "operations": [
-                    {
-                        "operation": "fft",
-                        "gpu_mean_ms": 420.0,
-                        "speedup_ratio": 1.2
-                    },
-                    {
-                        "operation": "lde",
-                        "gpu_mean_ms": 800.0,
-                        "speedup_ratio": 1.05
-                    },
-                    {
-                        "operation": "ifft",
-                        "gpu_mean_ms": 430.0,
-                        "speedup_ratio": 1.15
-                    },
-                    {
-                        "operation": "poseidon_hash_columns",
-                        "gpu_mean_ms": 700.0,
-                        "speedup_ratio": 1.1
-                    },
-                    {
-                        "operation": "poseidon_merkle_pairs",
-                        "gpu_mean_ms": 300.0,
-                        "speedup_ratio": 1.2
-                    },
-                    {
-                        "operation": "bn254_poseidon_words",
-                        "gpu_mean_ms": 500.0,
-                        "speedup_ratio": 1.05
-                    }
-                ]
-            },
-            "report": {}
-        })
+        let flat = digest384_report::test_report(rows, true);
+        let report = digest384_report::test_report(rows, false);
+        Value::Object([
+            ("producer_schema".into(), Value::from("cuda_nested")),
+            ("metadata".into(), norito::json!({"host": "synthetic-schema-test", "notes": "No device run or qualification"})),
+            ("benchmarks".into(), flat), ("report".into(), report),
+        ].into_iter().collect())
+    }
+    fn encode_test_bundle(bundle: &Value) -> Vec<u8> {
+        // Keep both representations of intentional fixture mutations identical;
+        // projection disagreement has separate adversarial controls in the shared owner.
+        let mut bundle = bundle.clone();
+        let mut report = bundle.get("benchmarks").unwrap().clone();
+        for entry in report
+            .get_mut("operations")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+        {
+            let map = entry.as_object_mut().unwrap();
+            for (flat, group, field) in [
+                ("cpu_mean_ms", "cpu", "mean_ms"),
+                ("gpu_mean_ms", "gpu", "mean_ms"),
+                ("speedup_ratio", "speedup", "ratio"),
+                ("speedup_delta_ms", "speedup", "delta_ms"),
+            ] {
+                if let Some(value) = map.remove(flat) {
+                    let object = map
+                        .entry(group.into())
+                        .or_insert_with(|| Value::Object(json::Map::new()))
+                        .as_object_mut()
+                        .unwrap();
+                    object.insert(field.into(), value);
+                }
+            }
+        }
+        bundle
+            .as_object_mut()
+            .unwrap()
+            .insert("report".into(), report);
+        norito::json::to_vec_pretty(&bundle).unwrap()
     }
     fn write_bundle(temp: &TempDir, name: &str, rows: u64) -> PathBuf {
         let path = temp.path().join(name);
         let json = sample_bundle(rows);
-        fs::write(&path, norito::json::to_vec_pretty(&json).unwrap()).unwrap();
+        fs::write(&path, encode_test_bundle(&json)).unwrap();
         path
     }
     #[test]
@@ -1541,6 +1513,120 @@ mod tests {
     }
 
     #[test]
+    fn verify_bench_manifest_rejects_retired_microbench_even_when_null() {
+        let temp = TempDir::new().expect("tempdir");
+        let (path, trusted) = signed_manifest_fixture(&temp);
+        verify_bench_manifest(&path, &trusted).expect("positive trusted signature");
+        let original: Value = json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for retired in [Value::Null, norito::json!({"default": {"mean_ms": 1.0}})] {
+            let mut changed = original.clone();
+            changed
+                .get_mut("payload")
+                .unwrap()
+                .get_mut("benches")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()[0]
+                .as_object_mut()
+                .unwrap()
+                .insert("poseidon_microbench".into(), retired);
+            fs::write(&path, json::to_vec(&changed).unwrap()).unwrap();
+            let error = verify_bench_manifest(&path, &trusted)
+                .expect_err("retired field must not be silently discarded");
+            assert!(
+                error
+                    .to_string()
+                    .contains("retired benchmark field `poseidon_microbench`"),
+                "{error}"
+            );
+        }
+    }
+    #[test]
+    fn manifest_writer_rejects_old_constraint_and_filter_names_before_output() {
+        let temp = TempDir::new().unwrap();
+        for mutant in 0..4 {
+            let mut options = BenchManifestOptions {
+                benches: vec![BenchInput {
+                    label: "fixture".into(),
+                    path: write_bundle(&temp, "fixture.json", 20_000),
+                }],
+                output: temp.path().join("must-not-exist.json"),
+                ..BenchManifestOptions::default()
+            };
+            match mutant {
+                0 => {
+                    options
+                        .max_operation_ms
+                        .insert("poseidon_hash_columns".into(), 1.0);
+                }
+                1 => {
+                    options
+                        .min_operation_speedup
+                        .insert("merkle-pairs".into(), 1.0);
+                }
+                2 => {
+                    options
+                        .label_max_operation_ms
+                        .insert("fixture".into(), BTreeMap::from([("poseidon".into(), 1.0)]));
+                }
+                3 => {
+                    options
+                        .label_operation_filters
+                        .insert("fixture".into(), BTreeSet::from(["ALL".into()]));
+                }
+                _ => unreachable!(),
+            }
+            let error = write_bench_manifest(options).expect_err("retired namespace must reject");
+            assert!(
+                error.to_string().contains("unknown benchmark operation"),
+                "{error}"
+            );
+            assert!(!temp.path().join("must-not-exist.json").exists());
+        }
+    }
+    #[test]
+    fn signed_manifest_rejects_canonical_resigned_operation_aliases() {
+        let temp = TempDir::new().unwrap();
+        let (path, trusted) = signed_manifest_fixture(&temp);
+        let bytes = fs::read(&path).unwrap();
+        for mutant in 0..4 {
+            let mut signed: SignedBenchManifest = json::from_slice(&bytes).unwrap();
+            match mutant {
+                0 => {
+                    signed
+                        .payload
+                        .constraints
+                        .max_operation_ms
+                        .insert("poseidon_hash_columns".into(), 1.0);
+                }
+                1 => {
+                    signed
+                        .payload
+                        .constraints
+                        .min_operation_speedup
+                        .insert("merkle-pairs".into(), 1.0);
+                }
+                2 => {
+                    signed.payload.benches[0].operation_filter = Some("poseidon".into());
+                }
+                3 => {
+                    signed.payload.benches[0].matrix_operation_filters = Some(vec!["ALL".into()]);
+                }
+                _ => unreachable!(),
+            }
+            let payload = json::to_vec(&signed.payload).unwrap();
+            signed.signature =
+                Some(sign_manifest(&payload, &temp.path().join("fixture-signing.key")).unwrap());
+            fs::write(&path, json::to_vec(&signed).unwrap()).unwrap();
+            let error = verify_bench_manifest(&path, &trusted)
+                .expect_err("signed old namespace must fail current owner validation");
+            assert!(
+                error.to_string().contains("unknown benchmark operation"),
+                "{error}"
+            );
+        }
+    }
+    #[test]
     fn verify_bench_manifest_rejects_untrusted_signers_and_payload_tampering() {
         let temp = TempDir::new().expect("tempdir");
         let (path, trusted) = signed_manifest_fixture(&temp);
@@ -1591,6 +1677,7 @@ mod tests {
                     "operation": "fft",
                     "columns": 16,
                     "input_len": 32768,
+                    "gpu_recorded": true,
                     "cpu": { "mean_ms": 10.0, "min_ms": 9.5, "max_ms": 10.5 },
                     "gpu": { "mean_ms": 8.0, "min_ms": 7.5, "max_ms": 8.5 },
                     "speedup": { "ratio": 1.25, "delta_ms": 2.0 }
@@ -1605,7 +1692,18 @@ mod tests {
             operation: "fft",
             dir: "fft",
         };
+        let fixture = payload.get("report").expect("fixture report");
+        let mut payload = digest384_report::test_metal_report(20_000);
+        let map = payload.as_object_mut().unwrap();
+        map.insert("operation_filter".into(), Value::from("fft"));
+        for key in ["operations", "metal_dispatch_queue", "kernel_profiles"] {
+            map.insert(key.into(), fixture.get(key).unwrap().clone());
+        }
+        map.insert("column_staging".into(), digest384_report::test_staging());
         let summary = build_stage_summary(spec, &payload, Path::new("fft.json")).expect("summary");
+        digest384_report::report_from_root(&summary.validated_report)
+            .expect("complete retained report revalidates");
+        assert_eq!(summary.validated_report, payload);
         assert_eq!(summary.stage, "fft");
         assert_eq!(summary.operation, "fft");
         assert_eq!(summary.stats.columns, Some(16));
@@ -1619,15 +1717,19 @@ mod tests {
     fn dedup_stages_orders_unique() {
         let list = vec![
             StageKind::Fft,
-            StageKind::Poseidon,
+            StageKind::Digest384TraceColumns,
             StageKind::Fft,
             StageKind::Lde,
-            StageKind::Poseidon,
+            StageKind::Digest384TraceColumns,
         ];
         let deduped = dedup_stages(&list);
         assert_eq!(
             deduped,
-            vec![StageKind::Fft, StageKind::Lde, StageKind::Poseidon]
+            vec![
+                StageKind::Fft,
+                StageKind::Lde,
+                StageKind::Digest384TraceColumns
+            ]
         );
     }
     #[test]
@@ -1763,11 +1865,7 @@ mod tests {
             }
         }
         let slow_path = temp.path().join("metal_slow.json");
-        fs::write(
-            &slow_path,
-            norito::json::to_vec_pretty(&slow_bundle).unwrap(),
-        )
-        .unwrap();
+        fs::write(&slow_path, encode_test_bundle(&slow_bundle)).unwrap();
         let failing = BenchManifestOptions {
             benches: vec![BenchInput {
                 label: "metal".into(),
@@ -1796,16 +1894,26 @@ mod tests {
         let mut bundle = sample_bundle(20_000);
         if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
             map.insert("operation_filter".into(), norito::json!("lde"));
-            map.insert(
-                "operations".into(),
-                norito::json!([{
-                    "operation": "lde",
-                    "gpu_mean_ms": 800.0,
-                    "speedup_ratio": 1.05
-                }]),
-            );
+            let mut entry = map
+                .get("operations")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry.get("operation").and_then(Value::as_str) == Some("lde"))
+                .unwrap()
+                .clone();
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("gpu_mean_ms".into(), Value::from(800.0));
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("speedup_ratio".into(), Value::from(1.05));
+            map.insert("operations".into(), Value::Array(vec![entry]));
         }
-        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        fs::write(&path, encode_test_bundle(&bundle)).unwrap();
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
                 label: "cuda-lde".into(),
@@ -1831,23 +1939,32 @@ mod tests {
         assert_eq!(bench["operation_filter"], norito::json!("lde"));
     }
     #[test]
-    fn manifest_accepts_focused_metal_fft_without_poseidon_microbench() {
+    fn manifest_accepts_focused_fft_without_digest384_work() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("metal_fft.json");
         let mut bundle = sample_bundle(20_000);
         if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
             map.insert("operation_filter".into(), norito::json!("fft"));
-            map.insert(
-                "operations".into(),
-                norito::json!([{
-                    "operation": "fft",
-                    "gpu_mean_ms": 420.0,
-                    "speedup_ratio": 1.2
-                }]),
-            );
-            map.remove("poseidon_microbench");
+            let mut entry = map
+                .get("operations")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry.get("operation").and_then(Value::as_str) == Some("fft"))
+                .unwrap()
+                .clone();
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("gpu_mean_ms".into(), Value::from(420.0));
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("speedup_ratio".into(), Value::from(1.2));
+            map.insert("operations".into(), Value::Array(vec![entry]));
         }
-        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        fs::write(&path, encode_test_bundle(&bundle)).unwrap();
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
                 label: "metal-fft".into(),
@@ -1866,29 +1983,42 @@ mod tests {
         write_bench_manifest(options).expect("focused FFT manifest succeeds");
     }
     #[test]
-    fn manifest_rejects_metal_poseidon_without_poseidon_microbench() {
+    fn manifest_rejects_digest384_without_complete_evidence() {
         let temp = TempDir::new().expect("tempdir");
-        let path = temp.path().join("metal_poseidon.json");
+        let path = temp.path().join("digest384.json");
         let mut bundle = sample_bundle(20_000);
         if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
             map.insert(
                 "operation_filter".into(),
-                norito::json!("poseidon_hash_columns"),
+                norito::json!("digest384_trace_columns"),
             );
-            map.insert(
-                "operations".into(),
-                norito::json!([{
-                    "operation": "poseidon_hash_columns",
-                    "gpu_mean_ms": 700.0,
-                    "speedup_ratio": 1.1
-                }]),
-            );
-            map.remove("poseidon_microbench");
+            let mut entry = map
+                .get("operations")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| {
+                    entry.get("operation").and_then(Value::as_str)
+                        == Some("digest384_trace_columns")
+                })
+                .unwrap()
+                .clone();
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("gpu_mean_ms".into(), Value::from(700.0));
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("speedup_ratio".into(), Value::from(1.1));
+            entry.as_object_mut().unwrap().remove("digest384");
+            map.insert("operations".into(), Value::Array(vec![entry]));
         }
-        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        fs::write(&path, encode_test_bundle(&bundle)).unwrap();
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
-                label: "metal-poseidon".into(),
+                label: "digest384".into(),
                 path,
             }],
             output: temp.path().join("manifest.json"),
@@ -1901,31 +2031,28 @@ mod tests {
             label_min_operation_speedup: BTreeMap::new(),
             label_operation_filters: BTreeMap::new(),
         };
-        let error = write_bench_manifest(options).expect_err("missing microbench must fail");
+        let error = write_bench_manifest(options).expect_err("missing digest384 work must fail");
         assert!(
-            error
-                .to_string()
-                .contains("missing `benchmarks.poseidon_microbench`"),
+            error.to_string().contains("missing digest384 evidence"),
             "unexpected error: {error}"
         );
     }
     #[test]
-    fn manifest_rejects_declared_metal_poseidon_without_operations_or_microbench() {
+    fn manifest_rejects_declared_digest384_without_operations() {
         let temp = TempDir::new().expect("tempdir");
-        let path = temp.path().join("metal_poseidon_empty.json");
+        let path = temp.path().join("digest384_empty.json");
         let mut bundle = sample_bundle(20_000);
         if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
             map.insert(
                 "operation_filter".into(),
-                norito::json!("poseidon_hash_columns"),
+                norito::json!("digest384_trace_columns"),
             );
             map.insert("operations".into(), norito::json!([]));
-            map.remove("poseidon_microbench");
         }
-        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        fs::write(&path, encode_test_bundle(&bundle)).unwrap();
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
-                label: "metal-poseidon-empty".into(),
+                label: "digest384-empty".into(),
                 path,
             }],
             output: temp.path().join("manifest.json"),
@@ -1938,11 +2065,9 @@ mod tests {
             label_min_operation_speedup: BTreeMap::new(),
             label_operation_filters: BTreeMap::new(),
         };
-        let error = write_bench_manifest(options).expect_err("missing microbench must fail");
+        let error = write_bench_manifest(options).expect_err("missing digest384 work must fail");
         assert!(
-            error
-                .to_string()
-                .contains("missing `benchmarks.poseidon_microbench`"),
+            error.to_string().contains("operation rows do not match"),
             "unexpected error: {error}"
         );
     }
@@ -1953,17 +2078,26 @@ mod tests {
         let mut bundle = sample_bundle(20_000);
         if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
             map.insert("operation_filter".into(), norito::json!("fft"));
-            map.insert(
-                "operations".into(),
-                norito::json!([{
-                    "operation": "lde",
-                    "gpu_mean_ms": 800.0,
-                    "speedup_ratio": 1.05
-                }]),
-            );
-            map.remove("poseidon_microbench");
+            let mut entry = map
+                .get("operations")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry.get("operation").and_then(Value::as_str) == Some("lde"))
+                .unwrap()
+                .clone();
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("gpu_mean_ms".into(), Value::from(800.0));
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("speedup_ratio".into(), Value::from(1.05));
+            map.insert("operations".into(), Value::Array(vec![entry]));
         }
-        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        fs::write(&path, encode_test_bundle(&bundle)).unwrap();
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
                 label: "metal-fft-with-lde".into(),
@@ -1994,7 +2128,7 @@ mod tests {
             "version": 1,
             "devices": [{
                 "label": "cuda",
-                "operation_filters": ["fft", "lde", "poseidon_hash_columns"]
+                "operation_filters": ["fft", "lde", "digest384_trace_columns"]
             }]
         });
         fs::write(
@@ -2025,7 +2159,7 @@ mod tests {
         let bench = manifest["payload"]["benches"][0].clone();
         assert_eq!(
             bench["matrix_operation_filters"],
-            norito::json!(["fft", "lde", "poseidon_hash_columns"])
+            norito::json!(["fft", "lde", "digest384_trace_columns"])
         );
     }
     #[test]
@@ -2052,30 +2186,39 @@ mod tests {
     }
     #[test]
     fn filtered_cuda_default_output_includes_operation_name() {
-        let output = default_cuda_bench_output_path_for_operation(Some(StageKind::Poseidon));
+        let output =
+            default_cuda_bench_output_path_for_operation(Some(StageKind::Digest384TraceColumns));
         let output = display_path(&output);
         assert!(
-            output.contains("artifacts/fastpq_benchmarks/fastpq_cuda_bench_poseidon_hash_columns_"),
+            output
+                .contains("artifacts/fastpq_benchmarks/fastpq_cuda_bench_digest384_trace_columns_"),
             "unexpected filtered output path: {output}"
         );
     }
     #[test]
-    fn cuda_operation_filter_accepts_poseidon_merkle_and_bn254_aliases() {
+    fn cuda_operation_filter_accepts_final_digest_ids_and_rejects_scalar_aliases() {
         assert_eq!(
-            StageKind::from_str("poseidon_merkle_pairs"),
-            Some(StageKind::PoseidonMerklePairs)
+            StageKind::from_str("digest384_trace_columns"),
+            Some(StageKind::Digest384TraceColumns)
         );
         assert_eq!(
-            StageKind::from_str("merkle-pairs"),
-            Some(StageKind::PoseidonMerklePairs)
+            StageKind::from_str("digest384_merkle_pairs"),
+            Some(StageKind::Digest384MerklePairs)
         );
+        for retired in [
+            "poseidon",
+            "poseidon-hash",
+            "poseidon_hash_columns",
+            "poseidon_merkle_pairs",
+            "poseidon-merkle-pairs",
+            "merkle-pairs",
+            "bn254-poseidon-words",
+        ] {
+            assert!(StageKind::from_str(retired).is_none(), "{retired}");
+        }
         assert_eq!(
-            StageKind::from_str("bn254-poseidon-words"),
-            Some(StageKind::Bn254PoseidonWords)
-        );
-        assert_eq!(
-            StageKind::PoseidonMerklePairs.cuda_operation(),
-            "poseidon_merkle_pairs"
+            StageKind::Digest384MerklePairs.cuda_operation(),
+            "digest384_merkle_pairs"
         );
         assert_eq!(
             StageKind::Bn254PoseidonWords.cuda_operation(),
@@ -2150,16 +2293,16 @@ mod tests {
         let options = CudaSuiteOptions {
             output: temp.path().join("wrapped.json"),
             raw_output: temp.path().join("raw.json"),
-            require_poseidon_mean_ms: f64::NAN,
+            require_digest384_mean_ms: f64::NAN,
             dry_run: true,
             ..CudaSuiteOptions::default()
         };
         let message = match run_cuda_suite(&options) {
-            Ok(_) => panic!("NaN CUDA Poseidon threshold was accepted"),
+            Ok(_) => panic!("NaN CUDA digest384 threshold was accepted"),
             Err(error) => error.to_string(),
         };
         assert!(
-            message.contains("finite non-negative --require-poseidon-mean-ms"),
+            message.contains("finite non-negative --require-digest384-mean-ms"),
             "unexpected threshold error: {message}"
         );
     }
@@ -2169,7 +2312,7 @@ mod tests {
         let options = CudaSuiteOptions {
             output: temp.path().join("wrapped.json"),
             raw_output: temp.path().join("raw.json"),
-            require_poseidon_mean_ms: f64::NAN,
+            require_digest384_mean_ms: f64::NAN,
             wrap_output: false,
             ..CudaSuiteOptions::default()
         };
@@ -2190,7 +2333,7 @@ mod tests {
             wrap_output: false,
             wrapper: default_wrapper_path(),
             require_lde_mean_ms: 950.0,
-            require_poseidon_mean_ms: 1_000.0,
+            require_digest384_mean_ms: 1_000.0,
             labels: BTreeMap::new(),
             row_usage: Some(temp.path().join("row_usage.json")),
             device: Some("gpu0".into()),
@@ -2209,6 +2352,20 @@ mod tests {
         .expect("write row usage");
         let plan = build_cuda_bench_command(&options).expect("build bench");
         let args: Vec<_> = plan.record.args.clone();
+        assert_eq!(
+            &args[..9],
+            &[
+                "run",
+                "--release",
+                "-p",
+                "fastpq_prover",
+                "--bin",
+                "fastpq_cuda_bench",
+                "--features",
+                "dev-tools,fastpq-gpu",
+                "--"
+            ]
+        );
         assert!(args.contains(&"--rows".to_string()));
         assert!(args.contains(&"128".to_string()));
         assert!(args.contains(&"--require-gpu".to_string()));
@@ -2230,7 +2387,7 @@ mod tests {
             raw_output: temp.path().join("raw.json"),
             accel_instance: Some("xeon-rtx".into()),
             require_lde_mean_ms: 777.0,
-            require_poseidon_mean_ms: 888.0,
+            require_digest384_mean_ms: 888.0,
             row_usage: Some(temp.path().join("row_usage.json")),
             ..CudaSuiteOptions::default()
         };
@@ -2240,7 +2397,7 @@ mod tests {
         let plan = build_wrap_command(&options).expect("wrap plan");
         let args = plan.record.args.join(" ");
         assert!(args.contains("--require-lde-mean-ms 777"));
-        assert!(args.contains("--require-poseidon-mean-ms 888"));
+        assert!(args.contains("--require-digest384-mean-ms 888"));
         assert!(args.contains("device_class=xeon-rtx"));
         assert!(args.contains("--accel-instance xeon-rtx"));
     }
@@ -2252,29 +2409,29 @@ mod tests {
             raw_output: temp.path().join("raw.json"),
             operation: Some(StageKind::Fft),
             require_lde_mean_ms: 777.0,
-            require_poseidon_mean_ms: 888.0,
+            require_digest384_mean_ms: 888.0,
             ..CudaSuiteOptions::default()
         };
         let plan = build_wrap_command(&options).expect("wrap plan");
         let args = plan.record.args.join(" ");
         assert!(!args.contains("--require-lde-mean-ms"));
-        assert!(!args.contains("--require-poseidon-mean-ms"));
+        assert!(!args.contains("--require-digest384-mean-ms"));
     }
     #[test]
-    fn cuda_wrap_command_keeps_selected_threshold_for_poseidon_only() {
+    fn cuda_wrap_command_keeps_selected_threshold_for_digest384_columns_only() {
         let temp = TempDir::new().expect("tempdir");
         let options = CudaSuiteOptions {
             output: temp.path().join("wrapped.json"),
             raw_output: temp.path().join("raw.json"),
-            operation: Some(StageKind::Poseidon),
+            operation: Some(StageKind::Digest384TraceColumns),
             require_lde_mean_ms: 777.0,
-            require_poseidon_mean_ms: 888.0,
+            require_digest384_mean_ms: 888.0,
             ..CudaSuiteOptions::default()
         };
         let plan = build_wrap_command(&options).expect("wrap plan");
         let args = plan.record.args.join(" ");
         assert!(!args.contains("--require-lde-mean-ms"));
-        assert!(args.contains("--require-poseidon-mean-ms 888"));
+        assert!(args.contains("--require-digest384-mean-ms 888"));
     }
     #[test]
     fn cuda_suite_dry_run_writes_summary() {
@@ -2306,6 +2463,6 @@ mod tests {
         );
         assert_eq!(value["operation"], norito::json!("lde"));
         assert_eq!(value["require_lde_mean_ms"], norito::json!(950.0));
-        assert!(value.get("require_poseidon_mean_ms").is_none());
+        assert!(value.get("require_digest384_mean_ms").is_none());
     }
 }

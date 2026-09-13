@@ -119,7 +119,7 @@ impl ValidatedSoranetHandshake {
 
 /// Reloadable policy snapshots backed by one process-owned replay authority.
 #[derive(Debug)]
-pub(crate) struct SoranetHandshakeRuntime {
+pub struct SoranetHandshakeRuntime {
     policy: RwLock<Arc<SoranetHandshakeConfig>>,
     shared_state: SoranetHandshakeSharedState,
     owner: SoranetHandshakeOwnerConfig,
@@ -161,7 +161,7 @@ impl SoranetHandshakeRuntime {
     }
 }
 
-pub(crate) fn runtime_from_handshake(
+pub fn runtime_from_handshake(
     handshake: ActualSoranetHandshake,
 ) -> Result<Arc<SoranetHandshakeRuntime>, Error> {
     let validated = validate_handshake(handshake)?;

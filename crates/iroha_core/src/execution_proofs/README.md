@@ -20,7 +20,7 @@ and exact profile ID. Race-specific track, physics rules and result are inside t
 The profile ID hashes the rules, geometry descriptor, complete compiled integer relation and verifier,
 and the reused transparent proof-driver sources. Only compiled profiles can be registered.
 
-`registry.rs` contains the closed compiled catalog and generic dispatch. The first release has one canonical stock relation using the wide Poseidon2 execution substrate in `stark/`; obsolete draft profile and proof formats have no dispatch path. `race_result_v1` ranks every eligible racer before all forfeits, including forfeited earlier finishers. Exact eligible finish or distance ties split awards, and all-forfeit outcomes have no winners. Registry and export tooling are outside the profile source commitment; the actual rules, arithmetic, reference outcome and cryptographic engine are committed. Changes to those sources produce a new exact identity and require fresh qualification.
+`registry.rs` contains the closed compiled catalog and generic dispatch. The first release has one canonical stock relation using the six-lane Goldilocks Poseidon-x7 execution substrate in `stark/`; obsolete draft profile and proof formats have no dispatch path. `race_result_v1` ranks every eligible racer before all forfeits, including forfeited earlier finishers. Exact eligible finish or distance ties split awards, and all-forfeit outcomes have no winners. Registry and export tooling are outside the profile source commitment; the actual rules, arithmetic, reference outcome and cryptographic engine are committed. Changes to those sources produce a new exact identity and require fresh qualification.
 
 The RaceV1 proof request and payload require the immutable `GameAdmissionBodyV1` immediately
 after the manifest. The verifier checks the canonical original wallet/input-key/data roster,
@@ -93,11 +93,12 @@ gated (degree at most three), while all shared range-bank equations remain uncon
 Multiplying a stage selector by a quartic range equation would be degree five and is explicitly avoided.
 
 Finished and DNF cars are frozen and have no collision body. DNF records input-key inactivity even
-when a car already finished; earlier finishers retain prize priority. Finishes retain their actual tick,
-while the last six-tick batch is consumed to its boundary. At a six-tick boundary, fewer than two active
-keys also ends the game: prior finishers win first, otherwise a sole active survivor wins, and all DNF
-refunds when nobody previously finished. At the 5,400-tick limit, if nobody finished, the eligible
-racers with greatest progress share the prize. An unfinished active race therefore cannot become a
+when a car already finished; the earlier finish remains history, but the DNF car is ineligible for a
+prize. Finishes retain their actual tick while the last six-tick batch is consumed to its boundary.
+At a six-tick boundary, fewer than two active keys also ends the game: the earliest eligible finishers
+share priority, otherwise the sole eligible survivor wins. An all-forfeit outcome refunds regardless
+of historical finishes. At the 5,400-tick limit, if no eligible racer finished, the eligible racers with
+greatest progress share the prize. An unfinished active race therefore cannot become a
 refund merely by refusing to cross the line. Ranking is derived from the complete proof-constrained
 terminal state and bound into the outcome statement; timeout adds no separate arithmetic witness.
 Two inverse registers constrain nonterminal batch admission after the exact current DNF phase.
@@ -132,7 +133,7 @@ review must cover AIR completeness, DEEP/ALI composition, transcript ordering, P
 domain separation, query/grinding behavior, exact decoding, and the union of all failure terms.
 Twenty-bit grinding is nonadditive and is not counted as extra security.
 
-The execution-only [qualification record](SECURITY_REVIEW.md) identifies the remaining proof obligations. The sole compiled suite uses the published wide Poseidon2 construction with a complete binary fold schedule. Privacy proof formats remain separate. Obsolete development proof and profile formats have no runtime dispatch entry.
+The execution-only [qualification record](SECURITY_REVIEW.md) identifies the remaining proof obligations. The sole compiled suite uses the canonical shared six-lane Goldilocks Poseidon-x7 construction with a complete binary fold schedule. Privacy proof formats remain separate. Obsolete development proof and profile formats have no runtime dispatch entry.
 
 ## Interactive environment
 
@@ -148,7 +149,7 @@ The native codec enumerates all 21 track/roster layouts and permitted trace doma
 
 The actual production-module qualification harness passes all 52 regular and explicit expensive execution tests, including all 1,572,864 full-duration microcycle rows across three tracks; every row matches the independent native reference and has zero constraint residues. Environmental boundary tests exercise 2,592 wet/dry object-edge cases and reject altered computed outputs. Degree-four and fixed-query LDE parity tests also pass. These facts do not constitute independent cryptographic review or a successful full-node integration run.
 
-Execution verification rejects malformed wire, transcripts and Merkle openings before constructing public fixed traces. It evaluates the 136 authenticated query positions using exact subgroup Lagrange evaluation of the same public polynomials committed by the prover. The CPU prover uses actual Goldilocks/Fp4 arithmetic and wide Poseidon2 commitments; workers require public replay data only.
+Execution verification rejects malformed wire, transcripts and Merkle openings before constructing public fixed traces. It evaluates the 136 authenticated query positions using exact subgroup Lagrange evaluation of the same public polynomials committed by the prover. The CPU prover uses actual Goldilocks/Fp4 arithmetic and six-lane Goldilocks Poseidon-x7 commitments; workers require public replay data only.
 
 Current immutable-admission evidence is retained in `sora-cars/output/qualification/native-proof/admission-first-release/20260906T125522Z/qualification.json` for profile `c6b9b7536ca0a1d7c3f25ad67208927d36e79b5385af516cb93177a82eabc925`. Its genuine eight-car/5,400-tick envelope is 3,094,036 bytes. Proving plus internal verification took 525.902 seconds with 25,739,657,216 bytes peak RSS; separate verification took 2.233 seconds with 616,153,088 bytes peak RSS. The fixed-entropy CPU matrix also completed at widths 1, 2 and 16: byte-identical 3,099,124-byte envelopes and three independent CLI verifications. Proving/internal verification took 2,929.937, 1,751.132 and 480.046 seconds, respectively. These shared-host measurements are not isolated throughput or whole-validator costs. The one-worker run exceeds the unchanged 30-minute proof-worker limit.
 

@@ -2975,16 +2975,17 @@ mod tests {
             &network_id,
             trust_policy.as_ref(),
         );
+        let runtime_dependencies = dependencies(
+            &config,
+            &network_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
         let first = assemble(
             &config,
             &network_id,
             trust_policy.as_ref(),
-            dependencies(
-                &config,
-                &network_id,
-                trust_policy.as_ref(),
-                "ledger.finalized.primary",
-            ),
+            runtime_dependencies.clone(),
         )
         .expect("first assembly");
         let first_status = first.status().expect("first status");
@@ -3010,17 +3011,19 @@ mod tests {
                 .latest
                 .is_none()
         );
+        assert!(
+            runtime_dependencies
+                .journal_checkpoint_provider
+                .load_latest()
+                .expect("fixture checkpoint head")
+                .is_some()
+        );
         drop(first);
         let restarted = assemble(
             &config,
             &network_id,
             trust_policy.as_ref(),
-            dependencies(
-                &config,
-                &network_id,
-                trust_policy.as_ref(),
-                "ledger.finalized.primary",
-            ),
+            runtime_dependencies,
         )
         .expect("restart assembly");
         let restarted_status = restarted.status().expect("restart status");

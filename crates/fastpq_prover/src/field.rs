@@ -21,6 +21,12 @@ pub struct GoldilocksFp4V1 {
     coefficients: [u64; 4],
 }
 
+impl zeroize::Zeroize for GoldilocksFp4V1 {
+    fn zeroize(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.coefficients);
+    }
+}
+
 impl GoldilocksFp4V1 {
     /// Exact byte length of the final V1 polynomial-basis encoding.
     pub const BYTES: usize = 32;
@@ -264,6 +270,14 @@ fn reduce_wide(value: u128) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn zeroize_clears_every_extension_coordinate() {
+        let mut value = super::GoldilocksFp4V1::new([17, 31, 47, 61]).unwrap();
+        zeroize::Zeroize::zeroize(&mut value);
+        assert_eq!(value, super::GoldilocksFp4V1::ZERO);
+        assert_eq!(value.coefficients(), [0; 4]);
+    }
     use super::*;
     use norito::{codec::Encode, core::DecodeFromSlice};
 

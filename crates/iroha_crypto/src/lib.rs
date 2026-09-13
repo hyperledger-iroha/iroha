@@ -207,7 +207,7 @@ fn public_key_validation_call_count() -> usize {
     PUBLIC_KEY_VALIDATION_CALLS.with(core::cell::Cell::get)
 }
 // ML-DSA-65 wire widths are stable protocol constants. Keep them available
-// when the native PQC backend is disabled (for example in browser WASM) so
+// when the optional native PQC backend is disabled so
 // parsers preserve the same framing and algorithm discriminant.
 const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
 const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;

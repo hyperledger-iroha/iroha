@@ -5,6 +5,44 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## Follow-up from the 27-failure admission run
+
+The reported full Core run passed 14,951 tests, failed 27 and ignored 32.
+The failing fixtures constructed transactions with wall-clock timestamps but
+validated their signed TTL against the process-wide network clock. NTS advances
+from a monotonic UTC anchor; wall-clock corrections during a long run can make
+these clocks diverge. The near-identical expiry deltas across otherwise unrelated
+admission checks are consistent with that mismatch. NTS unit tests keep their
+service, sampler and output-floor state local.
+
+Signature, byte/attachment limits, gas, sequence, height-expiry and validation-fee
+fixtures now use an explicit admission instant taken from the signed fixture.
+The three tests exercising live cache/decoded ingress construct transactions
+from the same network clock used by those entrypoints. Both positive and negative
+validation-fee helpers use fixture time. The height-expiry test name now states
+that height expiry is optional; signature-bound wall-clock TTL remains mandatory.
+
+Regressions cover acceptance at the exact TTL deadline and rejection one
+millisecond later, plus historical short-TTL fee fixtures reaching acceptance
+and rejecting a signature from a different payload. Production clocks, TTL
+limits and validation order are unchanged.
+
+The fresh harness rebuilt without warnings in 9 minutes 57 seconds:
+
+```sh
+cargo test --locked -p iroha_core --lib \
+  --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run
+RAYON_NUM_THREADS=2 target/debug/deps/iroha_core-32e940501cee3ff7 \
+  tx::tests:: validation_fee_admission_tests:: time::tests:: --test-threads=16
+```
+
+The selection passed all 442 tests with no failures or ignored tests in 74.30
+seconds. An exact-name audit confirms all 27 reported failures passed, including
+the renamed height-expiry case. The filters also cover related transaction
+history and runtime tests. Changed Rust sources remained byte-identical throughout
+execution. Scoped Rust formatting, diff checks and historical-archive verification
+pass. Full Core/workspace execution was not rerun.
+
 ## Group 01 integration fixtures
 
 The reported group passed 56 tests and failed 11. Its fixtures and assertions

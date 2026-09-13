@@ -1041,6 +1041,31 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
     }
 }
 impl LifecycleLedgerRecordV1 {
+    /// Authenticate this completed row's original source against the closed
+    /// WAL frontier without exposing its persisted replay authority.
+    pub(super) fn authenticates_retired_terminal_validate_source(
+        &self,
+        verified: &VerifiedHeightContext,
+        frontier: crate::sumeragi::v2::LeaderWireRecoveryAuthority,
+        store: &crate::sumeragi::v2_body_store::V2BodyStore,
+    ) -> bool {
+        if self.work_class() != Some(LifecycleWorkClass::Validate)
+            || self.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || self.continuation() != Some(DurableContinuation::AdvancedNoSuccessor)
+        {
+            return false;
+        }
+        let (Some(key), Some(stage), Some(payload)) =
+            (self.key(), self.stage(), self.durable_payload())
+        else {
+            return false;
+        };
+        self.replay_authority
+            .authenticates_retired_terminal_validate_source(
+                verified, key, stage, payload, frontier, store,
+            )
+    }
+
     /// Decode one live signed Broadcast only as an inert recovered-WAL child.
     ///
     /// This keeps the replay envelope inside its checksummed LedgerV1 row.
@@ -1365,6 +1390,12 @@ impl LifecycleLedgerRecordV1 {
     #[cfg(test)]
     pub(super) fn with_work_class_for_test(mut self, work_class: LifecycleWorkClass) -> Self {
         self.work_class_code = work_class_code(work_class);
+        self
+    }
+    /// Change only a fixture's terminal outcome while preserving its sealed replay envelope.
+    #[cfg(test)]
+    pub(super) fn with_terminal_for_test(mut self, terminal: Option<TerminalOutcome>) -> Self {
+        self.terminal = terminal.map(PersistedTerminalV1::from_schema);
         self
     }
     /// Compare an ordinary body's execution generation without exposing its
@@ -1878,34 +1909,21 @@ impl StagedRecoveredTimeoutSupersessionSuccessorV1 {
             && projection.exactly_matches_ledger_at(successor, control_ordinal)
             && store.context == self.context
     }
-
-    /// Mint only after the specialized store method completed CAS and reload.
-    fn into_authenticated(
-        self,
-        store: &LifecycleLedgerStoreV1,
-        successor: &LifecycleLedgerV1,
-    ) -> AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
-        AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
-            store: store.clone(),
-            context: self.context,
-            predecessor_frame_identity: self.predecessor_frame_identity,
-            successor_frame_identity: successor.frame_identity(),
-        }
-    }
 }
-/// Move-only proof of one exact timeout-supersession owner-open publication.
+/// Move-only proof of the exact ledger publications made while opening an owner.
 ///
-/// This is the sole exception to CompleteTip's frozen-nonempty-successor rule.
-/// It remains sealed inside the production lifecycle owner until that owner is
-/// joined to the exact retired predecessor which froze the old frame.
-#[must_use = "a timeout-supersession successor proof must be consumed by owner binding"]
-pub(super) struct AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
+/// The bound store records a contiguous chain of successful compare-and-swap
+/// publications from its first opened frame. Owner construction consumes that
+/// chain; CompleteTip can then accept its authenticated repairs without accepting
+/// a caller-selected descendant or a frame written through another store handle.
+#[must_use = "an owner-open successor proof must be consumed by owner binding"]
+pub(super) struct AuthenticatedRecoveredOwnerOpenSuccessorV1 {
     store: LifecycleLedgerStoreV1,
     context: LifecycleContext,
     predecessor_frame_identity: LifecycleDigest,
     successor_frame_identity: LifecycleDigest,
 }
-impl AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
+impl AuthenticatedRecoveredOwnerOpenSuccessorV1 {
     fn authorizes_complete_tip_owner_join(
         &self,
         retirement_store: &LifecycleLedgerStoreV1,
@@ -2026,31 +2044,10 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
                 .is_authorized_complete_tip_predecessor_target(&self.complete_tip)
             && self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)
     }
-    /// Authenticate the sole startup publication allowed after retirement.
-    ///
-    /// A production owner may repair an exact recovered WAL row while opening
-    /// the H+1 store.  Retirement necessarily precedes that open, so an
-    /// initially empty successor can advance before the owner is joined.  The
-    /// adoption is deliberately one-way and narrow: only the exact initialized
-    /// empty frame can move, and every row in the replacement must begin above
-    /// the predecessor's retained ordinal floor. A nonempty retirement-time
-    /// frame remains frozen here; `bind_successor_owner` admits only the
-    /// separate move-only proof of an exact timeout-supersession owner-open CAS.
+    /// An unchanged successor needs no publication receipt. Every changed
+    /// frame, including an initially empty one, needs the exact owner-open CAS chain.
     fn authorizes_owner_open_successor(&self, successor: &LifecycleLedgerV1) -> bool {
-        if successor == &self.successor_ledger {
-            return self.successor_descends_from_retirement();
-        }
-        self.successor_descends_from_retirement()
-            && self.successor_ledger.records.is_empty()
-            && self.successor_ledger.producer_debts.is_empty()
-            && self.successor_ledger.high_water == self.retained_high_water
-            && successor.context() == self.successor_store.context
-            && !successor.records.is_empty()
-            && successor.high_water >= self.retained_high_water
-            && successor.records.iter().all(|record| {
-                record.ordinal() > self.retained_high_water
-                    && record.owner().first_admission_ordinal() > self.retained_high_water
-            })
+        successor == &self.successor_ledger && self.successor_descends_from_retirement()
     }
     /// Reauthenticate the retained canonical H+1 ledger at its Kura-derived target.
     pub(in crate::sumeragi) fn authorizes_retained_successor(&self) -> bool {
@@ -2074,15 +2071,29 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
     /// publication. This rejects observed copied, replaced, or foreign-context
     /// state at the owner-private quiescent boundary; it does not claim to
     /// defeat an actively replacing same-UID process between filesystem reads.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn authorizes_successor_status(
         &self,
         successor: &wire::SumeragiV2Status,
+    ) -> bool {
+        self.authorizes_successor_status_with_decision(successor, None)
+    }
+    /// Retain H as canonical parent while authenticating an unapplied H+1 Decision.
+    pub(in crate::sumeragi) fn authorizes_successor_status_with_decision(
+        &self,
+        successor: &wire::SumeragiV2Status,
+        decision: Option<&super::super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,
     ) -> bool {
         self.authorizes_retained_successor()
             && self.successor_ledger.context().height() == successor.height
             && self.complete_tip.successor_context_id() == successor.height_context_id
             && self.complete_tip.predecessor().height().checked_add(1) == Some(successor.height)
-            && successor.last_committed_height == self.complete_tip.predecessor().height()
+            && match decision {
+                Some(decision) => self
+                    .complete_tip
+                    .authorizes_successor_decision_status(decision, successor),
+                None => successor.last_committed_height == self.complete_tip.predecessor().height(),
+            }
     }
     fn matches_successor_owner_ledger(
         &self,
@@ -2171,7 +2182,7 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
             || owner.body_store_identity.is_none()
             || owner.apply_service.is_some()
             || owner.adapter_startup.is_some()
-            || owner.timeout_supersession_successor.is_some()
+            || owner.owner_open_successor.is_some()
             || owner.coordinator.fault.is_some()
             || owner.coordinator.active_lease.is_some()
             || !self.predecessor_remains_exact()
@@ -2262,7 +2273,7 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
             return Err(CompleteTipSuccessorOwnerBindErrorV1);
         };
         let retirement_frame_authorizes = self.authorizes_owner_open_successor(&successor_ledger);
-        let timeout_supersession_authorizes = if retirement_frame_authorizes {
+        let owner_open_publication_authorizes = if retirement_frame_authorizes {
             false
         } else if !self.successor_descends_from_retirement()
             || !self.frame_descends_from_retained_floor(&successor_ledger)
@@ -2278,7 +2289,7 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
                 return Err(CompleteTipSuccessorOwnerBindErrorV1);
             };
             owner
-                .timeout_supersession_successor
+                .owner_open_successor
                 .as_ref()
                 .is_some_and(|successor| {
                     successor.authorizes_complete_tip_owner_join(
@@ -2290,23 +2301,22 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
                     )
                 })
         };
-        if (retirement_frame_authorizes && owner.timeout_supersession_successor.is_some())
-            || (!retirement_frame_authorizes && !timeout_supersession_authorizes)
+        if (!retirement_frame_authorizes && !owner_open_publication_authorizes)
             || !self.matches_successor_owner_ledger(&mut owner, &successor_ledger)
         {
             return Err(CompleteTipSuccessorOwnerBindErrorV1);
         }
-        if timeout_supersession_authorizes {
+        if owner.owner_open_successor.is_some() {
             drop(
                 owner
-                    .timeout_supersession_successor
+                    .owner_open_successor
                     .take()
-                    .expect("authenticated timeout supersession was observed above"),
+                    .expect("the owner-open publication proof was observed above"),
             );
         }
         // Freeze the owner-authenticated publication, not the retirement-time
-        // snapshot. The sole nonempty replacement path consumed the exact
-        // owner-open timeout-supersession witness above. Every later
+        // snapshot. Every replacement consumed the exact contiguous owner-open
+        // publication witness above. Every later
         // runner/status check is strict against this new frame and therefore
         // still rejects post-bind drift.
         self.successor_frame_identity = successor_ledger.frame_identity();
@@ -2982,6 +2992,19 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
                 ProductionLifecycleStartupErrorKindV1::InvalidBodyPipelineCensus,
             )
         })?;
+        let (ledger, body_pipeline) = ledger
+            .reconcile_timeout_body_pipeline_startup(
+                &verified,
+                &body_store,
+                &ledger_store,
+                &adapter_startup,
+                body_pipeline,
+            )
+            .map_err(|reason| {
+                ProductionLifecycleStartupErrorV1::new(
+                    ProductionLifecycleStartupErrorKindV1::BodyPipelineAdapterReplay(reason),
+                )
+            })?;
         let (body_pipeline, adapter_startup) = body_pipeline
             .replay_adapter_startup(adapter_startup)
             .map_err(|reason| {
@@ -3052,6 +3075,10 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
         }
         Ok(ProductionLifecycleOwnerV1 {
             verified,
+            owner_open_successor: coordinator
+                .ledger_store
+                .as_ref()
+                .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
             coordinator,
             registry,
             recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -3062,7 +3089,6 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
-            timeout_supersession_successor: None,
         })
     }
     #[cfg(test)]
@@ -3330,6 +3356,15 @@ impl ProductionLifecycleOwnerV1 {
                             "recovered control cold pair body-pipeline census authentication failed",
                         )
                     })?;
+                let (opened, body_pipeline) = opened
+                    .reconcile_timeout_body_pipeline_startup(
+                        &verified,
+                        &body_store,
+                        &ledger_store,
+                        &adapter_startup,
+                        body_pipeline,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
                 let (body_pipeline, adapter_startup) = body_pipeline
                     .replay_adapter_startup(adapter_startup)
                     .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
@@ -3388,6 +3423,10 @@ impl ProductionLifecycleOwnerV1 {
                     })?;
                 return Ok(ProductionLifecycleOwnerV1 {
                     verified,
+                    owner_open_successor: coordinator
+                        .ledger_store
+                        .as_ref()
+                        .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
                     coordinator,
                     registry,
                     recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -3398,7 +3437,6 @@ impl ProductionLifecycleOwnerV1 {
                     kura_binding: None,
                     apply_service: None,
                     adapter_startup: Some(adapter_startup),
-                    timeout_supersession_successor: None,
                 });
             }
             if projection.has_advanced_vote_continuation(&opened, child_ordinal) {
@@ -3420,6 +3458,15 @@ impl ProductionLifecycleOwnerV1 {
                             "cold Proposal continuation body-pipeline authentication failed",
                         )
                     })?;
+                let (opened, body_pipeline) = opened
+                    .reconcile_timeout_body_pipeline_startup(
+                        &verified,
+                        &body_store,
+                        &ledger_store,
+                        &adapter_startup,
+                        body_pipeline,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
                 let (body_pipeline, adapter_startup) = body_pipeline
                     .replay_adapter_startup(adapter_startup)
                     .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
@@ -3460,6 +3507,10 @@ impl ProductionLifecycleOwnerV1 {
                     .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
                 return Ok(ProductionLifecycleOwnerV1 {
                     verified,
+                    owner_open_successor: coordinator
+                        .ledger_store
+                        .as_ref()
+                        .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
                     coordinator,
                     registry,
                     recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -3470,7 +3521,6 @@ impl ProductionLifecycleOwnerV1 {
                     kura_binding: None,
                     apply_service: None,
                     adapter_startup: Some(adapter_startup),
-                    timeout_supersession_successor: None,
                 });
             }
             let adapter_authority = projection
@@ -3501,6 +3551,15 @@ impl ProductionLifecycleOwnerV1 {
                         "recovered control Broadcast body-pipeline census authentication failed",
                     )
                 })?;
+            let (opened, body_pipeline) = opened
+                .reconcile_timeout_body_pipeline_startup(
+                    &verified,
+                    &body_store,
+                    &ledger_store,
+                    &adapter_startup,
+                    body_pipeline,
+                )
+                .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
             let (body_pipeline, adapter_startup) = body_pipeline
                 .replay_adapter_startup(adapter_startup)
                 .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
@@ -3556,6 +3615,10 @@ impl ProductionLifecycleOwnerV1 {
                 })?;
             Ok(ProductionLifecycleOwnerV1 {
                 verified,
+                owner_open_successor: coordinator
+                    .ledger_store
+                    .as_ref()
+                    .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
                 coordinator,
                 registry,
                 recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -3566,7 +3629,6 @@ impl ProductionLifecycleOwnerV1 {
                 kura_binding: None,
                 apply_service: None,
                 adapter_startup: Some(adapter_startup),
-                timeout_supersession_successor: None,
             })
         }
         if let Ok((broadcast, parent_ordinal, child_ordinal)) =
@@ -3621,37 +3683,30 @@ impl ProductionLifecycleOwnerV1 {
                         "recovered control durable row is absent-or-exact invariant failed",
                     )
                 })?;
-            let timeout_supersession_successor = if let Some(staged_supersession) =
-                staged_timeout_supersession
-            {
-                Some(
-                        ledger_store
-                            .persist_recovered_timeout_supersession_successor(
-                                staged_supersession,
-                                &opened,
-                                &reconciled,
-                                &repaired,
-                                &projection,
-                                ordinal,
-                            )
-                            .map_err(|_error| {
-                                ProductionRecoveredWalControlStartupErrorV1::new(
-                                    "recovered control timeout supersession successor publication failed",
-                                )
-                            })?,
+            if let Some(staged_supersession) = staged_timeout_supersession {
+                ledger_store
+                    .persist_recovered_timeout_supersession_successor(
+                        staged_supersession,
+                        &opened,
+                        &reconciled,
+                        &repaired,
+                        &projection,
+                        ordinal,
                     )
-            } else {
-                if staged {
-                    ledger_store
-                        .persist_exact_successor(&opened, &repaired)
-                        .map_err(|_error| {
-                            ProductionRecoveredWalControlStartupErrorV1::new(
-                                "recovered control LedgerV1 successor publication failed",
-                            )
-                        })?;
-                }
-                None
-            };
+                    .map_err(|_error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "recovered control timeout supersession successor publication failed",
+                        )
+                    })?;
+            } else if staged {
+                ledger_store
+                    .persist_exact_successor(&opened, &repaired)
+                    .map_err(|_error| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "recovered control LedgerV1 successor publication failed",
+                        )
+                    })?;
+            }
             let reopened = ledger_store.load().map_err(|_error| {
                 ProductionRecoveredWalControlStartupErrorV1::new(
                     "recovered control LedgerV1 reopen changed the exact row",
@@ -3669,6 +3724,15 @@ impl ProductionLifecycleOwnerV1 {
                         "recovered control body-pipeline census authentication failed",
                     )
                 })?;
+            let (repaired, body_pipeline) = repaired
+                .reconcile_timeout_body_pipeline_startup(
+                    &verified,
+                    &body_store,
+                    &ledger_store,
+                    &adapter_startup,
+                    body_pipeline,
+                )
+                .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
             let (body_pipeline, adapter_startup) = body_pipeline
                 .replay_adapter_startup(adapter_startup)
                 .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
@@ -3712,6 +3776,10 @@ impl ProductionLifecycleOwnerV1 {
                 })?;
             Ok(ProductionLifecycleOwnerV1 {
                 verified,
+                owner_open_successor: coordinator
+                    .ledger_store
+                    .as_ref()
+                    .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
                 coordinator,
                 registry,
                 recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -3722,7 +3790,6 @@ impl ProductionLifecycleOwnerV1 {
                 kura_binding: None,
                 apply_service: None,
                 adapter_startup: Some(adapter_startup),
-                timeout_supersession_successor,
             })
         }
         open_recovered_control_sign_startup(
@@ -3960,6 +4027,10 @@ impl ProductionLifecycleOwnerV1 {
             })?;
         Ok(Self {
             verified,
+            owner_open_successor: coordinator
+                .ledger_store
+                .as_ref()
+                .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
             coordinator,
             registry,
             recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -3970,7 +4041,6 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
-            timeout_supersession_successor: None,
         })
     }
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -4085,6 +4155,10 @@ impl ProductionLifecycleOwnerV1 {
             })?;
         Ok(Self {
             verified,
+            owner_open_successor: coordinator
+                .ledger_store
+                .as_ref()
+                .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
             coordinator,
             registry,
             recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -4095,7 +4169,6 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
-            timeout_supersession_successor: None,
         })
     }
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -4198,6 +4271,10 @@ impl ProductionLifecycleOwnerV1 {
             })?;
         Ok(Self {
             verified,
+            owner_open_successor: coordinator
+                .ledger_store
+                .as_ref()
+                .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
             coordinator,
             registry,
             recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -4208,7 +4285,6 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
-            timeout_supersession_successor: None,
         })
     }
     /// Publish or exactly coalesce one recovered Decision body fast-forward.
@@ -4377,6 +4453,10 @@ impl ProductionLifecycleOwnerV1 {
             .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
         Ok(Self {
             verified,
+            owner_open_successor: coordinator
+                .ledger_store
+                .as_ref()
+                .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
             coordinator,
             registry,
             recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
@@ -4387,7 +4467,6 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
-            timeout_supersession_successor: None,
         })
     }
     /// Bind one paired recovered-WAL open and adapter startup to exact owners.
@@ -4453,6 +4532,10 @@ impl ProductionLifecycleOwnerV1 {
         }
         Ok(Self {
             verified,
+            owner_open_successor: coordinator
+                .ledger_store
+                .as_ref()
+                .and_then(LifecycleLedgerStoreV1::take_owner_open_successor),
             coordinator,
             registry,
             recovered_lifecycle_outputs,
@@ -4463,15 +4546,14 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
-            timeout_supersession_successor: None,
         })
     }
 }
 #[cfg(test)]
 impl ProductionLifecycleOwnerV1 {
-    /// Whether owner-open retained the one-shot timeout-supersession successor proof.
-    pub(in crate::sumeragi) fn has_timeout_supersession_successor_for_test(&self) -> bool {
-        self.timeout_supersession_successor.is_some()
+    /// Whether owner-open retained its one-shot exact publication proof.
+    pub(in crate::sumeragi) fn has_owner_open_successor_for_test(&self) -> bool {
+        self.owner_open_successor.is_some()
     }
 
     pub(in crate::sumeragi) fn exact_recovered_body_pipeline_join_for_test(&mut self) -> bool {

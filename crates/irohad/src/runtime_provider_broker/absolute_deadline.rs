@@ -74,11 +74,50 @@ impl<'stream> DeadlineUnixStreamV1<'stream> {
 
 impl Read for DeadlineUnixStreamV1<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.stream
-            .set_read_timeout(Some(self.deadline.io_remaining()?))?;
-        let result = self.stream.read(buffer);
-        self.deadline.io_remaining()?;
-        result
+        read_unix_before(self.stream, self.deadline.expires_at(), buffer)
+    }
+}
+
+/// Drain buffered bytes and exact EOF without changing a closed socket's options.
+/// Every retry uses the original deadline, including interrupted readiness waits.
+pub(super) fn read_unix_before(
+    stream: &UnixStream,
+    expires_at: Instant,
+    buffer: &mut [u8],
+) -> io::Result<usize> {
+    let deadline = BrokerDeadlineV1 { expires_at };
+    loop {
+        deadline.io_remaining()?;
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        match rustix::net::recv(stream, &mut *buffer, rustix::net::RecvFlags::DONTWAIT) {
+            Ok((read, _)) => {
+                deadline.io_remaining()?;
+                return Ok(read);
+            }
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::AGAIN) => {}
+            Err(error) => return Err(error.into()),
+        }
+        let timeout = rustix::event::Timespec::try_from(
+            deadline
+                .io_remaining()?
+                .min(Duration::from_millis(i32::MAX as u64)),
+        )
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let mut fds = [rustix::event::PollFd::new(
+            stream,
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(&mut fds, Some(&timeout)) {
+            Ok(_) if fds[0].revents().contains(rustix::event::PollFlags::NVAL) => {
+                return Err(rustix::io::Errno::BADF.into());
+            }
+            Ok(_) | Err(rustix::io::Errno::INTR) => {}
+            Err(error) => return Err(error.into()),
+        }
+        // HUP may accompany unread bytes. Only recv establishes exact EOF.
     }
 }
 

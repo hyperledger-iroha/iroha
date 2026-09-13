@@ -1,4 +1,5 @@
 //! Shared finality polling state and typed, read-only HTTP backpressure.
+//! One absolute deadline bounds status dispatch, sleeps and terminal-outcome admission.
 //! Unresolved deadlines retain the exact public transaction hash and observation count.
 
 use std::time::{Duration, Instant};
@@ -108,9 +109,10 @@ pub(super) struct PollState {
     hash: HashOf<SignedTransaction>,
     options: TransactionWaitOptions,
     started: Instant,
+    deadline: Instant,
     attempts: u64,
     last_status: Option<String>,
-    last_backpressure: Option<eyre::Report>,
+    last_read_error: Option<eyre::Report>,
     delay: Duration,
 }
 
@@ -118,29 +120,37 @@ impl PollState {
     pub(super) fn new(
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
+        inherited_deadline: Option<Instant>,
     ) -> Result<Self> {
         if options.poll_interval.is_zero() {
             return Err(eyre!(
                 "transaction wait poll_interval must be greater than zero"
             ));
         }
+        let started = Instant::now();
+        let deadline = started.checked_add(options.timeout).ok_or_else(|| {
+            eyre!("transaction wait timeout cannot be represented as a monotonic deadline")
+        })?;
+        let deadline = inherited_deadline.map_or(deadline, |inherited| inherited.min(deadline));
         Ok(Self {
             hash,
             options,
-            started: Instant::now(),
+            started,
+            deadline,
             attempts: 0,
             last_status: None,
-            last_backpressure: None,
+            last_read_error: None,
             delay: options.poll_interval,
         })
     }
 
+    pub(super) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
     pub(super) fn begin_poll(&mut self) -> Result<()> {
-        // Preserve the initial observation even for a zero timeout, but never
-        // issue an extra read after sleeping to the confirmation deadline.
-        if self.attempts != 0 && self.started.elapsed() >= self.options.timeout {
-            return Err(self.timeout_error());
-        }
+        // An explicit zero timeout has no initial-read exemption.
+        self.ensure_before_deadline()?;
         self.attempts = self.attempts.saturating_add(1);
         Ok(())
     }
@@ -152,27 +162,40 @@ impl PollState {
         self.delay = self.options.poll_interval;
         let response = match result {
             Ok(response) => {
-                self.last_backpressure = None;
+                self.last_read_error = None;
                 response
             }
             Err(error) => {
+                if Instant::now() >= self.deadline {
+                    self.last_read_error = Some(error);
+                    return Err(self.timeout_error());
+                }
                 let Some(backpressure) = error.downcast_ref::<Backpressure>() else {
                     return Err(error);
                 };
                 self.delay = self.delay.max(backpressure.retry_after.unwrap_or_default());
-                self.last_backpressure = Some(error);
+                self.last_read_error = Some(error);
                 return Ok(None);
             }
         };
         let Some(response) = response else {
+            self.ensure_before_deadline()?;
             return Ok(None);
         };
         let kind = response.status.kind.as_str();
         self.last_status = Some(kind.to_owned());
-        match validate_global_pipeline_status_response(&response, self.hash)? {
-            TxConfirmationStatus::Applied if response.resolved_from == "state" => Ok(Some(
-                transaction_wait_outcome(response, self.attempts, self.started.elapsed()),
-            )),
+        let status = validate_global_pipeline_status_response(&response, self.hash)?;
+        // HTTP completion alone is insufficient: decoding and exact authority
+        // validation also belong to this wait. Never accept a late Applied result.
+        let observed = self.ensure_before_deadline()?;
+        match status {
+            TxConfirmationStatus::Applied if response.resolved_from == "state" => {
+                Ok(Some(transaction_wait_outcome(
+                    response,
+                    self.attempts,
+                    observed.saturating_duration_since(self.started),
+                )))
+            }
             TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
                 if response.resolved_from == "state" =>
             {
@@ -187,11 +210,18 @@ impl PollState {
     }
 
     pub(super) fn next_delay(&mut self) -> Result<Duration> {
-        let elapsed = self.started.elapsed();
-        if elapsed >= self.options.timeout {
+        self.ensure_before_deadline()?;
+        Ok(self
+            .delay
+            .min(self.deadline.saturating_duration_since(Instant::now())))
+    }
+
+    fn ensure_before_deadline(&mut self) -> Result<Instant> {
+        let observed = Instant::now();
+        if observed >= self.deadline {
             return Err(self.timeout_error());
         }
-        Ok(self.delay.min(self.options.timeout.saturating_sub(elapsed)))
+        Ok(observed)
     }
 
     fn timeout_error(&mut self) -> eyre::Report {
@@ -199,10 +229,12 @@ impl PollState {
         let message = format!(
             "transaction {} did not reach state-resolved Applied within {} ms; last_status={status}; attempts={}",
             self.hash,
-            self.options.timeout.as_millis(),
+            self.deadline
+                .saturating_duration_since(self.started)
+                .as_millis(),
             self.attempts
         );
-        let report = if let Some(error) = self.last_backpressure.take() {
+        let report = if let Some(error) = self.last_read_error.take() {
             error.wrap_err(message)
         } else {
             eyre!(message)

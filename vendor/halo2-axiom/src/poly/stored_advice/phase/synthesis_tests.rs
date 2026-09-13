@@ -374,7 +374,7 @@ fn backend_error_or_caught_unwind_cannot_return_an_owner() {
             StoredPhaseErrorV1::Poisoned
         } else {
             StoredPhaseErrorV1::Assignment(StoredAssignmentErrorV1::Store(
-                StoredAdviceErrorV1::Storage,
+                StoredPolynomialErrorV1::Storage,
             ))
         };
         assert!(
@@ -414,12 +414,12 @@ fn returned_synthesis_error_and_early_drop_release_all_writers() {
 use std::sync::{Arc, Mutex};
 
 struct SyncWriter {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     record: Arc<Mutex<Recording>>,
     values: Vec<[u8; 32]>,
 }
 struct SyncSnapshot {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     record: Arc<Mutex<Recording>>,
     values: Vec<[u8; 32]>,
     poisoned: bool,
@@ -434,12 +434,16 @@ impl Drop for SyncSnapshot {
         self.record.lock().unwrap().snapshot_drops += 1;
     }
 }
-impl StoredAdviceWriterV1 for SyncWriter {
+impl StoredPolynomialWriterV1 for SyncWriter {
     type Snapshot = SyncSnapshot;
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
-    fn write_chunk(&mut self, chunk: u64, values: &[[u8; 32]]) -> Result<(), StoredAdviceErrorV1> {
+    fn write_chunk(
+        &mut self,
+        chunk: u64,
+        values: &[[u8; 32]],
+    ) -> Result<(), StoredPolynomialErrorV1> {
         assert_eq!(
             chunk as usize * STORED_SCALARS_PER_CHUNK_V1,
             self.values.len()
@@ -448,7 +452,7 @@ impl StoredAdviceWriterV1 for SyncWriter {
         self.values.extend_from_slice(values);
         Ok(())
     }
-    fn seal(mut self) -> Result<Self::Snapshot, StoredAdviceErrorV1> {
+    fn seal(mut self) -> Result<Self::Snapshot, StoredPolynomialErrorV1> {
         assert_eq!(self.values.len(), self.layout.scalar_count());
         self.record
             .lock()
@@ -463,22 +467,22 @@ impl StoredAdviceWriterV1 for SyncWriter {
         })
     }
 }
-impl StoredAdviceSnapshotV1 for SyncSnapshot {
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+impl StoredPolynomialSnapshotV1 for SyncSnapshot {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
     fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         if self.poisoned {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         self.poisoned = true;
         if expected != self.layout {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         let count = expected.chunk_scalar_count(chunk)?;
         let start = chunk as usize * STORED_SCALARS_PER_CHUNK_V1;
@@ -488,9 +492,9 @@ impl StoredAdviceSnapshotV1 for SyncSnapshot {
     }
     fn with_column<R>(
         &mut self,
-        _: StoredAdviceLayoutV1,
-        _: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        _: StoredPolynomialLayoutV1,
+        _: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         panic!("single-phase synthesis and commitment must only read bounded chunks")
     }
 }
@@ -503,14 +507,16 @@ fn sync_writers<C: CurveAffine>(
         .iter()
         .enumerate()
         .map(|(ordinal, index)| SyncWriter {
-            layout: StoredAdviceLayoutV1::new(
+            layout: StoredPolynomialLayoutV1::new(
                 [9; 32],
                 11 + ordinal as u64,
                 plan.field,
                 StoredPolynomialBasisV1::Lagrange,
                 plan.k,
-                *index as u32,
-                0,
+                StoredPolynomialRoleV1::Advice {
+                    column: *index as u32,
+                    phase: 0,
+                },
             )
             .unwrap(),
             record: Arc::clone(record),
@@ -543,7 +549,7 @@ struct RegionCircuit<F> {
     smaller_first: bool,
 }
 
-impl<F: Field> Circuit<F> for RegionCircuit<F> {
+impl<F: Field + From<u64>> Circuit<F> for RegionCircuit<F> {
     type Config = Config;
     type FloorPlanner = V1;
     #[cfg(feature = "circuit-params")]
@@ -651,7 +657,7 @@ where
         };
         let vk = keygen_vk_custom(&params, &circuit, compress).unwrap();
         let pk = keygen_pk(&params, vk, &circuit).unwrap();
-        let mut fresh = ConstraintSystem::default();
+        let mut fresh = ConstraintSystem::<C::Scalar>::default();
         let config = configure(&mut fresh);
         assert_eq!(fresh.num_selectors(), 1);
         assert_eq!(pk.get_vk().cs().num_selectors(), usize::from(compress));

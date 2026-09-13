@@ -31,7 +31,6 @@ import {
   LANE_PRIVACY_MERKLE_MAX_DEPTH,
   PROOF_BOX_MAX_ENCODED_BYTES,
   canonicalBase64DecodedLength,
-  canonicalizePrehashedBytes,
   isPortableVerifyingKeyIdField,
   laneMerkleLeafIndexFitsDepth,
   proofBoxFitsEncodedBudget,
@@ -142,13 +141,15 @@ const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
   "private_key_algorithm",
   "privateKeyAlgorithm",
 ]);
+// Match the native Norito JSON map's lexicographic key order so the embedded
+// public-input text is unchanged by canonical instruction encode/decode.
 const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
-  "root_hint",
-  "owner",
   "amount",
-  "duration_blocks",
   "direction",
+  "duration_blocks",
   "nullifier",
+  "owner",
+  "root_hint",
 ]);
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
@@ -1418,7 +1419,7 @@ function normalizeProofAttachment(value, name) {
           `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath[${index}]`,
         );
       }
-      return canonicalizePrehashedBytes(
+      return canonicalHashLiteral(
         normalizeFixedBytes(
           entry,
           `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath[${index}]`,
@@ -1433,8 +1434,9 @@ function normalizeProofAttachment(value, name) {
         `${name}${TEXT_LANE_PRIVACY_MERKLE}leafIndex`,
       );
     }
+    // Match the native LaneCommitmentId tuple and HashOf JSON literal owners.
     payload.lane_privacy = {
-      commitment_id: commitmentId,
+      commitment_id: [commitmentId],
       witness: {
         kind: "merkle",
         payload: {

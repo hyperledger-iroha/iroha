@@ -50,16 +50,13 @@
 use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf};
 use blake2::{Blake2b, digest::consts::U32};
 use digest::Digest as _;
+use fastpq_isi::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput as _, XofReader as _},
-};
 use std::{fmt, string::String, sync::OnceLock, vec::Vec};
 use thiserror::Error;
 type BfvBlake2b256 = Blake2b<U32>;
@@ -83,44 +80,12 @@ macro_rules! invalid_guards {
 }
 
 /// Number of independent Poseidon-x7 lanes in the BFV native-STARK digest.
-pub const BFV_GOLDILOCKS_DIGEST384_LANES_V1: usize = 6;
+pub const BFV_GOLDILOCKS_DIGEST384_LANES_V1: usize = fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1;
 /// Canonical encoded size of one BFV native-STARK digest.
-pub const BFV_GOLDILOCKS_DIGEST384_BYTES_V1: usize = BFV_GOLDILOCKS_DIGEST384_LANES_V1 * 8;
-const BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1: usize = 3;
-const BFV_GOLDILOCKS_DIGEST384_RATE_V1: usize = 2;
-const BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1: usize = 4;
-const BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1: usize = 57;
-const BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1: usize =
-    BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1 * 2 + BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1;
-const BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1: usize = u32::MAX as usize;
-const BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1: &[u8] =
-    b"shake256-rejection-sampling-u64le-below-goldilocks-v1";
-const BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1: &[u8] =
-    b"iroha:first-release:native-stark:goldilocks-digest384:2026-08-28:v1";
-const BFV_GOLDILOCKS_DIGEST384_PARAMETER_DOMAIN_V1: &[u8] =
-    b"iroha:goldilocks-digest384:poseidon-x7:parameter-generator:v1";
-const BFV_GOLDILOCKS_DIGEST384_MESSAGE_FRAME_DOMAIN_V1: &[u8] =
-    b"iroha:goldilocks-digest384:message-frame:v1";
+pub const BFV_GOLDILOCKS_DIGEST384_BYTES_V1: usize = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
 const BFV_GOLDILOCKS_DIGEST384_CATALOG_V1: &[u8] = b"iroha-privacy-exact12-v1";
 const BFV_GOLDILOCKS_DIGEST384_PROTOCOL_V1: &[u8] = b"ram_lfe_bfv_v1";
 const BFV_GOLDILOCKS_DIGEST384_PROFILE_V1: &[u8] = b"stark-fri-poseidon-x7-goldilocks-6x64-v1";
-const BFV_GOLDILOCKS_DIGEST384_MDS_V1: [[u64; 3]; 3] = [
-    [
-        10_963_190_455_434_655_122,
-        11_750_275_951_116_524_688,
-        5_096_500_602_321_405_111,
-    ],
-    [
-        13_708_339_500_321_453_928,
-        18_089_393_393_422_782_879,
-        18_223_179_915_893_545_110,
-    ],
-    [
-        16_583_504_643_819_772_425,
-        15_141_694_648_858_373_060,
-        1_924_697_359_341_405_372,
-    ],
-];
 
 /// Canonical 384-bit BFV native-STARK digest.
 ///
@@ -275,17 +240,6 @@ impl norito::json::JsonDeserialize for BfvGoldilocksDigest384V1 {
     }
 }
 
-#[derive(Clone)]
-struct BfvGoldilocksDigest384LaneParametersV1 {
-    initial_state: [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
-    round_constants:
-        [[u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1]; BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1],
-}
-
-static BFV_GOLDILOCKS_DIGEST384_LANE_PARAMETERS_V1: OnceLock<
-    [BfvGoldilocksDigest384LaneParametersV1; BFV_GOLDILOCKS_DIGEST384_LANES_V1],
-> = OnceLock::new();
-
 #[derive(Clone, Copy)]
 struct BfvGoldilocksDigest384DomainV1<'a> {
     role: &'a [u8],
@@ -295,257 +249,26 @@ struct BfvGoldilocksDigest384DomainV1<'a> {
     counter: u64,
 }
 
-struct BfvGoldilocksDigest384LaneSpongeV1<'a> {
-    state: [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
-    pending: [u64; BFV_GOLDILOCKS_DIGEST384_RATE_V1],
-    pending_len: usize,
-    parameters: &'a BfvGoldilocksDigest384LaneParametersV1,
-}
-
-impl<'a> BfvGoldilocksDigest384LaneSpongeV1<'a> {
-    fn new(parameters: &'a BfvGoldilocksDigest384LaneParametersV1) -> Self {
-        Self {
-            state: parameters.initial_state,
-            pending: [0; BFV_GOLDILOCKS_DIGEST384_RATE_V1],
-            pending_len: 0,
-            parameters,
-        }
-    }
-
-    fn absorb(&mut self, value: u64) {
-        debug_assert!(value < BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
-        self.pending[self.pending_len] = value;
-        self.pending_len += 1;
-        if self.pending_len == BFV_GOLDILOCKS_DIGEST384_RATE_V1 {
-            self.flush();
-        }
-    }
-
-    fn flush(&mut self) {
-        for (state, value) in self.state.iter_mut().zip(self.pending) {
-            *state = bfv_goldilocks_digest384_add_v1(*state, value);
-        }
-        bfv_goldilocks_digest384_permute_v1(&mut self.state, self.parameters);
-        self.pending = [0; BFV_GOLDILOCKS_DIGEST384_RATE_V1];
-        self.pending_len = 0;
-    }
-
-    fn finish(mut self) -> u64 {
-        self.absorb(1);
-        if self.pending_len != 0 {
-            self.flush();
-        }
-        self.state[0]
-    }
-}
-
-fn bfv_goldilocks_digest384_lane_parameters_v1()
--> &'static [BfvGoldilocksDigest384LaneParametersV1; BFV_GOLDILOCKS_DIGEST384_LANES_V1] {
-    BFV_GOLDILOCKS_DIGEST384_LANE_PARAMETERS_V1.get_or_init(|| {
-        core::array::from_fn(|lane| {
-            let generator_length =
-                u64::try_from(BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1.len())
-                    .expect("fixed generator identifier length fits u64")
-                    .to_le_bytes();
-            let seed_length = u64::try_from(BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1.len())
-                .expect("fixed parameter seed length fits u64")
-                .to_le_bytes();
-            let lane = u64::try_from(lane)
-                .expect("six-lane index fits u64")
-                .to_le_bytes();
-            let mut generator = Shake256::default();
-            for field in [
-                BFV_GOLDILOCKS_DIGEST384_PARAMETER_DOMAIN_V1,
-                generator_length.as_slice(),
-                BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1,
-                seed_length.as_slice(),
-                BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1,
-                lane.as_slice(),
-            ] {
-                sha3::digest::Update::update(&mut generator, field);
-            }
-            let mut reader = generator.finalize_xof();
-            let mut next_field = || loop {
-                let mut bytes = [0_u8; 8];
-                reader.read(&mut bytes);
-                let candidate = u64::from_le_bytes(bytes);
-                if candidate < BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1 {
-                    break candidate;
-                }
-            };
-            BfvGoldilocksDigest384LaneParametersV1 {
-                initial_state: core::array::from_fn(|_| next_field()),
-                round_constants: core::array::from_fn(|_| core::array::from_fn(|_| next_field())),
-            }
-        })
-    })
-}
-
-#[inline]
-fn bfv_goldilocks_digest384_add_v1(left: u64, right: u64) -> u64 {
-    let modulus = BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1;
-    let sum = left.wrapping_add(right);
-    let mut reduced = sum;
-    if sum < left {
-        reduced = reduced.wrapping_sub(modulus);
-    }
-    if reduced >= modulus {
-        reduced - modulus
-    } else {
-        reduced
-    }
-}
-
-#[inline]
-fn bfv_goldilocks_digest384_reduce_wide_v1(value: u128) -> u64 {
-    let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked low word fits u64");
-    let high = u64::try_from(value >> 64).expect("high word fits u64");
-    let high_low = i128::from(high & 0xffff_ffff);
-    let high_high = i128::from(high >> 32);
-    let mut accumulated = i128::from(low) + (high_low << 32) - high_low - high_high;
-    let modulus = i128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
-    while accumulated < 0 {
-        accumulated += modulus;
-    }
-    while accumulated >= modulus {
-        accumulated -= modulus;
-    }
-    u64::try_from(accumulated).expect("Goldilocks reduction is canonical")
-}
-
-#[inline]
-fn bfv_goldilocks_digest384_mul_v1(left: u64, right: u64) -> u64 {
-    bfv_goldilocks_digest384_reduce_wide_v1(u128::from(left) * u128::from(right))
-}
-
-#[inline]
-fn bfv_goldilocks_digest384_pow7_v1(value: u64) -> u64 {
-    let square = bfv_goldilocks_digest384_mul_v1(value, value);
-    let fourth = bfv_goldilocks_digest384_mul_v1(square, square);
-    bfv_goldilocks_digest384_mul_v1(bfv_goldilocks_digest384_mul_v1(fourth, square), value)
-}
-
-fn bfv_goldilocks_digest384_permute_v1(
-    state: &mut [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
-    parameters: &BfvGoldilocksDigest384LaneParametersV1,
-) {
-    for round in 0..BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1 {
-        for (word, constant) in state
-            .iter_mut()
-            .zip(parameters.round_constants[round].iter())
-        {
-            *word = bfv_goldilocks_digest384_add_v1(*word, *constant);
-        }
-        let is_full = !(BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1
-            ..BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1
-                + BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1)
-            .contains(&round);
-        if is_full {
-            for word in state.iter_mut() {
-                *word = bfv_goldilocks_digest384_pow7_v1(*word);
-            }
-        } else {
-            state[0] = bfv_goldilocks_digest384_pow7_v1(state[0]);
-        }
-        let prior = *state;
-        for row in 0..BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1 {
-            state[row] = prior
-                .iter()
-                .enumerate()
-                .fold(0_u64, |sum, (column, value)| {
-                    bfv_goldilocks_digest384_add_v1(
-                        sum,
-                        bfv_goldilocks_digest384_mul_v1(
-                            BFV_GOLDILOCKS_DIGEST384_MDS_V1[row][column],
-                            *value,
-                        ),
-                    )
-                });
-        }
-    }
-}
-
-fn bfv_goldilocks_digest384_absorb_byte_field_v1(
-    sponge: &mut BfvGoldilocksDigest384LaneSpongeV1<'_>,
-    tag: u64,
-    bytes: &[u8],
-) -> Option<()> {
-    if bytes.len() > BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1 {
-        return None;
-    }
-    sponge.absorb(tag);
-    sponge.absorb(u64::try_from(bytes.len()).ok()?);
-    let mut chunks = bytes.chunks_exact(7);
-    for chunk in &mut chunks {
-        let mut word = [0_u8; 8];
-        word[..7].copy_from_slice(chunk);
-        sponge.absorb(u64::from_le_bytes(word));
-    }
-    let remainder = chunks.remainder();
-    let mut terminal = [0_u8; 8];
-    terminal[..remainder.len()].copy_from_slice(remainder);
-    terminal[remainder.len()] = 1;
-    sponge.absorb(u64::from_le_bytes(terminal));
-    Some(())
-}
-
 fn bfv_goldilocks_digest384_v1(
     domain: BfvGoldilocksDigest384DomainV1<'_>,
     fields: &[&[u8]],
 ) -> Result<BfvGoldilocksDigest384V1, BfvError> {
-    if fields.len() > BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1
-        || fields
-            .iter()
-            .chain([domain.role, domain.phase].iter())
-            .any(|field| field.len() > BFV_GOLDILOCKS_DIGEST384_MAX_FIELD_BYTES_V1)
-    {
-        return Err(invalid!("BFV native-STARK digest framing limit exceeded"));
-    }
-    let parameters = bfv_goldilocks_digest384_lane_parameters_v1();
-    let words = core::array::from_fn(|lane| {
-        let mut sponge = BfvGoldilocksDigest384LaneSpongeV1::new(&parameters[lane]);
-        let level = domain.level.to_le_bytes();
-        let index = domain.index.to_le_bytes();
-        let counter = domain.counter.to_le_bytes();
-        let lane = u64::try_from(lane)
-            .expect("six-lane index fits u64")
-            .to_le_bytes();
-        for (tag, field) in [
-            BFV_GOLDILOCKS_DIGEST384_MESSAGE_FRAME_DOMAIN_V1,
-            BFV_GOLDILOCKS_DIGEST384_CATALOG_V1,
-            BFV_GOLDILOCKS_DIGEST384_PROTOCOL_V1,
-            BFV_GOLDILOCKS_DIGEST384_PROFILE_V1,
-            domain.role,
-            domain.phase,
-            level.as_slice(),
-            index.as_slice(),
-            counter.as_slice(),
-            lane.as_slice(),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            bfv_goldilocks_digest384_absorb_byte_field_v1(
-                &mut sponge,
-                u64::try_from(tag + 1).expect("typed domain tag fits u64"),
-                field,
-            )
-            .expect("typed domain lengths were bounded");
-        }
-        sponge.absorb(11);
-        sponge.absorb(u64::try_from(fields.len()).expect("field count was bounded"));
-        for (index, field) in fields.iter().enumerate() {
-            bfv_goldilocks_digest384_absorb_byte_field_v1(
-                &mut sponge,
-                12 + u64::try_from(index).expect("field index was bounded"),
-                field,
-            )
-            .expect("field lengths were bounded");
-        }
-        sponge.finish()
-    });
-    BfvGoldilocksDigest384V1::new(words)
-        .ok_or_else(|| invalid!("BFV native-STARK digest produced a non-canonical field word"))
+    let digest = hash_bytes_384_v1(
+        GoldilocksDigestDomainV1 {
+            catalog: BFV_GOLDILOCKS_DIGEST384_CATALOG_V1,
+            protocol: BFV_GOLDILOCKS_DIGEST384_PROTOCOL_V1,
+            profile: BFV_GOLDILOCKS_DIGEST384_PROFILE_V1,
+            role: domain.role,
+            phase: domain.phase,
+            level: domain.level,
+            index: domain.index,
+            counter: domain.counter,
+        },
+        fields,
+    )
+    .ok_or_else(|| invalid!("BFV native-STARK digest framing limit exceeded"))?;
+    // The canonical owner guarantees all six words; retain BFV's exact wire identity.
+    Ok(BfvGoldilocksDigest384V1(digest.to_le_bytes()))
 }
 
 fn bfv_native_stark_generated_circuit_body_digest_v1(
@@ -38976,7 +38699,99 @@ fn rotation_steps_mod_slot_count(
 #[cfg(test)]
 mod first_release_hard_cut_tests {
     use super::*;
-    use sha3::Sha3_256;
+    use sha3::{
+        Sha3_256, Shake256,
+        digest::{ExtendableOutput as _, XofReader as _},
+    };
+
+    // Independent test reference for the pre-consolidation BFV parameter generator.
+    const BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1: usize = 3;
+    const BFV_GOLDILOCKS_DIGEST384_RATE_V1: usize = 2;
+    const BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1: usize = 4;
+    const BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1: usize = 57;
+    const BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1: usize =
+        BFV_GOLDILOCKS_DIGEST384_FULL_ROUNDS_HALF_V1 * 2
+            + BFV_GOLDILOCKS_DIGEST384_PARTIAL_ROUNDS_V1;
+    const BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1: &[u8] =
+        b"shake256-rejection-sampling-u64le-below-goldilocks-v1";
+    const BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1: &[u8] =
+        b"iroha:first-release:native-stark:goldilocks-digest384:2026-08-28:v1";
+    const BFV_GOLDILOCKS_DIGEST384_PARAMETER_DOMAIN_V1: &[u8] =
+        b"iroha:goldilocks-digest384:poseidon-x7:parameter-generator:v1";
+    const BFV_GOLDILOCKS_DIGEST384_MESSAGE_FRAME_DOMAIN_V1: &[u8] =
+        b"iroha:goldilocks-digest384:message-frame:v1";
+    const BFV_GOLDILOCKS_DIGEST384_MDS_V1: [[u64; 3]; 3] = [
+        [
+            10_963_190_455_434_655_122,
+            11_750_275_951_116_524_688,
+            5_096_500_602_321_405_111,
+        ],
+        [
+            13_708_339_500_321_453_928,
+            18_089_393_393_422_782_879,
+            18_223_179_915_893_545_110,
+        ],
+        [
+            16_583_504_643_819_772_425,
+            15_141_694_648_858_373_060,
+            1_924_697_359_341_405_372,
+        ],
+    ];
+
+    #[derive(Clone)]
+    struct ReferenceLaneParametersV1 {
+        initial_state: [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
+        round_constants: [[u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1];
+            BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1],
+    }
+
+    static REFERENCE_LANE_PARAMETERS_V1: OnceLock<
+        [ReferenceLaneParametersV1; BFV_GOLDILOCKS_DIGEST384_LANES_V1],
+    > = OnceLock::new();
+
+    fn reference_lane_parameters()
+    -> &'static [ReferenceLaneParametersV1; BFV_GOLDILOCKS_DIGEST384_LANES_V1] {
+        REFERENCE_LANE_PARAMETERS_V1.get_or_init(|| {
+            core::array::from_fn(|lane| {
+                let generator_length =
+                    u64::try_from(BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1.len())
+                        .expect("fixed generator identifier length fits u64")
+                        .to_le_bytes();
+                let seed_length = u64::try_from(BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1.len())
+                    .expect("fixed parameter seed length fits u64")
+                    .to_le_bytes();
+                let lane = u64::try_from(lane)
+                    .expect("six-lane index fits u64")
+                    .to_le_bytes();
+                let mut generator = Shake256::default();
+                for field in [
+                    BFV_GOLDILOCKS_DIGEST384_PARAMETER_DOMAIN_V1,
+                    generator_length.as_slice(),
+                    BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1,
+                    seed_length.as_slice(),
+                    BFV_GOLDILOCKS_DIGEST384_PARAMETER_SEED_V1,
+                    lane.as_slice(),
+                ] {
+                    sha3::digest::Update::update(&mut generator, field);
+                }
+                let mut reader = generator.finalize_xof();
+                let mut next_field = || loop {
+                    let mut bytes = [0_u8; 8];
+                    reader.read(&mut bytes);
+                    let candidate = u64::from_le_bytes(bytes);
+                    if candidate < BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1 {
+                        break candidate;
+                    }
+                };
+                ReferenceLaneParametersV1 {
+                    initial_state: core::array::from_fn(|_| next_field()),
+                    round_constants: core::array::from_fn(|_| {
+                        core::array::from_fn(|_| next_field())
+                    }),
+                }
+            })
+        })
+    }
 
     #[derive(Encode, norito::NoritoSchema)]
     #[norito_schema(name = "test::iroha_crypto::retired_sha256_verifier_payload")]
@@ -39025,7 +38840,7 @@ mod first_release_hard_cut_tests {
 
     fn reference_permute(
         state: &mut [u64; BFV_GOLDILOCKS_DIGEST384_STATE_WIDTH_V1],
-        parameters: &BfvGoldilocksDigest384LaneParametersV1,
+        parameters: &ReferenceLaneParametersV1,
     ) {
         for round in 0..BFV_GOLDILOCKS_DIGEST384_TOTAL_ROUNDS_V1 {
             for (word, constant) in state.iter_mut().zip(parameters.round_constants[round]) {
@@ -39074,7 +38889,7 @@ mod first_release_hard_cut_tests {
         domain: BfvGoldilocksDigest384DomainV1<'_>,
         fields: &[&[u8]],
     ) -> BfvGoldilocksDigest384V1 {
-        let parameters = bfv_goldilocks_digest384_lane_parameters_v1();
+        let parameters = reference_lane_parameters();
         let words = core::array::from_fn(|lane| {
             let level = domain.level.to_le_bytes();
             let index = domain.index.to_le_bytes();
@@ -39189,7 +39004,27 @@ mod first_release_hard_cut_tests {
             0x56, 0x38, 0x49, 0x24, 0x4f, 0xfd, 0xdb, 0xf5, 0x1f, 0x5d, 0x67, 0xb1, 0xdb, 0x95,
             0x22, 0x2c, 0xe3, 0xe6,
         ];
-        let parameters = bfv_goldilocks_digest384_lane_parameters_v1();
+        let parameters = reference_lane_parameters();
+        assert_eq!(
+            EXPECTED,
+            fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1
+        );
+        assert_eq!(
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1,
+            fastpq_isi::poseidon::FIELD_MODULUS
+        );
+        for (lane, parameters) in parameters.iter().enumerate() {
+            assert_eq!(
+                Some(parameters.initial_state),
+                fastpq_isi::goldilocks_digest384_lane_initial_state_v1(lane)
+            );
+            for (round, constants) in parameters.round_constants.iter().enumerate() {
+                assert_eq!(
+                    Some(*constants),
+                    fastpq_isi::goldilocks_digest384_lane_round_constants_v1(lane, round)
+                );
+            }
+        }
         let mut asset = Vec::new();
         asset.extend_from_slice(b"iroha:goldilocks-digest384:parameter-asset:v1");
         asset.extend_from_slice(BFV_GOLDILOCKS_DIGEST384_PARAMETER_GENERATOR_V1);
@@ -39224,6 +39059,13 @@ mod first_release_hard_cut_tests {
         let reference = reference_digest(domain, &fields);
         assert_eq!(optimized, reference);
         assert_eq!(optimized.encode(), reference.to_le_bytes());
+        assert_eq!(
+            hex::encode(optimized.as_ref()),
+            concat!(
+                "a595872ae4dff1ec0784c4feaa9f30140e8eff48e8ace302",
+                "9b3c623a1e96495ab95847160f7acebca5884a9fff08c71e"
+            )
+        );
 
         let changed_domain = BfvGoldilocksDigest384DomainV1 {
             counter: domain.counter + 1,
@@ -39232,6 +39074,156 @@ mod first_release_hard_cut_tests {
         assert_ne!(
             optimized,
             bfv_goldilocks_digest384_v1(changed_domain, &fields).unwrap()
+        );
+    }
+
+    #[test]
+    fn canonical_digest_preserves_empty_fields_and_chunk_boundaries() {
+        let domain = BfvGoldilocksDigest384DomainV1 {
+            role: b"fri-layer",
+            phase: b"terminal-opening",
+            level: 3,
+            index: 17,
+            counter: 9,
+        };
+        for length in [0_usize, 1, 6, 7, 8, 13, 14, 15, 63, 64] {
+            let payload = (0..length)
+                .map(|index| u8::try_from((index * 19 + 7) & 255).unwrap())
+                .collect::<Vec<_>>();
+            let fields = [payload.as_slice()];
+            assert_eq!(
+                bfv_goldilocks_digest384_v1(domain, &fields).unwrap(),
+                reference_digest(domain, &fields),
+                "payload length {length}"
+            );
+        }
+        let distinct_frames: [&[&[u8]]; 5] =
+            [&[], &[b""], &[b"abc", b"def"], &[b"abcdef"], &[b"abcdef\0"]];
+        let digests = distinct_frames
+            .iter()
+            .map(|fields| bfv_goldilocks_digest384_v1(domain, fields).unwrap())
+            .collect::<Vec<_>>();
+        for (index, digest) in digests.iter().enumerate() {
+            assert_eq!(*digest, reference_digest(domain, distinct_frames[index]));
+            for previous in &digests[..index] {
+                assert_ne!(digest, previous, "field boundaries must remain distinct");
+            }
+        }
+        for changed in [
+            BfvGoldilocksDigest384DomainV1 {
+                role: b"changed\0",
+                ..domain
+            },
+            BfvGoldilocksDigest384DomainV1 {
+                phase: b"changed\0",
+                ..domain
+            },
+            BfvGoldilocksDigest384DomainV1 {
+                level: u64::MAX,
+                ..domain
+            },
+            BfvGoldilocksDigest384DomainV1 {
+                index: u64::MAX,
+                ..domain
+            },
+            BfvGoldilocksDigest384DomainV1 {
+                counter: u64::MAX,
+                ..domain
+            },
+        ] {
+            let fields: [&[u8]; 1] = [b"domain coordinates"];
+            let digest = bfv_goldilocks_digest384_v1(changed, &fields).unwrap();
+            assert_eq!(digest, reference_digest(changed, &fields));
+            assert_ne!(
+                digest,
+                bfv_goldilocks_digest384_v1(domain, &fields).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn native_air_challenge_and_domain_tag_consume_all_six_lanes() {
+        let statement_hash = Hash::new(b"BFV canonical owner statement");
+        let trace_hash = Hash::new(b"BFV canonical owner trace");
+        let statement_bytes: [u8; Hash::LENGTH] = statement_hash.into();
+        let trace_bytes: [u8; Hash::LENGTH] = trace_hash.into();
+        let expected_digest = reference_digest(
+            BfvGoldilocksDigest384DomainV1 {
+                role: b"air-transcript",
+                phase: b"composition-challenge",
+                level: 0,
+                index: 3,
+                counter: 5,
+            },
+            &[
+                BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DOMAIN,
+                &statement_bytes,
+                &trace_bytes,
+            ],
+        );
+        let full = bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(expected_digest.as_ref());
+        let truncated = bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(
+            &expected_digest.as_ref()[..Hash::LENGTH],
+        );
+        assert_ne!(full, truncated, "fixture must detect 32-byte truncation");
+        assert_eq!(
+            bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
+                statement_hash,
+                trace_hash,
+                3,
+                5,
+            )
+            .unwrap(),
+            if full == 0 { 1 } else { full }
+        );
+        assert_eq!(
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1,
+            48
+        );
+        let domain_digest = reference_digest(
+            BfvGoldilocksDigest384DomainV1 {
+                role: b"air-transcript",
+                phase: b"domain-tag",
+                level: 0,
+                index: 0,
+                counter: 0,
+            },
+            &[
+                BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_DOMAIN_TAG_DOMAIN,
+                &statement_bytes,
+            ],
+        );
+        let tag = bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash);
+        assert_eq!(tag.len(), 96);
+        assert_eq!(tag, hex::encode(domain_digest.as_ref()));
+    }
+
+    #[test]
+    fn native_metadata_binding_keeps_32_byte_identity_over_full_digest() {
+        let fields: [&[u8]; 1] = [b"BFV generated circuit body"];
+        let digest = bfv_goldilocks_digest384_v1(
+            BfvGoldilocksDigest384DomainV1 {
+                role: b"proof-key-commitment",
+                phase: b"generated-circuit-body",
+                level: 0,
+                index: 0,
+                counter: 0,
+            },
+            &fields,
+        )
+        .unwrap();
+        let binding = bfv_native_stark_digest_binding_hash_v1(digest);
+        assert_eq!(Hash::LENGTH, 32);
+        assert_eq!(binding, Hash::new(digest.as_ref()));
+        assert_ne!(binding, Hash::new(&digest.as_ref()[..Hash::LENGTH]));
+        assert_eq!(
+            bfv_native_stark_binding_hash_v1(
+                b"proof-key-commitment",
+                b"generated-circuit-body",
+                &fields,
+            )
+            .unwrap(),
+            binding
         );
     }
 

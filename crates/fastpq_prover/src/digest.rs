@@ -1,12 +1,14 @@
+//! Canonical six-lane preprocessing trace commitment framing.
 use crate::{
     Error, Result,
     batch::TransitionBatch,
     field::GOLDILOCKS_MODULUS_V1,
-    trace::{Trace, build_trace},
+    trace::{Trace, TraceColumn, build_trace},
 };
 use fastpq_isi::{
-    FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384V1 as NativeDigest384V1,
-    GoldilocksDigestDomainV1, StarkParameterSet, hash_bytes_384_v1,
+    FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1_ID, GoldilocksDigest384FrameV1,
+    GoldilocksDigest384V1 as NativeDigest384V1, GoldilocksDigestDomainV1, StarkParameterSet,
+    hash_bytes_384_v1,
 };
 use iroha_data_model::privacy::GoldilocksDigest384V1;
 
@@ -78,10 +80,58 @@ pub fn ensure_trace_capacity(params: &StarkParameterSet, transition_rows: usize)
     }
     Ok(())
 }
+fn validate_trace_shape(trace: &Trace, params: &StarkParameterSet) -> Result<()> {
+    if trace.columns.len() > crate::trace::DEFAULT_MAX_TRACE_COLUMNS {
+        return Err(Error::VerifierLimitExceeded {
+            limit: "max_air_row_values",
+            actual: trace.columns.len(),
+            max: crate::trace::DEFAULT_MAX_TRACE_COLUMNS,
+        });
+    }
+    let required_padded_len = trace
+        .rows
+        .max(1)
+        .checked_next_power_of_two()
+        .ok_or(Error::TraceLengthOverflow { rows: trace.rows })?;
+    if trace.padded_len != required_padded_len {
+        return Err(Error::InvalidTraceShape {
+            details: format!(
+                "padded length {} does not match canonical length {required_padded_len} for {} rows",
+                trace.padded_len, trace.rows
+            ),
+        });
+    }
+    let max_rows = 1usize
+        .checked_shl(params.trace_log_size)
+        .ok_or(Error::TraceLengthOverflow {
+            rows: trace.padded_len,
+        })?;
+    if trace.padded_len > max_rows {
+        return Err(Error::TraceDomainCapacityExceeded {
+            rows: trace.rows,
+            padded_rows: trace.padded_len,
+            max_rows,
+        });
+    }
+    for (index, column) in trace.columns.iter().enumerate() {
+        if column.values.len() != trace.padded_len {
+            return Err(Error::InvalidTraceShape {
+                details: format!(
+                    "column {index} (`{}`) has length {}, expected {}",
+                    column.name,
+                    column.values.len(),
+                    trace.padded_len
+                ),
+            });
+        }
+    }
+    Ok(())
+}
 pub(crate) fn trace_commitment_from_trace(
     params: &StarkParameterSet,
     trace: &Trace,
 ) -> Result<GoldilocksDigest384V1> {
+    validate_trace_shape(trace, params)?;
     let root = trace_column_root_v1(params, trace)?;
     let rows: u64 = trace
         .rows
@@ -115,40 +165,13 @@ pub(crate) fn trace_commitment_from_trace(
 }
 
 fn trace_column_root_v1(params: &StarkParameterSet, trace: &Trace) -> Result<NativeDigest384V1> {
-    let mut current = trace
-        .columns
-        .iter()
-        .enumerate()
-        .map(|(index, column)| {
-            if column.values.len() != trace.padded_len {
-                return Err(Error::InvalidTraceShape {
-                    details: format!(
-                        "column `{}` has {} values; expected {}",
-                        column.name,
-                        column.values.len(),
-                        trace.padded_len
-                    ),
-                });
-            }
-            let mut values = Vec::with_capacity(column.values.len().saturating_mul(8));
-            for (row, value) in column.values.iter().copied().enumerate() {
-                if value >= GOLDILOCKS_MODULUS_V1 {
-                    return Err(Error::NonCanonicalGoldilocksElement {
-                        context: "trace_commitment_column",
-                        indices: vec![index, row],
-                    });
-                }
-                values.extend_from_slice(&value.to_le_bytes());
-            }
-            hash_trace_bytes_v1(
-                params,
-                TRACE_COLUMN_LEAF_PHASE_V1,
-                0,
-                index,
-                &[column.name.as_bytes(), &values],
+    let mut current =
+        hash_trace_columns_v1(params, &trace.columns, trace.padded_len, &mut |frames| {
+            crate::digest_executor::execute_digest384_frames_v1(
+                frames,
+                crate::digest_executor::DigestExecutionV1::Cpu,
             )
-        })
-        .collect::<Result<Vec<_>>>()?;
+        })?;
 
     if current.is_empty() {
         return hash_trace_bytes_v1(params, TRACE_EMPTY_PHASE_V1, 0, 0, &[]);
@@ -158,21 +181,107 @@ fn trace_column_root_v1(params: &StarkParameterSet, trace: &Trace) -> Result<Nat
         if !current.len().is_multiple_of(2) {
             current.push(*current.last().expect("non-empty trace commitment level"));
         }
-        current = crate::digest_executor::hash_digest384_pairs_v1(
-            &current,
-            |index| trace_digest_domain_v1(params, TRACE_NODE_PHASE_V1, level, index),
-            &mut |frames| {
-                crate::digest_executor::execute_digest384_frames_v1(
-                    frames,
-                    crate::digest_executor::DigestExecutionV1::Cpu,
-                )
-            },
-        )?;
+        current = hash_trace_pairs_v1(params, &current, level, &mut |frames| {
+            crate::digest_executor::execute_digest384_frames_v1(
+                frames,
+                crate::digest_executor::DigestExecutionV1::Cpu,
+            )
+        })?;
         level = level
             .checked_add(1)
             .ok_or(Error::QueryIndexOverflow { index: level })?;
     }
     Ok(current[0])
+}
+
+// Bound canonical byte copies while allowing device dispatch to batch complete
+// column frames. No prefix seed or scalar digest projection participates.
+const TRACE_COLUMN_PREPARATION_BYTES_V1: usize = 8 * 1024 * 1024;
+
+pub(crate) fn hash_trace_columns_v1(
+    params: &StarkParameterSet,
+    columns: &[TraceColumn],
+    rows: usize,
+    execute: &mut impl FnMut(&[GoldilocksDigest384FrameV1<'_>]) -> Result<Vec<NativeDigest384V1>>,
+) -> Result<Vec<NativeDigest384V1>> {
+    let column_bytes = rows
+        .checked_mul(8)
+        .ok_or(Error::PayloadLengthOverflow { length: rows })?;
+    // Reject malformed/noncanonical inputs before any execution callback.
+    for (index, column) in columns.iter().enumerate() {
+        if column.values.len() != rows {
+            return Err(Error::InvalidTraceShape {
+                details: format!(
+                    "column `{}` has {} values; expected {}",
+                    column.name,
+                    column.values.len(),
+                    rows
+                ),
+            });
+        }
+        for (row, value) in column.values.iter().enumerate() {
+            if *value >= GOLDILOCKS_MODULUS_V1 {
+                return Err(Error::NonCanonicalGoldilocksElement {
+                    context: "trace_commitment_column",
+                    indices: vec![index, row],
+                });
+            }
+        }
+    }
+    let chunk_columns = (TRACE_COLUMN_PREPARATION_BYTES_V1 / column_bytes.max(1)).max(1);
+    let mut output = Vec::with_capacity(columns.len());
+    for (chunk_index, chunk) in columns.chunks(chunk_columns).enumerate() {
+        let encoded: Vec<Vec<u8>> = chunk
+            .iter()
+            .map(|column| {
+                let mut bytes = Vec::with_capacity(column_bytes);
+                for value in &column.values {
+                    bytes.extend_from_slice(&value.to_le_bytes());
+                }
+                bytes
+            })
+            .collect();
+        let fields: Vec<[&[u8]; 2]> = chunk
+            .iter()
+            .zip(&encoded)
+            .map(|(column, values)| [column.name.as_bytes(), values.as_slice()])
+            .collect();
+        let frames = fields
+            .iter()
+            .enumerate()
+            .map(|(local_index, fields)| {
+                let index = chunk_index * chunk_columns + local_index;
+                GoldilocksDigest384FrameV1::new(
+                    trace_digest_domain_v1(params, TRACE_COLUMN_LEAF_PHASE_V1, 0, index)?,
+                    fields,
+                )
+                .ok_or(Error::PayloadLengthOverflow {
+                    length: column_bytes,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let digests = execute(&frames)?;
+        if digests.len() != frames.len() {
+            return Err(Error::NativeDigestExecution {
+                details: "trace column executor returned an incorrect digest count".into(),
+            });
+        }
+        output.extend(digests);
+    }
+    Ok(output)
+}
+
+pub(crate) fn hash_trace_pairs_v1(
+    params: &StarkParameterSet,
+    children: &[NativeDigest384V1],
+    level: usize,
+    execute: &mut impl FnMut(&[GoldilocksDigest384FrameV1<'_>]) -> Result<Vec<NativeDigest384V1>>,
+) -> Result<Vec<NativeDigest384V1>> {
+    crate::digest_executor::hash_digest384_pairs_v1(
+        children,
+        |index| trace_digest_domain_v1(params, TRACE_NODE_PHASE_V1, level, index),
+        execute,
+    )
 }
 
 fn hash_trace_bytes_v1(
@@ -458,7 +567,7 @@ mod tests {
             trace_commitment_from_trace(&relabelled, &trace).expect("parameter change");
         assert_ne!(base, other_parameter);
         let mut row_changed = trace.clone();
-        row_changed.rows = 2;
+        row_changed.rows = 0;
         let other_rows = trace_commitment_from_trace(&canonical, &row_changed).expect("row change");
         assert_ne!(base, other_rows);
         let mut padded_changed = trace.clone();
@@ -497,6 +606,202 @@ mod tests {
                 indices,
             }) if indices == vec![0, 0]
         ));
+    }
+    fn independent_hash(
+        phase: &[u8],
+        level: usize,
+        index: usize,
+        fields: &[&[u8]],
+    ) -> NativeDigest384V1 {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        hash_bytes_384_v1(
+            GoldilocksDigestDomainV1 {
+                catalog: FASTPQ_CATALOG_V1.as_bytes(),
+                protocol: FASTPQ_FINAL_V1_ID.as_bytes(),
+                profile: params.name.as_bytes(),
+                role: b"fastpq:v1:preprocessing-trace",
+                phase,
+                level: u64::try_from(level).unwrap(),
+                index: u64::try_from(index).unwrap(),
+                counter: 0,
+            },
+            fields,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn complete_column_tree_matches_independent_framing_for_empty_odd_and_parallel_shapes() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        for count in [0, 1, 2, 3, 7, 65] {
+            let columns: Vec<_> = (0..count)
+                .map(|index| TraceColumn {
+                    name: format!("col_{index:02}"),
+                    values: vec![index as u64, index as u64 + 1],
+                })
+                .collect();
+            let mut expected: Vec<_> = columns
+                .iter()
+                .enumerate()
+                .map(|(index, column)| {
+                    let bytes: Vec<_> = column
+                        .values
+                        .iter()
+                        .flat_map(|word| word.to_le_bytes())
+                        .collect();
+                    independent_hash(b"column-leaf", 0, index, &[column.name.as_bytes(), &bytes])
+                })
+                .collect();
+            let actual = hash_trace_columns_v1(&params, &columns, 2, &mut |frames| {
+                crate::digest_executor::execute_digest384_frames_v1(
+                    frames,
+                    crate::digest_executor::DigestExecutionV1::Cpu,
+                )
+            })
+            .unwrap();
+            assert_eq!(
+                actual, expected,
+                "every six-lane column and its absolute index must match"
+            );
+            let mut level = 1;
+            while expected.len() > 1 {
+                expected = expected
+                    .chunks(2)
+                    .enumerate()
+                    .map(|(index, pair)| {
+                        let left = pair[0].to_le_bytes();
+                        let right = pair.last().unwrap().to_le_bytes();
+                        independent_hash(b"binary-node", level, index, &[&left, &right])
+                    })
+                    .collect();
+                level += 1;
+            }
+            let expected_root = expected
+                .first()
+                .copied()
+                .unwrap_or_else(|| independent_hash(b"empty-tree", 0, 0, &[]));
+            let trace = Trace {
+                rows: 2,
+                padded_len: 2,
+                columns,
+                transfer_witnesses: Vec::new(),
+                row_usage: RowUsage::default(),
+            };
+            assert_eq!(
+                trace_column_root_v1(&params, &trace).unwrap(),
+                expected_root,
+                "column count {count}"
+            );
+            let rows = 2_u64.to_le_bytes();
+            let count_bytes = (count as u64).to_le_bytes();
+            let expected_commitment: GoldilocksDigest384V1 = independent_hash(
+                b"final-commitment",
+                0,
+                0,
+                &[&rows, &rows, &count_bytes, &expected_root.to_le_bytes()],
+            )
+            .into();
+            assert_eq!(
+                trace_commitment_from_trace(&params, &trace).unwrap(),
+                expected_commitment
+            );
+        }
+    }
+    #[test]
+    fn canonical_column_executor_rejects_late_invalid_input_and_wrong_output_count() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let mut columns = vec![
+            TraceColumn {
+                name: "first".into(),
+                values: vec![1, 2],
+            },
+            TraceColumn {
+                name: "late".into(),
+                values: vec![3, GOLDILOCKS_MODULUS_V1],
+            },
+        ];
+        assert!(
+            hash_trace_columns_v1(&params, &columns, 2, &mut |_| panic!(
+                "all columns must preflight before execution"
+            ))
+            .is_err()
+        );
+        columns[1].values.pop();
+        assert!(
+            hash_trace_columns_v1(&params, &columns, 2, &mut |_| panic!(
+                "all shapes must preflight before execution"
+            ))
+            .is_err()
+        );
+        columns[1].values.push(4);
+        assert!(hash_trace_columns_v1(&params, &columns, 2, &mut |_| Ok(Vec::new())).is_err());
+        let value = NativeDigest384V1::new([1; 6]).unwrap();
+        assert!(
+            hash_trace_pairs_v1(&params, &[value], 1, &mut |_| panic!(
+                "incomplete pairs must not dispatch"
+            ))
+            .is_err()
+        );
+        assert!(hash_trace_pairs_v1(&params, &[value, value], 1, &mut |_| Ok(Vec::new())).is_err());
+    }
+    #[test]
+    fn every_child_digest_lane_and_tree_coordinate_changes_the_parent() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let left = NativeDigest384V1::new([1, 2, 3, 4, 5, 6]).unwrap();
+        let right = NativeDigest384V1::new([7, 8, 9, 10, 11, 12]).unwrap();
+        let base = independent_hash(
+            b"binary-node",
+            1,
+            0,
+            &[&left.to_le_bytes(), &right.to_le_bytes()],
+        );
+        for child in 0..2 {
+            for lane in 0..6 {
+                let mut words = if child == 0 {
+                    [1, 2, 3, 4, 5, 6]
+                } else {
+                    [7, 8, 9, 10, 11, 12]
+                };
+                words[lane] += 1;
+                let changed = NativeDigest384V1::new(words).unwrap();
+                let children = if child == 0 {
+                    [changed, right]
+                } else {
+                    [left, changed]
+                };
+                let parent = hash_trace_pairs_v1(&params, &children, 1, &mut |frames| {
+                    Ok(frames
+                        .iter()
+                        .map(GoldilocksDigest384FrameV1::hash)
+                        .collect())
+                })
+                .unwrap();
+                assert_ne!(parent[0], base, "child {child} lane {lane}");
+            }
+        }
+        for (phase, level, index) in [
+            (b"binary-node".as_slice(), 2, 0),
+            (b"binary-node".as_slice(), 1, 1),
+            (b"column-leaf".as_slice(), 1, 0),
+        ] {
+            assert_ne!(
+                independent_hash(
+                    phase,
+                    level,
+                    index,
+                    &[&left.to_le_bytes(), &right.to_le_bytes()]
+                ),
+                base
+            );
+        }
+        assert_ne!(
+            independent_hash(
+                b"binary-node",
+                1,
+                0,
+                &[&right.to_le_bytes(), &left.to_le_bytes()]
+            ),
+            base
+        );
     }
     #[test]
     fn commitment_matches_manual_merkle() {

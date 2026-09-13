@@ -73,13 +73,15 @@ impl<F: ScalarField> BaseConfig<F> {
     /// - Otherwise it will generate a `FlexGateConfig`.
     pub fn configure(meta: &mut ConstraintSystem<F>, params: BaseCircuitParams) -> Self {
         let total_lookup_advice_cols = params.num_lookup_advice_per_phase.iter().sum::<usize>();
-        let base = if params.lookup_bits.is_some() && total_lookup_advice_cols != 0 {
+        let base = if let Some(lookup_bits) =
+            params.lookup_bits.filter(|_| total_lookup_advice_cols != 0)
+        {
             // We only add a lookup table if lookup bits is not None
             MaybeRangeConfig::WithRange(RangeConfig::configure(
                 meta,
                 params.gate_params(),
                 &params.num_lookup_advice_per_phase,
-                params.lookup_bits.unwrap(),
+                lookup_bits,
             ))
         } else {
             MaybeRangeConfig::WithoutRange(FlexGateConfig::configure(meta, params.gate_params()))

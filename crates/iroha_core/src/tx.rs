@@ -7705,9 +7705,12 @@ pub mod tests {
     #[test]
     fn accept_with_canonical_signed_bytes_reuses_payload_cache() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(
+        // This test exercises live ingress, so creation must use its network clock.
+        let time_source = TimeSource::new_fixed(super::current_unix_time());
+        let signed = TransactionBuilder::new_with_time_source(
             test_network_id(),
             authority,
+            &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "canonical-cache".into())])
@@ -7746,9 +7749,12 @@ pub mod tests {
     #[test]
     fn decoded_versioned_signed_transaction_prepares_exact_length_from_payload() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(
+        // This test exercises live ingress, so creation must use its network clock.
+        let time_source = TimeSource::new_fixed(super::current_unix_time());
+        let signed = TransactionBuilder::new_with_time_source(
             test_network_id(),
             authority,
+            &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "versioned-cache".into())])
@@ -7857,9 +7863,12 @@ pub mod tests {
     #[test]
     fn decoded_versioned_signed_transaction_owned_supports_ed25519_prechecked_accept() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(
+        // This test exercises live ingress, so creation must use its network clock.
+        let time_source = TimeSource::new_fixed(super::current_unix_time());
+        let signed = TransactionBuilder::new_with_time_source(
             test_network_id(),
             authority,
+            &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "versioned-owned-precheck".into())])
@@ -8269,6 +8278,34 @@ pub mod tests {
         )
         .expect("transaction should be accepted with mock clock");
         assert_eq!(accepted.validation_time(), Some(Duration::from_secs(6)));
+        handle.set(Duration::from_secs(15));
+        let accepted = AcceptedTransaction::accept_with_time_source(
+            signed.clone(),
+            &test_network_id(),
+            Duration::ZERO,
+            tx_limits,
+            &crypto_cfg,
+            &time_source,
+        )
+        .expect("the exact signed TTL boundary remains valid");
+        assert_eq!(accepted.validation_time(), Some(Duration::from_secs(15)));
+        handle.advance(Duration::from_millis(1));
+        let err = AcceptedTransaction::accept_with_time_source(
+            signed.clone(),
+            &test_network_id(),
+            Duration::ZERO,
+            tx_limits,
+            &crypto_cfg,
+            &time_source,
+        )
+        .expect_err("one millisecond past the signed TTL must expire");
+        assert_eq!(
+            err,
+            AcceptTransactionFail::TransactionExpired {
+                expires_at_ms: 15_000,
+                now_ms: 15_001,
+            }
+        );
         let err = AcceptedTransaction::accept(
             signed,
             &test_network_id(),
@@ -8276,7 +8313,7 @@ pub mod tests {
             tx_limits,
             &crypto_cfg,
         )
-        .expect_err("system clock should see TTL expired relative to mock timestamp");
+        .expect_err("network admission clock should see TTL expired relative to mock timestamp");
         assert!(matches!(
             err,
             AcceptTransactionFail::TransactionExpired { .. }
@@ -10030,12 +10067,13 @@ pub mod tests {
             default_limits.max_metadata_depth(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::validate(
+        match AcceptedTransaction::validate_with_now(
             &invalid_tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            invalid_tx.creation_time(),
         ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.signature, invalid_tx.signature().clone());
@@ -10070,12 +10108,13 @@ pub mod tests {
         .sign(kp.private_key());
         // Admission must reject with a TransactionLimit error
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::validate(
+        match AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            tx.creation_time(),
         ) {
             Err(AcceptTransactionFail::TransactionLimit(_)) => {}
             other => {
@@ -10112,12 +10151,13 @@ pub mod tests {
         .sign(kp.private_key());
         // Admission should accept this transaction
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::validate(
+        match AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            tx.creation_time(),
         ) {
             Ok(()) => {}
             other => panic!("Expected Ok for at-limit IVM bytecode, got {other:?}"),
@@ -10138,12 +10178,13 @@ pub mod tests {
         .sign(kp.private_key());
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
-        let err = AcceptedTransaction::validate(
+        let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            tx.creation_time(),
         )
         .expect_err("missing gas limit in fee payment intent should be rejected");
         match err {
@@ -10202,12 +10243,13 @@ pub mod tests {
         .sign(kp.private_key());
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
-        let err = AcceptedTransaction::validate(
+        let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            tx.creation_time(),
         )
         .expect_err("missing gas limit in fee payment intent should be rejected");
         match err {
@@ -10246,12 +10288,13 @@ pub mod tests {
         .sign(kp.private_key());
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
-        let err = AcceptedTransaction::validate(
+        let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            tx.creation_time(),
         )
         .expect_err("missing gas limit in fee payment intent should be rejected");
         match err {
@@ -10294,12 +10337,13 @@ pub mod tests {
             .into(),
         ))
         .sign(kp.private_key());
-        let err = AcceptedTransaction::validate(
+        let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
             &iroha_config::parameters::actual::Crypto::default(),
+            tx.creation_time(),
         )
         .expect_err("mixed batch without a signed gas limit must be rejected");
         assert!(matches!(
@@ -10318,12 +10362,13 @@ pub mod tests {
         )
         .with_executable(Executable::Batch(ConstVec::new_empty()))
         .sign(kp.private_key());
-        let err = AcceptedTransaction::validate(
+        let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
             &iroha_config::parameters::actual::Crypto::default(),
+            tx.creation_time(),
         )
         .expect_err("empty executable batch must be rejected");
         assert!(matches!(
@@ -10358,12 +10403,13 @@ pub mod tests {
             NonZeroU16::new(8).unwrap(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let err = AcceptedTransaction::validate(
+        let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            tx.creation_time(),
         )
         .expect_err("transaction exceeding max_tx_bytes must be rejected");
         match err {
@@ -10402,12 +10448,13 @@ pub mod tests {
             NonZeroU16::new(8).unwrap(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let err = AcceptedTransaction::validate(
+        let err = AcceptedTransaction::validate_with_now(
             &tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            tx.creation_time(),
         )
         .expect_err("attachments exceeding max_decompressed_bytes must be rejected");
         match err {
@@ -10510,12 +10557,13 @@ pub mod tests {
             .with_instructions([Log::new(Level::INFO, format!("proof-{label}"))])
             .with_attachments(attachments)
             .sign(kp.private_key());
-            let err = AcceptedTransaction::validate(
+            let err = AcceptedTransaction::validate_with_now(
                 &tx,
                 &test_network_id(),
                 Duration::from_secs(0),
                 limits,
                 &crypto_cfg,
+                tx.creation_time(),
             )
             .expect_err("malformed proof attachment must be rejected at admission");
             match err {
@@ -10554,12 +10602,14 @@ pub mod tests {
         )
         .with_ingress_enforcement(true, false);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let err = AcceptedTransaction::accept(
+        let time_source = TimeSource::new_fixed(tx.creation_time());
+        let err = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect_err("transactions must provide expires_at_height when required");
         match err {
@@ -10596,12 +10646,14 @@ pub mod tests {
         )
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let err = AcceptedTransaction::accept(
+        let time_source = TimeSource::new_fixed(tx.creation_time());
+        let err = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect_err("transactions must provide tx_sequence when required");
         match err {
@@ -10773,12 +10825,14 @@ pub mod tests {
         .sign(kp.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let err = AcceptedTransaction::accept(
+        let time_source = TimeSource::new_fixed(tx.creation_time());
+        let err = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect_err("retired heartbeat marker must reject a non-empty transaction");
         match err {
@@ -10836,12 +10890,14 @@ pub mod tests {
         )
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let time_source = TimeSource::new_fixed(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("stateless sequence checks should pass when metadata present");
         let mut ivm_cache = IvmCache::new();
@@ -10902,12 +10958,14 @@ pub mod tests {
         )
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let time_source = TimeSource::new_fixed(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("stateless sequence checks should pass when metadata present");
         let mut ivm_cache = IvmCache::new();

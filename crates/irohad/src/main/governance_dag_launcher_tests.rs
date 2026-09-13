@@ -5,23 +5,23 @@ fn standard_launcher_qualifies_and_supervises_governance_dag_service_adapters() 
         .filter(|character| !character.is_whitespace())
         .collect();
     let qualification = compact_source
-        .find("letsorafs_governance_dag_service_launch=resolve_governance_dag_service_launch(")
+        .find("resolve_governance_dag_service_launch(&config.torii.sorafs_storage,&runtime_deps)")
         .expect("launcher qualifies Governance DAG providers");
     let supervisor = compact_source
         .find("sorafs_node::prepare_governance_dag_service_from_view(view,providers)")
         .expect("launcher prepares the Governance DAG service");
     let install = compact_source
-        .find("sorafs_node.install_governance_dag_mirror_read_handle(runner.mirror_read_handle())")
+        .find(".install_governance_dag_mirror_read_handle(runner.mirror_read_handle())")
         .expect("launcher installs the service-owned Governance DAG mirror reader");
     let service_spawn = compact_source[install..]
         .find("tokio::spawn(asyncmove")
         .map(|offset| install + offset)
         .expect("launcher spawns the prepared Governance DAG service");
     let node_construction = compact_source
-        .find("letmutsorafs_node=sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
+        .find("letmutsorafs_node=ifemergency_fast{None}else{Some(sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(")
         .expect("launcher constructs the embedded SoraFS node");
     let first_node_clone = compact_source[node_construction..]
-        .find("sorafs_node.clone()")
+        .find("sorafs_node::NodeHandle::clone(sorafs_node)")
         .map(|offset| node_construction + offset)
         .expect("launcher eventually shares the embedded SoraFS node");
     let state_open = compact_source
@@ -43,8 +43,9 @@ fn standard_launcher_qualifies_and_supervises_governance_dag_service_adapters() 
         "the service-owned mirror reader must be installed exactly once"
     );
     assert!(
-        compact_source
-            .contains("runner.run_until(asyncmove{service_shutdown.receive().await}).await"),
+        compact_source.contains(
+            "Box::pin(runner.run_until(asyncmove{service_shutdown.receive().await})).await"
+        ),
         "the embedded service must receive the existing supervisor shutdown signal"
     );
     assert!(

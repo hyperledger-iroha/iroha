@@ -6,7 +6,7 @@
 
 use super::*;
 use halo2_base::{
-    ContextCell,
+    AdviceNumeratorStorage, ContextCell,
     gates::circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
 };
 use halo2_proofs::{
@@ -26,9 +26,12 @@ struct AllocationCounts {
     contexts: usize,
     advice: usize,
     rational_advice: usize,
-    // Numerators, zero-mask bytes, rational positions, denominators.
+    // Retained numerator F slots, zero-mask bytes, rational positions, denominators.
     advice_storage_len: [usize; 4],
     advice_storage_capacity: [usize; 4],
+    // Aggregate exact numerator allocations. The transition counter is the sum
+    // of per-Context historical maxima, not a simultaneous process peak.
+    numerator_storage: AdviceNumeratorStorage,
     // Numerator, zero-mask, selector segment counts (not segment bytes).
     segments: [usize; 3],
     selector_bytes_len_capacity: [usize; 2],
@@ -68,8 +71,9 @@ fn snapshot<F: BigPrimeField>(builder: &BaseCircuitBuilder<F>) -> AllocationCoun
         counts.contexts += 1;
         counts.advice += ctx.advice_len();
         counts.rational_advice += ctx.rational_advice_len();
+        let numerator_storage = ctx.advice_numerator_storage();
         let lengths = [
-            ctx.advice_len(),
+            numerator_storage.field_slots_len.iter().sum(),
             ctx.advice_zero_mask_bytes_len(),
             ctx.advice_rational_position_slots_len(),
             ctx.advice_denominator_slots_len(),
@@ -80,6 +84,42 @@ fn snapshot<F: BigPrimeField>(builder: &BaseCircuitBuilder<F>) -> AllocationCoun
             counts.advice_storage_capacity[index] += capacities[index];
             assert!(lengths[index] <= capacities[index]);
         }
+        for index in 0..2 {
+            counts.numerator_storage.field_slots_len[index] +=
+                numerator_storage.field_slots_len[index];
+            counts.numerator_storage.field_slots_capacity[index] +=
+                numerator_storage.field_slots_capacity[index];
+            counts.numerator_storage.tag_bytes[index] += numerator_storage.tag_bytes[index];
+            counts.numerator_storage.rank_bytes[index] += numerator_storage.rank_bytes[index];
+            counts.numerator_storage.segment_counts[index] +=
+                numerator_storage.segment_counts[index];
+            assert!(
+                numerator_storage.field_slots_len[index]
+                    <= numerator_storage.field_slots_capacity[index]
+            );
+        }
+        assert!(numerator_storage.tag_bytes[0] <= numerator_storage.tag_bytes[1]);
+        assert!(numerator_storage.rank_bytes[0] <= numerator_storage.rank_bytes[1]);
+        assert_eq!(
+            capacities[0],
+            numerator_storage.field_slots_capacity.iter().sum::<usize>()
+        );
+        assert_eq!(
+            numerator_storage.owned_capacity_bytes,
+            numerator_storage.field_slots_capacity.iter().sum::<usize>() * mem::size_of::<F>()
+                + numerator_storage.tag_bytes[1]
+                + numerator_storage.rank_bytes[1]
+                + numerator_storage.segment_header_capacity_bytes
+        );
+        counts.numerator_storage.segment_header_capacity_bytes +=
+            numerator_storage.segment_header_capacity_bytes;
+        counts.numerator_storage.owned_capacity_bytes += numerator_storage.owned_capacity_bytes;
+        counts.numerator_storage.max_transition_owned_capacity_bytes +=
+            numerator_storage.max_transition_owned_capacity_bytes;
+        counts
+            .numerator_storage
+            .max_outer_growth_capacity_upper_bound_bytes +=
+            numerator_storage.max_outer_growth_capacity_upper_bound_bytes;
         counts.segments[0] += ctx.advice_numerator_segment_count();
         counts.segments[1] += ctx.advice_zero_mask_segment_count();
         counts.segments[2] += ctx.selector_segment_count();

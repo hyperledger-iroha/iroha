@@ -2,14 +2,15 @@
 
 `query_generated_identity_frames.json` was captured on 2026-09-07 before
 `queries!` acquired an identity derive and its 127 declarations acquired
-explicit names. It records 171 actual payloads and their JSON plus complete
-root, `Vec`, `Option` and `BTreeMap<u8, T>` frames: 684 frames in total.
+explicit names. The current catalog adds `FindSettlementReceiptById`, captured
+with the native codec on 2026-09-12. It records 172 actual payloads and their JSON plus complete
+root, `Vec`, `Option` and `BTreeMap<u8, T>` frames: 688 frames in total.
 The catalog covers unit queries, domainless account identifiers, both alias
 scopes, present/absent pagination anchors and every query-filter enum variant.
 Every JSON value and every frame is roundtripped during capture and checking.
 
 Fixture SHA-256:
-`020a27ac2a5e9b5f8b69f1c99608ffb6297e6cc0d243eb13996eb5d19253a4e9`.
+`6143df7829bba7d739e5856249cb5b91016791901a16a068aa500b5e018938a8`.
 The unchanged production sources during capture were:
 
 | Source | SHA-256 |
@@ -29,3 +30,7 @@ explicit identity, both codec hashes, every JSON value and every frame with
 this immutable fixture. The focused query suite passes 28 tests locally.
 This prepares declarations for the model split; it does not change active
 codec dispatch or qualify other features, FFI or a release candidate.
+
+The current inventory is 128 query types. The receipt-query capture roundtrips
+canonical JSON and all four frame contexts and rejects a substituted schema
+header. It does not establish live query or settlement execution.

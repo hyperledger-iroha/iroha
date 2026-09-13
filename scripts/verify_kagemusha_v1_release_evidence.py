@@ -1958,6 +1958,7 @@ class EvidenceVerifier:
                     path = self._path(
                         raw_argument["file"],
                         f"verifier command {command_id!r} file argument",
+                        argv_safe=True,
                     )
                     if path in file_arguments:
                         _fail(
@@ -3326,8 +3327,10 @@ class EvidenceVerifier:
         self.command_requirements[command_id] = frozenset(required_files)
         self.used_files.update(required_files)
 
-    def _path(self, raw: object, label: str) -> str:
+    def _path(self, raw: object, label: str, *, argv_safe: bool = False) -> str:
         path = canonical_relative_path(_string(raw, label))
+        if argv_safe and path.startswith("-"):
+            _fail(f"{label} must not begin with '-' when passed as an argument")
         if path not in self.files:
             _fail(f"{label} references an undeclared evidence file")
         return path

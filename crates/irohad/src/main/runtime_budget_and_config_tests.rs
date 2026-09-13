@@ -22,7 +22,7 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
     let original_bytes = std::fs::read(&config_path)?;
     let original_metadata = std::fs::metadata(&config_path)?;
     assert_eq!(original_metadata.mode() & 0o777, 0o400);
-    let (config, _genesis) = read_config_and_genesis(&Args {
+    let (config, _genesis) = read_config_with_fixture_space(&Args {
         config: Some(config_path.clone()),
         genesis_manifest_json: None,
         startup: StartupArgs {
@@ -117,7 +117,7 @@ fn explicit_budget_does_not_downgrade_structural_path_failures() -> eyre::Result
             .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
     })?;
     config.kura.store_dir = WithOrigin::inline(linked_root);
-    let error = reconcile_nexus_storage_budget(&mut config)
+    let error = reconcile_nexus_storage_budget(&mut config, filesystem_space)
         .expect_err("an explicit budget must not suppress a structural path failure");
     assert!(format!("{error:?}").contains("must not be a symbolic link or reparse point"));
     Ok(())
@@ -381,5 +381,34 @@ fn validator_cannot_assume_valid_confidential() -> eyre::Result<()> {
         format!("{report:#}"),
         "validator nodes cannot enable confidential observer mode"
     );
+    Ok(())
+}
+
+#[test]
+fn injected_filesystem_capacity_still_rejects_zero_budget_and_real_links() -> eyre::Result<()> {
+    let (mut config, temp, _path) = parse_config_with_overrides(|_, _| {})?;
+    config.kura.store_dir = WithOrigin::inline(temp.path().join("empty-kura"));
+    config.torii.sorafs_storage.data_dir = temp.path().join("empty-sorafs");
+    config.tiered_state.da_store_root = Some(temp.path().join("empty-cold"));
+    assert!(config.nexus.storage.local_budget_bytes.is_none());
+    assert!(config.nexus.storage.effective_local_budget_bytes.is_none());
+    let error = reconcile_nexus_storage_budget(&mut config, |_| Some((0, 1_000)))
+        .expect_err("zero available capacity with no managed bytes cannot fund a budget");
+    let diagnostic = format!("{error:?}");
+    assert!(
+        diagnostic.contains("no safe non-zero Nexus storage budget"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("200 bytes of headroom"), "{diagnostic}");
+    assert!(config.nexus.storage.effective_local_budget_bytes.is_none());
+    let real = temp.path().join("real-managed");
+    std::fs::create_dir(&real)?;
+    let alias = temp.path().join("linked-managed");
+    std::os::unix::fs::symlink(&real, &alias)?;
+    config.kura.store_dir = WithOrigin::inline(alias);
+    let error = reconcile_nexus_storage_budget(&mut config, |_| Some((800, 1_000)))
+        .expect_err("injected capacity must not bypass real path ownership");
+    assert!(format!("{error:?}").contains("must not be a symbolic link or reparse point"));
+    assert!(config.nexus.storage.effective_local_budget_bytes.is_none());
     Ok(())
 }

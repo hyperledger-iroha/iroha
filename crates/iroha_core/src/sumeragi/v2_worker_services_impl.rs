@@ -1268,11 +1268,73 @@ impl ProductionV2Services {
             exact_output_handoff_owner,
         )
     }
+    /// Freeze delivery from one preceding-State authority view. A durable
+    /// Decision has no TC owner; recovery must not reinterpret post-Apply lanes.
+    fn freeze_timeout_certificate_targets(
+        state: &crate::state::State,
+        context: &wire::HeightContext,
+        durable_decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<Vec<PeerId>, String> {
+        use crate::state::StateReadOnly as _;
+
+        let mut targets = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        if durable_decided_subject.is_some() {
+            return Ok(targets.into_iter().collect());
+        }
+        let view = state.view();
+        if u64::try_from(view.height())
+            .ok()
+            .and_then(|height| height.checked_add(1))
+            != Some(context.height)
+        {
+            return Err(
+                "Sumeragi v2 timeout delivery requires the exact preceding State height".to_owned(),
+            );
+        }
+        for lane in view.nexus().lane_catalog.lanes() {
+            if lane.id == LaneId::SINGLE
+                || crate::state::consensus_lane_dataspace_at_height(
+                    lane.id,
+                    view.nexus(),
+                    context.height,
+                ) != Some(lane.dataspace_id)
+            {
+                continue;
+            }
+            let committee = match view.resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(lane.id, lane.dataspace_id),
+                context.height,
+            ) {
+                Ok(committee) => committee,
+                // No exact attestation committee exists at this frozen height.
+                // Optional lanes cannot block the global progress needed to
+                // populate their pools or publish the first selection entropy.
+                Err(
+                    crate::state::LaneAuthorityError::UndersizedPool { .. }
+                    | crate::state::LaneAuthorityError::SelectionEntropyUnavailable { .. },
+                ) => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Sumeragi v2 timeout delivery cannot resolve lane {} dataspace {} authority: {error}",
+                        lane.id.as_u32(),
+                        lane.dataspace_id.as_u64(),
+                    ));
+                }
+            };
+            targets.extend(committee.into_validators());
+        }
+        Ok(targets.into_iter().collect())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn start_inner(
         context: wire::HeightContext,
         initial_tag: EventTag,
-        _durable_decided_subject: Option<wire::BlockSubject>,
+        durable_decided_subject: Option<wire::BlockSubject>,
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
@@ -1314,7 +1376,15 @@ impl ProductionV2Services {
             .checked_add(1)
             .ok_or_else(|| "Sumeragi v2 outbound fanout message bound overflowed".to_owned())?;
         let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
-        let max_peers_per_fanout = context.roster.len().max(reply_route_source_capacity).max(1);
+        let timeout_certificate_targets = Self::freeze_timeout_certificate_targets(
+            state.as_ref(),
+            &context,
+            durable_decided_subject,
+        )?;
+        let max_peers_per_fanout = timeout_certificate_targets
+            .len()
+            .max(reply_route_source_capacity)
+            .max(1);
         // Serve lifecycle storage has a frozen roster partition plus the
         // existing bounded authenticated reply-source partition. Each source
         // may own at most the already-configured auxiliary capacity; no new
@@ -1339,16 +1409,12 @@ impl ProductionV2Services {
             shared_pending_ownership_unit_capacity,
             reply_route_source_capacity,
         )?;
-        let frozen_semantic_targets = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
+        // Reserve the same immutable audience used by every TC retry.
         let pending_exact_output = PendingExactOutput::new(
             shared_pending_ownership_unit_capacity,
             max_messages_per_fanout,
             max_peers_per_fanout,
-            &frozen_semantic_targets,
+            &timeout_certificate_targets,
         )?;
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
@@ -1368,6 +1434,7 @@ impl ProductionV2Services {
         )?;
         let mut service = Self {
             context,
+            timeout_certificate_targets,
             validator_set_pops: certified_serve_validator_set_pops,
             state: evidence_state,
             local_peer,
@@ -3680,22 +3747,15 @@ impl ProductionV2Services {
             .checked_add(1)
             .ok_or_else(|| "Sumeragi v2 test outbound fanout bound overflowed".to_owned())?;
         let max_peers_per_fanout = self
-            .context
-            .roster
+            .timeout_certificate_targets
             .len()
             .max(self.network.reply_route_source_capacity())
             .max(1);
-        let frozen_semantic_targets = self
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
         let replacement = PendingExactOutput::new(
             shared_ownership_unit_capacity,
             max_messages_per_fanout,
             max_peers_per_fanout,
-            &frozen_semantic_targets,
+            &self.timeout_certificate_targets,
         )?;
         let mut pending = self.lock_pending_exact_output()?;
         if !pending.fanouts.is_empty() || !pending.admitted_sidecar_chunks.is_empty() {
@@ -3906,6 +3966,31 @@ impl ProductionV2Services {
             .iter()
             .filter(|message| *message == expected)
             .count()
+    }
+    /// Verify the incident's sole Prepare crossed the real network actor admission boundary.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn assert_pending_kura_prepare_actor_admission_for_test(
+        &self,
+        expected: &wire::Vote,
+    ) {
+        assert_eq!(expected.phase, wire::GlobalPhase::Prepare);
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(expected.clone()));
+        assert_eq!(
+            self.consensus_broadcasts.as_slice(),
+            std::slice::from_ref(&message),
+        );
+        assert_eq!(self.remote_voters().len(), 3);
+        let pending = self
+            .lock_pending_exact_output()
+            .expect("lock actual pending Prepare output");
+        assert!(!pending.is_pending());
+        assert_eq!(
+            pending
+                .scheduler_snapshot(false)
+                .remaining_message_occurrences,
+            0,
+        );
     }
     /// Count all retained exact fanouts and those carrying one exact PrepareQC.
     #[cfg(test)]

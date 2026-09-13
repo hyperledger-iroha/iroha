@@ -893,6 +893,29 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_local_body_record_fix
         payload,
     ))
 }
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_proposal_validate_record_fixture(
+    context: LifecycleContext,
+    tag: EventTag,
+    proposal: wire::Proposal,
+    receipt: &DurableBodyReceipt,
+) -> Option<ReplayCase> {
+    if receipt.context_id() != proposal.round.context_id
+        || receipt.round() != proposal.manifest.round
+        || receipt.subject() != proposal.subject
+        || receipt.manifest_hash() != HashOf::new(&proposal.manifest)
+    {
+        return None;
+    }
+    Some(replay_case(
+        context,
+        LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+            origin: BodyPipelineOriginV1::Proposal(proposal),
+        }),
+        LifecycleStageKind::ValidateBody,
+        DurablePayloadReference::BodyFrame(durable_body_frame_reference(context, receipt)?),
+    ))
+}
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn foreign_certified_serve_family_authority_fixture(
     context: LifecycleContext,
     stage: LifecycleStageKind,

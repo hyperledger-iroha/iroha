@@ -461,6 +461,8 @@ pub(crate) const SUCCESSOR_AUTHORITY_APPLIED: u8 = 1;
 pub(crate) const SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP: u8 = 2;
 /// First executable context authenticated by an audited snapshot envelope.
 pub(crate) const SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP: u8 = 3;
+/// CompleteTip H plus an authenticated unapplied successor WAL Decision at H+1.
+pub(crate) const SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP: u8 = 4;
 /// No successor-work stage participates in a lifecycle projection.
 pub(crate) const SUCCESSOR_STAGE_NONE: u8 = 0;
 /// Successor construction is queued behind durable application.
@@ -900,6 +902,9 @@ macro_rules! refinement_tag_value {
     (SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP) => {
         3u8
     };
+    (SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP) => {
+        4u8
+    };
     (SUCCESSOR_STAGE_NONE) => {
         0u8
     };
@@ -1072,6 +1077,7 @@ assert_refinement_tag_values!(
     SUCCESSOR_AUTHORITY_APPLIED,
     SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
     SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+    SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP,
     SUCCESSOR_STAGE_NONE,
     SUCCESSOR_STAGE_QUEUED,
     SUCCESSOR_STAGE_RUNNING,
@@ -1418,10 +1424,15 @@ macro_rules! durable_predecessor_equal_body {
 }
 macro_rules! production_successor_snapshot_body {
     ($predecessor_height:expr, $snapshot:expr) => {{
+        production_successor_snapshot_shape_body!($predecessor_height, $snapshot)
+            && $snapshot.last_committed_height == $predecessor_height
+    }};
+}
+macro_rules! production_successor_snapshot_shape_body {
+    ($predecessor_height:expr, $snapshot:expr) => {{
         $predecessor_height > 0u64
             && $predecessor_height < u64::MAX
             && $snapshot.height == $predecessor_height + 1u64
-            && $snapshot.last_committed_height == $predecessor_height
             && canonical_identity_is_typed_body!(
                 $snapshot.expected_context_id,
                 refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
@@ -1481,15 +1492,26 @@ macro_rules! production_recovered_successor_trace_body {
                 $projection.authority_context_id,
                 $projection.successor.expected_context_id
             )
-            && production_successor_snapshot_body!(
-                $projection.successor.last_committed_height,
-                $projection.successor
-            )
             && (if $projection.authority_kind
                 == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP)
             {
                 durable_predecessor_is_canonical_body!($projection.predecessor)
-                    && $projection.predecessor.height == $projection.successor.last_committed_height
+                    && production_successor_snapshot_body!(
+                        $projection.predecessor.height,
+                        $projection.successor
+                    )
+                    && canonical_identity_is_zero_body!($projection.snapshot_record_hash)
+                    && $projection.snapshot_height == 0u64
+                    && canonical_identity_is_zero_body!($projection.snapshot_block_hash)
+            } else if $projection.authority_kind
+                == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP)
+            {
+                durable_predecessor_is_canonical_body!($projection.predecessor)
+                    && production_successor_snapshot_shape_body!(
+                        $projection.predecessor.height,
+                        $projection.successor
+                    )
+                    && $projection.successor.last_committed_height == $projection.successor.height
                     && canonical_identity_is_zero_body!($projection.snapshot_record_hash)
                     && $projection.snapshot_height == 0u64
                     && canonical_identity_is_zero_body!($projection.snapshot_block_hash)
@@ -1497,6 +1519,10 @@ macro_rules! production_recovered_successor_trace_body {
                 == refinement_tag_value!(SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP)
             {
                 durable_predecessor_is_zero_body!($projection.predecessor)
+                    && production_successor_snapshot_body!(
+                        $projection.snapshot_height,
+                        $projection.successor
+                    )
                     && canonical_identity_is_typed_body!(
                         $projection.snapshot_record_hash,
                         refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),

@@ -1197,6 +1197,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             ".local_proposal_directive()",
             "local_proposal.exactly_matches(self.executor.context().id(), current_directive)",
             "ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch",
+            "recovered_successor_decision_activation_authority()",
             "let clock_activation = ProductionLifecycleLiveClockActivationPermitV1",
             "arm_live_clocks(clock_activation, now)",
             "successor_activation_status_snapshot()",
@@ -1375,6 +1376,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .split_once("let terminal_planning_fenced =")
         .expect("active-height terminal planning cut")
         .1;
+    // Select the block owning the terminal cut, not the earlier timing-only
+    // observation guarded by the same rollover readiness predicate.
+    let fenced_rollover = "if rollover_ready {\n            let Some(cut) = terminal_finalization_cut.as_ref() else {";
+    assert_source_token_count(terminal_tail, fenced_rollover, 1);
     assert_source_tokens_in_order(
         terminal_tail,
         &[
@@ -1389,7 +1394,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "let rollover_ready = if finalization_ready",
             "preflight_finalized_lane_rollover(",
             "if finalization_ready && !rollover_ready",
-            "if rollover_ready",
+            fenced_rollover,
             "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
         ],
     );
@@ -1811,9 +1816,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         &[
             "self.ingress_ready.store(false, Ordering::Release)",
             "Arc::ptr_eq",
-            "retirement.authorizes_successor_status(&successor)",
+            "retirement.authorizes_successor_status_with_decision(&successor, decision.as_ref())",
             "self.block_ingress.open()",
-            "status::activate_recovered_complete_tip_v2_height(retirement, successor)",
+            "status::activate_recovered_complete_tip_v2_height_with_decision(",
             "self.ingress_ready.store(true, Ordering::Release)",
         ],
     );
@@ -2208,9 +2213,13 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
 #[test]
 fn live_terminal_height_authenticates_after_closed_drain_without_a_successor() {
     let source = include_str!("v2_runner/lifecycle_run_inner.rs");
+    // Include the closed ingress drain and later terminal-height branch while
+    // excluding the earlier observation-only readiness marker.
+    let fenced_rollover = "if rollover_ready {\n            let Some(cut) = terminal_finalization_cut.as_ref() else {";
+    assert_source_token_count(source, fenced_rollover, 1);
     let terminal = source_region(
         source,
-        "if rollover_ready {",
+        fenced_rollover,
         "let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height",
     );
     assert_source_tokens_in_order(

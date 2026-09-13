@@ -32,6 +32,27 @@ use tokio::{
 struct TestMessage(String);
 // Classify test payloads into a generic topic
 impl iroha_p2p::network::message::ClassifyTopic for TestMessage {
+    fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
+        norito::core::validate_header_flags(flags)?;
+        if payload.is_empty() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        // The type has one fixed class and no variant discriminator. String
+        // decoding remains the charged typed decoder's responsibility.
+        Ok(Some(Topic::Other))
+    }
+    // This synthetic type has no availability or recovery variants. Positive
+    // empty-class bounds fund mandatory transport geometry only for this fixture.
+    fn availability_frame_maximum(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<usize, norito::core::Error> {
+        Ok(1)
+    }
+    fn recovery_frame_maxima(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<[usize; 2], norito::core::Error> {
+        Ok([1, 1])
+    }
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         iroha_p2p::network::message::Topic::Other
     }
@@ -44,6 +65,21 @@ struct MultiTopic {
     payload: u32,
 }
 impl iroha_p2p::network::message::ClassifyTopic for MultiTopic {
+    fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
+        fixed_fixture_topic::<Self>(payload, flags)
+    }
+    // This synthetic type has no availability or recovery variants. Positive
+    // empty-class bounds fund mandatory transport geometry only for this fixture.
+    fn availability_frame_maximum(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<usize, norito::core::Error> {
+        Ok(1)
+    }
+    fn recovery_frame_maxima(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<[usize; 2], norito::core::Error> {
+        Ok([1, 1])
+    }
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         match self.chan {
             0 => iroha_p2p::network::message::Topic::TxGossip,
@@ -52,6 +88,23 @@ impl iroha_p2p::network::message::ClassifyTopic for MultiTopic {
             _ => iroha_p2p::network::message::Topic::Other,
         }
     }
+}
+// These scalar fixtures have no dynamic fields. Their largest declared layout
+// is two fixed scalars plus three u64 offsets; decoding stays bounded to 29 bytes.
+fn fixed_fixture_topic<T>(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error>
+where
+    T: for<'a> norito::core::DecodeFromSlice<'a> + ClassifyTopic,
+{
+    norito::core::validate_header_flags(flags)?;
+    if payload.len() > 29 {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+    let (value, consumed) = T::decode_from_slice(payload)?;
+    if consumed != payload.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    Ok(Some(value.topic()))
 }
 macro_rules! impl_decode_from_slice_via_canonical {
     ($($ty:ty),+ $(,)?) => {
@@ -107,10 +160,7 @@ async fn network_create() {
     .await;
     let (network, _) = match started {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping network_create: cannot start network: {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed network_create: cannot start network: {e:?}"),
     };
     tokio::time::sleep(delay).await;
     info!("Connecting to peer...");
@@ -148,7 +198,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     .await;
     let (mut net_a, _child_a) = match started_a {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("network must start after TCP-bind preflight: {error:?}"),
     };
     let started_b = NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_b.clone()),
@@ -161,7 +211,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     .await;
     let (mut net_b, _child_b) = match started_b {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("network must start after TCP-bind preflight: {error:?}"),
     };
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
     let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
@@ -186,7 +236,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     .await
     .is_err()
     {
-        return;
+        panic!("authenticated fixture connection must complete before its deadline");
     }
     if tokio::time::timeout(Duration::from_millis(2500), async {
         let mut n = net_b
@@ -203,7 +253,7 @@ async fn trust_gossip_opt_out_blocks_trust_frames() {
     .await
     .is_err()
     {
-        return;
+        panic!("authenticated fixture connection must complete before its deadline");
     }
     let (tx_a, mut rx_a) = mpsc::channel(8);
     let (tx_b, mut rx_b) = mpsc::channel(8);
@@ -294,7 +344,7 @@ async fn trust_gossip_enabled_flows_through() {
     .await;
     let (mut net_a, _child_a) = match started_a {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("network must start after TCP-bind preflight: {error:?}"),
     };
     let started_b = NetworkHandle::<MultiTopic>::start(
         super::p2p_identity_keys(kp_b.clone()),
@@ -307,7 +357,7 @@ async fn trust_gossip_enabled_flows_through() {
     .await;
     let (mut net_b, _child_b) = match started_b {
         Ok(ok) => ok,
-        Err(_) => return,
+        Err(error) => panic!("network must start after TCP-bind preflight: {error:?}"),
     };
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
     let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
@@ -332,7 +382,7 @@ async fn trust_gossip_enabled_flows_through() {
     .await
     .is_err()
     {
-        return;
+        panic!("authenticated fixture connection must complete before its deadline");
     }
     if tokio::time::timeout(Duration::from_millis(2500), async {
         let mut n = net_b
@@ -349,7 +399,7 @@ async fn trust_gossip_enabled_flows_through() {
     .await
     .is_err()
     {
-        return;
+        panic!("authenticated fixture connection must complete before its deadline");
     }
     let (tx_b, mut rx_b) = mpsc::channel(4);
     net_b
@@ -581,10 +631,7 @@ async fn update_peers_triggers_immediate_connect() {
     let (mut network1, _) = match started1 {
         Ok(ok) => ok,
         Err(e) => {
-            eprintln!(
-                "Skipping update_peers_triggers_immediate_connect: cannot start network1: {e:?}"
-            );
-            return;
+            panic!("Failed update_peers_triggers_immediate_connect: cannot start network1: {e:?}")
         }
     };
     let started2 = NetworkHandle::<TestMessage>::start(
@@ -599,10 +646,7 @@ async fn update_peers_triggers_immediate_connect() {
     let (network2, _) = match started2 {
         Ok(ok) => ok,
         Err(e) => {
-            eprintln!(
-                "Skipping update_peers_triggers_immediate_connect: cannot start network2: {e:?}"
-            );
-            return;
+            panic!("Failed update_peers_triggers_immediate_connect: cannot start network2: {e:?}")
         }
     };
     // Advertise only topology (no addresses yet), on both sides.
@@ -655,10 +699,7 @@ async fn happy_eyeballs_parallel_dials() {
     .await;
     let (_n2, _) = match started2 {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping happy_eyeballs_parallel_dials: cannot start listener: {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed happy_eyeballs_parallel_dials: cannot start listener: {e:?}"),
     };
     // Dialer (network1)
     let address1 = socket_addr!(127.0.0.1: {next_port()});
@@ -674,20 +715,14 @@ async fn happy_eyeballs_parallel_dials() {
     .await;
     let (mut network1, _) = match started1 {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping happy_eyeballs_parallel_dials: cannot start dialer: {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed happy_eyeballs_parallel_dials: cannot start dialer: {e:?}"),
     };
     let peer2 = Peer::new(address2.clone(), key_pair2.public_key().clone());
     network1.update_topology(UpdateTopology([peer2.id().clone()].into_iter().collect()));
     let blackhole_listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(e) => {
-            eprintln!(
-                "Skipping happy_eyeballs_parallel_dials: cannot bind blackhole listener: {e:?}"
-            );
-            return;
+            panic!("Failed happy_eyeballs_parallel_dials: cannot bind blackhole listener: {e:?}")
         }
     };
     let blackhole_port = blackhole_listener
@@ -762,10 +797,7 @@ async fn low_topics_do_not_starve_each_other() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping low_topics_do_not_starve_each_other (receiver): {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed low_topics_do_not_starve_each_other (receiver): {e:?}"),
     };
     // Start sender network (A)
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
@@ -787,10 +819,7 @@ async fn low_topics_do_not_starve_each_other() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping low_topics_do_not_starve_each_other (sender): {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed low_topics_do_not_starve_each_other (sender): {e:?}"),
     };
     // Allow B to accept inbound connections from A
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
@@ -906,10 +935,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping relay_hub_routes_consensus_between_spokes (hub): {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed relay_hub_routes_consensus_between_spokes (hub): {e:?}"),
     };
     let (mut spoke1_net, _spoke1_child) = match NetworkHandle::<ConsensusMessage>::start(
         super::p2p_identity_keys(spoke1_kp.clone()),
@@ -926,10 +952,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping relay_hub_routes_consensus_between_spokes (spoke1): {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed relay_hub_routes_consensus_between_spokes (spoke1): {e:?}"),
     };
     let (mut spoke2_net, _spoke2_child) = match NetworkHandle::<ConsensusMessage>::start(
         super::p2p_identity_keys(spoke2_kp.clone()),
@@ -946,19 +969,37 @@ async fn relay_hub_routes_consensus_between_spokes() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping relay_hub_routes_consensus_between_spokes (spoke2): {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed relay_hub_routes_consensus_between_spokes (spoke2): {e:?}"),
     };
     let (spoke2_tx, mut spoke2_rx) = mpsc::channel(4);
     if let Err(sender) = spoke2_net.subscribe_to_peers_messages(spoke2_tx) {
         drop(sender);
         panic!("failed to subscribe spoke2 to messages");
     }
-    update_topology_and_peers_addresses(&hub_net, &[spoke1_peer.clone(), spoke2_peer.clone()]);
-    update_topology_and_peers_addresses(&spoke1_net, std::slice::from_ref(&hub_peer));
-    update_topology_and_peers_addresses(&spoke2_net, std::slice::from_ref(&hub_peer));
+    // Spokes prove hub authority through their configured outbound dial.
+    // Authorize both at the hub without starting a competing reverse dial.
+    hub_net.update_topology(UpdateTopology(HashSet::from([
+        spoke1_peer.id().clone(),
+        spoke2_peer.id().clone(),
+    ])));
+    // The remote end peer is authorized; only the hub has a dial address.
+    spoke1_net.update_topology(UpdateTopology(HashSet::from([
+        hub_peer.id().clone(),
+        spoke2_peer.id().clone(),
+    ])));
+    spoke1_net.update_peers_addresses(UpdatePeers(vec![(
+        hub_peer.id().clone(),
+        hub_peer.address().clone(),
+    )]));
+    // The remote end peer is authorized; only the hub has a dial address.
+    spoke2_net.update_topology(UpdateTopology(HashSet::from([
+        hub_peer.id().clone(),
+        spoke1_peer.id().clone(),
+    ])));
+    spoke2_net.update_peers_addresses(UpdatePeers(vec![(
+        hub_peer.id().clone(),
+        hub_peer.address().clone(),
+    )]));
     tokio::time::timeout(Duration::from_secs(5), async {
         while hub_net.online_peers(HashSet::len) < 2 {
             hub_net
@@ -992,11 +1033,16 @@ async fn relay_hub_routes_consensus_between_spokes() {
     // Give relay hub selection and subscriber wiring a moment to settle under parallel test load.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let payload = ConsensusMessage(7);
-    spoke1_net.post(Post {
-        data: payload.clone(),
-        peer_id: spoke2_peer.id().clone(),
-        priority: Priority::High,
-    });
+    spoke1_net
+        .post_recoverable(
+            Post {
+                data: payload.clone(),
+                peer_id: spoke2_peer.id().clone(),
+                priority: Priority::High,
+            },
+            None,
+        )
+        .expect("admit exact authorized relay consensus owner");
     let received = tokio::time::timeout(Duration::from_secs(10), spoke2_rx.recv())
         .await
         .expect("spoke2 should receive consensus via hub")
@@ -1052,10 +1098,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     .await
     {
         Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping relay_hub_routes_consensus_between_spoke_and_assist (hub): {e:?}");
-            return;
-        }
+        Err(e) => panic!("Failed relay_hub_routes_consensus_between_spoke_and_assist (hub): {e:?}"),
     };
     let (mut spoke_net, _spoke_child) = match NetworkHandle::<ConsensusMessage>::start(
         super::p2p_identity_keys(spoke_kp.clone()),
@@ -1069,10 +1112,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     {
         Ok(ok) => ok,
         Err(e) => {
-            eprintln!(
-                "Skipping relay_hub_routes_consensus_between_spoke_and_assist (spoke): {e:?}"
-            );
-            return;
+            panic!("Failed relay_hub_routes_consensus_between_spoke_and_assist (spoke): {e:?}")
         }
     };
     let (mut assist_net, _assist_child) = match NetworkHandle::<ConsensusMessage>::start(
@@ -1091,10 +1131,7 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     {
         Ok(ok) => ok,
         Err(e) => {
-            eprintln!(
-                "Skipping relay_hub_routes_consensus_between_spoke_and_assist (assist): {e:?}"
-            );
-            return;
+            panic!("Failed relay_hub_routes_consensus_between_spoke_and_assist (assist): {e:?}")
         }
     };
     let (spoke_tx, mut spoke_rx) = mpsc::channel(4);
@@ -1107,9 +1144,30 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
         drop(sender);
         panic!("failed to subscribe assist to messages");
     }
-    update_topology_and_peers_addresses(&hub_net, &[spoke_peer.clone(), assist_peer.clone()]);
-    update_topology_and_peers_addresses(&spoke_net, std::slice::from_ref(&hub_peer));
-    update_topology_and_peers_addresses(&assist_net, std::slice::from_ref(&hub_peer));
+    // Spokes prove hub authority through their configured outbound dial.
+    // Authorize both at the hub without starting a competing reverse dial.
+    hub_net.update_topology(UpdateTopology(HashSet::from([
+        spoke_peer.id().clone(),
+        assist_peer.id().clone(),
+    ])));
+    // The remote end peer is authorized; only the hub has a dial address.
+    spoke_net.update_topology(UpdateTopology(HashSet::from([
+        hub_peer.id().clone(),
+        assist_peer.id().clone(),
+    ])));
+    spoke_net.update_peers_addresses(UpdatePeers(vec![(
+        hub_peer.id().clone(),
+        hub_peer.address().clone(),
+    )]));
+    // The remote end peer is authorized; only the hub has a dial address.
+    assist_net.update_topology(UpdateTopology(HashSet::from([
+        hub_peer.id().clone(),
+        spoke_peer.id().clone(),
+    ])));
+    assist_net.update_peers_addresses(UpdatePeers(vec![(
+        hub_peer.id().clone(),
+        hub_peer.address().clone(),
+    )]));
     tokio::time::timeout(Duration::from_secs(10), async {
         while hub_net.online_peers(HashSet::len) < 2 {
             hub_net
@@ -1143,11 +1201,16 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     // Give relay hub selection and subscriber wiring a moment to settle under parallel test load.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let payload_a = ConsensusMessage(11);
-    assist_net.post(Post {
-        data: payload_a.clone(),
-        peer_id: spoke_peer.id().clone(),
-        priority: Priority::High,
-    });
+    assist_net
+        .post_recoverable(
+            Post {
+                data: payload_a.clone(),
+                peer_id: spoke_peer.id().clone(),
+                priority: Priority::High,
+            },
+            None,
+        )
+        .expect("admit exact authorized relay consensus owner");
     let received = tokio::time::timeout(Duration::from_secs(20), spoke_rx.recv())
         .await
         .expect("spoke should receive consensus via hub")
@@ -1155,11 +1218,16 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
     assert_eq!(received.peer.id(), assist_peer.id());
     assert_eq!(received.payload.0, payload_a.0);
     let payload_b = ConsensusMessage(12);
-    spoke_net.post(Post {
-        data: payload_b.clone(),
-        peer_id: assist_peer.id().clone(),
-        priority: Priority::High,
-    });
+    spoke_net
+        .post_recoverable(
+            Post {
+                data: payload_b.clone(),
+                peer_id: assist_peer.id().clone(),
+                priority: Priority::High,
+            },
+            None,
+        )
+        .expect("admit exact authorized relay consensus owner");
     let received = tokio::time::timeout(Duration::from_secs(20), assist_rx.recv())
         .await
         .expect("assist should receive consensus via hub")
@@ -1345,10 +1413,7 @@ async fn tls_inbound_listener_smoke() {
         .await
         {
             Ok(started) => started,
-            Err(error) => {
-                eprintln!("Skipping tls_inbound_listener_smoke: cannot start peer: {error:?}");
-                return;
-            }
+            Err(error) => panic!("Failed tls_inbound_listener_smoke: cannot start peer: {error:?}"),
         };
         peers.push(peer);
         networks.push(network);
@@ -1386,3 +1451,158 @@ async fn tls_inbound_listener_smoke() {
     drop(children);
 }
 include!("p2p_test_primitives.rs");
+
+/// One fully supervised transport fixture; this is not a consensus or settlement run.
+struct ArbitrationNode {
+    network: NetworkHandle<ConsensusMessage>,
+    shutdown: ShutdownSignal,
+    joined: tokio::task::JoinHandle<iroha_futures::supervisor::Result<()>>,
+    inbox: mpsc::Receiver<PeerMessage<ConsensusMessage>>,
+}
+async fn arbitration_node(key: KeyPair, peer: &Peer, chain: NetworkId) -> ArbitrationNode {
+    let mut supervisor = iroha_futures::supervisor::Supervisor::new();
+    let shutdown = supervisor.shutdown_signal();
+    let (mut network, child) = NetworkHandle::start(
+        super::p2p_identity_keys(key),
+        trust_config(
+            peer.address().clone(),
+            TRUST_GOSSIP,
+            Duration::from_secs(60),
+        ),
+        chain,
+        None,
+        None,
+        shutdown.clone(),
+    )
+    .await
+    .expect("four-peer fixture must pass actual startup admission");
+    supervisor.monitor(child);
+    let joined = tokio::spawn(supervisor.start());
+    let (sender, inbox) = mpsc::channel(4);
+    network
+        .subscribe_to_peers_messages(sender)
+        .expect("bounded fixture subscriber");
+    ArbitrationNode {
+        network,
+        shutdown,
+        joined,
+        inbox,
+    }
+}
+async fn arbitration_mesh_online(nodes: &mut [Option<ArbitrationNode>]) {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for node in nodes.iter_mut() {
+            let node = node.as_mut().unwrap();
+            while node.network.online_peers(HashSet::len) != 3 {
+                node.network
+                    .wait_online_peers_update(HashSet::len)
+                    .await
+                    .expect("online owner remains open");
+            }
+        }
+    })
+    .await
+    .expect("all four bidirectionally dialling identities must connect");
+}
+
+/// Four authorized transport identities deliberately retain the ordinary eager
+/// dial policy, including identities outside a validator dial roster. The unit
+/// duplex control fixes the precise crossing schedule; this exercises shipping
+/// TLS identity, central admission, geometry, dispatch and graceful restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_peer_crossed_dials_and_restart_progress_with_old_delivered_owner() {
+    setup_logger();
+    if super::skip_if_no_tcp_bind() {
+        return;
+    }
+    let chain = super::test_network_id("four peer central reader arbitration");
+    let keys: Vec<_> = (0..4).map(|_| super::random_node_key_pair()).collect();
+    let peers: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            Peer::new(
+                socket_addr!(127.0.0.1: {next_port()}),
+                key.public_key().clone(),
+            )
+        })
+        .collect();
+    let mut nodes = Vec::new();
+    for (key, peer) in keys.iter().zip(&peers) {
+        nodes.push(Some(arbitration_node(key.clone(), peer, chain).await));
+    }
+    // Every endpoint receives the full authorized transport address set before
+    // any test waits for a connection. No one-way fixture suppresses crossings.
+    for (index, node) in nodes.iter().enumerate() {
+        let others: Vec<_> = peers
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .map(|(_, p)| p.clone())
+            .collect();
+        update_topology_and_peers_addresses(&node.as_ref().unwrap().network, &others);
+    }
+    let mut retained = None;
+    for round in 0_u32..2 {
+        arbitration_mesh_online(&mut nodes).await;
+        for source in 0..4 {
+            let target = (source + 1) % 4;
+            nodes[source]
+                .as_ref()
+                .unwrap()
+                .network
+                .post_recoverable(
+                    Post {
+                        data: ConsensusMessage(round * 4 + u32::try_from(source).unwrap()),
+                        peer_id: peers[target].id().clone(),
+                        priority: Priority::High,
+                    },
+                    None,
+                )
+                .expect("one exact retained consensus post per sender");
+        }
+        for target in 0..4 {
+            let source = (target + 3) % 4;
+            let message = tokio::time::timeout(
+                Duration::from_secs(20),
+                nodes[target].as_mut().unwrap().inbox.recv(),
+            )
+            .await
+            .expect("exact ring delivery must progress")
+            .expect("subscriber remains open");
+            assert_eq!(message.peer.id(), peers[source].id());
+            assert_eq!(
+                message.payload.0,
+                round * 4 + u32::try_from(source).unwrap()
+            );
+            if round == 0 && target == 1 {
+                retained = Some(message);
+            }
+        }
+        if round == 0 {
+            // Retain a real message from source 0 at peer 1 while source 0
+            // shuts down and reconnects with the same authenticated identity.
+            let old = nodes[0].take().unwrap();
+            old.shutdown.send();
+            tokio::time::timeout(Duration::from_secs(20), old.joined)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            drop((old.network, old.inbox));
+            let replacement = arbitration_node(keys[0].clone(), &peers[0], chain).await;
+            update_topology_and_peers_addresses(&replacement.network, &peers[1..]);
+            nodes[0] = Some(replacement);
+        }
+    }
+    drop(retained);
+    for node in nodes.iter().flatten() {
+        node.shutdown.send();
+    }
+    for node in nodes.into_iter().flatten() {
+        tokio::time::timeout(Duration::from_secs(20), node.joined)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+}

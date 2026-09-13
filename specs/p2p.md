@@ -1,69 +1,120 @@
-## P2P Queues and Metrics
+# P2P admission, queues and metrics
 
-This section describes the peer-to-peer (P2P) queue capacities and the metrics exposed for monitoring.
+## Mandatory first-release records
 
-### Queue Capacities ([network] settings)
+After the identity handshake, `NetworkBase` selects a provisional connection
+using the complete identity-authenticated session hash. Only connection ids
+already reserved by its listener or dialer can enter this bounded owner. Both
+endpoints prefer the same full hash; local direction, compact-prefix ties and
+relay roles do not define another arbitration policy. Exact configured outbound
+hub identity proof remains independent of the selected transport.
 
+The selected connection receives a non-cloneable reader permit before
+`Pool::bind`. A replacement cancels its predecessor and waits for actual I/O and
+source-ledger destruction. It does not wait for old delivered work: those guards
+retain the same strong PeerId partitions and exact byte/count reservations.
+Pending replacements never hold another reader. Stale Connected/Terminated
+notices cannot publish or retire a different connection generation. The physical
+release channel is independent of the service mailbox and dispatch-worker drain.
 
-- `p2p_queue_cap_high` (usize, default: 8192)
-  - Capacity of each high-priority network message queue and inbound peer dispatch buffer.
-    Authoritative v2 safety traffic and topic-qualified semantic-progress traffic each get an
-    independent queue of this capacity; other High traffic uses the ordinary high queue. The
-    safety and ordinary queues share an exact `H + S` byte owner. The progress queue has a separate
-    additive `P` owner equal to one maximum eligible encrypted stream frame. Each lane may retain
-    at most 64 leased overflow waiters. Progress backpressure instead leaves the payload with its
-    source and assigns a bounded FIFO metadata ticket; fresh work cannot overtake live tickets.
-- `p2p_queue_cap_low` (usize, default: 32768)
-  - Capacity of the low-priority network message queue and inbound peer dispatch buffer
-    (gossip/sync messages).
-- `p2p_post_queue_cap` (usize, default: 2048)
-  - Capacity of the per-peer post channel (outbound messages to a specific peer).
-- `p2p_outbound_frame_queue_max_high_bytes` (usize, default: 128 MiB)
-  - Maximum encrypted stream bytes retained by each peer's aggregate high-priority sender queue
-    and by the process-wide owner shared across all connected post channels, sender queues,
-    batches, and socket writes. The network actor uses the same amount as its ordinary high-byte
-    subcap. The actor adds one maximum control-frame safety charge (`S`) and one maximum eligible
-    progress-frame charge (`P`) as disjoint reserves. Separately, each authenticated peer gets one
-    such charge (`R`). Eligible traffic is consensus safety/consensus/payload/chunk and BlockSync;
-    caller-selected High traffic, including all Control traffic, cannot spend `P` or `R`. Duplicate
-    or replacement sessions reuse the same peer reserve, and `max_total_connections` bounds the
-    connected owner as `H + L + N * R`; the actor owner is independently bounded as `H + S + P`.
-    Startup fails closed if an expression overflows or an owner cannot retain one maximum eligible
-    frame.
-    These formulas describe leased encrypted-frame payload ownership, not total process RSS. Each
-    authenticated stream also has fixed-cap scratch/batch buffers (`B_stream`), and each QUIC
-    connection has transport state plus per-connection datagram/flow-control buffers (`B_quic`).
-    The complete transport-memory envelope is therefore
-    `actor(H+S+P) + H + L + N × (R + B_stream + B_quic)` (plus bounded deferred and subscriber
-    owners). In particular, do not size a deployment from `H + L + N × R` alone.
-- `p2p_outbound_frame_queue_max_low_bytes` (usize, default: 64 MiB)
-  - Maximum encrypted stream bytes retained by each peer's low-priority sender queue and by the
-    process-wide owner shared across all connected low-priority posts through socket completion.
-- `p2p_subscriber_queue_cap` (usize, default: 8192)
-  - Capacity of each inbound subscriber queue feeding the node relay.
+Identity, permission wait, `peer/receive_credit/negotiation.rs` geometry exchange
+and the Connected handoff share the original authentication deadline. Geometry
+uses canonical `GeometryOfferV1` records.
+Each offer binds nine semantic class ordinals, counts, byte partitions, native
+frame maxima and Norito writer flags. Both independently valid offers are
+bound into directional authority; outgoing maxima use their per-class minima.
+Different valid geometries can connect. Missing classes, malformed layouts and
+unfunded protected maxima fail before application registration. Listener diagnostics
+separate Authenticated, PeerEnded and DeadlineElapsed. A completion/early-end
+timestamp is captured at the peer boundary, so delayed listener polling cannot
+turn an earlier close into a timeout; equality with the deadline is expired. Shipping QUIC
+is rejected by `validate_shipping_quic_policy`; it is not an alternate stream.
 
-These defaults are tuned for blockchain workloads around 20,000 TPS: consensus/control traffic stays responsive, while gossip and synchronization get more headroom. Adjust these values based on your block size, block time, and network conditions.
+`RecordHeaderV1` has version, kind, class, binding, sequence and plaintext size.
+Kinds are Request, Grant, Data, Ping and Pong. A bounded length prefix precedes
+one canonical Norito header, authenticated verbatim as AEAD associated data.
+Data carries exactly one canonical peer/relay message; control carries an empty
+authenticated body. Directional authority binds network, complete connected
+PeerIds, session key identity, transport binding and geometry. Application
+class and Topic are separate owners:
 
-Notes
-- `ConsensusSafety` is a local scheduling tag (never a wire field) for authoritative v2
-  proposals, votes, quorum/timeout certificates, and commit-certificate responses. Its network
-  actor, per-peer post, inbound dispatch, and relay subscriber scheduling lanes are isolated so
-  auxiliary and proxy traffic cannot consume their count capacity. The encrypted sender and
-  missing-session deferred queues instead share the configured aggregate high count/byte
-  envelope with ordinary traffic; safety owns the first retry/service rank and cannot be evicted
-  by ordinary traffic. This keeps aggregate retention bounded without surrendering safety service.
-- The relay registers separate safety, ordinary high (`Consensus` plus `Control`), payload, chunk,
-  and low subscribers; Torii proxy control retains its filtered `Control` subscription. Genesis is
-  a local trust-root input and has no peer request/response route. On a full subscriber channel,
-  safety and topic-qualified semantic progress retain their exact dispatch-owned message in
-  separate bounded per-peer backlogs with alternating service. The
-  progress count bound is `max(p2p_subscriber_queue_cap, 2 × admitted_peer_count)`; each peer's
-  share is clamped to 2–64 entries and divided evenly between a consensus lane and a
-  payload/chunk/BlockSync bulk lane. Round-robin service across those classes prevents a chunk
-  flood from consuming or starving the lane reservation. Retained messages keep their existing
-  inbound dispatch-byte leases, so this count backlog does not create an uncharged payload owner.
-  General, Torii, and Connect control remain lossy under subscriber pressure and cannot occupy the
-  progress backlog.
+| Class | Payload family | Scheduling resource |
+| --- | --- | --- |
+| Safety | V2 safety messages | protected high |
+| Lane | ordinary consensus control | high |
+| Payload | certified bodies | high |
+| Availability | ordinary signed RS16 PayloadChunk | protected high |
+| RecoveryControl | sidecar Request/Close/CloseAck/GenerationHint | protected high |
+| RecoveryData | sidecar Chunk, at most 64 KiB data | protected high |
+| Control | application control/proxy messages | high |
+| BlockSync | ordinary block synchronization | low |
+| Low | remaining gossip/health/application traffic | low |
+
+Existing Topic caps remain authoritative. Native Core witnesses calculate
+complete signed relay/peer envelope maxima from the RS16 chunk/signature bounds
+and sidecar shapes; a broad Topic cap is not a recovery size witness. Reader
+admission requires declared, bounded raw and fully decoded classes to agree.
+The connected-peer authentication does not replace relay-origin or consensus
+signature/authority validation by the existing consumers.
+
+## Exact retained owners
+
+A Request obtains a receiver-issued Grant only after its source, scratch,
+dispatch byte and count reservations exist. A matching plaintext Data header
+transfers that exact reservation to the unique reader solely to allocate the
+bounded ciphertext. AEAD, canonical decode and semantic agreement precede
+application delivery. Failed tags fence the reader; they cannot release an
+unspent grant early. Every transferred guard remains with subscriber and final
+consumer work, including retained gossip and supervised proxy work.
+
+Request/Grant/Ping/Pong use fixed, independently precharged transport cells,
+not application Control or Low grants. Remote Ping requests retain a two-token
+burst and one-token refill per half idle interval. An exact authenticated Pong
+retires the sole outstanding local probe without spending remote Ping credit.
+Unknown, duplicate and substituted Pongs fail. Grant/control progress never waits
+on a data credit it must release. One bounded record scheduler gives each high
+class two ranks and each low class one rank. FIFO remains within each semantic
+source/class; ordinary work is serviced after its retained predecessor releases.
+This removes application-backpressure blockage on an honest ordered stream. It
+cannot bypass earlier bytes that the sender/network never delivers.
+
+Let `H`/`L` be configured high/low byte budgets, `P` the existing per-PeerId
+progress reserve and `N` the admitted connection/source bound. Each owner keeps
+its existing physical ceiling. High class sublimits partition `H`, and
+BlockSync/other Low partition `L`. Private `P` first funds all three physical
+allocations for full Safety, Availability and both recovery maxima plus fixed
+control cells, then deterministically divides the residual. Shared class/scratch
+saturation does not spend another admitted PeerId's private protected reserve.
+Startup rejects insufficient geometry; no extra pool is created to make it fit.
+Large ordinary bodies have no claim to a full private protected maximum.
+
+Unspent grants, partial reads, delivered guards and pending writer ACKs retain
+strong PeerId ownership. Reconnect reuses that owner; closing a tenure reclaims
+only its unspent grants after I/O closes. Old delivered work keeps its original
+reservations until physical consumption. Outbound posts likewise reserve
+semantic `H`/`L`/`P` bytes before joining a peer FIFO and keep them through flush.
+
+The network actor has six protected classes: Safety, Lane, body Bulk,
+Availability, RecoveryControl and RecoveryData. Its public exact-output API
+keeps three producer classes; the transport actor class derives from the actual
+payload, never caller priority. For each of `T = 2N` authorized target slots,
+Lane retains 65 FIFO metadata ranks and each other class has 26: the original
+195 total. Extra small-frame source bytes and three source counts per target
+are transferred from ordinary actor capacity, not added. Algebraically,
+`H_new + T*(S+Lane+Bulk+Availability+RecoveryControl+RecoveryData)` equals
+`H_old + T*(S+Lane+Bulk)`; the independent safety and low owners are unchanged.
+
+Physical inbound and daemon subscriber queues partition their existing count
+budgets across the semantic classes. Default high count is 8192, low count
+32768, post count 2048, and subscriber count 8192. Default byte budgets are
+128 MiB high and 64 MiB low. Validated nonzero partitions, checked arithmetic
+and native maximum witnesses are mandatory. These are retained-owner bounds,
+not measured process RSS; kernel/TLS state, fixed parser storage and application
+execution graphs have separate owners and qualification obligations.
+
+TODO: qualify the composed actor/post/record/subscriber/final-consumer path with
+native P2P and Core controls and fresh networks. Uncompiled fixtures and source
+geometry proofs are not throughput, memory or adversarial-liveness measurements.
 
 ### Low-Priority Rate Limiting ([network] settings)
 
@@ -72,7 +123,7 @@ Notes
 - `low_priority_burst` (optional; msgs)
   - Bucket burst capacity; defaults to `low_priority_rate_per_sec` when unset.
 
-When enabled, inbound Low-priority frames are dropped before relay dispatch (tx gossip, peer/trust gossip, health/time), and outbound Low-priority posts/broadcast deliveries are throttled per peer. Streaming control frames are also gated by the ingress limiter to prevent control-plane floods. High-priority consensus/control traffic is otherwise unaffected.
+When enabled, inbound Low-priority frames are dropped before relay dispatch (tx gossip, peer/trust gossip, health/time), and outbound Low-priority posts/broadcast deliveries are throttled per peer. Fixed transport Request/Grant records use their separately precharged cells; they are not application Low traffic. Remote Ping requests have the explicit two-token rate limit; exact correlated Pongs retire locally owned probes. High-priority consensus/control traffic is otherwise unaffected.
 
 ### DNS Hostname Refresh ([network] setting)
 
@@ -402,11 +453,14 @@ trust_min_score = -20              # drop trust gossip at or below this score
   completes address validation, before the connection waits for global
   pre-authentication capacity.
   Successful peers are governed only by `idle_timeout_ms` after authentication.
-- Each authenticated connection admits a shared burst of two inbound `Ping`/`Pong`
-  health frames and refills one credit every `idle_timeout_ms / 2`. Excess health
-  frames receive no response and do not refresh liveness; admitted health frames
-  and application data do. This bounds Pong amplification without turning a
-  short burst into forced reconnect churn.
+- Each authenticated connection admits a burst of two remote `Ping` requests
+  and refills one request credit every `idle_timeout_ms / 2`. Excess requests
+  receive no response and do not refresh liveness. An authenticated `Pong` must
+  match the sole outstanding local probe and retires it without spending or
+  replenishing remote Ping credit. Unknown, duplicate and substituted responses
+  fail. Admitted requests, correlated responses and application data refresh
+  liveness. Both endpoints can probe every half idle interval without consuming
+  each other's response budget; fixed response cells bound amplification.
 - `preauth_max_connections_per_ip` caps concurrent accepted-but-unauthenticated
   transports from one canonical source IP (default: 8). One shared reservation
   gate covers TCP and address-validated QUIC, and reserves the source before
@@ -528,7 +582,7 @@ mandatory TLS/QUIC certificate fingerprint. The network start API requires a `Ne
 changing any advertised claim, replaying it into another session or transport,
 or connecting from another network fails signature verification before the peer
 can enter the authenticated set or exchange network traffic. The compact
-64-bit disambiguator is only a simultaneous-connection tie-breaker. There is no
+64-bit disambiguator is a diagnostic prefix, not a second selection policy. There is no
 feature flag or unbound mode. Only the TLS-over-TCP and QUIC listeners can enter
 the `ConnectedFrom` handshake state; each adds its server-certificate fingerprint
 to the common signed claim. There is no raw TCP listener or external stream

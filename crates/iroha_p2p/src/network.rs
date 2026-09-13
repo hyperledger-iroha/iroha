@@ -355,6 +355,9 @@ fn bind_reusable_tcp_listener_addr(addr: std::net::SocketAddr) -> io::Result<Tcp
     TcpListener::from_std(socket.into())
 }
 mod admission;
+mod connection_arbitration;
+#[cfg(test)]
+pub(crate) use connection_arbitration::fixture as reader_arbitration_fixture;
 #[cfg(test)]
 #[path = "network/tcp_listener_bind_tests.rs"]
 mod tcp_listener_bind_tests;
@@ -580,13 +583,13 @@ fn should_stop_high_actor_drain(
     drained >= drain_limit || service_pending || shutdown_requested
 }
 #[derive(Clone, Debug, Encode, Decode)]
-enum RelayTarget {
+pub(crate) enum RelayTarget {
     Broadcast,
     Direct(PeerId),
 }
 #[derive(Clone, Debug, Encode, Decode)]
 #[norito(decode_from_slice)]
-struct RelayMessage<T> {
+pub(crate) struct RelayMessage<T> {
     origin: PeerId,
     target: RelayTarget,
     ttl: u8,
@@ -625,7 +628,7 @@ impl<T: Encode> RelayMessage<T> {
             payload,
         })
     }
-    fn new_signed(key_pair: &KeyPair, target: RelayTarget, ttl: u8, payload: T) -> Self {
+    pub(crate) fn new_signed(key_pair: &KeyPair, target: RelayTarget, ttl: u8, payload: T) -> Self {
         Self::try_new(key_pair, target, ttl, payload)
             .expect("a validated local P2P key pair must sign relay-origin material")
     }
@@ -644,7 +647,7 @@ impl<T: Encode> RelayMessage<T> {
             payload,
         }
     }
-    fn verify_origin_signature(&self) -> Result<(), iroha_crypto::error::Error> {
+    pub(crate) fn verify_origin_signature(&self) -> Result<(), iroha_crypto::error::Error> {
         ensure_relay_node_identity(&self.origin)?;
         if let RelayTarget::Direct(target) = &self.target {
             ensure_relay_node_identity(target)?;
@@ -722,6 +725,24 @@ pub fn data_frame_wire_len<T: Encode + Clone>(
 ) -> usize {
     data_frame_wire_len_from_payload_len::<T>(origin, target, payload.encoded_len())
 }
+/// Materialize a genuinely signed canonical relay/Data frame for cross-crate
+/// admission-size regressions. This helper does not authorize or send its payload.
+///
+/// # Errors
+/// Returns identity/signature/codec errors from the actual canonical owners.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn materialized_signed_data_frame_len_for_test<T: Pload>(
+    key: &KeyPair,
+    target: Option<PeerId>,
+    payload: T,
+) -> Result<usize, Error> {
+    let _flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
+    let target = target.map_or(RelayTarget::Broadcast, RelayTarget::Direct);
+    let relay = RelayMessage::try_new(key, target, 1, payload)?;
+    relay.verify_origin_signature()?;
+    crate::peer::materialized_data_message_wire_len(relay).map_err(Error::NoritoCodec)
+}
+
 fn checked_len_prefixed(payload_len: usize, flags: u8) -> Option<usize> {
     ncore::len_prefix_len_with_flags(payload_len, flags).checked_add(payload_len)
 }
@@ -794,8 +815,9 @@ fn relay_message_wire_payload_len(direct: bool, payload_len: usize, flags: u8) -
             .into_iter()
             .try_fold(offsets_len, usize::checked_add);
     }
-    // The hybrid packed relay bitset marks every field except the fixed-width TTL.
-    let size_header_len = [origin_len, target_len, origin_signature_len, payload_len]
+    // Hybrid fields carry sizes only for origin, target and generic payload.
+    // TTL is fixed-width and the signature Vec<u8> carries its own sequence count.
+    let size_header_len = [origin_len, target_len, payload_len]
         .into_iter()
         .try_fold(0usize, |total, field_len| {
             total.checked_add(ncore::len_prefix_len_with_flags(field_len, flags))
@@ -858,12 +880,12 @@ pub fn data_frame_wire_len_from_payload_len<T>(
 }
 type WireMessage<T> = RelayMessage<T>;
 fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore::Error> {
+    ncore::validate_header_flags(flags)?;
     const FIELD_COUNT: usize = 5;
     const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
-    // Hybrid packed RelayMessage fields needing explicit sizes are origin,
-    // target, origin signature, and payload. TTL is the sole one-byte fixed
-    // field.
-    const EXPECTED_FIELD_BITSET: u8 = 0b0001_1011;
+    // The canonical derive marks origin, target and generic payload only.
+    // TTL is fixed-width; origin_signature: Vec<u8> is self-delimiting.
+    const EXPECTED_FIELD_BITSET: u8 = 0b0001_0011;
     if flags & ncore::header_flags::PACKED_STRUCT == 0 {
         let mut remaining = payload;
         for index in 0..FIELD_COUNT {
@@ -931,7 +953,7 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
     if bitset != EXPECTED_FIELD_BITSET {
         return Err(ncore::Error::LengthMismatch);
     }
-    let mut field_sizes = [0_usize; 4];
+    let mut field_sizes = [0_usize; 3];
     for field_size in &mut field_sizes {
         let (size, used) = ncore::read_len_from_slice_with_flags(size_headers, flags)?;
         *field_size = size;
@@ -939,13 +961,22 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
             .get(used..)
             .ok_or(ncore::Error::LengthMismatch)?;
     }
-    let payload_start = field_sizes[0]
+    let signature_start = field_sizes[0]
         .checked_add(field_sizes[1])
         .and_then(|offset| offset.checked_add(core::mem::size_of::<u8>()))
-        .and_then(|offset| offset.checked_add(field_sizes[2]))
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let signature_and_payload = size_headers
+        .get(signature_start..)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    // Borrow the already-bounded Vec<u8> encoding without decoding or allocating
+    // signature bytes. The canonical sequence count is fixed-u64 in every layout.
+    let (signature_len, signature_prefix) = ncore::inspect_seq_len_slice(signature_and_payload)?;
+    let payload_start = signature_start
+        .checked_add(signature_prefix)
+        .and_then(|offset| offset.checked_add(signature_len))
         .ok_or(ncore::Error::LengthMismatch)?;
     let payload_end = payload_start
-        .checked_add(field_sizes[3])
+        .checked_add(field_sizes[2])
         .ok_or(ncore::Error::LengthMismatch)?;
     if payload_end != size_headers.len() {
         return Err(ncore::Error::LengthMismatch);
@@ -958,6 +989,21 @@ impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
     const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
     fn topic(&self) -> message::Topic {
         self.payload.topic()
+    }
+    fn admission_class(&self) -> message::TransportAdmissionClass {
+        self.payload.admission_class()
+    }
+    fn availability_frame_maximum(local_peer: &PeerId) -> Result<usize, ncore::Error> {
+        T::availability_frame_maximum(local_peer)
+    }
+    fn recovery_frame_maxima(local_peer: &PeerId) -> Result<[usize; 2], ncore::Error> {
+        T::recovery_frame_maxima(local_peer)
+    }
+    fn inbound_admission_class(
+        payload: &[u8],
+        flags: u8,
+    ) -> Result<message::TransportAdmissionClass, ncore::Error> {
+        T::inbound_admission_class(relay_message_payload_field(payload, flags)?, flags)
     }
     fn priority(&self) -> message::Priority {
         self.payload.topic().scheduling_priority()
@@ -3387,20 +3433,55 @@ enum ActorProgressClass {
     Safety,
     Lane,
     Bulk,
+    Availability,
+    RecoveryControl,
+    RecoveryData,
 }
 impl ActorProgressClass {
-    const COUNT: usize = 3;
-    fn index(self) -> usize {
+    const COUNT: usize = 6;
+    const ALL: [Self; Self::COUNT] = [
+        Self::Safety,
+        Self::Lane,
+        Self::Bulk,
+        Self::Availability,
+        Self::RecoveryControl,
+        Self::RecoveryData,
+    ];
+    const fn index(self) -> usize {
         match self {
             Self::Safety => 0,
             Self::Lane => 1,
             Self::Bulk => 2,
+            Self::Availability => 3,
+            Self::RecoveryControl => 4,
+            Self::RecoveryData => 5,
         }
     }
+    fn for_payload<T: message::ClassifyTopic>(payload: &T) -> Option<Self> {
+        if !is_reliable_progress_route(payload.topic(), payload.subscriber_route()) {
+            return None;
+        }
+        use message::TransportAdmissionClass as Class;
+        match payload.admission_class() {
+            Class::Safety => Some(Self::Safety),
+            Class::Lane => Some(Self::Lane),
+            Class::Payload | Class::BlockSync => Some(Self::Bulk),
+            Class::Availability => Some(Self::Availability),
+            Class::RecoveryControl => Some(Self::RecoveryControl),
+            Class::RecoveryData => Some(Self::RecoveryData),
+            Class::Control | Class::Low => None,
+        }
+    }
+    // Explicit ordinary-message fixture only: production never infers a
+    // recovery owner from Topic or caller-supplied priority.
+    #[cfg(test)]
     fn for_route(topic: message::Topic, route: message::SubscriberRoute) -> Option<Self> {
         match reliable_progress_class(topic, route)? {
             ReliableProgressClass::Safety => Some(Self::Safety),
             ReliableProgressClass::Lane => Some(Self::Lane),
+            ReliableProgressClass::Bulk if topic == message::Topic::ConsensusChunk => {
+                Some(Self::Availability)
+            }
             ReliableProgressClass::Bulk => Some(Self::Bulk),
         }
     }
@@ -3410,6 +3491,9 @@ struct ActorProgressByteLimits {
     safety: usize,
     lane: usize,
     bulk: usize,
+    availability: usize,
+    recovery_control: usize,
+    recovery_data: usize,
 }
 impl ActorProgressByteLimits {
     fn uniform(bytes: usize) -> Self {
@@ -3417,6 +3501,9 @@ impl ActorProgressByteLimits {
             safety: bytes,
             lane: bytes,
             bulk: bytes,
+            availability: bytes,
+            recovery_control: bytes,
+            recovery_data: bytes,
         }
     }
     fn for_class(self, class: ActorProgressClass) -> usize {
@@ -3424,11 +3511,33 @@ impl ActorProgressByteLimits {
             ActorProgressClass::Safety => self.safety,
             ActorProgressClass::Lane => self.lane,
             ActorProgressClass::Bulk => self.bulk,
+            ActorProgressClass::Availability => self.availability,
+            ActorProgressClass::RecoveryControl => self.recovery_control,
+            ActorProgressClass::RecoveryData => self.recovery_data,
         }
     }
     fn checked_per_target_total(self) -> Option<usize> {
-        self.safety.checked_add(self.lane)?.checked_add(self.bulk)
+        ActorProgressClass::ALL
+            .into_iter()
+            .try_fold(0usize, |sum, class| sum.checked_add(self.for_class(class)))
     }
+}
+/// Repartition the existing three-class waiter envelope. The 64-envelope
+/// `LaneRelayBroadcaster` emits Lane only; the other producer is the bounded
+/// exact-output scheduler. Preserve all 65 Lane ranks and give each of the
+/// other five classes 26 ranks, independently of blocked payload work.
+fn actor_waiter_limits() -> Option<[usize; ActorProgressClass::COUNT]> {
+    let lane = RELIABLE_PROGRESS_WAITERS_PER_SOURCE;
+    let residual = lane.checked_mul(2)?;
+    let mut result = [residual / (ActorProgressClass::COUNT - 1); ActorProgressClass::COUNT];
+    result[ActorProgressClass::Lane.index()] = lane;
+    // Deterministic remainder goes to Safety; current 130 / 5 is exact.
+    result[ActorProgressClass::Safety.index()] =
+        result[0].checked_add(residual % (ActorProgressClass::COUNT - 1))?;
+    result
+        .into_iter()
+        .all(|limit| limit >= RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE)
+        .then_some(result)
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ActorProgressSource {
@@ -3444,7 +3553,7 @@ impl ActorProgressSource {
             // accepted topology before actor admission.
             return None;
         };
-        let class = ActorProgressClass::for_route(post.data.topic(), post.data.subscriber_route())?;
+        let class = ActorProgressClass::for_payload(&post.data)?;
         Some(Self {
             target: Some(post.peer_id.clone()),
             class,
@@ -3461,10 +3570,7 @@ impl ActorProgressSource {
                     // before actor admission.
                     return None;
                 };
-                let class = ActorProgressClass::for_route(
-                    frame.payload.topic(),
-                    frame.payload.subscriber_route(),
-                )?;
+                let class = ActorProgressClass::for_payload(&frame.payload)?;
                 Some(Self {
                     target: Some(target.clone()),
                     class,
@@ -3487,8 +3593,8 @@ struct NetworkActorProgressBudget {
     max_sources_per_class: usize,
     max_total_bytes: usize,
     max_waiters: usize,
-    max_waiters_per_class: usize,
-    max_waiters_per_source: usize,
+    max_waiters_per_class: [usize; ActorProgressClass::COUNT],
+    max_waiters_per_source: [usize; ActorProgressClass::COUNT],
     state: Mutex<NetworkActorProgressState>,
 }
 #[derive(Clone, Copy, Debug)]
@@ -3629,6 +3735,9 @@ impl NetworkActorAdmittedTicketIdentity {
             ActorProgressClass::Safety => 1,
             ActorProgressClass::Lane => 2,
             ActorProgressClass::Bulk => 3,
+            ActorProgressClass::Availability => 4,
+            ActorProgressClass::RecoveryControl => 5,
+            ActorProgressClass::RecoveryData => 6,
         });
         Hash::new_from_chunks(&[DOMAIN, projection.as_slice()])
     }
@@ -3693,7 +3802,7 @@ impl NetworkActorAdmissionTicketTestFixture {
             .expect("test topology payload must have a canonical Norito encoding")
             .max(1);
         let canonical = NetworkMessage::Post(canonical_post);
-        let class = ActorProgressClass::for_route(topic, subscriber_route)
+        let class = ActorProgressClass::for_payload(&post.data)
             .expect("reliable test topology route must have an actor class");
         let membership = Arc::new(ReliableProgressMembership {
             peer_id: post.peer_id.clone(),
@@ -3776,7 +3885,7 @@ impl NetworkActorAdmissionTicketTestFixture {
             .expect("test reply payload must have a canonical Norito encoding")
             .max(1);
         let canonical = NetworkMessage::Post(canonical_post);
-        let class = ActorProgressClass::for_route(topic, subscriber_route)
+        let class = ActorProgressClass::for_payload(&post.data)
             .expect("reliable test reply route must have an actor class");
         let authority = ProgressDeliveryAuthority::Reply(route.clone());
         let shape = ProgressTicketShape {
@@ -4343,7 +4452,7 @@ impl NetworkReplyFlushAckTestFixture {
             .expect("test reply payload must have a canonical Norito encoding")
             .max(1);
         let canonical = NetworkMessage::Post(canonical_post);
-        let class = ActorProgressClass::for_route(topic, subscriber_route)
+        let class = ActorProgressClass::for_payload(&post.data)
             .expect("reliable test reply route must have an actor class");
         let ticket = NetworkActorAdmittedTicketIdentity {
             budget: NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
@@ -4520,8 +4629,8 @@ impl NetworkActorProgressBudget {
             max_sources_per_class: max_sources,
             max_total_bytes,
             max_waiters,
-            max_waiters_per_class: max_waiters,
-            max_waiters_per_source: max_waiters,
+            max_waiters_per_class: [max_waiters; ActorProgressClass::COUNT],
+            max_waiters_per_source: [max_waiters; ActorProgressClass::COUNT],
             state: Mutex::new(NetworkActorProgressState::default()),
         }))
     }
@@ -4532,18 +4641,24 @@ impl NetworkActorProgressBudget {
     ) -> Option<Arc<Self>> {
         if target_sources == 0
             || max_waiters == 0
-            || per_class_max_bytes.safety == 0
-            || per_class_max_bytes.lane == 0
-            || per_class_max_bytes.bulk == 0
+            || ActorProgressClass::ALL
+                .into_iter()
+                .any(|class| per_class_max_bytes.for_class(class) == 0)
         {
             return None;
         }
         let max_sources = target_sources.checked_mul(ActorProgressClass::COUNT)?;
-        if max_waiters < max_sources || max_waiters.checked_rem(max_sources)? != 0 {
+        let max_waiters_per_source = actor_waiter_limits()?;
+        let mut max_waiters_per_class = [0usize; ActorProgressClass::COUNT];
+        let mut required_waiters = 0usize;
+        for class in ActorProgressClass::ALL {
+            let i = class.index();
+            max_waiters_per_class[i] = target_sources.checked_mul(max_waiters_per_source[i])?;
+            required_waiters = required_waiters.checked_add(max_waiters_per_class[i])?;
+        }
+        if max_waiters != required_waiters {
             return None;
         }
-        let max_waiters_per_source = max_waiters.checked_div(max_sources)?;
-        let max_waiters_per_class = target_sources.checked_mul(max_waiters_per_source)?;
         let max_total_bytes = per_class_max_bytes
             .checked_per_target_total()?
             .checked_mul(target_sources)?;
@@ -4668,7 +4783,7 @@ impl NetworkActorProgressBudget {
             if state
                 .waiters
                 .get(&source)
-                .is_some_and(|waiters| waiters.len() >= self.max_waiters_per_source)
+                .is_some_and(|waiters| waiters.len() >= self.max_waiters_per_source[class_index])
             {
                 return ProgressLeaseAttempt::Waiting {
                     ticket: None,
@@ -4676,7 +4791,7 @@ impl NetworkActorProgressBudget {
                 };
             }
             if state.waiter_count >= self.max_waiters
-                || state.waiters_by_class[class_index] >= self.max_waiters_per_class
+                || state.waiters_by_class[class_index] >= self.max_waiters_per_class[class_index]
             {
                 return ProgressLeaseAttempt::Waiting {
                     ticket: None,
@@ -4947,11 +5062,7 @@ impl NetworkActorProgressBudget {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut cancelled = 0usize;
-        for class in [
-            ActorProgressClass::Safety,
-            ActorProgressClass::Lane,
-            ActorProgressClass::Bulk,
-        ] {
+        for class in ActorProgressClass::ALL {
             let source = ActorProgressSource {
                 target: Some(source_peer.clone()),
                 class,
@@ -5049,6 +5160,11 @@ impl Drop for NetworkActorProgressLease {
 }
 mod reliable_actor;
 use reliable_actor::*;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[path = "network/actor_admission_fixture.rs"]
+mod actor_admission_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use actor_admission_fixture::NetworkActorAdmissionTestFixture;
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TopicFrameCaps {
     consensus: usize,
@@ -5061,7 +5177,48 @@ pub(crate) struct TopicFrameCaps {
     other: usize,
 }
 impl TopicFrameCaps {
-    #[cfg(test)]
+    /// Complete canonical plaintext maxima, not encrypted-frame or payload-only sizes.
+    pub(crate) fn admission_maxima<T: message::ClassifyTopic>(
+        self,
+        local_peer: &PeerId,
+        max_plaintext: usize,
+    ) -> Result<[usize; message::TransportAdmissionClass::COUNT], Error> {
+        let [recovery_control, recovery_data] = T::recovery_frame_maxima(local_peer)?;
+        let availability = T::availability_frame_maximum(local_peer)?;
+        if availability == 0
+            || availability > self.block_sync
+            || recovery_control == 0
+            || recovery_data == 0
+            || recovery_control > self.consensus
+            || recovery_data > self.block_sync
+        {
+            return Err(invalid_transport_geometry(
+                "native recovery maxima exceed their unchanged Topic caps",
+            ));
+        }
+        let maximum = [
+            self.control,
+            self.consensus,
+            self.block_sync,
+            availability,
+            recovery_control,
+            recovery_data,
+            self.control,
+            self.block_sync,
+            self.tx_gossip
+                .max(self.peer_gossip)
+                .max(self.health)
+                .max(self.connect)
+                .max(self.other),
+        ];
+        if maximum.iter().any(|n| *n == 0 || *n > max_plaintext) {
+            return Err(invalid_transport_geometry(
+                "semantic admission maximum exceeds the exact encrypted transport limit",
+            ));
+        }
+        Ok(maximum)
+    }
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) const fn uniform(bytes: usize) -> Self {
         Self {
             consensus: bytes,
@@ -5807,6 +5964,13 @@ pub fn inc_post_overflow_for_test(priority_high: bool, topic: message::Topic, n:
 /// Filter for peer-message subscriptions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubscriberFilter {
+    /// One semantic application class on one independently owned delivery route.
+    SemanticClass {
+        /// Class authenticated and checked by the mandatory transport reader.
+        class: message::TransportAdmissionClass,
+        /// Unique final application route.
+        route: message::SubscriberRoute,
+    },
     /// Receive every incoming message.
     All,
     /// Receive messages whose topic matches one of the listed entries.
@@ -5822,6 +5986,14 @@ pub enum SubscriberFilter {
     },
 }
 impl SubscriberFilter {
+    /// Subscribe to one semantic FIFO on the general application route.
+    pub fn semantic_class(class: message::TransportAdmissionClass) -> Self {
+        Self::SemanticClass {
+            class,
+            route: message::SubscriberRoute::General,
+        }
+    }
+
     /// Build a filter from an iterable of topics.
     pub fn topics<I>(topics: I) -> Self
     where
@@ -5839,8 +6011,17 @@ impl SubscriberFilter {
             route,
         }
     }
-    fn matches(&self, topic: message::Topic, route: message::SubscriberRoute) -> bool {
+    fn matches(
+        &self,
+        topic: message::Topic,
+        route: message::SubscriberRoute,
+        class: message::TransportAdmissionClass,
+    ) -> bool {
         match self {
+            Self::SemanticClass {
+                class: expected,
+                route: expected_route,
+            } => *expected == class && *expected_route == route,
             Self::All => true,
             Self::Topics(topics) => {
                 matches!(route, message::SubscriberRoute::General)
@@ -5869,8 +6050,27 @@ impl SubscriberFilter {
         TOPICS.into_iter().any(|topic| {
             ROUTES.into_iter().any(|route| {
                 is_reliable_progress_route(topic, route)
-                    && self.matches(topic, route)
-                    && other.matches(topic, route)
+                    && message::TransportAdmissionClass::ALL
+                        .into_iter()
+                        .any(|class| {
+                            // Exhaustive semantic/topic relationship, including the two
+                            // recovery subvariants of existing Consensus/Chunk topics.
+                            let possible = class
+                                == message::TransportAdmissionClass::ordinary_for_topic(topic)
+                                || matches!(
+                                    (class, topic),
+                                    (
+                                        message::TransportAdmissionClass::RecoveryControl,
+                                        message::Topic::Consensus
+                                    ) | (
+                                        message::TransportAdmissionClass::RecoveryData,
+                                        message::Topic::ConsensusChunk
+                                    )
+                                );
+                            possible
+                                && self.matches(topic, route, class)
+                                && other.matches(topic, route, class)
+                        })
             })
         })
     }
@@ -6426,14 +6626,15 @@ fn network_actor_progress_target_capacity(max_total_connections: usize) -> Optio
     max_total_connections.checked_mul(2)
 }
 fn network_actor_progress_source_capacity(max_total_connections: usize) -> Option<usize> {
-    // Every authorized target can own one safety, lane, and bulk item.
+    // Every authorized target can own one item in each protected semantic class.
     // Reliable broadcasts acquire these same target lanes before crossing
     // admission; there is deliberately no class-wide broadcast parent.
     network_actor_progress_target_capacity(max_total_connections)?
         .checked_mul(ActorProgressClass::COUNT)
 }
 fn network_actor_progress_waiter_capacity(max_total_connections: usize) -> Option<usize> {
-    network_actor_progress_source_capacity(max_total_connections)?
+    network_actor_progress_target_capacity(max_total_connections)?
+        .checked_mul(3)?
         .checked_mul(RELIABLE_PROGRESS_WAITERS_PER_SOURCE)
 }
 fn inbound_source_credit_capacity(
@@ -6483,7 +6684,7 @@ mod inbound_source_memory_bound_tests {
     #[test]
     fn reliable_actor_source_geometry_counts_targets_broadcasts_and_classes() {
         assert_eq!(network_actor_progress_target_capacity(4), Some(8));
-        assert_eq!(network_actor_progress_source_capacity(4), Some(24));
+        assert_eq!(network_actor_progress_source_capacity(4), Some(48));
         let configured_per_source = RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY
             + RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE;
         assert_eq!(RELIABLE_PROGRESS_WAITERS_PER_SOURCE, configured_per_source);
@@ -6524,6 +6725,14 @@ fn validate_channel_capacity_geometry(
     post: usize,
     subscriber: usize,
 ) -> Result<(), Error> {
+    if high < message::TransportAdmissionClass::ORDINARY_HIGH.len()
+        || low < message::TransportAdmissionClass::LOW.len()
+        || subscriber < 2
+    {
+        return Err(invalid_transport_geometry(
+            "mandatory semantic queue partitions do not fit configured count ceilings",
+        ));
+    }
     let max = Semaphore::MAX_PERMITS;
     for (name, value) in [
         ("network.p2p_queue_cap_high", high),
@@ -6675,7 +6884,60 @@ fn validate_transport_queue_geometry<E: Enc>(
             safety: safety_reserve_bytes,
             lane: lane_reserve_bytes,
             bulk: bulk_reserve_bytes,
+            // Native semantic bounds are mandatory in startup before a pool
+            // is constructed; this function validates Topic geometry only.
+            availability: 0,
+            recovery_control: 0,
+            recovery_data: 0,
         },
+    })
+}
+#[derive(Debug)]
+struct SemanticActorGeometry {
+    progress: ActorProgressByteLimits,
+    ordinary_high_bytes: usize,
+    ordinary_high_count: usize,
+}
+fn semantic_actor_geometry<E: Enc>(
+    mut progress: ActorProgressByteLimits,
+    maximum: [usize; message::TransportAdmissionClass::COUNT],
+    targets: usize,
+    high_bytes: usize,
+    high_count: usize,
+) -> Result<SemanticActorGeometry, Error> {
+    use message::TransportAdmissionClass as Class;
+    let charge = |class: Class| {
+        crate::frame_queue_charge_for::<E>(maximum[class.index()])
+            .filter(|charge| *charge > 0)
+            .ok_or(Error::FrameTooLarge)
+    };
+    progress.availability = charge(Class::Availability)?;
+    progress.recovery_control = charge(Class::RecoveryControl)?;
+    progress.recovery_data = charge(Class::RecoveryData)?;
+    let extra = progress
+        .availability
+        .checked_add(progress.recovery_control)
+        .and_then(|n| n.checked_add(progress.recovery_data))
+        .and_then(|n| n.checked_mul(targets))
+        .ok_or_else(|| invalid_transport_geometry("semantic actor byte transfer overflows"))?;
+    let ordinary_high_bytes = high_bytes.checked_sub(extra).filter(|bytes|
+        *bytes >= progress.safety.max(progress.lane).max(progress.bulk))
+        .ok_or_else(|| invalid_transport_geometry("ordinary actor bytes cannot fund complete availability/recovery reserves while retaining one ordinary maximum"))?;
+    let extra_count = targets
+        .checked_mul(ActorProgressClass::COUNT - 3)
+        .ok_or_else(|| invalid_transport_geometry("semantic actor count transfer overflows"))?;
+    let ordinary_high_count = high_count
+        .checked_sub(extra_count)
+        .filter(|count| *count > 0)
+        .ok_or_else(|| {
+            invalid_transport_geometry(
+                "ordinary actor count cannot fund mandatory semantic sources",
+            )
+        })?;
+    Ok(SemanticActorGeometry {
+        progress,
+        ordinary_high_bytes,
+        ordinary_high_count,
     })
 }
 fn network_actor_byte_budget(
@@ -7141,10 +7403,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                     "shared high/low source budgets plus network.max_total_connections × the exact maximum progress-frame reserve overflow the inbound source-memory bound",
                 )
             })?;
-        let network_actor_byte_budget = network_actor_byte_budget(
-            p2p_outbound_frame_queue_max_high_bytes.get(),
-            safety_reserve_bytes,
-        )?;
         let network_actor_progress_waiters =
             network_actor_progress_waiter_capacity(max_total_connections).ok_or_else(|| {
                 invalid_transport_geometry(
@@ -7157,8 +7415,22 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                     "network.max_total_connections overflows the reliable actor target geometry",
                 )
             })?;
-        let network_actor_progress_budget = NetworkActorProgressBudget::new_classed(
+        let self_id = PeerId::from(key_pair.public_key().clone());
+        let receive_maximum = topic_frame_caps.admission_maxima::<T>(
+            &self_id,
+            crate::frame_plaintext_cap_for::<E>(max_frame_bytes),
+        )?;
+        let semantic_actor = semantic_actor_geometry::<E>(
             transport_geometry.actor_progress_bytes,
+            receive_maximum,
+            network_actor_progress_targets,
+            p2p_outbound_frame_queue_max_high_bytes.get(),
+            p2p_queue_cap_high.get(),
+        )?;
+        let network_actor_byte_budget =
+            network_actor_byte_budget(semantic_actor.ordinary_high_bytes, safety_reserve_bytes)?;
+        let network_actor_progress_budget = NetworkActorProgressBudget::new_classed(
+            semantic_actor.progress,
             network_actor_progress_targets,
             network_actor_progress_waiters,
         )
@@ -7170,7 +7442,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         let network_actor_low_byte_budget =
             NetworkActorByteBudget::new(p2p_outbound_frame_queue_max_low_bytes.get(), 0)
                 .expect("zero-reserve low actor byte geometry cannot overflow");
-        let self_id = PeerId::from(key_pair.public_key().clone());
         initial_validator_dial_roster
             .retain(|peer_id| peer_id == &self_id || initial_trusted_sources.contains(peer_id));
         let validator_dial_scheduler = ValidatorDialScheduler::new(
@@ -7199,6 +7470,14 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             safety_reserve_bytes,
         )
         .expect("validated inbound dispatch budgets must fit");
+        // Mandatory first-release semantic geometry is admitted before any
+        // listener/dialer starts. No caller-priority or broad-Topic substitute.
+        let receive_credit_pool = crate::peer::receive_credit::Pool::new(
+            inbound_frame_byte_budgets.clone(),
+            inbound_dispatch_byte_budgets.clone(),
+            authenticated_source_credit_capacity,
+            receive_maximum,
+        )?;
         let relay_role = relay_role_from_mode(relay_mode);
         let relay_ttl = relay_ttl;
         let outbound_frame_queue_limits = OutboundFrameQueueLimits::new_with_progress_reserve(
@@ -7208,6 +7487,10 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             p2p_outbound_frame_queue_max_high_frames.get(),
             p2p_outbound_frame_queue_max_low_frames.get(),
         );
+        crate::peer::receive_credit::writer_partitions(
+            receive_maximum,
+            outbound_frame_queue_limits,
+        )?;
         let outbound_post_byte_budgets = OutboundPostByteBudgets::new_with_source_geometry(
             outbound_frame_queue_limits.high_max_bytes,
             outbound_frame_queue_limits.low_max_bytes,
@@ -7215,6 +7498,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             authenticated_source_geometry,
         )
         .expect("validated process-wide outbound byte geometry must fit");
+        let semantic_post_pool = outbound_post_byte_budgets.install_semantic(receive_maximum)?;
         let trust_gossip_config = trust_gossip;
         let trust_gossip = trust_gossip_config && soranet_handshake.trust_gossip;
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
@@ -7386,19 +7670,47 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         // Bounded queue capacities are supplied from node configuration so the
         // default build enforces backpressure without relying on feature flags.
         let (network_message_high_sender, network_message_high_receiver) =
-            net_channel::channel_with_capacity(p2p_queue_cap_high.get());
+            net_channel::channel_with_capacity(semantic_actor.ordinary_high_count);
         let (network_message_safety_sender, network_message_safety_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_high.get());
         let (network_message_progress_sender, network_message_progress_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_high.get());
         let (network_message_low_sender, network_message_low_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_low.get());
+        // Each physical FIFO is a positive partition of the existing lane
+        // count; adding semantic owners cannot multiply any configured total.
+        let high_total = p2p_queue_cap_high.get();
+        let high_n = message::TransportAdmissionClass::ORDINARY_HIGH.len();
+        let share = std::num::NonZeroUsize::new(high_total / high_n).ok_or_else(|| {
+            invalid_transport_geometry("high queue cap cannot fund all mandatory classes")
+        })?;
+        let lane_share = std::num::NonZeroUsize::new(high_total / high_n + high_total % high_n)
+            .expect("positive high share");
+        let low_n = message::TransportAdmissionClass::LOW.len();
+        let low_total = p2p_queue_cap_low.get();
+        let low_share = std::num::NonZeroUsize::new(low_total / low_n).ok_or_else(|| {
+            invalid_transport_geometry("low queue cap cannot fund BlockSync and other low traffic")
+        })?;
+        let sync_share = std::num::NonZeroUsize::new(low_total / low_n + low_total % low_n)
+            .expect("positive low share");
         let (peer_message_high_sender, peer_message_high_receiver) =
-            peer_message_channel::<T>(p2p_queue_cap_high);
+            peer_message_channel::<T>(lane_share);
+        let (peer_message_payload_sender, peer_message_payload_receiver) =
+            peer_message_channel::<T>(share);
+        let (peer_message_availability_sender, peer_message_availability_receiver) =
+            peer_message_channel::<T>(share);
+        let (peer_message_recovery_control_sender, peer_message_recovery_control_receiver) =
+            peer_message_channel::<T>(share);
+        let (peer_message_recovery_data_sender, peer_message_recovery_data_receiver) =
+            peer_message_channel::<T>(share);
+        let (peer_message_control_sender, peer_message_control_receiver) =
+            peer_message_channel::<T>(share);
         let (peer_message_safety_sender, peer_message_safety_receiver) =
             peer_message_channel::<T>(p2p_queue_cap_high);
+        let (peer_message_block_sync_sender, peer_message_block_sync_receiver) =
+            peer_message_channel::<T>(sync_share);
         let (peer_message_low_sender, peer_message_low_receiver) =
-            peer_message_channel::<T>(p2p_queue_cap_low);
+            peer_message_channel::<T>(low_share);
         let (service_message_sender, service_message_receiver) =
             mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         let listener_socket_addr =
@@ -7528,6 +7840,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet_runtime.clone(),
             peers: HashMap::new(),
+            reader_arbitration: connection_arbitration::Arbitration::default(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
             key_pair,
@@ -7559,6 +7872,12 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             network_message_progress_receiver,
             network_message_low_receiver,
             peer_message_high_receiver,
+            peer_message_payload_sender, peer_message_payload_receiver,
+            peer_message_block_sync_sender, peer_message_block_sync_receiver,
+            peer_message_availability_sender, peer_message_availability_receiver,
+            peer_message_recovery_control_sender, peer_message_recovery_control_receiver,
+            peer_message_recovery_data_sender, peer_message_recovery_data_receiver,
+            peer_message_control_sender, peer_message_control_receiver,
             peer_message_safety_receiver,
             peer_message_low_receiver,
             peer_message_high_sender,
@@ -7586,6 +7905,8 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             outbound_frame_queue_limits,
             outbound_post_byte_budgets,
             inbound_frame_byte_budgets: inbound_frame_byte_budgets.clone(),
+            _receive_credit_pool: receive_credit_pool,
+            _semantic_post_pool:Some(semantic_post_pool),
             inbound_dispatch_byte_budgets,
             authenticated_source_credit_capacity,
             max_frame_bytes,
@@ -8315,9 +8636,9 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         }
         after_route_preflight();
         msg.priority = canonical_outbound_priority(topic, route, msg.priority);
+        let class = ActorProgressClass::for_payload(&msg.data)
+            .expect("a reliable typed progress message must have one actor class");
         let message = NetworkMessage::Post(msg);
-        let class = ActorProgressClass::for_route(topic, route)
-            .expect("a reliable progress route must have one actor class");
         let source = ActorProgressSource {
             target: Some(reply_route.tenure.delivery_peer.clone()),
             class,
@@ -8466,8 +8787,8 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 rank: 1,
             });
         }
-        let class = ActorProgressClass::for_route(topic, route)
-            .expect("a reliable progress route must have one actor class");
+        let class = ActorProgressClass::for_payload(&msg.data)
+            .expect("a reliable typed progress message must have one actor class");
         let attempts = ticket.targets.len();
         let mut minimum_rank = usize::MAX;
         for _ in 0..attempts {
@@ -8964,7 +9285,34 @@ mod accept_stream_tests {
     fn test_p2p_identity_keys(node: KeyPair) -> P2pIdentityKeys {
         P2pIdentityKeys::new(node, test_transport_key_pair()).expect("test P2P identity roles")
     }
-    impl crate::network::message::ClassifyTopic for Dummy {}
+    impl crate::network::message::ClassifyTopic for Dummy {
+        // This explicit synthetic payload has no Availability or sidecar variants.
+        // A positive bound for each empty variant set funds mandatory geometry;
+        // no production payload owner uses these fixture-only declarations.
+        fn availability_frame_maximum(
+            _: &iroha_model_base::peer::PeerId,
+        ) -> Result<usize, norito::core::Error> {
+            Ok(1)
+        }
+        fn recovery_frame_maxima(
+            _: &iroha_model_base::peer::PeerId,
+        ) -> Result<[usize; 2], norito::core::Error> {
+            Ok([1, 1])
+        }
+
+        fn inbound_topic(
+            payload: &[u8],
+            flags: u8,
+        ) -> Result<Option<message::Topic>, norito::core::Error> {
+            // Unit fixture decode is fixed and performs no dynamic allocation.
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            let (value, used) = norito::core::decode_field_canonical::<Self>(payload)?;
+            if used != payload.len() {
+                return Err(norito::core::Error::LengthMismatch);
+            }
+            Ok(Some(value.topic()))
+        }
+    }
     type TestNetworkHandle = super::NetworkBaseHandle<Dummy, ChaCha20Poly1305>;
     async fn start_test_network(
         key_pair: KeyPair,
@@ -9208,7 +9556,7 @@ mod accept_stream_tests {
             allow_cidrs: vec![],
             deny_cidrs: vec![],
             disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
+            max_frame_bytes: 1_048_576 + iroha_config::parameters::defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES,
             tcp_nodelay: true,
             tcp_keepalive: None,
             max_frame_bytes_consensus: 262_144,
@@ -9347,10 +9695,10 @@ mod accept_stream_tests {
             exact_total,
             exact_total,
             3,
+            6,
+            2,
             1,
-            1,
-            1,
-            1,
+            2,
         );
         assert_eq!(
             exact.expect("exact boundary must be valid"),
@@ -9361,6 +9709,9 @@ mod accept_stream_tests {
                     safety,
                     lane,
                     bulk: max_ordinary,
+                    availability: 0,
+                    recovery_control: 0,
+                    recovery_data: 0,
                 },
             }
         );
@@ -9372,10 +9723,10 @@ mod accept_stream_tests {
             exact_total - 1,
             exact_total,
             3,
+            6,
+            2,
             1,
-            1,
-            1,
-            1,
+            2,
         );
         assert!(
             matches!(below, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput),
@@ -9389,10 +9740,10 @@ mod accept_stream_tests {
             exact_total,
             exact_total - 1,
             3,
+            6,
+            2,
             1,
-            1,
-            1,
-            1,
+            2,
         );
         assert!(
             matches!(per_peer_below, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput),
@@ -9431,10 +9782,10 @@ mod accept_stream_tests {
                 32 * 1024 * 1024,
                 32 * 1024 * 1024,
                 3,
+                message::TransportAdmissionClass::ORDINARY_HIGH.len(),
+                message::TransportAdmissionClass::LOW.len(),
                 1,
-                1,
-                1,
-                1,
+                2,
             )
         };
         validate(required).expect("exact low-stream Connect frame capacity");
@@ -11199,16 +11550,20 @@ where
                     quic_datagram_max_payload_bytes,
                 );
                 let peer_task = AbortOnDropTask::new(peer_task);
-                if !preauth_deadline
-                    .wait_for_authentication(auth_receiver)
-                    .await
-                {
-                    iroha_logger::warn!(
-                        %remote,
-                        timeout = ?preauth_timeout,
-                        "QUIC peer did not authenticate before its pre-authentication deadline"
-                    );
-                    return;
+                match preauth_deadline.wait_for_authentication(auth_receiver).await {
+                    crate::preauth::AuthenticationWaitOutcome::Authenticated => {}
+                    crate::preauth::AuthenticationWaitOutcome::PeerEnded => {
+                        iroha_logger::debug!(%remote, "QUIC peer ended before completing authentication");
+                        return;
+                    }
+                    crate::preauth::AuthenticationWaitOutcome::DeadlineElapsed => {
+                        iroha_logger::warn!(
+                            %remote,
+                            timeout = ?preauth_timeout,
+                            "QUIC peer did not authenticate before its pre-authentication deadline"
+                        );
+                        return;
+                    }
                 }
                 drop(source_permit);
                 reservation.disarm();
@@ -11573,16 +11928,20 @@ where
                             quic_datagram_max_payload_bytes,
                         );
                         let peer_task = AbortOnDropTask::new(peer_task);
-                        if !preauth_deadline
-                            .wait_for_authentication(auth_receiver)
-                            .await
-                        {
-                            iroha_logger::warn!(
-                                %remote,
-                                timeout = ?preauth_timeout,
-                                "TLS peer did not authenticate before its pre-authentication deadline"
-                            );
-                            return;
+                        match preauth_deadline.wait_for_authentication(auth_receiver).await {
+                            crate::preauth::AuthenticationWaitOutcome::Authenticated => {}
+                            crate::preauth::AuthenticationWaitOutcome::PeerEnded => {
+                                iroha_logger::debug!(%remote, "TLS peer ended before completing authentication");
+                                return;
+                            }
+                            crate::preauth::AuthenticationWaitOutcome::DeadlineElapsed => {
+                                iroha_logger::warn!(
+                                    %remote,
+                                    timeout = ?preauth_timeout,
+                                    "TLS peer did not authenticate before its pre-authentication deadline"
+                                );
+                                return;
+                            }
                         }
                         drop(source_permit);
                         reservation.disarm();
@@ -11655,6 +12014,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     soranet_handshake: Arc<SoranetHandshakeRuntime>,
     /// Current [`Peer`]s in [`Peer::Ready`] state.
     peers: HashMap<PeerId, RefPeer<WireMessage<T>>>,
+    /// Exclusive pre-credit reader selection for registered authenticated connections.
+    reader_arbitration: connection_arbitration::Arbitration,
     /// [`Peer`]s in process of being connected.
     connecting_peers: HashMap<ConnectionId, Peer>,
     /// Exact outbound generations retained until their termination witness.
@@ -11716,6 +12077,23 @@ struct NetworkBase<T: Pload, E: Enc> {
     network_message_low_receiver: net_channel::Receiver<AdmittedNetworkMessage<T>>,
     /// High-priority inbound peer messages (consensus/control).
     peer_message_high_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    /// Dedicated semantic bulk delivery owner.
+    peer_message_payload_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    peer_message_payload_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    peer_message_block_sync_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    peer_message_block_sync_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    peer_message_availability_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    peer_message_availability_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    /// Dedicated semantic recovery control delivery owner.
+    peer_message_recovery_control_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    peer_message_recovery_control_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    /// Dedicated semantic recovery data delivery owner.
+    peer_message_recovery_data_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    peer_message_recovery_data_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    /// Dedicated semantic control delivery owner.
+    peer_message_control_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    peer_message_control_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+
     /// Authoritative-consensus safety messages from peers.
     peer_message_safety_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
     /// Low-priority inbound peer messages (gossip/sync).
@@ -11773,6 +12151,9 @@ struct NetworkBase<T: Pload, E: Enc> {
     outbound_post_byte_budgets: OutboundPostByteBudgets,
     /// Aggregate pre-authentication frame owners shared by every connected reader.
     inbound_frame_byte_budgets: crate::peer::InboundFrameByteBudgets,
+    /// Owns the one validated class partition across all live and draining tenures.
+    _receive_credit_pool: Arc<crate::peer::receive_credit::Pool>,
+    _semantic_post_pool: Option<Arc<crate::peer::post_admission::Pool>>,
     /// Classified byte owners spanning actor, subscriber, and application queues.
     inbound_dispatch_byte_budgets: crate::peer::InboundDispatchByteBudgets,
     /// Per-lane message credits reserved for each authenticated connection.
@@ -11942,8 +12323,56 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         let _ = update.respond_to.send(result);
     }
+    fn peer_authenticated(&mut self, candidate: Authenticated) {
+        let connection_id = candidate.connection_id;
+        // Only a real listener/dial reservation can create a provisional entry.
+        // Authentication supplies identity; it does not mint another connection slot.
+        let registered = self.incoming_pending.contains(&connection_id)
+            || self
+                .connecting_peers
+                .get(&connection_id)
+                .is_some_and(|target| target.id() == candidate.peer.id());
+        if !registered {
+            candidate.cancel.send_replace(true);
+            return;
+        }
+        // Preserve exact configured-address hub proof at the moved identity
+        // boundary, independently of which simultaneous session wins. The
+        // losing transport grants no online or application authority.
+        if matches!(candidate.relay_role, RelayRole::Hub)
+            && self.outbound_connections.contains(&connection_id)
+            && self
+                .connecting_peers
+                .get(&connection_id)
+                .is_some_and(|target| {
+                    target.id() == candidate.peer.id()
+                        && self.configured_hub_matches(target.address())
+                })
+        {
+            self.relay_trusted_peers.insert(candidate.peer.id().clone());
+        }
+        self.drain_reader_releases(SERVICE_MESSAGE_BUDGET);
+        let admission = self.reader_arbitration.admit(candidate);
+        if let Some(retired) = admission.retired {
+            self.mark_connection_terminating(retired);
+        }
+        if !admission.accepted {
+            self.mark_connection_terminating(connection_id);
+        }
+    }
+    fn drain_reader_releases(&mut self, budget: usize) {
+        for _ in 0..budget {
+            let Some(id) = self.reader_arbitration.ready_release() else {
+                break;
+            };
+            self.reader_arbitration.released(id);
+        }
+    }
     fn handle_service_message(&mut self, service_message: ServiceMessage<WireMessage<T>>) {
         match service_message {
+            ServiceMessage::Authenticated(candidate) => {
+                self.peer_authenticated(candidate);
+            }
             ServiceMessage::Terminated(terminated) => {
                 self.peer_terminated(terminated);
             }
@@ -12390,6 +12819,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 iroha_logger::debug!("Shutting down due to signal");
                 break;
             }
+            self.drain_reader_releases(SERVICE_MESSAGE_BUDGET);
             self.flush_safety_subscribers();
             let mut outbound_safety_drained = 0usize;
             while outbound_safety_drained < CONSENSUS_SAFETY_DRAIN_BUDGET
@@ -12589,6 +13019,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 }
                 // The pre-drain above preserves service-before-data priority;
                 // this branch handles arrivals that race with selection.
+                released = std::future::poll_fn(|cx| self.reader_arbitration.poll_released(cx)) => {
+                    if shutdown_signal.is_sent() { break; }
+                    self.reader_arbitration.released(released);
+                }
                 Some(service_message) = self.service_message_receiver.recv() => {
                     self.handle_service_message(service_message);
                 }
@@ -12651,6 +13085,25 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 Some(peer_message) = self.peer_message_high_receiver.recv() => {
                     self.peer_message(peer_message).await;
                 }
+                Some(peer_message) = self.peer_message_payload_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
+                Some(peer_message) = self.peer_message_availability_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
+                Some(peer_message) = self.peer_message_block_sync_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
+                Some(peer_message) = self.peer_message_recovery_control_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
+                Some(peer_message) = self.peer_message_recovery_data_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
+                Some(peer_message) = self.peer_message_control_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
+
                 // Low-priority network messages (gossip)
                 network_message = self.network_message_low_receiver.recv() => {
                     let Some(network_message) = network_message else {
@@ -14507,6 +14960,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             crate::peer::message::PeerMessageSenders<WireMessage<T>>,
         >,
     ) {
+        self.reader_arbitration.cancel(connection_id);
         ready_peer_handle.request_termination();
         drop(peer_message_sender);
         // Keep this authenticated tenure charged against the total cap
@@ -14528,6 +14982,13 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             trust_gossip,
         }: Connected<WireMessage<T>>,
     ) {
+        if !self
+            .reader_arbitration
+            .claim_connected(connection_id, peer.id(), disambiguator)
+        {
+            self.reject_authenticated_tenure(connection_id, ready_peer_handle, peer_message_sender);
+            return;
+        }
         let dial_target = self.connecting_peers.remove(&connection_id);
         let proven_outbound_hub = matches!(relay_role, RelayRole::Hub)
             && self.outbound_connections.contains(&connection_id)
@@ -14636,28 +15097,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             self.reject_authenticated_tenure(connection_id, ready_peer_handle, peer_message_sender);
             return;
         }
-        //  Insert peer if peer not in peers yet or replace peer if it's disambiguator value is smaller than new one (simultaneous connections resolution rule)
-        match self.peers.get(peer.id()) {
-            Some(peer) if peer.disambiguator > disambiguator && !proven_outbound_hub => {
-                iroha_logger::debug!(
-                    "Peer is disconnected due to simultaneous connection resolution policy"
-                );
-                self.reject_authenticated_tenure(
-                    connection_id,
-                    ready_peer_handle,
-                    peer_message_sender,
-                );
-                return;
-            }
-            Some(_) => {
-                iroha_logger::debug!(
-                    "New peer will replace previous one due to simultaneous connection resolution policy"
-                );
-            }
-            None => {
-                iroha_logger::debug!("Peer isn't in the peer set, inserting");
-            }
-        }
+        // The full authenticated session order was settled before reader
+        // binding. No second compact/direction/hub arbitration may disagree.
         if configured_hub_candidate {
             let prior_hub = self.pending_configured_hub_source.clone();
             self.pending_configured_hub_source = Some(peer.id().clone());
@@ -14730,13 +15171,19 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             handle: ready_peer_handle,
             conn_id: connection_id,
             p2p_addr: peer.address().clone(),
-            disambiguator,
             relay_role,
             trust_gossip,
         };
         if peer_message_sender
             .send(crate::peer::message::PeerMessageSenders {
                 safety: self.peer_message_safety_sender.clone(),
+                payload: self.peer_message_payload_sender.clone(),
+                block_sync: self.peer_message_block_sync_sender.clone(),
+                availability: self.peer_message_availability_sender.clone(),
+                recovery_control: self.peer_message_recovery_control_sender.clone(),
+                recovery_data: self.peer_message_recovery_data_sender.clone(),
+                control: self.peer_message_control_sender.clone(),
+
                 high: self.peer_message_high_sender.clone(),
                 low: self.peer_message_low_sender.clone(),
                 dispatch_budgets: self.inbound_dispatch_byte_budgets.clone(),
@@ -14867,6 +15314,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         );
     }
     fn peer_terminated(&mut self, Terminated { peer, conn_id }: Terminated) {
+        self.reader_arbitration.cancel(conn_id);
         let known_connection = self.outbound_connections.contains(&conn_id)
             || self.reply_route_tenures.contains_key(&conn_id)
             || self.terminating_connections.contains(&conn_id)
@@ -15611,6 +16059,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         use tokio::sync::mpsc::error::TrySendError;
         let topic = msg.payload.topic();
         let route = msg.payload.subscriber_route();
+        let admission_class = msg.payload.admission_class();
         let progress_class = subscriber_progress_class(topic, route);
         let reliable_single_consumer = is_reliable_progress_route(topic, route);
         let logging_peer = msg.peer.clone();
@@ -15655,14 +16104,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let matched_count = self
             .subscribers_to_peers_messages
             .iter()
-            .filter(|subscriber| subscriber.filter.matches(topic, route))
+            .filter(|subscriber| subscriber.filter.matches(topic, route, admission_class))
             .count();
         let mut next = Vec::with_capacity(self.subscribers_to_peers_messages.len());
         let mut recovered = VecDeque::new();
         let mut matched_index = 0_usize;
         let mut original = Some(msg);
         for mut subscriber in self.subscribers_to_peers_messages.drain(..) {
-            if !subscriber.filter.matches(topic, route) {
+            if !subscriber.filter.matches(topic, route, admission_class) {
                 next.push(subscriber);
                 continue;
             }
@@ -16001,6 +16450,9 @@ fn bounded_hash_jitter_ms(material: &str, upper_ms: u64) -> u64 {
         .expect("bounded jitter value fits in u64")
 }
 #[cfg(test)]
+#[path = "network/admission_class_tests.rs"]
+pub(crate) mod admission_class_tests;
+#[cfg(test)]
 mod tests {
     use super::handle_update_tests::handle_with_network_receivers;
     use super::*;
@@ -16200,6 +16652,8 @@ mod tests {
                 expected.map(|class| match class {
                     ReliableProgressClass::Safety => ActorProgressClass::Safety,
                     ReliableProgressClass::Lane => ActorProgressClass::Lane,
+                    ReliableProgressClass::Bulk if topic == message::Topic::ConsensusChunk =>
+                        ActorProgressClass::Availability,
                     ReliableProgressClass::Bulk => ActorProgressClass::Bulk,
                 })
             );
@@ -16302,6 +16756,33 @@ mod tests {
             )
         };
     }
+    /// Logical actor fixture: no socket/reader exists. Hold the synthetic permit
+    /// through the real authenticated/Connected handoff, then release it. Native
+    /// arbitration tests below exercise actual delayed physical reader ownership.
+    fn connect_authenticated_fixture(
+        network: &mut NetworkBase<DummyMsg, ChaCha20Poly1305>,
+        connected: Connected<WireMessage<DummyMsg>>,
+    ) {
+        let mut session = [0; iroha_crypto::Hash::LENGTH];
+        session[..8].copy_from_slice(&connected.disambiguator.to_be_bytes());
+        let (reply, mut receiver) = oneshot::channel();
+        network.peer_authenticated(Authenticated {
+            peer: connected.peer.clone(),
+            connection_id: connected.connection_id,
+            session,
+            relay_role: connected.relay_role,
+            cancel: connected.ready_peer_handle.termination_sender_for_test(),
+            reply,
+        });
+        if let Ok(permit) = receiver.try_recv() {
+            network.peer_connected(connected);
+            drop(permit);
+        } else {
+            connected.ready_peer_handle.request_termination();
+            drop(connected.peer_message_sender);
+        }
+    }
+    include!("network/connection_lifecycle_tests.rs");
     macro_rules! connect_test_peer {
         (
             $network:ident,
@@ -16313,17 +16794,20 @@ mod tests {
         ) => {
             let (peer_handle, $receivers) = test_wire_peer_handle::<DummyMsg>(1);
             let (peer_message_sender, $receiver) = tokio::sync::oneshot::channel();
-            $network.peer_connected(Connected {
-                peer: ($peer).clone(),
-                connection_id: $connection_id,
-                ready_peer_handle: peer_handle,
-                peer_message_sender,
-                delivery_drain: InboundDeliveryDrain::completed_for_test(),
-                disambiguator: $disambiguator,
-                relay_role: RelayRole::$relay_role,
-                scion_supported: false,
-                trust_gossip: true,
-            });
+            connect_authenticated_fixture(
+                &mut $network,
+                Connected {
+                    peer: ($peer).clone(),
+                    connection_id: $connection_id,
+                    ready_peer_handle: peer_handle,
+                    peer_message_sender,
+                    delivery_drain: InboundDeliveryDrain::completed_for_test(),
+                    disambiguator: $disambiguator,
+                    relay_role: RelayRole::$relay_role,
+                    scion_supported: false,
+                    trust_gossip: true,
+                },
+            );
         };
     }
     macro_rules! admit_lane_reply {
@@ -18915,7 +19399,6 @@ mod tests {
                 handle,
                 conn_id,
                 p2p_addr: peer_addr,
-                disambiguator: 0,
                 relay_role: RelayRole::Disabled,
                 trust_gossip,
             },
@@ -19125,6 +19608,20 @@ mod tests {
             consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_safety_sender, peer_message_safety_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_payload_sender, peer_message_payload_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_block_sync_sender, peer_message_block_sync_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_availability_sender, peer_message_availability_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_recovery_control_sender, peer_message_recovery_control_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_recovery_data_sender, peer_message_recovery_data_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_control_sender, peer_message_control_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (service_message_tx, service_message_rx) =
@@ -19137,6 +19634,18 @@ mod tests {
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
             control_update_channel();
         let soranet = test_soranet_handshake_runtime();
+        // This bare actor fixture does not instantiate a native application
+        // transport. Its explicit finite geometry remains shared by all owners.
+        let inbound_frames = crate::peer::InboundFrameByteBudgets::default();
+        assert!(inbound_frames.install_protected_sources(HashSet::new()));
+        let inbound_dispatch = crate::peer::InboundDispatchByteBudgets::default();
+        let receive_credit_pool = crate::peer::receive_credit::Pool::new(
+            inbound_frames.clone(),
+            inbound_dispatch.clone(),
+            6,
+            [1024; message::TransportAdmissionClass::COUNT],
+        )
+        .expect("explicit synthetic actor geometry");
         let network_id = test_network_id("test-chain");
         let self_id = PeerId::from(key_pair.public_key().clone());
         let key_pair = Arc::new(key_pair);
@@ -19160,6 +19669,7 @@ mod tests {
                 peer_reputations: PeerReputationBook::default(),
                 soranet_handshake: soranet,
                 peers: HashMap::new(),
+                reader_arbitration: connection_arbitration::Arbitration::default(),
                 connecting_peers: HashMap::new(),
                 outbound_connections: HashSet::new(),
                 key_pair,
@@ -19193,10 +19703,23 @@ mod tests {
                 network_message_progress_receiver: super::net_channel::channel_with_capacity(1).1,
                 network_message_low_receiver: network_message_low_rx,
                 peer_message_high_receiver: peer_message_hi_rx,
-                peer_message_safety_receiver: mpsc::channel(1).1,
+                peer_message_payload_sender,
+                peer_message_payload_receiver,
+                peer_message_block_sync_sender,
+                peer_message_block_sync_receiver,
+                peer_message_availability_sender,
+                peer_message_availability_receiver,
+                peer_message_recovery_control_sender,
+                peer_message_recovery_control_receiver,
+                peer_message_recovery_data_sender,
+                peer_message_recovery_data_receiver,
+                peer_message_control_sender,
+                peer_message_control_receiver,
+
+                peer_message_safety_receiver,
                 peer_message_low_receiver: peer_message_lo_rx,
                 peer_message_high_sender: peer_message_hi_tx,
-                peer_message_safety_sender: mpsc::channel(1).0,
+                peer_message_safety_sender,
                 peer_message_low_sender: peer_message_lo_tx,
                 service_message_receiver: service_message_rx,
                 service_message_sender: service_message_tx,
@@ -19217,9 +19740,11 @@ mod tests {
                 post_queue_cap: 4,
                 outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
                 outbound_post_byte_budgets: OutboundPostByteBudgets::default(),
-                inbound_frame_byte_budgets: crate::peer::InboundFrameByteBudgets::default(),
-                inbound_dispatch_byte_budgets: crate::peer::InboundDispatchByteBudgets::default(),
-                authenticated_source_credit_capacity: 1,
+                inbound_frame_byte_budgets: inbound_frames,
+                _receive_credit_pool: receive_credit_pool,
+                _semantic_post_pool: None,
+                inbound_dispatch_byte_budgets: inbound_dispatch,
+                authenticated_source_credit_capacity: 5,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
                 dns_last_refresh: HashMap::new(),
@@ -20133,17 +20658,20 @@ mod tests {
         reserve_test_incoming(&mut network, old_conn_id);
         let (old_handle, old_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (old_sender_tx, mut old_sender_rx) = tokio::sync::oneshot::channel();
-        network.peer_connected(Connected {
-            peer: peer.clone(),
-            connection_id: old_conn_id,
-            ready_peer_handle: old_handle,
-            peer_message_sender: old_sender_tx,
-            delivery_drain: Arc::clone(&old_delivery_drain),
-            disambiguator: 0,
-            relay_role: RelayRole::Disabled,
-            scion_supported: false,
-            trust_gossip: true,
-        });
+        connect_authenticated_fixture(
+            &mut network,
+            Connected {
+                peer: peer.clone(),
+                connection_id: old_conn_id,
+                ready_peer_handle: old_handle,
+                peer_message_sender: old_sender_tx,
+                delivery_drain: Arc::clone(&old_delivery_drain),
+                disambiguator: 0,
+                relay_role: RelayRole::Disabled,
+                scion_supported: false,
+                trust_gossip: true,
+            },
+        );
         let old_senders = old_sender_rx
             .try_recv()
             .expect("authenticated connection receives its dispatch owners");
@@ -20324,17 +20852,20 @@ mod tests {
         let (old_handle, old_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (old_sender_tx, mut old_sender_rx) = tokio::sync::oneshot::channel();
         let old_delivery_drain = Arc::new(InboundDeliveryDrain::new());
-        network.peer_connected(Connected {
-            peer: peer.clone(),
-            connection_id: old_conn_id,
-            ready_peer_handle: old_handle,
-            peer_message_sender: old_sender_tx,
-            delivery_drain: Arc::clone(&old_delivery_drain),
-            disambiguator: 0,
-            relay_role: RelayRole::Disabled,
-            scion_supported: false,
-            trust_gossip: true,
-        });
+        connect_authenticated_fixture(
+            &mut network,
+            Connected {
+                peer: peer.clone(),
+                connection_id: old_conn_id,
+                ready_peer_handle: old_handle,
+                peer_message_sender: old_sender_tx,
+                delivery_drain: Arc::clone(&old_delivery_drain),
+                disambiguator: 0,
+                relay_role: RelayRole::Disabled,
+                scion_supported: false,
+                trust_gossip: true,
+            },
+        );
         let old_senders = old_sender_rx
             .try_recv()
             .expect("first authenticated connection receives its dispatch owners");
@@ -20364,17 +20895,20 @@ mod tests {
         let (new_handle, _new_receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (new_sender_tx, mut new_sender_rx) = tokio::sync::oneshot::channel();
         let new_delivery_drain = Arc::new(InboundDeliveryDrain::new());
-        network.peer_connected(Connected {
-            peer: peer.clone(),
-            connection_id: new_conn_id,
-            ready_peer_handle: new_handle,
-            peer_message_sender: new_sender_tx,
-            delivery_drain: new_delivery_drain,
-            disambiguator: 1,
-            relay_role: RelayRole::Disabled,
-            scion_supported: false,
-            trust_gossip: true,
-        });
+        connect_authenticated_fixture(
+            &mut network,
+            Connected {
+                peer: peer.clone(),
+                connection_id: new_conn_id,
+                ready_peer_handle: new_handle,
+                peer_message_sender: new_sender_tx,
+                delivery_drain: new_delivery_drain,
+                disambiguator: 1,
+                relay_role: RelayRole::Disabled,
+                scion_supported: false,
+                trust_gossip: true,
+            },
+        );
         assert!(
             old_receivers.termination_requested(),
             "replacement must tear down the predecessor connection"
@@ -20508,17 +21042,20 @@ mod tests {
         let (handle, receivers) = test_wire_peer_handle::<DummyMsg>(1);
         let (peer_message_sender, peer_message_receiver) = tokio::sync::oneshot::channel();
         drop(peer_message_receiver);
-        network.peer_connected(Connected {
-            peer: peer.clone(),
-            connection_id: conn_id,
-            ready_peer_handle: handle,
-            peer_message_sender,
-            delivery_drain: InboundDeliveryDrain::completed_for_test(),
-            disambiguator: 0,
-            relay_role: RelayRole::Disabled,
-            scion_supported: false,
-            trust_gossip: true,
-        });
+        connect_authenticated_fixture(
+            &mut network,
+            Connected {
+                peer: peer.clone(),
+                connection_id: conn_id,
+                ready_peer_handle: handle,
+                peer_message_sender,
+                delivery_drain: InboundDeliveryDrain::completed_for_test(),
+                disambiguator: 0,
+                relay_role: RelayRole::Disabled,
+                scion_supported: false,
+                trust_gossip: true,
+            },
+        );
         assert!(!network.peers.contains_key(peer.id()));
         assert!(!network.incoming_pending.contains(&conn_id));
         assert!(!network.incoming_active.contains(&conn_id));
@@ -26821,6 +27358,188 @@ mod tests {
         );
     }
 }
+/// Validate the complete mandatory native class maxima against the shipping
+/// default byte/count geometry, without opening a socket or spawning a task.
+/// Intended for native codec fixtures; successful construction is not a native
+/// memory measurement or workload qualification.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn assert_native_semantic_geometry_for_test<T: Pload + message::ClassifyTopic>(peer: &PeerId) {
+    use iroha_config::parameters::defaults::network as d;
+    use iroha_crypto::encryption::ChaCha20Poly1305 as Cipher;
+    let caps = TopicFrameCaps {
+        consensus: d::MAX_FRAME_BYTES_CONSENSUS.get(),
+        control: d::MAX_FRAME_BYTES_CONTROL.get(),
+        block_sync: d::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+        tx_gossip: d::MAX_FRAME_BYTES_TX_GOSSIP.get(),
+        peer_gossip: d::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
+        health: d::MAX_FRAME_BYTES_HEALTH.get(),
+        connect: d::MAX_FRAME_BYTES_CONNECT.get(),
+        other: d::MAX_FRAME_BYTES_OTHER.get(),
+    };
+    let high = d::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES.get();
+    let low = d::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES.get();
+    let connections = d::lane_profile::CORE_MAX_TOTAL_CONNECTIONS;
+    let old = validate_transport_queue_geometry::<Cipher>(
+        d::MAX_FRAME_BYTES.get(),
+        caps,
+        high,
+        low,
+        d::DEFERRED_SEND_MAX_BYTES_TOTAL,
+        d::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        d::DEFERRED_SEND_MAX_PER_PEER,
+        d::P2P_QUEUE_CAP_HIGH.get(),
+        d::P2P_QUEUE_CAP_LOW.get(),
+        d::P2P_POST_QUEUE_CAP.get(),
+        d::P2P_SUBSCRIBER_QUEUE_CAP.get(),
+    )
+    .unwrap();
+    let maxima = caps
+        .admission_maxima::<T>(
+            peer,
+            crate::frame_plaintext_cap_for::<Cipher>(d::MAX_FRAME_BYTES.get()),
+        )
+        .unwrap();
+    let targets = network_actor_progress_target_capacity(connections).unwrap();
+    let actor = semantic_actor_geometry::<Cipher>(
+        old.actor_progress_bytes,
+        maxima,
+        targets,
+        high,
+        d::P2P_QUEUE_CAP_HIGH.get(),
+    )
+    .unwrap();
+    assert_eq!(
+        actor.ordinary_high_bytes + actor.progress.checked_per_target_total().unwrap() * targets,
+        high + old.actor_progress_bytes.checked_per_target_total().unwrap() * targets
+    );
+    let _actor = NetworkActorProgressBudget::new_classed(
+        actor.progress,
+        targets,
+        network_actor_progress_waiter_capacity(connections).unwrap(),
+    )
+    .unwrap();
+    let source_geometry = crate::peer::AuthenticatedSourceGeometry::new(connections);
+    let source = crate::peer::InboundFrameByteBudgets::new_with_source_geometry(
+        high,
+        low,
+        old.progress_reserve_bytes,
+        source_geometry.clone(),
+    )
+    .unwrap();
+    let dispatch =
+        crate::peer::InboundDispatchByteBudgets::new(high, low, old.safety_reserve_bytes).unwrap();
+    let _receive = crate::peer::receive_credit::Pool::new(
+        source,
+        dispatch,
+        inbound_source_credit_capacity(d::P2P_SUBSCRIBER_QUEUE_CAP.get(), connections).unwrap(),
+        maxima,
+    )
+    .unwrap();
+    let posts = crate::peer::OutboundPostByteBudgets::new_with_source_geometry(
+        high,
+        low,
+        old.progress_reserve_bytes,
+        source_geometry,
+    )
+    .unwrap();
+    let _post = posts.install_semantic(maxima).unwrap();
+    let writer = OutboundFrameQueueLimits::new_with_progress_reserve(
+        high,
+        low,
+        old.progress_reserve_bytes,
+        d::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES.get(),
+        d::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES.get(),
+    );
+    crate::peer::receive_credit::writer_partitions(maxima, writer).unwrap();
+}
+/// Exercise mandatory post/grant ownership with two actual signed native message
+/// shapes on a partial Tokio duplex stream. The fixture retains a Payload while
+/// an ordinary RS16 Availability frame progresses, then proves eventual Payload
+/// service and physical byte release. It starts no node or real network.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn assert_payload_availability_progress_for_test<T: Pload + message::ClassifyTopic>(
+    key: &KeyPair,
+    payload: T,
+    availability: T,
+) {
+    // Use actual typed inputs at the actor boundary before exercising the
+    // physical post/AEAD/receive pipeline. The blocked owner keeps its ticket
+    // until exact release; a second body cannot leapfrog it.
+    assert_eq!(
+        ActorProgressClass::for_payload(&payload),
+        Some(ActorProgressClass::Bulk)
+    );
+    assert_eq!(
+        ActorProgressClass::for_payload(&availability),
+        Some(ActorProgressClass::Availability)
+    );
+    let budget = NetworkActorProgressBudget::new_classed(
+        ActorProgressByteLimits::uniform(1024 * 1024),
+        1,
+        3 * RELIABLE_PROGRESS_WAITERS_PER_SOURCE,
+    )
+    .unwrap();
+    let source = |class| ActorProgressSource {
+        target: Some(key.public_key().clone().into()),
+        class,
+    };
+    let shape = |tag: u8, topic| ProgressTicketShape {
+        topic,
+        stream_wire_bytes: 1,
+        broadcast: false,
+        reply_writer_timeout_attempt: None,
+        request_digest: Hash::new([tag]),
+        authority: None,
+    };
+    let first = shape(0, payload.topic());
+    let body_source = source(ActorProgressClass::Bulk);
+    let ProgressLeaseAttempt::Ready {
+        lease: blocked,
+        mut ticket,
+    } = budget.try_reserve_for_source(1, first, body_source.clone(), None, None)
+    else {
+        panic!("first body must own its actor source");
+    };
+    ticket.commit();
+    let second = shape(1, payload.topic());
+    let ProgressLeaseAttempt::Waiting {
+        ticket: Some(waiter),
+        rank: 1,
+    } = budget.try_reserve_for_source(1, second, body_source.clone(), None, None)
+    else {
+        panic!("second body must wait with an exact rank");
+    };
+    let ProgressLeaseAttempt::Ready {
+        lease: independent,
+        mut ticket,
+    } = budget.try_reserve_for_source(
+        1,
+        shape(2, availability.topic()),
+        source(ActorProgressClass::Availability),
+        None,
+        None,
+    )
+    else {
+        panic!("availability must bypass a retained body actor owner");
+    };
+    ticket.commit();
+    crate::peer::receive_credit::progress_fixture::exercise(key, payload, availability).await;
+    drop(independent);
+    drop(blocked);
+    let ProgressLeaseAttempt::Ready {
+        lease: eventual,
+        mut ticket,
+    } = budget.try_reserve_for_source(1, second, body_source, None, Some(waiter))
+    else {
+        panic!("ordinary body must resume at its original rank");
+    };
+    ticket.commit();
+    drop(eventual);
+    let state = budget.state.lock().unwrap();
+    assert!(state.retained_by_source.is_empty());
+    assert_eq!(state.waiter_count, 0);
+}
+
 pub mod message {
     //! Module for network messages
     use super::*;
@@ -26943,6 +27662,135 @@ pub mod message {
             )
         }
     }
+    /// Semantic application admission class, independent of unchanged Topic caps.
+    ///
+    /// Ordinary RS16 availability has its own owner, separate from large bodies,
+    /// low-priority `BlockSync`, and certified sidecar recovery. These classes do
+    /// not grant origin, committee, finality or execution authority. Fixed credit
+    /// records use their independently precharged parser, never an application class.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub enum TransportAdmissionClass {
+        /// Authoritative consensus safety messages.
+        Safety,
+        /// Ordinary consensus lane control, excluding sidecar control.
+        Lane,
+        /// Large ordinary consensus bodies, excluding availability chunks.
+        Payload,
+        /// Mandatory ordinary RS16 availability chunks; never sidecar recovery.
+        Availability,
+        /// Certified sidecar Request, Close, `CloseAck` and `GenerationHint`.
+        RecoveryControl,
+        /// Certified sidecar Chunk only.
+        RecoveryData,
+        /// Non-consensus application control, with no progress authority.
+        Control,
+        /// Reliable block synchronization in the existing low-priority lane.
+        BlockSync,
+        /// Other low-priority application traffic.
+        Low,
+    }
+    impl TransportAdmissionClass {
+        /// Exact first-release application-class cardinality.
+        pub const COUNT: usize = 9;
+        /// Complete class order bound by mandatory geometry and record framing.
+        pub const ALL: [Self; Self::COUNT] = [
+            Self::Safety,
+            Self::Lane,
+            Self::Payload,
+            Self::Availability,
+            Self::RecoveryControl,
+            Self::RecoveryData,
+            Self::Control,
+            Self::BlockSync,
+            Self::Low,
+        ];
+        /// Classes sharing the existing high byte ceiling.
+        pub const HIGH: [Self; 7] = [
+            Self::Safety,
+            Self::Lane,
+            Self::Payload,
+            Self::Availability,
+            Self::RecoveryControl,
+            Self::RecoveryData,
+            Self::Control,
+        ];
+        /// Non-safety classes partitioning the existing high occurrence ceiling.
+        pub const ORDINARY_HIGH: [Self; 6] = [
+            Self::Lane,
+            Self::Payload,
+            Self::Availability,
+            Self::RecoveryControl,
+            Self::RecoveryData,
+            Self::Control,
+        ];
+        /// Classes partitioning the existing low byte and occurrence ceilings.
+        pub const LOW: [Self; 2] = [Self::BlockSync, Self::Low];
+        /// Deterministic weighted service cycle. High classes each receive two
+        /// ranks, low classes one; every eligible low class retains finite service.
+        /// A rank is one complete record, never a permission to skip missing TCP bytes.
+        pub const SCHEDULE: [Self; 16] = [
+            Self::Safety,
+            Self::Lane,
+            Self::Payload,
+            Self::Availability,
+            Self::RecoveryControl,
+            Self::RecoveryData,
+            Self::Control,
+            Self::Safety,
+            Self::Lane,
+            Self::Payload,
+            Self::Availability,
+            Self::RecoveryControl,
+            Self::RecoveryData,
+            Self::Control,
+            Self::BlockSync,
+            Self::Low,
+        ];
+        /// Total local ownership index, independent of Topic and caller priority.
+        #[must_use]
+        pub const fn index(self) -> usize {
+            self.wire_code() as usize
+        }
+        /// Exact one-byte class code shared by geometry offers and credit records.
+        #[must_use]
+        pub(crate) const fn wire_code(self) -> u8 {
+            match self {
+                Self::Safety => 0,
+                Self::Lane => 1,
+                Self::Payload => 2,
+                Self::Availability => 3,
+                Self::RecoveryControl => 4,
+                Self::RecoveryData => 5,
+                Self::Control => 6,
+                Self::BlockSync => 7,
+                Self::Low => 8,
+            }
+        }
+        /// Whether this class belongs to the existing low scheduling/resource lane.
+        #[must_use]
+        pub const fn is_low(self) -> bool {
+            matches!(self, Self::BlockSync | Self::Low)
+        }
+        /// Map an ordinary topic without ever granting sidecar recovery status.
+        #[must_use]
+        pub const fn ordinary_for_topic(topic: Topic) -> Self {
+            match topic {
+                Topic::ConsensusSafety => Self::Safety,
+                Topic::Consensus => Self::Lane,
+                Topic::ConsensusPayload => Self::Payload,
+                Topic::ConsensusChunk => Self::Availability,
+                Topic::BlockSync => Self::BlockSync,
+                Topic::Control => Self::Control,
+                Topic::TxGossip
+                | Topic::TxGossipRestricted
+                | Topic::PeerGossip
+                | Topic::TrustGossip
+                | Topic::Health
+                | Topic::Connect
+                | Topic::Other => Self::Low,
+            }
+        }
+    }
     /// Classification hook for payload types to indicate their logical topic.
     ///
     /// By default, all messages are classified as `Topic::Other`. Crates that
@@ -26959,6 +27807,63 @@ pub mod message {
         /// Return the logical topic of the message for scheduling.
         fn topic(&self) -> Topic {
             Topic::Other
+        }
+        /// Return the semantic application admission class.
+        ///
+        /// The ordinary mapping never grants recovery status. Payload owners
+        /// with sidecar variants and envelopes must override this method.
+        fn admission_class(&self) -> TransportAdmissionClass {
+            TransportAdmissionClass::ordinary_for_topic(self.topic())
+        }
+        /// Classify a bare inbound application payload without materializing it.
+        ///
+        /// Envelopes must validate their own framing and delegate the exact
+        /// nested field. A receive-credit consumer must compare the declared,
+        /// raw and decoded classes; this hook does not validate signatures or
+        /// every payload field. Unknown raw classification is an error, with
+        /// no decoded-value or caller-priority fallback.
+        ///
+        /// # Errors
+        ///
+        /// Reject malformed or unknown discriminants and payload owners which
+        /// provide no bounded raw classifier.
+        fn inbound_admission_class(
+            payload: &[u8],
+            flags: u8,
+        ) -> Result<TransportAdmissionClass, norito::core::Error> {
+            let topic = Self::inbound_topic(payload, flags)?.ok_or_else(|| {
+                norito::core::Error::Message(
+                    "application payload has no raw admission classifier".to_owned(),
+                )
+            })?;
+            Ok(TransportAdmissionClass::ordinary_for_topic(topic))
+        }
+        /// Maximum complete canonical ordinary RS16 availability frame.
+        /// Native owners derive this from the protocol chunk/signature bounds,
+        /// including the signed relay and peer envelopes. A missing witness is
+        /// rejected; the broad Topic cap is not a per-source progress guarantee.
+        fn availability_frame_maximum(_local_peer: &PeerId) -> Result<usize, ncore::Error> {
+            Err(ncore::Error::Message(
+                "missing native availability frame witness".to_owned(),
+            ))
+        }
+        /// Exact maximum complete canonical peer/relay frames for the two
+        /// semantic recovery classes, under the mandatory transport writer layout.
+        ///
+        /// The concrete application owner must derive these from its actual
+        /// native message shapes. Envelope types delegate unchanged because the
+        /// result already includes the complete outer peer and relay encoding.
+        /// This is independent of Topic caps and never includes ordinary RS16 chunks.
+        ///
+        /// # Errors
+        /// Refuses startup when a payload owner has not supplied the bound, or
+        /// when its native serialization/identity witness cannot be constructed.
+        fn recovery_frame_maxima(
+            _local_peer: &iroha_model_base::peer::PeerId,
+        ) -> Result<[usize; 2], norito::core::Error> {
+            Err(norito::core::Error::Message(
+                "application owner must declare exact native recovery frame maxima".to_owned(),
+            ))
         }
         /// Return the locally trusted delivery priority for scheduling.
         ///
@@ -27130,24 +28035,6 @@ struct RefPeer<T: Pload> {
     handle: PeerHandle<T>,
     conn_id: ConnectionId,
     p2p_addr: SocketAddr,
-    /// Disambiguator serves purpose of resolving situation when both peers are tying to connect to each other at the same time.
-    /// Usually in Iroha network only one peer is trying to connect to another peer, but if peer is misbehaving it could be useful.
-    ///
-    /// Consider timeline:
-    ///
-    /// ```text
-    /// [peer1 outgoing connection with peer2 completes first (A)] -> [peer1 incoming connection with peer2 completes second (B)]
-    ///
-    /// [peer2 outgoing connection with peer1 completes first (B)] -> [peer2 incoming connection with peer1 completes second (A)]
-    /// ```
-    ///
-    /// Because it's meaningless for peer to have more than one connection with the same peer, peer must have some way of selecting what connection to preserve.
-    ///
-    /// In this case native approach where new connections will replace old ones won't work because it will result in peers not being connect at all.
-    ///
-    /// To solve this situation disambiguator value is used.
-    /// It's equal for both peers and when peer receive connection for peer already present in peers set it just select connection with higher value.
-    disambiguator: u64,
     #[allow(dead_code)]
     relay_role: RelayRole,
     trust_gossip: bool,

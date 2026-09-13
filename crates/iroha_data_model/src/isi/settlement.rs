@@ -1,10 +1,17 @@
+//! Settlement instructions and typed successful receipts.
 pub use self::model::SettlementId;
+mod atomic;
 use super::*;
 use crate::{
     NetworkId,
     block::BlockHeader,
     oracle::{FeedConfigVersion, FeedEvent, FeedId, FeedSlot, ObservationValue},
     prelude::{AccountId, AssetDefinitionId},
+};
+pub use atomic::{
+    ATOMIC_SETTLEMENT_MAX_MOVEMENTS, ATOMIC_SETTLEMENT_MIN_MOVEMENTS, AtomicSettlementMovement,
+    AtomicSettlementMovements, ResolvedSettlementMovement, ResolvedSettlementMovements,
+    SettleAtomic,
 };
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
@@ -671,104 +678,114 @@ impl core::fmt::Display for PvpIsi {
         )
     }
 }
-/// Settlement kind recorded in a successful receipt.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    JsonSerialize,
-    JsonDeserialize,
-)]
-#[norito(tag = "kind", content = "value")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[repr(u8)]
-pub enum SettlementKind {
-    /// Delivery-versus-payment trade.
-    Dvp,
-    /// Payment-versus-payment trade.
-    Pvp,
-    /// Policy-backed native cross-dataspace FX conversion.
-    FxCorridor,
-}
-/// Enumerates the logical role played by a settlement leg.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    JsonSerialize,
-    JsonDeserialize,
-)]
-#[norito(tag = "kind", content = "value")]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-#[repr(u8)]
-pub enum SettlementLegRole {
-    /// Asset leg in a delivery-versus-payment trade.
-    Delivery,
-    /// Payment leg in a delivery-versus-payment trade.
-    Payment,
-    /// Primary leg in a payment-versus-payment trade.
-    Primary,
-    /// Counter leg in a payment-versus-payment trade.
-    Counter,
-    /// Source-currency collection leg in an FX corridor settlement.
-    FxSource,
-    /// Destination-currency payout leg in an FX corridor settlement.
-    FxDestination,
-}
-/// Snapshot of a single leg in a committed settlement receipt.
-#[allow(missing_copy_implementations)]
-#[derive(
-    Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, JsonSerialize, JsonDeserialize,
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-pub struct SettlementLegSnapshot {
-    /// Logical role of the leg (delivery, payment, primary, counter).
-    pub role: SettlementLegRole,
-    /// Original leg payload.
-    pub leg: SettlementLeg,
-}
-/// Immutable pricing and route context retained for a successful native FX settlement.
+/// Immutable pricing context retained for a successful native FX settlement.
 ///
-/// The two generic leg snapshots retain the actual balance movements. This record additionally
-/// binds those legs to the exact governed policy revision and rate that the signer approved.
+/// The named resolved movements in `SettlementDetails::FxCorridor` retain all parties,
+/// amounts, asset definitions and scopes. This context retains the mandatory governed
+/// policy revision and oracle observation without duplicating those movements.
 #[derive(
     Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+#[norito(deny_unknown_fields)]
+pub struct FxCorridorPricingContext {
+    /// Stable corridor policy identifier.
+    pub policy_id: Name,
+    /// Exact policy revision used for execution.
+    pub policy_revision: u64,
+    /// Exact retained oracle event selected by the signed instruction.
+    pub oracle_evidence: FxCorridorOracleEvidence,
+    /// Consensus-time timestamp attached to the retained oracle event.
+    pub oracle_recorded_at_ms: u64,
+    /// Exact positive fixed-point destination/source rate from the oracle event.
+    pub oracle_rate: ObservationValue,
+}
+/// A complete delivery-versus-payment exchange.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::DvpSettlementDetails")]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct DvpSettlementDetails {
+    /// Resolved delivery movement.
+    pub delivery: ResolvedSettlementMovement,
+    /// Resolved payment movement.
+    pub payment: ResolvedSettlementMovement,
+    /// Order in which the all-or-nothing exchange was prepared.
+    pub order: SettlementExecutionOrder,
+}
+
+/// A complete payment-versus-payment exchange.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::PvpSettlementDetails")]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct PvpSettlementDetails {
+    /// Resolved primary movement.
+    pub primary: ResolvedSettlementMovement,
+    /// Resolved counter movement.
+    pub counter: ResolvedSettlementMovement,
+    /// Order in which the all-or-nothing exchange was prepared.
+    pub order: SettlementExecutionOrder,
+}
+
+/// A complete governed FX exchange with mandatory pricing context.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::FxCorridorSettlementDetails")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -778,46 +795,129 @@ pub struct SettlementLegSnapshot {
     ffi_type(opaque)
 )]
 pub struct FxCorridorSettlementDetails {
-    /// Stable corridor policy identifier.
-    pub policy_id: Name,
-    /// Exact policy revision used for execution.
-    pub policy_revision: u64,
-    /// Source private dataspace.
-    pub source_dataspace: DataSpaceId,
-    /// Destination private dataspace.
-    pub destination_dataspace: DataSpaceId,
-    /// Immutable corridor owner that received the source currency.
-    pub owner: AccountId,
-    /// Exact retained oracle event selected by the signed instruction.
-    pub oracle_evidence: FxCorridorOracleEvidence,
-    /// Consensus-time timestamp attached to the retained oracle event.
-    pub oracle_recorded_at_ms: u64,
-    /// Exact positive fixed-point destination/source rate from the oracle event.
-    pub oracle_rate: ObservationValue,
-    /// Account that supplied source currency.
-    pub source_account: AccountId,
-    /// Non-signable corridor escrow that supplied destination currency.
-    pub destination_escrow: AccountId,
-    /// Account that received destination currency.
-    pub recipient: AccountId,
-    /// Source asset definition bound by the signed instruction.
-    pub source_asset_definition_id: AssetDefinitionId,
-    /// Destination asset definition bound by the signed instruction.
-    pub destination_asset_definition_id: AssetDefinitionId,
-    /// Source quantity collected.
-    pub source_amount: Quantity,
-    /// Destination quantity paid out.
-    pub destination_amount: Quantity,
+    /// Actual source-currency collection.
+    pub source: ResolvedSettlementMovement,
+    /// Actual destination-currency payout.
+    pub destination: ResolvedSettlementMovement,
+    /// Exact authenticated governed pricing context.
+    pub context: FxCorridorPricingContext,
 }
-/// Immutable receipt persisted after one successful settlement.
-///
-/// The containing world-state map is keyed by the settlement identifier, so the
-/// identifier is deliberately not duplicated here. Presence of a receipt means
-/// that both legs committed successfully. Failed attempts are observable only
-/// through bounded, node-local telemetry and never create consensus state.
+
+/// A complete canonical N-payment atomic settlement.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::AtomicSettlementDetails")]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct AtomicSettlementDetails {
+    /// Every exact balance movement in the signed canonical order.
+    pub movements: ResolvedSettlementMovements,
+    /// Exact complete network-bound intent approved by the debit owners.
+    pub intent_hash: Hash,
+}
+
+/// Exactly one successful settlement operation and its fully resolved movements.
+///
+/// There is no separate kind, optional FX context, arbitrary role list or partial
+/// atomicity field that could contradict the selected operation.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::SettlementDetails")]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub enum SettlementDetails {
+    /// A complete delivery-versus-payment exchange.
+    Dvp(DvpSettlementDetails),
+    /// A complete payment-versus-payment exchange.
+    Pvp(PvpSettlementDetails),
+    /// A complete governed FX exchange with mandatory pricing context.
+    FxCorridor(FxCorridorSettlementDetails),
+    /// A complete canonical N-payment atomic settlement.
+    Atomic(AtomicSettlementDetails),
+}
+
+impl SettlementDetails {
+    /// Iterate every committed movement, including all N atomic movements.
+    ///
+    /// Reference-retention consumers must use both exact source and destination
+    /// AssetIds; the fixed bilateral pair is not a bound on atomic receipts.
+    pub fn movements(&self) -> impl Iterator<Item = &ResolvedSettlementMovement> {
+        let (first, second, batch) = match self {
+            Self::Dvp(DvpSettlementDetails {
+                delivery, payment, ..
+            }) => (Some(delivery), Some(payment), None),
+            Self::Pvp(PvpSettlementDetails {
+                primary, counter, ..
+            }) => (Some(primary), Some(counter), None),
+            Self::FxCorridor(FxCorridorSettlementDetails {
+                source,
+                destination,
+                ..
+            }) => (Some(source), Some(destination), None),
+            Self::Atomic(AtomicSettlementDetails { movements, .. }) => {
+                (None, None, Some(movements.as_slice()))
+            }
+        };
+        first
+            .into_iter()
+            .chain(second)
+            .chain(batch.into_iter().flatten())
+    }
+}
+
+/// Immutable receipt persisted only after complete successful settlement.
+///
+/// The world-state map key is the unique SettlementId. Failed attempts create no
+/// receipt. Resolved asset scopes come from the prepared transfer owner, never
+/// from ambient routing or a subsequent state view.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::isi::settlement::SettlementReceipt")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -827,25 +927,18 @@ pub struct FxCorridorSettlementDetails {
     ffi_type(opaque)
 )]
 pub struct SettlementReceipt {
-    /// Settlement kind (`DvP`, `PvP`, or governed FX corridor).
-    pub kind: SettlementKind,
-    /// Account that authorised the settlement.
+    /// Account that authorized the settlement carrier.
     pub authority: AccountId,
-    /// Execution plan applied when settling.
-    pub plan: SettlementPlan,
-    /// Arbitrary metadata supplied alongside the settlement instruction.
+    /// Complete signed settlement metadata.
     pub metadata: Metadata,
-    /// Block height in which the event was recorded.
+    /// Block height in which all movements were committed.
     pub block_height: u64,
-    /// Hash of the enclosing block for traceability.
+    /// Hash of the enclosing block.
     pub block_hash: HashOf<BlockHeader>,
-    /// Block timestamp (milliseconds since Unix epoch).
+    /// Block timestamp in milliseconds since Unix epoch.
     pub executed_at_ms: u64,
-    /// The two committed settlement legs.
-    #[norito(json = "crate::json_helpers::fixed_array")]
-    pub legs: [SettlementLegSnapshot; 2],
-    /// Exact governed FX context, present only for native FX corridor settlements.
-    pub fx_corridor: Option<FxCorridorSettlementDetails>,
+    /// One mandatory typed description of the complete successful operation.
+    pub details: SettlementDetails,
 }
 impl crate::seal::Instruction for DvpIsi {}
 impl crate::seal::Instruction for PvpIsi {}
@@ -869,10 +962,12 @@ isi_box! {
         RefundFxCorridorEscrow(RefundFxCorridorEscrow),
         /// Execute one policy-backed native FX settlement.
         SettleFxCorridor(SettleFxCorridor),
+        /// Execute one complete network-bound all-or-nothing N-payment settlement.
+        Atomic(SettleAtomic),
     }
 }
 impl_into_box! {
-    DvpIsi | PvpIsi | SetFxCorridorPolicy | FundFxCorridorEscrow | RefundFxCorridorEscrow | SettleFxCorridor => SettlementInstructionBox
+    DvpIsi | PvpIsi | SetFxCorridorPolicy | FundFxCorridorEscrow | RefundFxCorridorEscrow | SettleFxCorridor | SettleAtomic => SettlementInstructionBox
 }
 impl crate::seal::Instruction for SettlementInstructionBox {}
 impl SettlementInstructionBox {
@@ -986,6 +1081,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
                 super::read_aos_field(bytes, &mut offset, flags)?,
                 flags,
             )?),
+            6 => Self::Atomic(super::decode_aos_slice_field::<SettleAtomic>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
             _ => {
                 return Err(norito::core::Error::Message(format!(
                     "invalid SettlementInstructionBox tag {tag}"
@@ -1030,22 +1129,11 @@ mod tests {
         metadata: Metadata,
     }
     #[derive(Encode)]
-    struct ForgedFxCorridorSettlementDetails {
-        policy_id: Name,
-        policy_revision: u64,
-        source_dataspace: DataSpaceId,
-        destination_dataspace: DataSpaceId,
-        owner: AccountId,
-        oracle_evidence: FxCorridorOracleEvidence,
-        oracle_recorded_at_ms: u64,
-        oracle_rate: ObservationValue,
-        source_account: AccountId,
-        destination_escrow: AccountId,
-        recipient: AccountId,
-        source_asset_definition_id: AssetDefinitionId,
-        destination_asset_definition_id: AssetDefinitionId,
-        source_amount: Numeric,
-        destination_amount: Numeric,
+    struct ForgedResolvedSettlementMovement {
+        source: crate::asset::AssetId,
+        destination: crate::asset::AssetId,
+        quantity: Numeric,
+        metadata: Metadata,
     }
     const ALICE_SIGNATORY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -1363,36 +1451,30 @@ mod tests {
         assert_eq!(decoded, settlement);
     }
     #[test]
-    fn fx_receipt_json_requires_canonical_quantity_strings() {
-        let policy = fx_policy();
-        let details = FxCorridorSettlementDetails {
-            policy_id: policy.policy_id,
-            policy_revision: policy.revision,
-            source_dataspace: policy.source_dataspace,
-            destination_dataspace: policy.destination_dataspace,
-            owner: policy.owner.clone(),
-            oracle_evidence: fx_oracle_evidence(),
-            oracle_recorded_at_ms: 1_700_000_000_000,
-            oracle_rate: ObservationValue::new(76, 0),
-            source_account: account(ALICE_SIGNATORY, "cbuae"),
-            destination_escrow: policy.owner,
-            recipient: account(BOB_SIGNATORY, "sbp"),
-            source_asset_definition_id: policy.source_asset_definition_id,
-            destination_asset_definition_id: policy.destination_asset_definition_id,
-            source_amount: Quantity::from(10_u32),
-            destination_amount: Quantity::from(760_u32),
+    fn resolved_receipt_json_requires_canonical_quantity_strings() {
+        let details = ResolvedSettlementMovement {
+            source: crate::asset::AssetId::new(
+                asset("bank", "cash"),
+                account(ALICE_SIGNATORY, "bank"),
+            ),
+            destination: crate::asset::AssetId::new(
+                asset("bank", "cash"),
+                account(BOB_SIGNATORY, "bank"),
+            ),
+            quantity: Quantity::from(10_u32),
+            metadata: Metadata::default(),
         };
-        let canonical = norito::json::to_json(&details).expect("serialize FX receipt details");
-        assert!(canonical.contains("\"source_amount\":\"10\""));
-        assert!(canonical.contains("\"destination_amount\":\"760\""));
-        let decoded: FxCorridorSettlementDetails =
-            norito::json::from_str(&canonical).expect("canonical FX receipt JSON");
+        let canonical =
+            norito::json::to_json(&details).expect("serialize resolved receipt movement");
+        assert!(canonical.contains("\"quantity\":\"10\""));
+        let decoded: ResolvedSettlementMovement =
+            norito::json::from_str(&canonical).expect("canonical receipt JSON");
         assert_eq!(decoded, details);
-        for replacement in ["\"source_amount\":10", "\"source_amount\":\"010\""] {
-            let malformed = canonical.replace("\"source_amount\":\"10\"", replacement);
+        for replacement in ["\"quantity\":10", "\"quantity\":\"010\""] {
+            let malformed = canonical.replace("\"quantity\":\"10\"", replacement);
             assert!(
-                norito::json::from_str::<FxCorridorSettlementDetails>(&malformed).is_err(),
-                "FX receipts must reject non-string and non-canonical quantity encodings",
+                norito::json::from_str::<ResolvedSettlementMovement>(&malformed).is_err(),
+                "receipts must reject non-string and non-canonical quantity encodings"
             );
         }
     }
@@ -1405,31 +1487,48 @@ mod tests {
             ..
         } = dvp_instruction();
         let receipt = SettlementReceipt {
-            kind: SettlementKind::Dvp,
             authority: delivery_leg.from().clone(),
-            plan,
             metadata: Metadata::default(),
             block_height: 7,
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
                 [0xA7; Hash::LENGTH],
             )),
             executed_at_ms: 11,
-            legs: [
-                SettlementLegSnapshot {
-                    role: SettlementLegRole::Delivery,
-                    leg: delivery_leg,
+            details: SettlementDetails::Dvp(crate::isi::DvpSettlementDetails {
+                order: plan.order(),
+                delivery: ResolvedSettlementMovement {
+                    source: crate::asset::AssetId::new(
+                        delivery_leg.asset_definition_id.clone(),
+                        delivery_leg.from.clone(),
+                    ),
+                    destination: crate::asset::AssetId::new(
+                        delivery_leg.asset_definition_id,
+                        delivery_leg.to,
+                    ),
+                    quantity: delivery_leg.quantity,
+                    metadata: delivery_leg.metadata,
                 },
-                SettlementLegSnapshot {
-                    role: SettlementLegRole::Payment,
-                    leg: payment_leg,
+                payment: ResolvedSettlementMovement {
+                    source: crate::asset::AssetId::new(
+                        payment_leg.asset_definition_id.clone(),
+                        payment_leg.from.clone(),
+                    ),
+                    destination: crate::asset::AssetId::new(
+                        payment_leg.asset_definition_id,
+                        payment_leg.to,
+                    ),
+                    quantity: payment_leg.quantity,
+                    metadata: payment_leg.metadata,
                 },
-            ],
-            fx_corridor: None,
+            }),
         };
         let bytes = receipt.encode();
         let decoded = SettlementReceipt::decode(&mut bytes.as_slice()).expect("decode receipt");
         assert_eq!(decoded, receipt);
-        assert_eq!(decoded.legs.len(), 2);
+        assert!(matches!(
+            decoded.details,
+            SettlementDetails::Dvp(crate::isi::DvpSettlementDetails { .. })
+        ));
 
         {
             let json = norito::json::to_json(&receipt).expect("serialize receipt");
@@ -1440,7 +1539,10 @@ mod tests {
             let decoded: SettlementReceipt =
                 norito::json::from_str(&json).expect("deserialize receipt");
             assert_eq!(decoded, receipt);
-            assert_eq!(decoded.legs.len(), 2);
+            assert!(matches!(
+                decoded.details,
+                SettlementDetails::Dvp(crate::isi::DvpSettlementDetails { .. })
+            ));
         }
     }
     #[test]
@@ -1474,26 +1576,23 @@ mod tests {
             SettleFxCorridor::decode_from_slice(&forged_instruction.encode()).is_err(),
             "a negative signed payload must not decode as an FX settlement instruction"
         );
-        let forged_receipt = ForgedFxCorridorSettlementDetails {
-            policy_id: policy.policy_id,
-            policy_revision: policy.revision,
-            source_dataspace: policy.source_dataspace,
-            destination_dataspace: policy.destination_dataspace,
-            owner: policy.owner.clone(),
-            oracle_evidence: fx_oracle_evidence(),
-            oracle_recorded_at_ms: 1_700_000_000_000,
-            oracle_rate: ObservationValue::new(76, 0),
-            source_account: policy.owner.clone(),
-            destination_escrow: policy.owner,
-            recipient,
-            source_asset_definition_id: policy.source_asset_definition_id,
-            destination_asset_definition_id: policy.destination_asset_definition_id,
-            source_amount: Numeric::new(-1_i32, 0),
-            destination_amount: Numeric::from(760_u32),
+        let forged_receipt = ForgedResolvedSettlementMovement {
+            source: crate::asset::AssetId::with_scope(
+                policy.source_asset_definition_id,
+                policy.owner,
+                crate::asset::AssetBalanceScope::Dataspace(policy.source_dataspace),
+            ),
+            destination: crate::asset::AssetId::with_scope(
+                policy.destination_asset_definition_id,
+                recipient,
+                crate::asset::AssetBalanceScope::Dataspace(policy.destination_dataspace),
+            ),
+            quantity: Numeric::new(-1_i32, 0),
+            metadata: Metadata::default(),
         };
         let encoded = forged_receipt.encode();
         assert!(
-            FxCorridorSettlementDetails::decode(&mut encoded.as_slice()).is_err(),
+            ResolvedSettlementMovement::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a durable FX settlement receipt"
         );
     }

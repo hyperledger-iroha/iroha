@@ -20,8 +20,9 @@ use ff::{BatchInverter, PrimeField};
 use halo2curves::pasta::{Fp, Fq};
 
 use super::{
-    STORED_SCALARS_PER_CHUNK_V1, StoredAdviceErrorV1, StoredAdviceLayoutV1, StoredAdviceSnapshotV1,
-    StoredAdviceWriterV1, StoredPastaFieldV1, StoredPolynomialBasisV1,
+    STORED_SCALARS_PER_CHUNK_V1, StoredPastaFieldV1, StoredPolynomialBasisV1,
+    StoredPolynomialErrorV1, StoredPolynomialLayoutV1, StoredPolynomialSnapshotV1,
+    StoredPolynomialWriterV1,
 };
 use crate::plonk::Assigned;
 
@@ -50,7 +51,7 @@ impl StoredAssignmentFieldV1 for Fq {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoredAssignmentErrorV1 {
     /// A backend or authenticated-layout operation failed.
-    Store(StoredAdviceErrorV1),
+    Store(StoredPolynomialErrorV1),
     /// An advice assignment was outside the configured usable rows.
     Row,
     /// A duplicate or backward row would violate the admitted write-once contract.
@@ -67,8 +68,8 @@ impl fmt::Display for StoredAssignmentErrorV1 {
     }
 }
 impl std::error::Error for StoredAssignmentErrorV1 {}
-impl From<StoredAdviceErrorV1> for StoredAssignmentErrorV1 {
-    fn from(error: StoredAdviceErrorV1) -> Self {
+impl From<StoredPolynomialErrorV1> for StoredAssignmentErrorV1 {
+    fn from(error: StoredPolynomialErrorV1) -> Self {
         Self::Store(error)
     }
 }
@@ -112,7 +113,7 @@ impl Drop for EncodedChunk {
     }
 }
 
-struct Active<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> {
+struct Active<F: StoredAssignmentFieldV1, W: StoredPolynomialWriterV1> {
     writer: W,
     numerators: FieldChunk<F>,
     denominators: FieldChunk<F>,
@@ -130,13 +131,13 @@ struct Active<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> {
 /// including a backend panic caught by the caller, drops the backend writer and clears the owned
 /// chunk. No snapshot can then escape from this owner. The trusted backend still owns storage
 /// authentication and destruction; this adapter does not turn a malicious backend into one.
-pub struct StoredAdviceAssignmentV1<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> {
-    layout: StoredAdviceLayoutV1,
+pub struct StoredAdviceAssignmentV1<F: StoredAssignmentFieldV1, W: StoredPolynomialWriterV1> {
+    layout: StoredPolynomialLayoutV1,
     usable_rows: usize,
     active: Option<Active<F, W>>,
 }
 
-impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> fmt::Debug
+impl<F: StoredAssignmentFieldV1, W: StoredPolynomialWriterV1> fmt::Debug
     for StoredAdviceAssignmentV1<F, W>
 {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -148,7 +149,7 @@ impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> fmt::Debug
     }
 }
 
-impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> StoredAdviceAssignmentV1<F, W> {
+impl<F: StoredAssignmentFieldV1, W: StoredPolynomialWriterV1> StoredAdviceAssignmentV1<F, W> {
     /// Admit one exact Lagrange column and its exclusive usable-row end.
     ///
     /// # Errors
@@ -157,17 +158,18 @@ impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> StoredAdviceAssignment
     /// uniqueness of column/phase coordinates; a per-column constructor cannot establish it.
     pub fn new(
         writer: W,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         usable_rows: usize,
     ) -> Result<Self, StoredAssignmentErrorV1> {
+        expected.advice_coordinates()?;
         if writer.layout() != expected
             || expected.field() != F::STORED_FIELD
             || expected.basis() != StoredPolynomialBasisV1::Lagrange
         {
-            return Err(StoredAdviceErrorV1::Context.into());
+            return Err(StoredPolynomialErrorV1::Context.into());
         }
         if usable_rows > expected.scalar_count() {
-            return Err(StoredAdviceErrorV1::Layout.into());
+            return Err(StoredPolynomialErrorV1::Layout.into());
         }
         Ok(Self {
             layout: expected,
@@ -183,7 +185,7 @@ impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> StoredAdviceAssignment
     }
 
     /// Return the trusted complete immutable identity of this destination.
-    pub fn layout(&self) -> StoredAdviceLayoutV1 {
+    pub fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
 
@@ -261,21 +263,21 @@ impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> StoredAdviceAssignment
             active.append(Assigned::Trivial(value), self.layout)?;
         }
         if active.writer.layout() != self.layout {
-            return Err(StoredAdviceErrorV1::Context.into());
+            return Err(StoredPolynomialErrorV1::Context.into());
         }
         let snapshot = active.writer.seal()?;
         if snapshot.layout() != self.layout {
-            return Err(StoredAdviceErrorV1::Context.into());
+            return Err(StoredPolynomialErrorV1::Context.into());
         }
         Ok(snapshot)
     }
 }
 
-impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> Active<F, W> {
+impl<F: StoredAssignmentFieldV1, W: StoredPolynomialWriterV1> Active<F, W> {
     fn fill_zeros_to(
         &mut self,
         end: usize,
-        layout: StoredAdviceLayoutV1,
+        layout: StoredPolynomialLayoutV1,
     ) -> Result<(), StoredAssignmentErrorV1> {
         while self.next_row < end {
             let chunk_end = ((self.next_chunk as usize + 1) * STORED_SCALARS_PER_CHUNK_V1)
@@ -292,7 +294,7 @@ impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> Active<F, W> {
     fn append(
         &mut self,
         value: Assigned<F>,
-        layout: StoredAdviceLayoutV1,
+        layout: StoredPolynomialLayoutV1,
     ) -> Result<(), StoredAssignmentErrorV1> {
         let slot = self.next_row % STORED_SCALARS_PER_CHUNK_V1;
         let (numerator, denominator) = match value {
@@ -311,9 +313,9 @@ impl<F: StoredAssignmentFieldV1, W: StoredAdviceWriterV1> Active<F, W> {
         Ok(())
     }
 
-    fn flush(&mut self, layout: StoredAdviceLayoutV1) -> Result<(), StoredAssignmentErrorV1> {
+    fn flush(&mut self, layout: StoredPolynomialLayoutV1) -> Result<(), StoredAssignmentErrorV1> {
         if self.writer.layout() != layout {
-            return Err(StoredAdviceErrorV1::Context.into());
+            return Err(StoredPolynomialErrorV1::Context.into());
         }
         let count = layout.chunk_scalar_count(self.next_chunk)?;
         let mut scratch = FieldChunk::<F>::zero();

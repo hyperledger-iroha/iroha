@@ -810,15 +810,20 @@ fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> Stat
         query_handle,
         chain_id,
     );
-    let (baseline, _, _) = kura.lane_geometry_journal_state_for_test()
+    let (baseline, _, _) = kura
+        .lane_geometry_journal_state_for_test()
         .expect("snapshot fixture has readable geometry custody");
     if let Some(baseline) = baseline {
         let lanes = state.nexus_snapshot().lane_config;
-        let incarnation = state.lane_incarnation(lanes.primary().lane_id)
+        let incarnation = state
+            .lane_incarnation(lanes.primary().lane_id)
             .expect("snapshot primary has a canonical incarnation");
         kura.establish_or_verify_configured_primary_geometry_anchor(
-            lanes.primary(), incarnation, baseline,
-        ).expect("snapshot fixture anchors its configured primary geometry");
+            lanes.primary(),
+            incarnation,
+            baseline,
+        )
+        .expect("snapshot fixture anchors its configured primary geometry");
     }
     state
 }
@@ -1209,6 +1214,42 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
 }
 
 #[tokio::test]
+async fn staged_snapshot_wsv_hash_projects_deferred_storage_and_undo_history() {
+    let staged = br#"{"world":{"axt_replay_ledger":{"blocks":{"expired":1},"revert":{}},"smart_contract_state":{"blocks":{"quota":[1]},"revert":{}}},"other":{"axt_replay_ledger":{"keep":true}}}"#;
+    let replay = r#"{"revert":{"expired":1},"blocks":{}}"#;
+    let quota = r#"{"revert":{"quota":[1]},"blocks":{"quota":[2]}}"#;
+    // Independently spelled canonical bytes also prove that the override is
+    // restricted to the exact World field, and keeps storage undo history.
+    let canonical = br#"{"other":{"axt_replay_ledger":{"keep":true}},"world":{"axt_replay_ledger":{"blocks":{},"revert":{"expired":1}},"smart_contract_state":{"blocks":{"quota":[2]},"revert":{"quota":[1]}}}}"#;
+    let actual = canonical_snapshot_wsv_hash_with_overrides(
+        staged,
+        CanonicalWsvOverrides {
+            committed_axt_replay_ledger: Some(replay),
+            committed_smart_contract_state: Some(quota),
+            ..CanonicalWsvOverrides::default()
+        },
+    )
+    .expect("hash exact deferred storage projections");
+    assert_eq!(actual, Hash::new(canonical));
+    assert_ne!(
+        actual,
+        canonical_snapshot_wsv_hash(staged).expect("hash unprojected state")
+    );
+    assert_ne!(
+        actual,
+        canonical_snapshot_wsv_hash_with_overrides(
+            staged,
+            CanonicalWsvOverrides {
+                committed_axt_replay_ledger: Some(r#"{"blocks":{},"revert":{}}"#),
+                committed_smart_contract_state: Some(quota),
+                ..CanonicalWsvOverrides::default()
+            },
+        )
+        .expect("hash a projection missing the required undo history"),
+    );
+}
+
+#[tokio::test]
 async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
     for evidence in [
         None,
@@ -1457,10 +1498,18 @@ fn snapshot_json_with_mutation(original: &str, mutated: &json::Value) -> String 
 fn snapshot_mutation_preserves_schema_order_and_changes_only_requested_fields() {
     let original = r#"{"z":{"later":1,"earlier":2},"a":[{"y":3,"b":4}]}"#;
     let mut value: json::Value = json::from_str(original).expect("ordered JSON fixture");
-    value.as_object_mut().unwrap().get_mut("z").unwrap()
-        .as_object_mut().unwrap().insert("later".to_owned(), json::Value::from(5_u64));
-    assert_eq!(snapshot_json_with_mutation(original, &value),
-        r#"{"z":{"later":5,"earlier":2},"a":[{"y":3,"b":4}]}"#);
+    value
+        .as_object_mut()
+        .unwrap()
+        .get_mut("z")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("later".to_owned(), json::Value::from(5_u64));
+    assert_eq!(
+        snapshot_json_with_mutation(original, &value),
+        r#"{"z":{"later":5,"earlier":2},"a":[{"y":3,"b":4}]}"#
+    );
 }
 fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
@@ -1566,7 +1615,12 @@ fn store_block_and_mark_state_height(state: &mut State, kura: &Arc<Kura>, block:
 
 /// Direct block fixtures retain the resolver anchor required of every committed state.
 fn seed_snapshot_genesis_resolver_checkpoint(state: &State) {
-    let genesis_hash = state.block_hashes.view().iter().next().copied()
+    let genesis_hash = state
+        .block_hashes
+        .view()
+        .iter()
+        .next()
+        .copied()
         .expect("committed snapshot fixture has a genesis hash");
     let revision = crate::state::MusubiResolverIndexRevisionV1::default();
     let checkpoint = iroha_data_model::musubi::MusubiRegistrySnapshotV1 {
@@ -1574,12 +1628,16 @@ fn seed_snapshot_genesis_resolver_checkpoint(state: &State) {
         finalized_block_hash: *genesis_hash.as_ref(),
         index_revision: revision.get(),
     };
-    checkpoint.validate().expect("canonical resolver genesis checkpoint");
+    checkpoint
+        .validate()
+        .expect("canonical resolver genesis checkpoint");
     let mut world = state.world.block();
     if let Some(existing) = world.musubi_resolver_index_checkpoints.get(&revision) {
         assert_eq!(existing, &checkpoint);
     } else {
-        world.musubi_resolver_index_checkpoints.insert(revision, checkpoint);
+        world
+            .musubi_resolver_index_checkpoints
+            .insert(revision, checkpoint);
     }
     world.commit();
 }

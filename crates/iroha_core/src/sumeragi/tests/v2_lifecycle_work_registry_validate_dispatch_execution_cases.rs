@@ -1463,7 +1463,7 @@ fn direct_cached_validate_successor_releases_retry_ordinal_fixture() {
         kura_binding: None,
         apply_service: None,
         adapter_startup: None,
-        timeout_supersession_successor: None,
+        owner_open_successor: None,
     };
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
@@ -1662,7 +1662,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
         kura_binding: None,
         apply_service: None,
         adapter_startup: None,
-        timeout_supersession_successor: None,
+        owner_open_successor: None,
     };
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
@@ -3510,7 +3510,7 @@ fn local_proposal_intent_live_wal_sign_fixture() {
         kura_binding: None,
         apply_service: None,
         adapter_startup: None,
-        timeout_supersession_successor: None,
+        owner_open_successor: None,
     };
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { buildRegisterSmartContractCodeInstruction } from "../src/instructionBuilders.js";
 import { ToriiClient } from "../src/toriiClient.js";
 import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../src/contractErrorTypes.js";
 import { analyzeEntrypointValueTypeV1 } from "../src/entrypointSchema.js";
 import { isCanonicalKotodamaStateTypeName, isCanonicalKotodamaStructName } from "../src/kotodamaIdentifiers.js";
-import { _createNoritoInstructionApi } from "../src/norito.js";
-import { createNativeRuntime } from "../src/nativeRuntime.js";
+import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.js";
 
 const error = { identity: "example/vault@1.0.0::金庫::拒否", variants: [{ name: "不足", code: 1 }, { name: "CapacityExceeded", code: 2 }] };
 const returnSchema = { nodes: [{ kind: "Result", value: null }, { kind: "Unit", value: null }, { kind: "Error", value: error }] };
@@ -71,20 +74,18 @@ test("Unit and nominal errors compose into exact public and state types", () => 
   assert.throws(() => validateManifestErrorTypeBindingsV1({ ...manifest, error_types: [{ ...error, variants: [{ name: "Different", code: 1 }] }] }), /does not match/u);
 });
 
-test("canonical Norito manifest codecs roundtrip Unit and nominal error schemas without native bindings", async () => {
+test("native Norito manifest codecs roundtrip Unit and nominal error schemas", async () => {
   const fixture = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
   const manifest = structuredClone(fixture.manifest);
   manifest.error_types = [error];
   manifest.entrypoints[0].return_type = `Result<(), ${error.identity}>`;
   manifest.entrypoints[0].return_schema = returnSchema;
-  const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
-  const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
   const instruction = { RegisterSmartContractCode: { manifest } };
-  const encoded = api.noritoEncodeInstruction(instruction, 753);
-  const decoded = api.noritoDecodeInstruction(encoded, 753);
+  const encoded = noritoEncodeInstruction(instruction, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.error_types, [error]);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, returnSchema);
-  assert.deepEqual(api.noritoEncodeInstruction(decoded, 753), encoded);
+  assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
 });
 
 test("canonical Norito manifest codec preserves nominal state cursor key schemas", async () => {
@@ -93,12 +94,10 @@ test("canonical Norito manifest codec preserves nominal state cursor key schemas
   const schema = { nodes: [{ kind: "Option", value: null }, { kind: "StateCursor", value: { kind: "Int", value: null } }] };
   manifest.entrypoints[0].return_type = "Option<StateCursor<int>>";
   manifest.entrypoints[0].return_schema = schema;
-  const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
-  const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
-  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
-  const decoded = api.noritoDecodeInstruction(encoded, 753);
+  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, schema);
-  assert.deepEqual(api.noritoEncodeInstruction(decoded, 753), encoded);
+  assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
 });
 
 
@@ -116,10 +115,8 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
   const manifest = structuredClone(fixture.manifest);
   manifest.entrypoints[0].return_type = "()";
   manifest.entrypoints[0].return_schema = { nodes: [{ kind: "Unit", value: null }] };
-  const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
-  const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
-  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
-  const decoded = api.noritoDecodeInstruction(encoded, 753).RegisterSmartContractCode.manifest;
+  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753).RegisterSmartContractCode.manifest;
   assert.deepEqual(decoded.entrypoints[0].return_schema, manifest.entrypoints[0].return_schema);
   buildRegisterSmartContractCodeInstruction({ manifest });
   const fetchManifest = async (value) => new ToriiClient("http://localhost:8080", {
@@ -135,7 +132,7 @@ test("public Unit returns require an exact descriptor on JSON and Norito boundar
         if (omitted) delete invalid.entrypoints[0][field];
         else invalid.entrypoints[0][field] = null;
       }
-      assert.throws(() => api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest: invalid } }, 753), /return_type.*return_schema/u);
+      assert.throws(() => noritoEncodeInstruction({ RegisterSmartContractCode: { manifest: invalid } }, 753), /return_type.*return_schema/u);
       assert.throws(() => buildRegisterSmartContractCodeInstruction({ manifest: invalid }), /return_type.*return_schema/u);
       await assert.rejects(fetchManifest(invalid), /return_type.*return_schema/u);
     }
@@ -164,13 +161,46 @@ test("exported structs retain locked identity in public and durable schemas", as
   }
   const base = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
   const manifest = { ...base.manifest, ...fixture.manifest };
-  const unavailable = { noritoEncodeInstruction() { throw new Error("Native binding required"); }, noritoDecodeInstruction() { throw new Error("Native binding required"); } };
-  const api = _createNoritoInstructionApi(createNativeRuntime(unavailable));
-  const encoded = api.noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
-  const decoded = api.noritoDecodeInstruction(encoded, 753);
+  const encoded = noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }, 753);
+  const decoded = noritoDecodeInstruction(encoded, 753);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.entrypoints[0].return_schema, fixture.manifest.entrypoints[0].return_schema);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest.states, fixture.manifest.states);
-  assert.deepEqual(api.noritoEncodeInstruction(decoded, 753), encoded);
+  assert.deepEqual(noritoEncodeInstruction(decoded, 753), encoded);
   manifest.error_types = [];
   assert.throws(() => validateManifestErrorTypeBindingsV1(manifest), /error_types catalog/u);
+});
+
+
+test("manifest instruction encoding and decoding reject unavailable native bindings", async () => {
+  const fixture = JSON.parse(await readFile(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"));
+  const instruction = { RegisterSmartContractCode: { manifest: fixture.manifest } };
+  const encoded = noritoEncodeInstruction(instruction, 753);
+  const directory = await mkdtemp(join(tmpdir(), "iroha-manifest-codec-native-absence-"));
+  try {
+    const script = `
+      import assert from "node:assert/strict";
+      import { noritoEncodeInstruction, noritoDecodeInstruction } from "./src/norito.js";
+      const instruction = ${JSON.stringify(instruction)};
+      const encoded = Buffer.from(${JSON.stringify(encoded.toString("base64"))}, "base64");
+      for (const operation of [
+        () => noritoEncodeInstruction(instruction, 753),
+        () => noritoEncodeInstruction(JSON.stringify(instruction), 753),
+        () => noritoEncodeInstruction(encoded, 753),
+        () => noritoDecodeInstruction(encoded, 753),
+        () => noritoDecodeInstruction(encoded, 753, { parseJson: false }),
+      ]) {
+        assert.throws(operation, { code: "ERR_IROHA_NATIVE_BINDING", nativeStatus: "missing_file" });
+      }
+    `;
+    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: { ...process.env, IROHA_JS_NATIVE_DIR: join(directory, "absent-native") },
+      encoding: "utf8",
+    });
+    assert.equal(child.error, undefined);
+    assert.equal(child.signal, null);
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

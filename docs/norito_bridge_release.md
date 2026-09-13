@@ -102,6 +102,11 @@ that workflow for local release verification.
    with its embedded manifest and canonical public manifest symlink already in
    the first-release layout; the builder does not migrate an older layout.
 
+   PQClean archive normalization binds the registry package identity and checksum
+   from the selected Cargo lock to the exact successful build's JSON messages and
+   native link outputs. It removes only byte-identical duplicate members from
+   those authenticated archives; complete-archive linking remains mandatory.
+
 2. Confirm the builder-owned archive publication:
 
    ```bash

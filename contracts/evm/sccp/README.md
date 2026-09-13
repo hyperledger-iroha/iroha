@@ -3,8 +3,9 @@
 These contracts provide the shared exact V1 implementation used by Ethereum
 and BNB Smart Chain routes.
 
-Production sources require exact Solidity `0.7.4`. EVM and TVM artifacts use
-the authenticated `0.7.4+commit.3f05b770` compiler, optimizer run count `200`,
+Production sources require exact Solidity `0.7.6`. EVM artifacts use Ethereum's
+native `0.7.6+commit.7338295f` compiler; TVM artifacts use TRON's distinct native
+`0.7.6+commit.d1802f25` compiler. Both use optimizer run count `200`
 and the `istanbul` target over distinct reviewed source maps. Their target
 identities, complete standard-json inputs,
 ABIs, creation/runtime bytes, immutable-runtime patch ranges, and hashes are
@@ -17,6 +18,11 @@ deployed runtime bytes outside compiler-declared immutable slots. The BLAKE2b
 compressor's intentional modulo-2^64 additions are isolated in the documented
 `_add64` helper with an explicit 64-bit mask; every value-moving overflow remains
 explicitly checked.
+
+Compiler downloads, platform executables and full native version responses are
+authenticated by the [native compiler policy](../../../scripts/contract_tooling/README.md).
+Supported hosts are Linux x86-64 and macOS with x86-64 execution (Rosetta on
+arm64). Compilation and execution use private verified native binaries.
 
 ## Components
 

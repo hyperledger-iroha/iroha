@@ -1,9 +1,9 @@
-//! Blocking and async finality waits must survive read backpressure without replaying writes.
+//! Blocking and async waits share one deadline and survive read backpressure without replaying writes.
 
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use super::{
@@ -81,10 +81,21 @@ fn wait(
     asynchronous: bool,
     timeout: Duration,
 ) -> eyre::Result<super::TransactionWaitOutcome> {
-    let options = TransactionWaitOptions {
-        timeout,
-        poll_interval: Duration::from_millis(1),
-    };
+    wait_with_options(
+        client,
+        asynchronous,
+        TransactionWaitOptions {
+            timeout,
+            poll_interval: Duration::from_millis(1),
+        },
+    )
+}
+
+fn wait_with_options(
+    client: &Client,
+    asynchronous: bool,
+    options: TransactionWaitOptions,
+) -> eyre::Result<super::TransactionWaitOutcome> {
     if asynchronous {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -160,13 +171,20 @@ fn transaction_wait_timeout_identifies_the_exact_pending_transaction() {
             (status("Queued", "queue"), "Queued"),
         ] {
             let (client, snapshots) = scripted_client(vec![response]);
-            let error =
-                wait(&client, asynchronous, Duration::ZERO).expect_err("unresolved deadline");
+            let error = wait_with_options(
+                &client,
+                asynchronous,
+                TransactionWaitOptions {
+                    timeout: Duration::from_millis(50),
+                    poll_interval: Duration::from_millis(50),
+                },
+            )
+            .expect_err("unresolved deadline");
             let report = format!("{error:#}");
             assert!(report.contains(&format!("transaction {} did not reach", hash())));
             assert!(report.contains(&format!("last_status={expected_status}; attempts=1")));
             let snapshots = snapshots.lock().expect("snapshots");
-            assert_eq!(snapshots.len(), 1, "zero timeout still observes once");
+            assert_eq!(snapshots.len(), 1, "no read after the original deadline");
             assert_only_exact_status_reads(&snapshots);
         }
     }
@@ -304,4 +322,251 @@ fn wait_for_transaction_applied_rejects_fixed_failures() {
         assert_eq!(snapshots.len(), 1);
         assert_status_scope(&snapshots[0], "global");
     }
+}
+
+fn assert_unresolved(error: &eyre::Report, attempts: u64) {
+    let final_error = error
+        .downcast_ref::<super::TxConfirmationFinalError>()
+        .expect("typed confirmation failure");
+    assert_eq!(
+        final_error.resolution,
+        super::TxConfirmationErrorResolution::Unresolved
+    );
+    let report = format!("{error:#}");
+    assert!(report.contains(&format!("transaction {} did not reach", hash())));
+    assert!(report.contains(&format!("attempts={attempts}")), "{report}");
+}
+
+#[test]
+fn transaction_wait_zero_timeout_never_dispatches_an_initial_read() {
+    for asynchronous in [false, true] {
+        for response in [
+            json_response(StatusCode::NOT_FOUND, "transaction not observed"),
+            status("Queued", "queue"),
+            status("Applied", "state"),
+        ] {
+            let (client, snapshots) = scripted_client(vec![response]);
+            let error = wait(&client, asynchronous, Duration::ZERO)
+                .expect_err("zero budget cannot admit an observation");
+            assert_unresolved(&error, 0);
+            assert!(format!("{error:#}").contains("last_status=not_observed"));
+            assert!(snapshots.lock().expect("snapshots").is_empty());
+        }
+    }
+}
+
+#[test]
+fn transaction_wait_unrepresentable_deadline_fails_before_dispatch() {
+    for asynchronous in [false, true] {
+        let (client, snapshots) = scripted_client(vec![status("Applied", "state")]);
+        let error = wait(&client, asynchronous, Duration::MAX).expect_err("invalid deadline");
+        assert!(
+            error
+                .to_string()
+                .contains("timeout cannot be represented as a monotonic deadline")
+        );
+        assert!(snapshots.lock().expect("snapshots").is_empty());
+    }
+}
+
+#[test]
+fn transaction_wait_expired_context_deadline_cannot_be_extended() {
+    for asynchronous in [false, true] {
+        let (client, snapshots) = scripted_client(vec![status("Applied", "state")]);
+        let expired = client
+            .with_request_deadline(Instant::now())
+            .with_request_deadline(Instant::now() + Duration::from_secs(1));
+        let error = wait(&expired, asynchronous, Duration::from_secs(1))
+            .expect_err("an inherited deadline is an upper bound");
+        assert_unresolved(&error, 0);
+        assert!(snapshots.lock().expect("snapshots").is_empty());
+        // The bounded clone retains pools without modifying the original context.
+        assert!(
+            expired
+                .http_transport
+                .shares_pools_with(&client.http_transport)
+        );
+        assert!(client.http_transport.deadline().is_none());
+    }
+}
+
+#[test]
+fn transaction_wait_late_http_status_is_unresolved_in_both_transports() {
+    for asynchronous in [false, true] {
+        for response in [
+            status("Applied", "state"),
+            status("Queued", "queue"),
+            status("Rejected", "state"),
+            status("Expired", "state"),
+        ] {
+            let snapshots = Arc::new(Mutex::new(Vec::new()));
+            let observed = Arc::clone(&snapshots);
+            let budget = Duration::from_millis(50);
+            let transport = DefaultHttpTransport::mock(Arc::new(move |snapshot| {
+                observed.lock().expect("snapshots").push(snapshot);
+                // This synchronous responder returns a ready async future after expiry.
+                // The blocking transport rejects it at completion; PollState must also
+                // reject every late-ready async result, including terminal evidence.
+                std::thread::sleep(budget + Duration::from_millis(1));
+                Ok(response.clone())
+            }));
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            let error = wait(&client, asynchronous, budget).expect_err("late response");
+            assert_unresolved(&error, 1);
+            assert!(
+                error
+                    .chain()
+                    .all(|cause| cause.downcast_ref::<TransactionFinalityFailure>().is_none()),
+                "late terminal statuses must not produce finality evidence"
+            );
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert_eq!(snapshots.len(), 1);
+            assert_only_exact_status_reads(&snapshots);
+            assert!(snapshots[0].timeout.expect("remaining HTTP budget") <= budget);
+        }
+    }
+}
+
+#[test]
+fn transaction_wait_retries_spend_one_remaining_http_budget() {
+    for asynchronous in [false, true] {
+        for inherited in [false, true] {
+            let snapshots = Arc::new(Mutex::new(Vec::new()));
+            let observed = Arc::clone(&snapshots);
+            let transport = DefaultHttpTransport::mock(Arc::new(move |snapshot| {
+                let attempt = {
+                    let mut observed = observed.lock().expect("snapshots");
+                    observed.push(snapshot);
+                    observed.len()
+                };
+                std::thread::sleep(Duration::from_millis(5));
+                Ok(match attempt {
+                    1 => backpressure(Some("0")),
+                    2 => status("Applied", "cache"),
+                    3 => status("Applied", "state"),
+                    _ => panic!("unexpected read"),
+                })
+            }));
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            let options_budget = Duration::from_secs(2);
+            let effective_budget = if inherited {
+                Duration::from_secs(1)
+            } else {
+                options_budget
+            };
+            let client = if inherited {
+                client.with_request_deadline(Instant::now() + effective_budget)
+            } else {
+                client
+            };
+            let outcome = wait(&client, asynchronous, options_budget).expect("in-budget finality");
+            assert_eq!(outcome.attempts, 3);
+            assert_eq!(outcome.resolved_from, "state");
+            let snapshots = snapshots.lock().expect("snapshots");
+            assert_eq!(snapshots.len(), 3);
+            assert_only_exact_status_reads(&snapshots);
+            let budgets = snapshots
+                .iter()
+                .map(|snapshot| snapshot.timeout.expect("remaining budget"))
+                .collect::<Vec<_>>();
+            assert!(budgets.iter().all(|budget| *budget <= effective_budget));
+            assert!(budgets.windows(2).all(|pair| pair[1] < pair[0]));
+        }
+    }
+}
+
+#[test]
+fn transaction_wait_outcome_admission_rechecks_deadline_after_decoding() {
+    let response: super::PipelineTransactionStatusResponse =
+        norito::json::from_slice(status("Applied", "state").body()).expect("typed status");
+    let mut state = super::transaction_wait::PollState::new(
+        hash(),
+        TransactionWaitOptions {
+            timeout: Duration::from_millis(50),
+            poll_interval: Duration::from_millis(1),
+        },
+        None,
+    )
+    .expect("wait");
+    state.begin_poll().expect("in-budget dispatch");
+    std::thread::sleep(state.deadline().saturating_duration_since(Instant::now()));
+    let error = state
+        .observe(Ok(Some(response.clone())))
+        .expect_err("predecoded Applied cannot bypass outcome deadline");
+    assert_unresolved(&error, 1);
+    assert!(format!("{error:#}").contains("last_status=Applied"));
+
+    let mut wrong = response;
+    wrong.hash = Hash::prehashed([0x73; Hash::LENGTH]).to_string();
+    let error = state
+        .observe(Ok(Some(wrong)))
+        .expect_err("binding remains mandatory");
+    assert!(matches!(
+        error.downcast_ref::<crate::Error>(),
+        Some(crate::Error::ResponseBinding {
+            operation: "pipeline.transaction_status",
+            field: "hash",
+        })
+    ));
+}
+
+#[tokio::test]
+async fn transaction_wait_async_deadline_retires_the_pending_status_future() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::http::{HttpTransport, TransportFuture, TransportRequest};
+
+    struct RetainedRead(Arc<AtomicBool>);
+    impl Drop for RetainedRead {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    #[derive(Debug)]
+    struct PendingStatus {
+        dropped: Arc<AtomicBool>,
+        snapshots: Arc<Mutex<Vec<RequestSnapshot>>>,
+    }
+    impl HttpTransport for PendingStatus {
+        fn send_blocking(&self, _: TransportRequest) -> eyre::Result<Response<Vec<u8>>> {
+            panic!("async-only fixture")
+        }
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            self.snapshots
+                .lock()
+                .expect("snapshots")
+                .push((&request).into());
+            let retained = RetainedRead(Arc::clone(&self.dropped));
+            Box::pin(async move {
+                let _retained = retained;
+                std::future::pending().await
+            })
+        }
+    }
+    let dropped = Arc::new(AtomicBool::new(false));
+    let snapshots = Arc::new(Mutex::new(Vec::new()));
+    let transport = DefaultHttpTransport::from_shared(Arc::new(PendingStatus {
+        dropped: Arc::clone(&dropped),
+        snapshots: Arc::clone(&snapshots),
+    }));
+    let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.wait_until_transaction_applied(
+            hash(),
+            TransactionWaitOptions {
+                timeout: Duration::from_millis(30),
+                poll_interval: Duration::from_millis(1),
+            },
+        ),
+    )
+    .await
+    .expect("the operation deadline must retire the pending read")
+    .expect_err("unresolved deadline");
+    assert_unresolved(&error, 1);
+    assert!(dropped.load(Ordering::SeqCst));
+    let snapshots = snapshots.lock().expect("snapshots");
+    assert_eq!(snapshots.len(), 1);
+    assert_only_exact_status_reads(&snapshots);
+    assert!(snapshots[0].timeout.expect("deadline") <= Duration::from_millis(30));
 }

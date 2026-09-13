@@ -5,12 +5,15 @@ Requires completed maintained preparation and an owner-public deployment record.
 --plan-only contacts no host. The default command
 transfers the daemon and matching CLI via native cat/SSH and executes the reviewed guest
 controller. No secret files are read. Failed attempts are never overwritten.
+An explicit --failed-start-chain authenticates every failed startup since the
+completed deployment. Unchanged binaries can be retried in a fresh operation.
 """
 import argparse
 import fcntl
 import secrets
 from urllib.parse import urlsplit
 import taira_retry as retry
+from taira_update_guest import COHORT_MAX_TIMEOUT_SECONDS, MAX_FAILED_START_ATTEMPTS
 import base64
 import hashlib
 import importlib.util
@@ -25,6 +28,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+GUEST_OPERATION_TIMEOUT_SECONDS = COHORT_MAX_TIMEOUT_SECONDS + 60 * 60 + MAX_FAILED_START_ATTEMPTS * 4 * 20
 
 
 def need(value, reason):
@@ -119,12 +123,32 @@ def validate_build(build, commit):
     return selected
 
 
-def make_plan(build, deployment, prior, guest, operation):
+def failed_start_inputs(reference, deployment, prior, guest, operation, candidate):
+    """Resolve a complete ancestry of digest-bound public failed-attempt records."""
+    budget = guest.FailedStartRecordBudget()
+
+    def read_ref(ref):
+        raw = retry.public_record(ref['path'], ref['sha256'])
+        budget.consume(raw)
+        return retry.decode(raw)
+
+    def load_attempt(ref):
+        failed = read_ref(ref['plan'])
+        records = {name: read_ref(value) for name, value in ref['records'].items()}
+        return failed, records
+
+    installed, entries = guest.validate_failed_start_chain(
+        reference, deployment, prior, operation, load_attempt, candidate=candidate)
+    return dict(reference, installed=installed), entries[-1][0]
+
+
+def make_plan(build, deployment, prior, guest, operation, failed_start=None):
     commit = build['commit']
     artifacts = validate_build(build, commit)
     current = deployment['current']
     need(commit != current['commit'], 'candidate is already the current runtime')
     need(re.fullmatch('update-[0-9a-f]{32}', operation), 'invalid operation directory')
+    need(operation != current['attempt_name'], 'fresh operation directory required')
     need(prior.get('schema') == current['plan_schema'] and prior.get('commit') == current['commit']
          and prior.get('network_id') == deployment['network_id'], 'installed predecessor plan differs')
     need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == deployment['renderer_sha256']
@@ -133,9 +157,14 @@ def make_plan(build, deployment, prior, guest, operation):
     value = {'schema':'taira.daemon-update.plan.v1', 'commit':commit,
              'network_id':deployment['network_id'], 'artifacts':artifacts,
              'operation':operation, 'deployment':deployment}
+    installed_plan = prior
+    if failed_start is not None:
+        value['failed_start'], installed_plan = failed_start_inputs(
+            failed_start, deployment, prior, guest, operation, value)
+    guest.validate_candidate_transition(commit, artifacts, current['commit'], installed_plan)
     guest.configure(value)
     units = []
-    for row in prior['units']:
+    for row in installed_plan['units']:
         raw = base64.b64decode(row['after'], validate=True)
         need(sha(raw) == row['after_sha256'], 'installed predecessor unit digest differs')
         after = guest.replace_daemon(raw, row['role'])
@@ -211,6 +240,16 @@ def apply_plan(args):
         need(sha(read_public(HERE / name)) == plan[field], 'reviewed coordinator source changed')
     need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == plan['renderer_sha256'],
          'reviewed custody renderer changed')
+    if 'failed_start' in plan:
+        current = plan['deployment']['current']
+        prior = retry.decode(retry.public_record(current['local_plan'], current['local_plan_sha256']))
+        guest = module(HERE / 'taira_update_guest.py', 'runtime_update_recovery_validation')
+        reference = {key: value for key, value in plan['failed_start'].items() if key != 'installed'}
+        rebound = make_plan(json.loads(build_raw), plan['deployment'], prior, guest,
+                            plan['operation'], reference)
+        need(rebound['failed_start'] == plan['failed_start'] and rebound['units'] == plan['units']
+             and rebound['retained_predecessor'] == plan['retained_predecessor'],
+             'failed-start recovery plan differs from its public inputs')
     need(args.output.is_absolute() and args.output.parent.resolve() == args.output.parent
          and not args.output.exists(), 'fresh absolute local output required')
     argv = retry.validate_ssh(plan['deployment']['guest_ssh'])
@@ -241,7 +280,10 @@ def apply_plan(args):
     guest_source = read_public(HERE / 'taira_update_guest.py')
     payload = guest_source + b'\napply_locked(' + repr(plan).encode() + b')\n'
     with (args.output / 'stdout.json').open('xb') as out, (args.output / 'stderr.log').open('xb') as err:
-        process = subprocess.run(argv, input=payload, stdout=out, stderr=err, timeout=900)
+        # Bound the complete guest operation beyond its individual preflight,
+        # stop/start, progress-bounded catch-up, doctor and final observation budgets.
+        process = subprocess.run(argv, input=payload, stdout=out, stderr=err,
+                                 timeout=GUEST_OPERATION_TIMEOUT_SECONDS)
     write_new(args.output / 'exit.json', json.dumps({'exit_code': process.returncode}).encode())
     need(process.returncode == 0, 'guest update failed; inspect owner-private attempt, never blindly reapply')
     result = json.loads(read_public(args.output / 'stdout.json'))
@@ -259,6 +301,8 @@ def main():
     parser.add_argument('--prepared-result', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--plan-only', action='store_true', help='write the exact local plan without SSH')
+    parser.add_argument('--failed-start-chain', type=Path,
+                        help='ordered digest-bound failed attempts since the last completed deployment')
     args = parser.parse_args()
     os.umask(0o077)
     need(subprocess.check_output(['git', 'branch', '--show-current'], cwd=ROOT, text=True).strip()
@@ -281,7 +325,9 @@ def main():
                                         deployment['current']['local_plan_sha256'])
         guest = module(HERE / 'taira_update_guest.py', 'runtime_update_guest')
         value = make_plan(retry.decode(build_raw), deployment, retry.decode(prior_raw), guest,
-                          'update-' + secrets.token_hex(16))
+                          'update-' + secrets.token_hex(16),
+                          retry.decode(read_public(args.failed_start_chain))
+                          if args.failed_start_chain is not None else None)
         value.update(build_result_path=str(args.prepared_result), build_result_sha256=sha(build_raw))
         raw = (json.dumps(value, sort_keys=True)+'\n').encode()
         if args.plan_only:

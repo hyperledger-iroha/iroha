@@ -1222,7 +1222,6 @@ Root {
                 max_io_bytes: 25165824,
                 max_egress_bytes: 12582912,
                 allow_gpu_hints: true,
-                allow_wasi: true,
             },
             Name(
                 "cpu-small",
@@ -1233,7 +1232,6 @@ Root {
                 max_io_bytes: 16777216,
                 max_egress_bytes: 8388608,
                 allow_gpu_hints: false,
-                allow_wasi: false,
             },
         },
         default_resource_profile: Name(
@@ -1253,7 +1251,6 @@ Root {
         ),
         auth_policy: Either,
         sandbox: ComputeSandboxRules {
-            mode: IvmOnly,
             randomness: SeededFromRequest,
             storage: ReadOnly,
             deny_nondeterministic_syscalls: true,

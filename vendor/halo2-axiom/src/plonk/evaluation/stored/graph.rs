@@ -16,12 +16,18 @@ use super::{
 };
 use ff::Field;
 
+pub(crate) mod coset;
+
 use crate::{
     arithmetic::CurveAffine,
     plonk::evaluation::{Calculation, GraphEvaluator, ValueSource},
     poly::{
         LagrangeCoeff, Polynomial,
-        stored_advice::{StoredAdviceSnapshotV1, assignment::StoredAssignmentFieldV1},
+        stored_advice::{
+            StoredPolynomialSnapshotV1,
+            assignment::StoredAssignmentFieldV1,
+            reader::{StoredAdviceChunkSourceV1, StoredAdviceSliceReaderV1},
+        },
     },
 };
 
@@ -35,6 +41,11 @@ pub(crate) struct StoredGraphPlanV1<'graph, 'context, C: CurveAffine> {
 }
 
 impl<C: CurveAffine> StoredGraphPlanV1<'_, '_, C> {
+    /// Borrow the exact planning metadata without exposing or cloning the retained graph.
+    pub(crate) fn context(&self) -> StoredExpressionContextV1<'_> {
+        self.context
+    }
+
     /// Initialized owned field payload, excluding public query metadata and backend memory.
     pub(crate) fn scratch_bytes(&self) -> usize {
         self.scratch_bytes
@@ -167,6 +178,28 @@ where
 }
 
 struct GraphScratch<F: StoredAssignmentFieldV1>(Vec<F>);
+
+// Both retained-graph entry points use the original arithmetic order and Horner convention.
+fn evaluate_calculation<F: Field>(calculation: &Calculation, get: impl Fn(ValueSource) -> F) -> F {
+    match calculation {
+        Calculation::Add(a, b) => get(*a) + get(*b),
+        Calculation::Sub(a, b) => get(*a) - get(*b),
+        Calculation::Mul(a, b) => get(*a) * get(*b),
+        Calculation::Square(value) => get(*value).square(),
+        Calculation::Double(value) => get(*value).double(),
+        Calculation::Negate(value) => -get(*value),
+        Calculation::Store(value) => get(*value),
+        Calculation::Horner(start, parts, factor) => {
+            let factor = get(*factor);
+            let mut value = get(*start);
+            for part in parts {
+                value = value * factor + get(*part);
+            }
+            value
+        }
+    }
+}
+
 impl<F: StoredAssignmentFieldV1> GraphScratch<F> {
     fn zeroed(count: usize) -> Result<Self, StoredExpressionErrorV1> {
         let mut fields = Vec::new();
@@ -207,7 +240,44 @@ pub(crate) fn with_stored_graph_chunk_v1<C, S, R>(
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    S: StoredAdviceSnapshotV1,
+    S: StoredPolynomialSnapshotV1,
+{
+    with_stored_graph_reader_v1(
+        plan,
+        tile,
+        &mut StoredAdviceSliceReaderV1::new(advice),
+        fixed,
+        instance,
+        challenges,
+        beta,
+        gamma,
+        theta,
+        y,
+        previous,
+        consume,
+    )
+}
+
+/// Shared retained-graph arithmetic; the complete owner encloses this entire call.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn with_stored_graph_reader_v1<C, A, R>(
+    plan: &StoredGraphPlanV1<'_, '_, C>,
+    tile: StoredRowTileV1,
+    advice: &mut A,
+    fixed: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    instance: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    challenges: &[C::Scalar],
+    beta: C::Scalar,
+    gamma: C::Scalar,
+    theta: C::Scalar,
+    y: C::Scalar,
+    previous: &[C::Scalar],
+    consume: impl FnOnce(&[C::Scalar]) -> Result<R, StoredExpressionErrorV1>,
+) -> Result<R, StoredExpressionErrorV1>
+where
+    C: CurveAffine,
+    C::Scalar: StoredAssignmentFieldV1,
+    A: StoredAdviceChunkSourceV1,
 {
     let context = &plan.context;
     validate_inputs(context, tile, advice, fixed, instance, challenges)?;
@@ -218,7 +288,8 @@ where
     let mut scratch = GraphScratch::<C::Scalar>::zeroed(plan.field_count)?;
     for (slot, &(column, rotation)) in plan.advice_queries.iter().enumerate() {
         read_advice(
-            &mut advice[column],
+            advice,
+            context.advice[column],
             tile,
             plan.graph.rotations[rotation],
             &mut scratch.0[slot * TILE..(slot + 1) * TILE],
@@ -254,23 +325,7 @@ where
                 ValueSource::PreviousValue() => *previous_value,
             };
             // Keep every original Calculation operation, including Horner's factor/start order.
-            let value = match &info.calculation {
-                Calculation::Add(a, b) => get(*a) + get(*b),
-                Calculation::Sub(a, b) => get(*a) - get(*b),
-                Calculation::Mul(a, b) => get(*a) * get(*b),
-                Calculation::Square(value) => get(*value).square(),
-                Calculation::Double(value) => get(*value).double(),
-                Calculation::Negate(value) => -get(*value),
-                Calculation::Store(value) => get(*value),
-                Calculation::Horner(start, parts, factor) => {
-                    let factor = get(*factor);
-                    let mut value = get(*start);
-                    for part in parts {
-                        value = value * factor + get(*part);
-                    }
-                    value
-                }
-            };
+            let value = evaluate_calculation(&info.calculation, get);
             scratch.0[intermediate_start + info.target] = value;
         }
         scratch.0[output_start + row] = plan
@@ -282,6 +337,10 @@ where
     }
     consume(&scratch.0[output_start..output_start + tile.len])
 }
+
+/// The original graph constructor is used only by completed-owner integration oracles.
+#[cfg(test)]
+pub(crate) use crate::plonk::evaluation::Evaluator as TestEvaluator;
 
 #[cfg(test)]
 mod tests;

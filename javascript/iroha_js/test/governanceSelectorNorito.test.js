@@ -6,6 +6,7 @@ import { AccountAddress } from "../src/address.js";
 import { isCanonicalGovernanceSelectorV1 } from "../src/governanceSelector.js";
 import { _createNoritoInstructionApi } from "../src/norito.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
+import { nativeBinding } from "./helpers/native.js";
 
 const TEST_ACCOUNT = AccountAddress.fromAccount({
   publicKey: Buffer.from(
@@ -32,6 +33,9 @@ function proofAttachment(name) {
     backend: "halo2/ipa",
     proof: { backend: "halo2/ipa", bytes: [1] },
     vk_ref: { backend: "halo2/ipa", name },
+    vk_commitment: null,
+    envelope_hash: null,
+    lane_privacy: null,
   };
 }
 
@@ -169,4 +173,22 @@ test("valid selector boundary lengths reach the selected native owner", () => {
     }
   }
   assert.equal(nativeCalls, VALID_SELECTORS.length * SELECTOR_INSTRUCTIONS.length);
+});
+
+// Native ProofAttachment JSON is a complete six-field record. An absent
+// optional value is explicit null; omitting the field is not another shape.
+test("raw election proofs require every nullable attachment field", () => {
+  for (const name of ["SubmitBallot", "FinalizeElection"]) {
+    const instruction = SELECTOR_INSTRUCTIONS.find(([key]) => key === name)[1];
+    const proofField = name === "SubmitBallot" ? "ballot_proof" : "tally_proof";
+    for (const field of ["vk_commitment", "envelope_hash", "lane_privacy"]) {
+      const payload = instruction("a");
+      delete payload.zk[name][proofField][field];
+      assert.throws(
+        () => nativeBinding.noritoEncodeInstruction(JSON.stringify(payload), 753),
+        { name: "Error", message: `JSON error: missing field \`${field}\`` },
+        `${name}.${proofField}.${field}`,
+      );
+    }
+  }
 });

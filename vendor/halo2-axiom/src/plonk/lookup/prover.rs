@@ -649,3 +649,377 @@ fn permute_expression_pair_seq<'params, C: CurveAffine, P: Params<'params, C>, R
 #[cfg(test)]
 #[path = "deterministic_recovery_tests.rs"]
 mod deterministic_recovery_tests;
+
+/// Test-only differential access to the active ordinary permutation, with guaranteed membership.
+#[cfg(test)]
+pub(crate) fn stored_sort_ordinary_oracle<C: CurveAffine>(
+    pk: &ProvingKey<C>,
+    params: &crate::poly::ipa::commitment::ParamsIPA<C>,
+    values: Vec<C::Scalar>,
+) -> Vec<C::Scalar> {
+    use rand_core::SeedableRng;
+    let polynomial = pk.vk.domain.lagrange_from_vec(values);
+    let (input, _) = permute_expression_pair(
+        pk,
+        params,
+        &pk.vk.domain,
+        rand_chacha::ChaCha20Rng::from_seed([73; 32]),
+        &polynomial,
+        &polynomial,
+    )
+    .unwrap();
+    input.to_vec()
+}
+
+/// Test-only differential access to the active ordinary pair construction for valid membership.
+#[cfg(test)]
+pub(crate) fn stored_membership_ordinary_oracle<C: CurveAffine>(
+    pk: &ProvingKey<C>,
+    params: &crate::poly::ipa::commitment::ParamsIPA<C>,
+    input: Vec<C::Scalar>,
+    table: Vec<C::Scalar>,
+) -> (Vec<C::Scalar>, Vec<C::Scalar>) {
+    use rand_core::SeedableRng;
+    let input = pk.vk.domain.lagrange_from_vec(input);
+    let table = pk.vk.domain.lagrange_from_vec(table);
+    let (input, table) = permute_expression_pair(
+        pk,
+        params,
+        &pk.vk.domain,
+        rand_chacha::ChaCha20Rng::from_seed([79; 32]),
+        &input,
+        &table,
+    )
+    .unwrap();
+    (input.to_vec(), table.to_vec())
+}
+
+/// Test-only concrete result from the active ordinary lookup commitment implementation.
+#[cfg(test)]
+pub(crate) struct StoredPermutedOrdinaryOracleV1<C: CurveAffine> {
+    pub(crate) input_lagrange: Vec<C::Scalar>,
+    pub(crate) table_lagrange: Vec<C::Scalar>,
+    pub(crate) input_coefficient: Vec<C::Scalar>,
+    pub(crate) table_coefficient: Vec<C::Scalar>,
+    pub(crate) input_blind: Blind<C::Scalar>,
+    pub(crate) table_blind: Blind<C::Scalar>,
+}
+
+/// Invoke the actual ordinary argument, including its tails, conversions, blinds and writes.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stored_permuted_ordinary_oracle<C, R, T, E>(
+    pk: &ProvingKey<C>,
+    params: &crate::poly::ipa::commitment::ParamsIPA<C>,
+    lookup_index: usize,
+    theta: ChallengeTheta<C>,
+    advice: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    instances: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    challenges: &[C::Scalar],
+    rng: &mut R,
+    transcript: &mut T,
+) -> Result<StoredPermutedOrdinaryOracleV1<C>, Error>
+where
+    C: CurveAffine,
+    C::Scalar: WithSmallOrderMulGroup<3>,
+    C::Curve: Mul<C::Scalar, Output = C::Curve> + MulAssign<C::Scalar>,
+    R: RngCore,
+    E: EncodedChallenge<C>,
+    T: TranscriptWrite<C, E>,
+{
+    let result = pk.vk.cs.lookups[lookup_index].commit_permuted(
+        pk,
+        params,
+        &pk.vk.domain,
+        theta,
+        advice,
+        &pk.fixed_values,
+        instances,
+        challenges,
+        rng,
+        transcript,
+    )?;
+    Ok(StoredPermutedOrdinaryOracleV1 {
+        input_lagrange: result.permuted_input_expression.to_vec(),
+        table_lagrange: result.permuted_table_expression.to_vec(),
+        input_coefficient: result.permuted_input_poly.to_vec(),
+        table_coefficient: result.permuted_table_poly.to_vec(),
+        input_blind: result.permuted_input_blind,
+        table_blind: result.permuted_table_blind,
+    })
+}
+
+/// Test-only values from a real ordinary lookup product, including its original pair blinds.
+#[cfg(test)]
+pub(crate) struct StoredLookupProductOrdinaryOracleV1<C: CurveAffine> {
+    pub(crate) input_coefficient: Vec<C::Scalar>,
+    pub(crate) table_coefficient: Vec<C::Scalar>,
+    pub(crate) product_coefficient: Vec<C::Scalar>,
+    pub(crate) input_blind: Blind<C::Scalar>,
+    pub(crate) table_blind: Blind<C::Scalar>,
+    pub(crate) product_blind: Blind<C::Scalar>,
+}
+/// Test-only complete ordinary trajectory from immediately after theta through all products.
+#[cfg(test)]
+pub(crate) struct StoredProductsOrdinaryOracleV1<C: CurveAffine> {
+    pub(crate) beta: C::Scalar,
+    pub(crate) gamma: C::Scalar,
+    pub(crate) pairs: Vec<StoredPermutedOrdinaryOracleV1<C>>,
+    pub(crate) permutations:
+        Vec<crate::plonk::permutation::prover::StoredCopyProductOrdinaryOracleV1<C>>,
+    pub(crate) lookups: Vec<StoredLookupProductOrdinaryOracleV1<C>>,
+}
+/// Invoke the actual ordinary lookup-permutation, challenge and product routines in order.
+/// The caller supplies the genuine cloned RNG and transcript prefix immediately after theta;
+/// no reseed, manufactured Permuted owner or independently sampled beta/gamma is substituted.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stored_products_ordinary_oracle<C, R, T, E>(
+    pk: &ProvingKey<C>,
+    params: &crate::poly::ipa::commitment::ParamsIPA<C>,
+    theta: ChallengeTheta<C>,
+    advice: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    instances: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    challenges: &[C::Scalar],
+    rng: &mut R,
+    transcript: &mut T,
+) -> Result<StoredProductsOrdinaryOracleV1<C>, Error>
+where
+    C: CurveAffine,
+    C::Scalar: WithSmallOrderMulGroup<3>,
+    C::Curve: Mul<C::Scalar, Output = C::Curve> + MulAssign<C::Scalar>,
+    R: RngCore,
+    T: TranscriptWrite<C, E>,
+    E: EncodedChallenge<C>,
+{
+    let mut actual = Vec::new();
+    let mut pairs = Vec::new();
+    for argument in &pk.vk.cs.lookups {
+        let pair = argument.commit_permuted(
+            pk,
+            params,
+            &pk.vk.domain,
+            theta,
+            advice,
+            &pk.fixed_values,
+            instances,
+            challenges,
+            &mut *rng,
+            transcript,
+        )?;
+        pairs.push(StoredPermutedOrdinaryOracleV1 {
+            input_lagrange: pair.permuted_input_expression.to_vec(),
+            table_lagrange: pair.permuted_table_expression.to_vec(),
+            input_coefficient: pair.permuted_input_poly.to_vec(),
+            table_coefficient: pair.permuted_table_poly.to_vec(),
+            input_blind: pair.permuted_input_blind,
+            table_blind: pair.permuted_table_blind,
+        });
+        actual.push(pair);
+    }
+    let beta: ChallengeBeta<C> = transcript.squeeze_challenge_scalar();
+    let gamma: ChallengeGamma<C> = transcript.squeeze_challenge_scalar();
+    let permutations = pk
+        .vk
+        .cs
+        .permutation
+        .commit(
+            params,
+            pk,
+            &pk.permutation,
+            advice,
+            &pk.fixed_values,
+            instances,
+            beta,
+            gamma,
+            &mut *rng,
+            transcript,
+        )?
+        .stored_product_oracle_values();
+    let mut lookups = Vec::new();
+    for pair in actual {
+        let product = pair.commit_product(pk, params, beta, gamma, &mut *rng, transcript)?;
+        lookups.push(StoredLookupProductOrdinaryOracleV1 {
+            input_coefficient: product.permuted_input_poly.to_vec(),
+            table_coefficient: product.permuted_table_poly.to_vec(),
+            product_coefficient: product.product_poly.to_vec(),
+            input_blind: product.permuted_input_blind,
+            table_blind: product.permuted_table_blind,
+            product_blind: product.product_blind,
+        });
+    }
+    Ok(StoredProductsOrdinaryOracleV1 {
+        beta: *beta,
+        gamma: *gamma,
+        pairs,
+        permutations,
+        lookups,
+    })
+}
+
+/// Actual ordinary commitments and undivided numerator from the genuine pre-pair trajectory.
+#[cfg(test)]
+pub(crate) struct StoredQuotientOrdinaryOracleV1<C: CurveAffine> {
+    pub(crate) products: StoredProductsOrdinaryOracleV1<C>,
+    pub(crate) vanishing: crate::plonk::vanishing::StoredVanishingOrdinaryOracleV1<C>,
+    pub(crate) numerator: Vec<C::Scalar>,
+    pub(crate) borrowed_numerator: Vec<C::Scalar>,
+    pub(crate) advice_coefficient: Vec<Vec<C::Scalar>>,
+    pub(crate) instance_coefficient: Vec<Vec<C::Scalar>>,
+}
+
+/// Continue the actual pair/product/vanishing routines and both ordinary evaluator owners.
+///
+/// The caller supplies its cloned original RNG and transcript immediately after theta. Actual
+/// Committed values survive through evaluation; no product owner is reconstructed from extracted
+/// scalars. The two evaluator calls consume no proof randomness or transcript operations. Their
+/// flattened outputs use the ordinary row-major extended-domain layout, before quotient division.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stored_quotient_ordinary_oracle<C, R, T, E>(
+    pk: &ProvingKey<C>,
+    params: &crate::poly::ipa::commitment::ParamsIPA<C>,
+    theta: ChallengeTheta<C>,
+    advice: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    instances: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    challenges: &[C::Scalar],
+    rng: &mut R,
+    transcript: &mut T,
+) -> Result<StoredQuotientOrdinaryOracleV1<C>, Error>
+where
+    C: CurveAffine,
+    C::Scalar: WithSmallOrderMulGroup<3>,
+    C::Curve: Mul<C::Scalar, Output = C::Curve> + MulAssign<C::Scalar>,
+    R: RngCore,
+    T: TranscriptWrite<C, E>,
+    E: EncodedChallenge<C>,
+{
+    let mut actual_pairs = Vec::new();
+    let mut pairs = Vec::new();
+    for argument in &pk.vk.cs.lookups {
+        let pair = argument.commit_permuted(
+            pk,
+            params,
+            &pk.vk.domain,
+            theta,
+            advice,
+            &pk.fixed_values,
+            instances,
+            challenges,
+            &mut *rng,
+            transcript,
+        )?;
+        pairs.push(StoredPermutedOrdinaryOracleV1 {
+            input_lagrange: pair.permuted_input_expression.to_vec(),
+            table_lagrange: pair.permuted_table_expression.to_vec(),
+            input_coefficient: pair.permuted_input_poly.to_vec(),
+            table_coefficient: pair.permuted_table_poly.to_vec(),
+            input_blind: pair.permuted_input_blind,
+            table_blind: pair.permuted_table_blind,
+        });
+        actual_pairs.push(pair);
+    }
+    let beta: ChallengeBeta<C> = transcript.squeeze_challenge_scalar();
+    let gamma: ChallengeGamma<C> = transcript.squeeze_challenge_scalar();
+    let actual_permutations = vec![pk.vk.cs.permutation.commit(
+        params,
+        pk,
+        &pk.permutation,
+        advice,
+        &pk.fixed_values,
+        instances,
+        beta,
+        gamma,
+        &mut *rng,
+        transcript,
+    )?];
+    let mut actual_lookups = Vec::new();
+    for pair in actual_pairs {
+        actual_lookups.push(pair.commit_product(pk, params, beta, gamma, &mut *rng, transcript)?);
+    }
+    let actual_lookups = vec![actual_lookups];
+    let vanishing = crate::plonk::vanishing::stored_vanishing_ordinary_oracle(
+        params,
+        &pk.vk.domain,
+        &mut *rng,
+        transcript,
+    )?;
+    let advice_coefficient = advice
+        .iter()
+        .map(|polynomial| pk.vk.domain.lagrange_to_coeff(polynomial.clone()))
+        .collect::<Vec<_>>();
+    let instance_coefficient = instances
+        .iter()
+        .map(|polynomial| pk.vk.domain.lagrange_to_coeff(polynomial.clone()))
+        .collect::<Vec<_>>();
+    // Exercise the actual borrowed evaluator's dense-sigma branch, and the actual consuming
+    // evaluator's streamed-sigma branch, with the same immutable argument commitments.
+    let borrowed_numerator = pk.ev.evaluate_h(
+        pk,
+        &[advice_coefficient.as_slice()],
+        &[instance_coefficient.as_slice()],
+        challenges,
+        vanishing.y,
+        *beta,
+        *gamma,
+        *theta,
+        &actual_lookups,
+        &actual_permutations,
+        false,
+    );
+    let (numerator, restored_advice) = pk.ev.evaluate_h_consuming_advice(
+        pk,
+        vec![advice_coefficient],
+        &[instance_coefficient.as_slice()],
+        challenges,
+        vanishing.y,
+        *beta,
+        *gamma,
+        *theta,
+        &actual_lookups,
+        &actual_permutations,
+        true,
+    );
+    let permutations = actual_permutations
+        .into_iter()
+        .next()
+        .expect("one actual ordinary proof instance")
+        .stored_product_oracle_values();
+    let lookups = actual_lookups
+        .into_iter()
+        .next()
+        .expect("one actual ordinary proof instance")
+        .into_iter()
+        .map(|product| StoredLookupProductOrdinaryOracleV1 {
+            input_coefficient: product.permuted_input_poly.to_vec(),
+            table_coefficient: product.permuted_table_poly.to_vec(),
+            product_coefficient: product.product_poly.to_vec(),
+            input_blind: product.permuted_input_blind,
+            table_blind: product.permuted_table_blind,
+            product_blind: product.product_blind,
+        })
+        .collect();
+    Ok(StoredQuotientOrdinaryOracleV1 {
+        products: StoredProductsOrdinaryOracleV1 {
+            beta: *beta,
+            gamma: *gamma,
+            pairs,
+            permutations,
+            lookups,
+        },
+        vanishing,
+        numerator: numerator.to_vec(),
+        borrowed_numerator: borrowed_numerator.to_vec(),
+        advice_coefficient: restored_advice
+            .into_iter()
+            .next()
+            .expect("one restored ordinary proof instance")
+            .into_iter()
+            .map(|polynomial| polynomial.to_vec())
+            .collect(),
+        instance_coefficient: instance_coefficient
+            .into_iter()
+            .map(|polynomial| polynomial.to_vec())
+            .collect(),
+    })
+}

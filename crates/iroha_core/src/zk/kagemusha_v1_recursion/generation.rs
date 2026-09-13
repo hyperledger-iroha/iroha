@@ -73,6 +73,9 @@ use snark_verifier::{
 };
 use thiserror::Error;
 
+#[cfg(feature = "zk-halo2-ipa")]
+use super::artifacts::CanonicalArtifactDigestWriterV1;
+
 /// Return an owned Eq parameter set backed by one process-local canonical derivation.
 ///
 /// `ParamsIPA::new(k)` is deterministic but expensive at `k = 16`. Artifact stages require the
@@ -10633,56 +10636,6 @@ where
         ));
     }
     Ok(())
-}
-
-/// Hash canonical preprocessing directly into the authenticated length bound. This never
-/// allocates a second key-sized buffer, and every nested writer propagates its sink errors.
-#[cfg(feature = "zk-halo2-ipa")]
-struct CanonicalArtifactDigestWriterV1 {
-    digest: Sha256,
-    written: u64,
-    maximum: u64,
-}
-
-#[cfg(feature = "zk-halo2-ipa")]
-impl CanonicalArtifactDigestWriterV1 {
-    fn new(maximum: u64) -> Self {
-        Self {
-            digest: Sha256::new(),
-            written: 0,
-            maximum,
-        }
-    }
-
-    fn matches(self, binding: KagemushaArtifactBindingV1) -> bool {
-        self.written == binding.byte_len
-            && <[u8; 32]>::from(self.digest.finalize()) == binding.sha256
-    }
-}
-
-#[cfg(feature = "zk-halo2-ipa")]
-impl io::Write for CanonicalArtifactDigestWriterV1 {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let count = u64::try_from(bytes.len())
-            .map_err(|_| io::Error::other("canonical artifact byte count overflow"))?;
-        let next = self
-            .written
-            .checked_add(count)
-            .filter(|next| *next <= self.maximum)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "canonical artifact exceeds authenticated byte length",
-                )
-            })?;
-        self.digest.update(bytes);
-        self.written = next;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 /// Decode the sole structured-v1 key format and compare its streamed canonical encoding to the manifest.

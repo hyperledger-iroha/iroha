@@ -9,7 +9,7 @@ Run only the early native gate:
 
     python3 scripts/taira_release.py check
 
-Prepare binaries from the exact signed HEAD on optimizations:
+Prepare binaries from an explicitly selected signed commit in the optimizations repository:
 
     python3 scripts/taira_release.py prepare \
       --expected-commit FULL_SIGNED_COMMIT \
@@ -34,9 +34,13 @@ into the build. Gitlinks retain their signed mode and commit in the capture and
 remain empty there; worktree submodule contents are excluded. There are no
 embedded tool digests or release-number-specific paths to update.
 
-Before fresh preparation starts, the optimizations HEAD, its signature and the
-controller sources are checked.
-The command then reads that commit's Git objects into a private, read-only source
+Fresh preparation and resume use the same source admission: the selected repository
+must be on `optimizations`, and `--expected-commit` must name the exact signed Git
+commit with the supplied full signer fingerprint and matching controller sources.
+The selected commit can differ from HEAD, so unrelated commits already made on
+`optimizations` do not enter a new build. The command does not move HEAD, modify
+the index, or require another checkout.
+It reads the selected commit's Git objects into a private, read-only source
 capture under the selected Cargo target's `taira-release-sources/`. It creates no Git repository,
 worktree or branch. Both native checks and the Linux build consume this capture;
 One explicit `source/target` binding points to the selected existing warm Cargo
@@ -47,15 +51,19 @@ recorded separately as `source_output_target`. Every signed source path remains
 read-only. Subsequent
 checkout edits, merges or HEAD changes cannot mix source versions into
 the build. Native test selection is loaded from the captured gate helper, including
-a resumed check after the checkout has changed. Resume authenticates the recorded
-commit, the controller files against that commit, and the captured bytes. Unrelated
-HEAD advancement is allowed on optimizations; changes to controller files require
-a new preparation for their signed commit.
+a resumed check after the checkout has changed. Resume additionally authenticates
+the recorded request and captured bytes. Unrelated HEAD advancement is allowed
+before fresh preparation and resume; a different branch, signer, or executing
+controller is rejected before source capture. Changes to controller files require
+a preparation selecting the signed commit containing those exact controller files.
 
 Each selected warm Cargo lane has one stable source path. A lane-wide lock covers
 capture refresh, native checks, Linux compilation and artifact capture, including
 an active child if its launcher exits. Source replacement occurs only between
-preparations. Unchanged files retain their timestamps so routine releases can
+preparations. Unchanged files and complete unchanged directory subtrees retain their timestamps.
+Directory watches in native build scripts therefore remain fresh when only
+unrelated source changes. Added, removed, renamed, mode-changed, or edited
+descendants invalidate their ancestors. Routine releases can
 reuse Cargo's cache. Interrupted source publication is recoverable; previous
 source directories and unfinished copies remain retained alongside the current
 capture.
@@ -124,7 +132,17 @@ Configuration library and integration tests, CLI, SDK, Torii, crypto, P2P, Core,
 including all four shipping entry points, then share one Cargo invocation,
 resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when an independent-test checkpoint can be reused.
-CLI and the canonical Kagami projection checks precede the proof, crypto,
+Core, Torii and daemon startup recovery checks run next; failures are collected
+across those startup groups before stopping, without running CLI or network tests.
+These include bounded regressions for failure reporting and worker teardown under
+a held lifecycle operation, plus retained-output recovery through real actor admission.
+Live Decision cleanup also exercises the shared runner reconciliation after an idle
+runtime turn, before exact acknowledgement can release the Apply fence.
+Recovered Decision Fetch checks run real periodic runtime turns before the signed
+response arrives and while its persistence is queued, then complete Store,
+Validate and the cold Apply handoff. An exact retry retains the original request
+owner; unrelated or unauthenticated work cannot claim its coordinates.
+CLI and the canonical Kagami projection checks then precede the proof, crypto,
 transport, consensus and fixture selections. Every independent failure stops
 before daemon startup. Shipping targets without selected tests provide actual
 compilation evidence, with no invented test passes. The native production build
@@ -205,7 +223,22 @@ network and directory identities, and the exact completed predecessor receipt.
 Keep it outside Git. The updater transfers the prepared daemon and matching CLI,
 preserves configuration, signer custody and ledger state, and verifies native
 Strict snapshot restoration and public basic health. It does not invoke Cargo.
+Every validator must reach the stopped cohort's highest committed block and agree
+on that block's hash. After the public health check, the updater repeats cohort
+readiness and verifies that the same processes are still running. An idle chain
+does not need to create another block to pass.
 `--plan-only` writes the concrete plan locally without contacting the host.
+
+After all four stopped checkpoints are recorded, the matching candidate CLI runs
+`iroha taira stopped-owner-maintenance` once before unit replacement or startup.
+It verifies the live updater parent and its update flock, the retained public plan,
+the exact stopped units and state roots, and acquires all four existing signer
+slot locks before cleaning stopped native owners. Python passes only public
+operation and process identities through a read-only descriptor; the native
+custody boundary owns cleanup. The operation retains a maintenance intent,
+per-slot receipts and `stopped-owner-maintenance-result.json`. Native maintenance
+has a 120-second deadline and its caller a 150-second timeout. Failure leaves
+the cohort stopped for inspection and prevents candidate installation or startup.
 
 Local and guest locks serialize updates. Each operation retains its own staging
 and evidence paths, so a failed transfer or lock conflict can use the same
@@ -214,6 +247,53 @@ on disk. An interrupted runtime mutation requires recovery before another update
 there is no automatic rollback to earlier execution rules after candidate start.
 A successful update emits `next-deployment.json` for the next invocation. Confirm
 an application transaction as state-resolved Applied after installation.
+
+For an update that installed all four units and failed after starting the new
+daemon, retain the last completed deployment record and pass
+`--failed-start-chain /absolute/owner-private/taira/failed-chain.json`.
+Use schema `taira.failed-start-chain.v1` with an `attempts` array ordered oldest
+to newest. Each entry contains its exact `operation`, a `plan` reference, and
+`records` references for `intent.json`, `before.json`, `checkpoint-stopped.json`,
+`start-intent.json`, and `failure.json`. Every reference contains the absolute
+public-record `path` and its `sha256`; `plan` and `intent.json` bind identical
+bytes. Capture only these public records. When appending a failed corrective
+attempt, preserve all earlier entries and historical records unchanged.
+
+The chain admits 1–16 distinct operations, with an 8 MiB bound per public record
+and a 32 MiB aggregate read budget. Each intent must authenticate the exact earlier
+prefix. Installed unit bytes follow the immediately preceding attempt; accepted
+health remains the unchanged completed baseline. Every ancestor must have all
+four units installed and a recorded startup failure, with no completion or
+rollback marker. The guest checks every retained Kura prefix before its normal
+stop/checkpoint/start verification. Partial observations remain diagnostic.
+
+Retry the same retained `--prepared-result` after an infrastructure failure; a
+new operation does not require Cargo or a source change. Any reused source commit
+must retain the exact daemon and CLI package, size, and digest throughout the
+chain. A rebuilt binary with a different identity under that commit is rejected.
+Every retry uses fresh staging and evidence, preserves the latest authenticated
+snapshot and Kura prefix, and repeats all four-validator health checks. It never
+promotes a failed attempt to completed health or automatically restarts old code.
+
+Probe failures identify the validator, endpoint and native exit code. Process
+observations include PID, invocation and restart count so an unavailable listener
+can be distinguished from a restarted worker without exposing response bodies,
+configuration or native error output.
+Startup and unhealthy observations have a ten-minute limit. Each lagging peer
+gets another ten minutes only when healthy observations of the same candidate
+processes show that peer's committed height advancing. Another peer's progress
+cannot conceal a stalled validator, and a height regression is rejected.
+Catch-up has an absolute ninety-minute limit; the host adds a conservative
+bounded allowance for staging, final checks and all sixteen possible ancestry
+records. The updater returns as soon as
+all four peers verify the existing common prefix and readiness. Waiting never
+restarts a daemon, rebuilds a binary, requires empty blocks, or adds a fixed soak.
+
+After native start succeeds, `cohort-observation-intent.json` identifies the
+read-only observation phase by operation, candidate, updater PID/start time and
+the existing update flock's device/inode. A separate observer can verify that
+live owner through public procfs and check that no terminal receipt exists.
+This records an in-progress rollout; it does not assert four-peer completion.
 
 Validate this controller without Cargo or network:
 

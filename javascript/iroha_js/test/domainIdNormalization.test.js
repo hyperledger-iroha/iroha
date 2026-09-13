@@ -4,17 +4,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { canonicalizeDomainIdLabel } from "../src/domainId.js";
+import { noritoEncodeInstruction } from "../src/public/norito.js";
 import { _createNoritoInstructionApi } from "../src/norito.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
-
-const { noritoEncodeInstruction } = _createNoritoInstructionApi(
-  createNativeRuntime({
-    noritoEncodeInstruction(json, prefix) {
-      assert.equal(prefix, 753);
-      return Buffer.from(json);
-    },
-  }),
-);
 
 function registerDomain(domainId) {
   return {
@@ -77,10 +69,27 @@ test("internal DomainId label normalization retains explicit-domain policy", () 
   }
 });
 
-test("instruction JSON preserves domain operands for validation by the selected owner", () => {
+test("native DomainId encoding canonicalizes labels without AccountAddress", () => {
   const encode = (domainId) =>
     Buffer.from(noritoEncodeInstruction(registerDomain(domainId), 753));
+
+  assert.deepEqual(
+    encode("BÜCHER.SORA"),
+    encode("xn--bcher-kva.sora"),
+  );
+  assert.throws(() => encode("bad@name.sora"), /domain|name|reserved/iu);
+});
+
+test("instruction JSON preserves domain operands for validation by the selected owner", () => {
+  const api = _createNoritoInstructionApi(createNativeRuntime({
+    noritoEncodeInstruction(json, prefix) {
+      assert.equal(prefix, 753);
+      return Buffer.from(json);
+    },
+  }));
   for (const domainId of ["BÜCHER.SORA", "xn--bcher-kva.sora", "bad@name.sora"]) {
-    assert.deepEqual(JSON.parse(encode(domainId).toString()), registerDomain(domainId));
+    const instruction = registerDomain(domainId);
+    const encoded = api.noritoEncodeInstruction(instruction, 753);
+    assert.deepEqual(JSON.parse(encoded.toString()), instruction);
   }
 });

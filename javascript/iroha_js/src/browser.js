@@ -1,5 +1,3 @@
-export { BrowserCodecError, initializeBrowserCodec } from "./browserCodec.js";
-
 export {
   AccountAddress,
   AccountAddressError,

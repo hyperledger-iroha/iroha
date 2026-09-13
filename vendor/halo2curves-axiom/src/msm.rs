@@ -680,7 +680,9 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
 
     let c = optimal_window_size(bases.len(), C::Scalar::NUM_BITS as usize);
 
-    if c < 10 {
+    // The batched affine path assumes every base is nonidentity. The complete
+    // parallel algorithm handles identities without an extra filtered bank.
+    if c < 10 || bases.iter().any(|base| bool::from(base.is_identity())) {
         return msm_parallel(coeffs, bases);
     }
 
@@ -854,7 +856,7 @@ mod test {
     fn parallel_scalar_repr_scratch_clears_partial_initialization_on_unwind() {
         use std::sync::{
             Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicU32, AtomicUsize, Ordering},
         };
 
         for threads in [1, 2, 4] {
@@ -865,11 +867,19 @@ mod test {
             for should_panic in [false, true] {
                 let observations = Arc::new(Mutex::new(Vec::new()));
                 let filled = AtomicUsize::new(0);
+                let filled_indices = AtomicU32::new(0);
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     pool.install(|| {
                         let scratch = super::ScalarReprs::<ObservedRepr>::from_fn_parallel(
                             32,
                             |index, repr| {
+                                // Rayon can finish queued jobs after a sibling panics, even
+                                // with one worker. Reserve an untouched half explicitly.
+                                if should_panic && index >= 16 {
+                                    return;
+                                }
+                                let bit = 1_u32 << index;
+                                assert_eq!(filled_indices.fetch_or(bit, Ordering::SeqCst) & bit, 0);
                                 repr.observations = Some(Arc::clone(&observations));
                                 repr.bytes.fill((index + 1) as u8);
                                 filled.fetch_add(1, Ordering::SeqCst);
@@ -887,12 +897,21 @@ mod test {
                 assert_eq!(outcome.is_err(), should_panic);
                 let observations = observations.lock().unwrap();
                 assert_eq!(observations.len(), filled.load(Ordering::SeqCst));
+                let filled_indices = filled_indices.load(Ordering::SeqCst);
+                assert_eq!(observations.len(), filled_indices.count_ones() as usize);
                 assert!(!observations.is_empty());
                 assert!(observations.iter().all(|bytes| *bytes == [0; 32]));
                 if !should_panic {
                     assert_eq!(observations.len(), 32);
-                } else if threads == 1 {
-                    assert_eq!(observations.len(), 4);
+                    assert_eq!(filled_indices, u32::MAX);
+                } else {
+                    assert_ne!(
+                        filled_indices & (1 << 3),
+                        0,
+                        "the injected panic slot was filled"
+                    );
+                    assert_eq!(filled_indices >> 16, 0, "the reserved half stayed unfilled");
+                    assert!(observations.len() <= 16);
                 }
             }
         }
@@ -1001,6 +1020,52 @@ mod test {
             assert_eq!(super::msm_best(&scalars, &points), expected);
             assert_eq!(super::msm_parallel(&scalars, &points), expected);
         }
+    }
+
+    #[test]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn large_msm_identity_bases_match_pasta_group_law() {
+        use rand::{SeedableRng, rngs::StdRng};
+
+        fn check<C: CurveAffine>() {
+            const COUNT: usize = 4096;
+            assert!(super::optimal_window_size(COUNT, C::Scalar::NUM_BITS as usize) >= 10);
+            let mut rng = StdRng::seed_from_u64(0x5741_534d_4d53_4d31);
+            for all_identity in [false, true] {
+                let mut expected_scalar = C::Scalar::ZERO;
+                let mut scalars = Vec::with_capacity(COUNT);
+                let mut points = Vec::with_capacity(COUNT);
+                for index in 0..COUNT {
+                    let factor = if all_identity {
+                        C::Scalar::ZERO
+                    } else {
+                        match index % 4 {
+                            0 => C::Scalar::ZERO,
+                            1 => C::Scalar::ONE,
+                            2 => -C::Scalar::ONE,
+                            _ => C::Scalar::from(2),
+                        }
+                    };
+                    let scalar = match index % 5 {
+                        0 => C::Scalar::ZERO,
+                        1 => C::Scalar::ONE,
+                        2 => -C::Scalar::ONE,
+                        _ => C::Scalar::random(&mut rng),
+                    };
+                    expected_scalar += factor * scalar;
+                    scalars.push(scalar);
+                    points.push((C::Curve::generator() * factor).to_affine());
+                }
+                // The independent scalar sum covers duplicate, inverse and
+                // identity bases, including nonzero coefficients on identities.
+                let expected = C::Curve::generator() * expected_scalar;
+                assert_eq!(super::msm_without_threads(&scalars, &points), expected);
+                assert_eq!(super::msm_best(&scalars, &points), expected);
+                assert_eq!(super::msm_parallel(&scalars, &points), expected);
+            }
+        }
+        check::<crate::pasta::EpAffine>();
+        check::<crate::pasta::EqAffine>();
     }
 
     #[test]

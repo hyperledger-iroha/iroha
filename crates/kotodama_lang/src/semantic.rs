@@ -5034,10 +5034,7 @@ pub(crate) fn type_name(ty: &Type) -> String {
 /// schemas at the compiler boundary; this helper deliberately renders ordinary
 /// structs without the schema-only `struct ` prefix.
 pub fn render_type_name(ty: &Type) -> String {
-    crate::session::run_with_compiler_stack(move || render_type_name_inline(ty))
-        .expect("compiler must allocate the bounded stack required to render a semantic type")
-}
-fn render_type_name_inline(ty: &Type) -> String {
+    // The renderer and structural equality checks traverse explicit work lists.
     render_source_type_name(ty)
 }
 fn render_source_type_name(ty: &Type) -> String {

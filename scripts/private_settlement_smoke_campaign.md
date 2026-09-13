@@ -42,8 +42,10 @@ python3 scripts/private_settlement_smoke_campaign.py validate \
 ```
 
 The driver builds `iroha3d` with `test-network-message-control` and the grouped
-integration test with `atomic-private-settlement-release` once, discovers the
-exact ignored smoke test, then executes ten serial fresh requests. It requires
+integration test with `atomic-private-settlement-metal-smoke` once. This explicit
+capability enables the common release harness and Core GPU dependency required
+by its Metal proof policy. The driver discovers the exact ignored smoke test,
+then executes ten serial fresh requests. It requires
 one executed passing test, zero failures and zero ignored tests from every
 invocation. `IROHA_TEST_REQUIRE_NETWORK=1` and
 `IROHA_TEST_NETWORK_START_ATTEMPTS=1` are set explicitly. The driver does not
@@ -108,3 +110,14 @@ files available and unchanged while using the gate as a release prerequisite.
 Synthetic unit tests are in
 `scripts/tests/private_settlement_smoke_campaign_test.py`; they never start a
 network or create measured release evidence.
+
+The subsequent canonical release campaign keeps its Python execution session
+alive through physical worker, economic-verifier, capture and adapter shutdown.
+An owner-directed SIGINT/SIGTERM requests draining after the current registered
+job or retained network; it never signals a native child or starts a later job.
+Publication errors and expired qualification deadlines retain the original
+failure while waiting for actual children/process groups. A late natural exit
+is not a successful measurement, accepted ACK, or evidence closure. Packet
+capture keeps its existing exact tcpdump shutdown operation. Execute this
+canonical campaign entrypoint on the main Python thread so its lifetime scope
+can own signal handling; do not terminate the enclosing app/session to drain it.

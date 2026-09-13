@@ -51,6 +51,7 @@ ecc-batch = ["dep:subtle", "ed25519-dalek/batch"]
 pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq", "dep:subtle"]
 
 [dependencies]
+fastpq_isi = { path = "../fastpq_isi" }
 iroha_primitives = { workspace = true }
 iroha_macro = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }

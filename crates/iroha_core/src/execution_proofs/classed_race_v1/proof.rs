@@ -42,7 +42,7 @@ const MIN_TRACE_LOG2: u8 = 13;
 const MAX_TRACE_LOG2: u8 = 19;
 const MAX_AIR_COLUMNS: usize = 409;
 // Parameter selection is explicitly unqualified. These numbers alone are not a soundness claim.
-const PROFILE: &[u8] = b"sora-cars:TouringS1:standalone:v1:wire=CLS1/1:Goldilocks-Fp4:Poseidon2-w16-r8-c8-output6:degree4:base-max417:aux118:trace13..19:query136:blowup3:terminal10/143:composition4:public-replay:generic-game-transcript:retained-native-history:exact-checkpoints-anchors-forced-inputs-epochs-dnf:producer-finish-range-schedule:terminal-only:one-required-kit-per-slot:no-registration:no-security-qualification";
+const PROFILE: &[u8] = b"sora-cars:TouringS1:standalone:v1:wire=CLS1/1:Goldilocks-Fp4:Poseidon-x7-Goldilocks-six-independent-lanes-6x64:degree4:base-max417:aux118:trace13..19:query136:blowup3:terminal10/143:composition4:public-replay:generic-game-transcript:retained-native-history:exact-checkpoints-anchors-forced-inputs-epochs-dnf:producer-finish-range-schedule:terminal-only:one-required-kit-per-slot:no-registration:no-security-qualification";
 const CONTEXT: TransparentStarkDigestContextV1 =
     TransparentStarkDigestContextV1::execution_v1(b"classed-touring-s1-proof-v1");
 const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
@@ -112,12 +112,8 @@ pub(super) const CLASSED_RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
         include_bytes!("../checked_integer_air.rs"),
     ),
     (
-        "crates/iroha_core/src/execution_proofs/poseidon2.rs",
-        include_bytes!("../poseidon2.rs"),
-    ),
-    (
-        "crates/iroha_core/src/execution_proofs/poseidon2_constants.rs",
-        include_bytes!("../poseidon2_constants.rs"),
+        "crates/iroha_core/src/execution_proofs/stark/mod.rs",
+        include_bytes!("../stark/mod.rs"),
     ),
     (
         "crates/iroha_core/src/execution_proofs/stark/transparent_stark.rs",
@@ -154,6 +150,10 @@ pub(super) const CLASSED_RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
     (
         "crates/iroha_data_model/src/execution_proofs.rs",
         include_bytes!("../../../../iroha_data_model/src/execution_proofs.rs"),
+    ),
+    (
+        "crates/fastpq_isi/src/lib.rs",
+        include_bytes!("../../../../fastpq_isi/src/lib.rs"),
     ),
     (
         "crates/fastpq_isi/src/params.rs",

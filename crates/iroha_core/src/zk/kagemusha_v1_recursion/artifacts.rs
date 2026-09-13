@@ -42,6 +42,13 @@ use super::{
 
 const ARTIFACT_STREAM_BUFFER_BYTES_V1: usize = 64 * 1024;
 
+mod stored_capture;
+
+#[cfg(feature = "zk-halo2-ipa")]
+pub(super) mod stored_key;
+#[cfg(feature = "zk-halo2-ipa")]
+pub(super) use stored_key::CanonicalArtifactDigestWriterV1;
+
 /// One canonical transparent parameter derivation and its exact wire encoding.
 ///
 /// Parameter roles are release-authenticated on every load. Caching only avoids repeating the

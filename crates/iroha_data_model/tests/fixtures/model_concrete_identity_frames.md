@@ -1,13 +1,13 @@
 # Concrete model identity fixtures
 
-These files preserve the successful pre-declaration captures byte for byte. The
-capture configuration enabled governance and HTTP and disabled `ids_projection`;
-those fields describe the original evidence, not the features required to read it.
+These files pin the current native concrete identities and frames. The capture
+configuration enables governance and HTTP and disables `ids_projection`;
+those fields describe the fixture provenance.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_concrete_identity_frames.json` | 13 populated families, each as root, Vec, Some and BTreeMap: 52 frames | `85a794d3976dac15aeb6a351938a0a7f76f264b3a3d1ecbd9b4e26adcbda599d` |
-| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `1b8e8810a594ef6e610f7cb6aa7c012be1a88230af938f6ad2bf874f7172e97d` |
+| `model_concrete_identity_frames.json` | 13 populated families, each as root, Vec, Some and BTreeMap: 52 frames | `d0b7e7e9881a80cbaf83a26a05247e171d1b7638af22ad8a33a88fc749d0babd` |
+| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `5f376772ed9a5c09691465a82bf62a6c1919054523a5c2b0f396a768bc5777f3` |
 | `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `7a4bdb7eae4c9aca0351bd6549628e185d3e24da0aa03cf54669f9e853c14ae1` |
 
 The seven concrete owners are Action, DataEvent, SmartContractContext,
@@ -50,3 +50,13 @@ Both runs unset `RUST_MIN_STACK`. The isolated consumer checks all 48 common
 root/container frames, the block-send projection, all 22 available schema
 variants and rejection of the reserved Governance frame. These are local codec
 checks; complete release qualification remains open.
+
+On 2026-09-12, the native fixture producer refreshed contexts containing the
+current default confidential-policy hash. The root payload changes were checked
+to consist solely of that hash; outer frame checksums follow from the changed
+payload. These synthetic frames do not qualify a network run.
+
+The HTTP block fixture was also refreshed through the native signed-block
+constructor. Its bare bytes differ only at the 32-byte policy hash and resulting
+64-byte block signature. All other bytes, entrypoint commitments and result
+commitments are unchanged, and the new signature verifies.

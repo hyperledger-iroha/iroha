@@ -1,6 +1,6 @@
 //! Canonical, host-independent admission for deployable IVM contract artifacts.
 //!
-//! This crate is the single policy implementation used by the native IVM and browser WebAssembly.
+//! This crate is the single policy implementation for native IVM artifact admission.
 //! It deliberately depends on the stable `ivm_abi` surface and canonical primitive codecs, not on
 //! the VM runtime, caches, proof systems, or host integrations.
 use iroha_crypto::Hash;
@@ -694,29 +694,6 @@ fn cntr_section_missing(artifact: &[u8]) -> bool {
     artifact.len() < HEADER_SIZE + 4
         || artifact[HEADER_SIZE..HEADER_SIZE + 4]
             != ivm_abi::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
-}
-/// Deterministic JSON admission result used by the raw browser-WASM boundary.
-#[must_use]
-pub fn verify_contract_artifact_json(artifact: &[u8]) -> String {
-    match verify_contract_artifact(artifact) {
-        Ok(verified) => {
-            let manifest = norito::json::to_json(&verified.manifest)
-                .expect("validated contract manifest must serialize");
-            format!(
-                "{{\"ok\":true,\"code_hash_hex\":\"{}\",\"abi_hash_hex\":\"{}\",\"header_len\":{},\"code_offset\":{},\"entrypoint_count\":{},\"manifest\":{manifest}}}",
-                hex::encode(verified.code_hash.as_ref()),
-                hex::encode(verified.abi_hash.as_ref()),
-                verified.header_len,
-                verified.code_offset,
-                verified.contract_interface.entrypoints.len(),
-            )
-        }
-        Err(error) => {
-            let encoded = norito::json::to_json(&error.to_string())
-                .expect("artifact error string must serialize");
-            format!("{{\"ok\":false,\"error\":{encoded}}}")
-        }
-    }
 }
 #[cfg(test)]
 mod tests {

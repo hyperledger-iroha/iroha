@@ -1667,15 +1667,16 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
     let payload_bytes = norito::to_bytes(&payload)
         .expect("encode synthetic Torii proxy response")
         .len();
-    let (responder_peer, _, payload, _, p2p_memory) =
-        iroha_p2p::peer::message::PeerMessage::new(responder_peer, payload, payload_bytes)
-            .into_parts();
-    super::handle_torii_proxy_network_message(
-        app.clone(),
-        iroha_core::IrohaNetwork::closed_for_tests(),
-        responder_peer,
-        payload,
-        p2p_memory,
+    let message =
+        iroha_p2p::peer::message::PeerMessage::new(responder_peer, payload, payload_bytes);
+    let (requests, _request_rx) = tokio::sync::mpsc::channel(1);
+    let (publications, _publication_rx) = tokio::sync::mpsc::channel(1);
+    super::proxy_network_workers::dispatch(
+        &app,
+        &iroha_core::IrohaNetwork::closed_for_tests(),
+        &requests,
+        &publications,
+        message,
     )
     .await;
     assert_eq!(

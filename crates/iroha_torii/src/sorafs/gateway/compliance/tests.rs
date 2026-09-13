@@ -694,12 +694,7 @@ fn acknowledgement_at(
         accepted,
         rejection_code: (!accepted).then(|| "reload-failed".into()),
     };
-    let digest = hash_canonical(
-        ACK_SIGNING_DOMAIN_V1,
-        &payload,
-        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-    )
-    .expect("ack digest");
+    let digest = payload.signing_digest().expect("ack digest");
     GatewayComplianceAcknowledgementV1 {
         payload,
         signature: gateway_keys()[gateway_index].sign(&digest).to_bytes(),
@@ -2174,4 +2169,162 @@ fn current_feed_frames_bind_normalized_documents_and_transport_pins() {
             .expect("rotated pin policy digest"),
         expected
     );
+}
+
+#[test]
+fn acknowledgement_signing_digest_preserves_exact_domain_and_valid_payloads() {
+    let policy = trust_policy();
+    for accepted in [true, false] {
+        let signed = acknowledgement(0, [0x81; 32], accepted);
+        let digest = signed
+            .payload
+            .signing_digest()
+            .expect("canonical acknowledgement");
+        assert_eq!(
+            digest,
+            hash_canonical(
+                ACK_SIGNING_DOMAIN_V1,
+                &signed.payload,
+                MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1
+            )
+            .expect("existing exact acknowledgement framing")
+        );
+        signed
+            .verify(&policy, [0x81; 32], NOW + 10, 300)
+            .expect("valid signed acknowledgement");
+        for domain in [
+            CATALOG_SIGNING_DOMAIN_V1,
+            CATALOG_DIGEST_DOMAIN_V1,
+            ROLLBACK_SIGNING_DOMAIN_V1,
+        ] {
+            let wrong_digest = hash_canonical(
+                domain,
+                &signed.payload,
+                MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+            )
+            .expect("bounded alternate-domain payload");
+            assert_ne!(digest, wrong_digest);
+            let wrong_domain = GatewayComplianceAcknowledgementV1 {
+                payload: signed.payload.clone(),
+                signature: gateway_keys()[0].sign(&wrong_digest).to_bytes(),
+            };
+            assert!(matches!(
+                wrong_domain.verify(&policy, [0x81; 32], NOW + 10, 300),
+                Err(GatewayComplianceError::InvalidSignature { .. })
+            ));
+        }
+    }
+}
+
+#[test]
+fn acknowledgement_signing_and_verification_reject_resealed_noncanonical_payloads() {
+    type Payload = GatewayComplianceAcknowledgementPayloadV1;
+    let mutations: [(&str, fn(&mut Payload)); 10] = [
+        ("version", |p| p.version = 2),
+        ("empty gateway", |p| p.gateway_id.clear()),
+        ("uppercase gateway", |p| p.gateway_id = "GATEWAY-EU".into()),
+        ("padded gateway", |p| p.gateway_id.push(' ')),
+        ("oversized gateway", |p| p.gateway_id = "a".repeat(129)),
+        ("zero clock", |p| p.observed_at_unix = 0),
+        ("accepted with reason", |p| {
+            p.rejection_code = Some("reload-failed".into())
+        }),
+        ("rejected without reason", |p| p.accepted = false),
+        ("noncanonical reason", |p| {
+            p.accepted = false;
+            p.rejection_code = Some("RELOAD-FAILED".into());
+        }),
+        ("empty reason", |p| {
+            p.accepted = false;
+            p.rejection_code = Some(String::new());
+        }),
+    ];
+    for (label, mutate) in mutations {
+        let mut payload = acknowledgement(0, [0x81; 32], true).payload;
+        mutate(&mut payload);
+        let error = payload.signing_digest().expect_err(label);
+        // Deliberately bypass the public signer validator in this adversary:
+        // even a correct signature on malformed canonical bytes must be rejected.
+        let raw_digest = hash_canonical(
+            ACK_SIGNING_DOMAIN_V1,
+            &payload,
+            MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+        )
+        .expect("bounded malformed payload");
+        let resealed = GatewayComplianceAcknowledgementV1 {
+            payload,
+            signature: gateway_keys()[0].sign(&raw_digest).to_bytes(),
+        };
+        let verify_error = resealed
+            .verify(&trust_policy(), [0x81; 32], NOW + 10, 300)
+            .expect_err(label);
+        assert_eq!(verify_error.to_string(), error.to_string(), "{label}");
+    }
+}
+
+#[test]
+fn acknowledgement_public_signing_keeps_controller_context_and_signature_checks() {
+    let signed = acknowledgement(0, [0x81; 32], true);
+    assert!(
+        matches!(signed.verify(&trust_policy(), [0x82; 32], NOW + 10, 300),
+        Err(GatewayComplianceError::InvalidAcknowledgement(reason)) if reason == "catalog digest mismatch")
+    );
+    for now in [NOW + 10 - 301, NOW + 10 + 301] {
+        assert!(
+            matches!(signed.verify(&trust_policy(), [0x81; 32], now, 300),
+            Err(GatewayComplianceError::InvalidAcknowledgement(reason)) if reason == "acknowledgement timestamp is invalid")
+        );
+    }
+    let mut revoked = trust_policy();
+    revoked.gateway_ack_threshold = 1;
+    revoked.revoked_gateway_signer_ids = vec!["gateway-eu".into()];
+    revoked
+        .validate()
+        .expect("canonical remaining signer policy");
+    assert!(matches!(signed.verify(&revoked, [0x81; 32], NOW + 10, 300),
+        Err(GatewayComplianceError::RevokedSigner(signer)) if signer == "gateway-eu"));
+    let mut unknown = signed.clone();
+    unknown.payload.gateway_id = "gateway-unknown".into();
+    unknown.signature = gateway_keys()[0]
+        .sign(&unknown.payload.signing_digest().unwrap())
+        .to_bytes();
+    assert!(
+        matches!(unknown.verify(&trust_policy(), [0x81; 32], NOW + 10, 300),
+        Err(GatewayComplianceError::UntrustedSigner(signer)) if signer == "gateway-unknown")
+    );
+    let mutations: [fn(&mut GatewayComplianceAcknowledgementPayloadV1); 4] = [
+        |p| p.observed_at_unix += 1,
+        |p| p.catalog_digest = [0x82; 32],
+        |p| p.gateway_id = "gateway-us".into(),
+        |p| {
+            p.accepted = false;
+            p.rejection_code = Some("reload-failed".into());
+        },
+    ];
+    for mutate in mutations {
+        let mut modified = signed.clone();
+        mutate(&mut modified.payload);
+        assert!(modified.payload.signing_digest().is_ok());
+        assert!(matches!(
+            modified.verify(
+                &trust_policy(),
+                modified.payload.catalog_digest,
+                NOW + 10,
+                300
+            ),
+            Err(GatewayComplianceError::InvalidSignature { .. })
+        ));
+    }
+    let mut rejected = acknowledgement(0, [0x81; 32], false);
+    rejected.payload.rejection_code = Some("different-reason".into());
+    assert!(matches!(
+        rejected.verify(&trust_policy(), [0x81; 32], NOW + 10, 300),
+        Err(GatewayComplianceError::InvalidSignature { .. })
+    ));
+    let mut corrupted = signed;
+    corrupted.signature[0] ^= 1;
+    assert!(matches!(
+        corrupted.verify(&trust_policy(), [0x81; 32], NOW + 10, 300),
+        Err(GatewayComplianceError::InvalidSignature { .. })
+    ));
 }

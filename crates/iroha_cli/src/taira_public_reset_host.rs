@@ -1,5 +1,7 @@
 //! Authenticated OpenSSH transport and compiled remote host dispatcher for public Taira reset.
 
+#[path = "taira_stopped_owner_maintenance.rs"]
+pub(crate) mod maintenance;
 #[path = "taira_public_reset_stopped_runtime.rs"]
 pub(super) mod stopped_runtime;
 
@@ -3675,10 +3677,17 @@ fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
         Path::new(admitted.target.service_root()),
         Path::new(admitted.target.state_root()),
     ];
+    require_no_live_path_references(&roots, admitted.action_deadline)
+}
+
+#[cfg(target_os = "linux")]
+fn require_no_live_path_references(roots: &[&Path], deadline: Instant) -> Result<()> {
     let mut examined = 0_usize;
     let mut mount_namespaces = BTreeSet::new();
     for entry in fs::read_dir("/proc")? {
-        ensure_action_deadline(admitted)?;
+        if Instant::now() >= deadline {
+            return Err(eyre!("stopped-owner process census deadline elapsed"));
+        }
         let entry = entry?;
         let Some(pid) = entry
             .file_name()
@@ -3697,7 +3706,7 @@ fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
         let proc_root = entry.path();
         for name in ["exe", "cwd", "root"] {
             match fs::read_link(proc_root.join(name)) {
-                Ok(path) if target_path_is_occupied(&path, &roots) => {
+                Ok(path) if target_path_is_occupied(&path, roots) => {
                     return Err(eyre!("vacant target retains a live process path"));
                 }
                 Ok(_) => {}
@@ -3715,7 +3724,7 @@ fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
                 return Err(eyre!("vacant target descriptor census exceeds its bound"));
             }
             match fs::read_link(fd?.path()) {
-                Ok(path) if target_path_is_occupied(&path, &roots) => {
+                Ok(path) if target_path_is_occupied(&path, roots) => {
                     return Err(eyre!("vacant target retains an open process descriptor"));
                 }
                 Ok(_) => {}
@@ -3735,7 +3744,7 @@ fn require_no_live_target_references(admitted: &HostAdmission) -> Result<()> {
             } else {
                 None
             };
-            inspect_process_namespace_evidence(&roots, namespace, &mut mount_namespaces, || {
+            inspect_process_namespace_evidence(roots, namespace, &mut mount_namespaces, || {
                 File::open(proc_root.join(name))
             })?;
         }

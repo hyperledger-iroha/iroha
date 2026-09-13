@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Verify native SCCP artifacts and run audited EVM diagnostics. Requires Python 3,
+# Node/npm, HTTPS and native x86-64 compiler execution (Rosetta on macOS arm64).
+# SCCP_CORRIDOR_{PYTHON,NODE,NPM}_BIN select developer tools; optional
+# SCCP_CONTRACT_ARTIFACT_DIR selects an already verified artifact directory.
+# All generated tooling and compiler files live in a disposable private directory.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,9 +13,6 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sccp-evm-smoke.XXXXXX")"
 PYTHON_BIN="${SCCP_CORRIDOR_PYTHON_BIN:-python3}"
 NODE_BIN="${SCCP_CORRIDOR_NODE_BIN:-node}"
 NPM_BIN="${SCCP_CORRIDOR_NPM_BIN:-npm}"
-PINNED_SOLC_BUILD="0.7.4+commit.3f05b770.Emscripten.clang"
-PINNED_SOLC_URL="https://binaries.soliditylang.org/wasm/soljson-v0.7.4+commit.3f05b770.js"
-PINNED_SOLC_SHA256="2b55ed5fec4d9625b6c7b3ab1abd2b7fb7dd2a9c68543bf0323db2c7e2d55af2"
 
 cleanup() {
   rm -rf "$WORK_DIR"
@@ -44,8 +46,7 @@ if [[ -f "$MANIFEST" && ! -L "$MANIFEST" ]]; then
 else
   "$PYTHON_BIN" scripts/contract_artifact_corridor.py build \
     --repo-root . \
-    --output-dir "$ARTIFACT_DIR" \
-    --node "$NODE_BIN"
+    --output-dir "$ARTIFACT_DIR"
 fi
 
 # A reviewed artifact is deployable only while it remains byte-for-byte bound
@@ -108,50 +109,34 @@ RUNTIME_ARTIFACT_LOCK="$WORK_DIR/runtime-artifact-lock.json"
 cp scripts/contract_tooling/artifact-lock.json "$RUNTIME_ARTIFACT_LOCK"
 chmod 0444 "$RUNTIME_ARTIFACT_LOCK"
 
-EVM_SOLJSON="$WORK_DIR/soljson-evm-0.7.4.js"
-EVM_SOLJSON_SHA256="$("$PYTHON_BIN" - \
-  "$EVM_SOLJSON" \
-  "$PINNED_SOLC_URL" \
-  "$PINNED_SOLC_SHA256" \
-  "$PINNED_SOLC_BUILD" <<'PY'
+EVM_NATIVE_SOLC="$WORK_DIR/solc-evm"
+"$PYTHON_BIN" scripts/contract_artifact_corridor.py materialize \
+  --target evm --output "$EVM_NATIVE_SOLC"
+MUTATED_NATIVE_SOLC="$WORK_DIR/mutated-solc-evm"
+cp "$EVM_NATIVE_SOLC" "$MUTATED_NATIVE_SOLC"
+chmod u+w "$MUTATED_NATIVE_SOLC"
+"$PYTHON_BIN" - "$MUTATED_NATIVE_SOLC" <<'INNER_PY'
 import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path("scripts").resolve()))
-import contract_artifact_corridor as corridor
-
-compiler = corridor.CompilerSpec(
-    target="evm-compatibility",
-    identity="solc-evm-0.7.4+commit.3f05b770",
-    reported_version=sys.argv[4],
-    url=sys.argv[2],
-    sha256=sys.argv[3],
-)
-corridor.materialize_verified_compiler(compiler, Path(sys.argv[1]))
-print(compiler.sha256)
-PY
-)"
-if ! [[ "$EVM_SOLJSON_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "authenticated EVM compiler receipt did not contain one SHA-256 digest" >&2
-  exit 1
-fi
-
-MUTATED_SOLJSON="$WORK_DIR/mutated-soljson-evm-0.7.4.js"
-cp "$EVM_SOLJSON" "$MUTATED_SOLJSON"
-"$PYTHON_BIN" - "$MUTATED_SOLJSON" <<'PY'
-import sys
-from pathlib import Path
-
 path = Path(sys.argv[1])
 path.write_bytes(path.read_bytes() + b"\n")
+INNER_PY
+"$PYTHON_BIN" - "$MUTATED_NATIVE_SOLC" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path("scripts").resolve()))
+import contract_artifact_corridor as corridor
+config = corridor.load_corridor_config()
+value, _ = corridor.standard_json_input(Path("."), config, "evm")
+try:
+    corridor.run_native_solc(Path(sys.argv[1]), config.compilers["evm"],
+                             corridor.canonical_json_bytes(value))
+except corridor.CorridorError as error:
+    if "digest mismatch before execution" not in str(error):
+        raise
+else:
+    raise SystemExit("mutated authenticated native compiler was accepted")
 PY
-if SCCP_SOLJSON_PATH="$MUTATED_SOLJSON" \
-  SCCP_SOLJSON_SHA256="$EVM_SOLJSON_SHA256" \
-  "$NODE_BIN" -e 'require("./scripts/contract_tooling/authenticated-solc")' >/dev/null 2>&1
-then
-  echo "mutated authenticated Solidity compiler was accepted" >&2
-  exit 1
-fi
 
 cp -R scripts/contract_tooling "$WORK_DIR/contract_tooling"
 (
@@ -171,16 +156,17 @@ SCCP_TVM_STATIC_ONLY=1 \
   "$NPM_BIN" audit --omit=dev --audit-level=low
 )
 
-echo "Running exact-manifest SCCP EVM runtime and test-only TRON compatibility smoke with authenticated $PINNED_SOLC_BUILD."
-echo "Execution uses the locked Hardhat runtime directly through its EIP-1193 provider."
+echo "Running exact-manifest SCCP EVM runtime and test-only TRON compatibility smoke with authenticated native Solidity 0.7.6."
+echo "Execution uses the locked native EDR runtime directly through its EIP-1193 provider."
 NODE_PATH="$WORK_DIR/contract_tooling/evm-runtime/node_modules" \
-SCCP_SOLJSON_PATH="$EVM_SOLJSON" \
-SCCP_SOLJSON_SHA256="$EVM_SOLJSON_SHA256" \
-SCCP_EXPECTED_SOLC_BUILD="$PINNED_SOLC_BUILD" \
+  "$NODE_BIN" --test scripts/tests/contract_edr_provider_test.cjs
+NODE_PATH="$WORK_DIR/contract_tooling/evm-runtime/node_modules" \
+SCCP_NATIVE_SOLC_PATH="$EVM_NATIVE_SOLC" \
+SCCP_CORRIDOR_PYTHON_BIN="$PYTHON_BIN" \
 SCCP_CONTRACT_ARTIFACT_MANIFEST="$RUNTIME_MANIFEST" \
 SCCP_CONTRACT_ARTIFACT_LOCK="$RUNTIME_ARTIFACT_LOCK" \
   "$NODE_BIN" contracts/evm/sccp/test/sccp_message_bridge_smoke.js
 
-echo "Pinned Solidity $PINNED_SOLC_BUILD compile and runtime smoke passed."
+echo "Pinned native Solidity 0.7.6 compile and runtime smoke passed."
 echo "Authenticated EVM and TRON compiler/artifact smoke passed."
 echo "No EVM execution is accepted as TVM evidence; run the explicit real-TRE phase for release evidence."

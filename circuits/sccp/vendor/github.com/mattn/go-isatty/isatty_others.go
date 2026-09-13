@@ -1,11 +1,11 @@
-//go:build (appengine || js || nacl || tinygo || wasm || wasip1 || wasip2 || haiku) && !windows
-// +build appengine js nacl tinygo wasm wasip1 wasip2 haiku
+//go:build (appengine || nacl || tinygo || haiku) && !windows
+// +build appengine nacl tinygo haiku
 // +build !windows
 
 package isatty
 
-// IsTerminal returns true if the file descriptor is terminal which
-// is always false on js and appengine classic which is a sandboxed PaaS.
+// IsTerminal reports whether the file descriptor is a terminal.
+// These platforms do not provide a terminal probe, so it returns false.
 func IsTerminal(fd uintptr) bool {
 	return false
 }

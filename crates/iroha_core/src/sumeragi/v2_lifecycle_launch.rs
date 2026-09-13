@@ -688,8 +688,8 @@ impl LaunchedProductionLifecycleV1 {
         let Some(body) = completion.completion().project_store_body_authority() else {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Body);
         };
-        let retry_marker =
-            match executor.prepare_published_lifecycle_store_retry_marker(body.durable()) {
+        let body_publication =
+            match executor.prepare_recovered_decision_fetch_store_publication(&body) {
                 Ok(marker) => marker,
                 Err(_) => {
                     retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Executor)
@@ -772,7 +772,7 @@ impl LaunchedProductionLifecycleV1 {
                 retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Registry)
             }
         };
-        let retry_marker = match retry_marker
+        let body_publication = match body_publication
             .bind_store_successor(successor.store_effect(), successor.pending_effect_binding())
         {
             Ok(marker) => marker,
@@ -831,7 +831,7 @@ impl LaunchedProductionLifecycleV1 {
             return ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired;
         }
         transition.commit_after_publication();
-        executor.commit_published_lifecycle_store_retry_marker(retry_marker);
+        executor.commit_recovered_decision_fetch_store_publication(body_publication);
         request_output_retirement.commit_after_publication(operation.permit());
         executor.commit_recovered_decision_fetch_owner_retirement(retirement);
         locked_dequeue.commit();
@@ -2017,14 +2017,22 @@ impl ProductionLifecycleActivationPublicationV1 {
         self,
         ingress: &Arc<FairV2Ingress>,
         status: wire::SumeragiV2Status,
+        decision: Option<super::super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,
     ) -> Result<
         super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1,
         ProductionLifecycleActivationErrorV1,
     > {
         let result = match self {
-            Self::Runner(runner) => runner.open_and_publish(ingress, status),
+            Self::Runner(runner) => {
+                if decision.is_some() {
+                    return Err(ProductionLifecycleActivationErrorV1::Status(
+                        super::super::v2::AdapterError::RecoveredSuccessorDecisionActivationMismatch,
+                    ));
+                }
+                runner.open_and_publish(ingress, status)
+            }
             Self::RecoveredCompleteTip { runner, retirement } => {
-                runner.open_and_publish(ingress, retirement, status)
+                runner.open_and_publish_with_decision(ingress, retirement, status, decision)
             }
         };
         result.map_err(|error| ProductionLifecycleActivationErrorV1::Runner(error.to_string()))
@@ -2223,6 +2231,16 @@ impl LaunchedProductionLifecycleV1 {
         if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) {
             return Err(ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch);
         }
+        let recovered_decision = if matches!(
+            publication,
+            ProductionLifecycleActivationPublicationV1::RecoveredCompleteTip { .. }
+        ) {
+            self.executor
+                .recovered_successor_decision_activation_authority()
+                .map_err(ProductionLifecycleActivationErrorV1::Status)?
+        } else {
+            None
+        };
         let clock_activation = ProductionLifecycleLiveClockActivationPermitV1 {
             _seal: ProductionLifecycleLiveClockActivationPermitSealV1,
         };
@@ -2241,8 +2259,11 @@ impl LaunchedProductionLifecycleV1 {
         self.services
             .activate_effect_completion_observer(observer)
             .map_err(ProductionLifecycleActivationErrorV1::CompletionObserver)?;
-        let runner_activation =
-            publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)?;
+        let runner_activation = publication.open_and_publish(
+            &self.leader_wire_ingress_binding.ingress,
+            status,
+            recovered_decision,
+        )?;
         activation.complete();
         Ok(ActivatedProductionLifecycleV1 {
             runner_activation,
@@ -2614,7 +2635,7 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             kura_binding,
             apply_service,
             adapter_startup,
-            timeout_supersession_successor: _,
+            owner_open_successor: _,
         } = owner;
         debug_assert!(
             recovered_lifecycle_outputs

@@ -119,3 +119,212 @@ fn sponsor_caps_enforced() {
         }
     ));
 }
+
+#[test]
+fn ivm_compute_defaults_have_only_current_resource_and_sandbox_fields() {
+    let config = ConfigReader::new()
+        .read_and_complete::<user::Compute>()
+        .expect("default compute config");
+    assert_eq!(
+        config.resource_profiles,
+        defaults::compute::resource_profiles()
+    );
+    assert_eq!(config.sandbox, defaults::compute::sandbox_rules());
+    let profiles = norito::json::to_value(&config.resource_profiles).unwrap();
+    for profile in profiles.as_object().unwrap().values() {
+        assert_eq!(profile.as_object().unwrap().len(), 6);
+        assert!(profile.get("max_stack_bytes").is_some());
+        assert!(profile.get("allow_wasi").is_none());
+    }
+    let sandbox = norito::json::to_value(&config.sandbox).unwrap();
+    assert_eq!(sandbox.as_object().unwrap().len(), 5);
+    assert!(sandbox.get("mode").is_none());
+    assert!(config.sandbox.deny_nondeterministic_syscalls);
+}
+
+#[test]
+fn ivm_compute_config_rejects_removed_resource_allowance() {
+    for value in [false, true] {
+        let table = format!(
+            r"[resource_profiles.cpu-small]
+max_cycles = 5000000
+max_memory_bytes = 134217728
+max_stack_bytes = 2097152
+max_io_bytes = 16777216
+max_egress_bytes = 8388608
+allow_gpu_hints = false
+allow_wasi = {value}
+"
+        )
+        .parse()
+        .expect("syntactically valid removed profile field");
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Compute>()
+            .expect_err("removed resource allowance must fail configuration parsing");
+        let report = format!("{error:?}");
+        assert!(report.contains("allow_wasi"), "{report}");
+    }
+}
+
+#[test]
+fn ivm_compute_config_rejects_every_removed_sandbox_mode() {
+    for mode in ["IvmOnly", "WasiLite"] {
+        let table = format!(
+            r#"[sandbox]
+randomness = "SeededFromRequest"
+storage = "ReadOnly"
+deny_nondeterministic_syscalls = true
+allow_gpu_hints = false
+allow_tee_hints = false
+mode = {{ mode = "{mode}" }}
+"#
+        )
+        .parse()
+        .expect("syntactically valid removed sandbox selector");
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Compute>()
+            .expect_err("even the former IVM selector must fail configuration parsing");
+        let report = format!("{error:?}");
+        assert!(report.contains("unknown field `mode`"), "{report}");
+    }
+}
+
+#[test]
+fn ivm_compute_config_accepts_explicit_current_guardrails() {
+    let table = r#"
+[sandbox]
+randomness = "SeededFromRequest"
+storage = "ReadOnly"
+deny_nondeterministic_syscalls = true
+allow_gpu_hints = false
+allow_tee_hints = false
+[resource_profiles.cpu-small]
+max_cycles = 5000000
+max_memory_bytes = 134217728
+max_stack_bytes = 2097152
+max_io_bytes = 16777216
+max_egress_bytes = 8388608
+allow_gpu_hints = false
+"#
+    .parse()
+    .expect("current IVM guardrails TOML");
+    let config = ConfigReader::new()
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<user::Compute>()
+        .expect("current IVM resource and sandbox overrides");
+    assert_eq!(config.sandbox, defaults::compute::sandbox_rules());
+    assert_eq!(config.resource_profiles.len(), 1);
+    let profile = defaults::compute::default_resource_profile();
+    assert_eq!(
+        config.resource_profiles[&profile],
+        defaults::compute::resource_profiles()[&profile]
+    );
+}
+
+#[test]
+fn ivm_compute_config_accepts_all_current_policy_strings() {
+    for randomness in ["None", "SeededFromRequest"] {
+        for storage in ["ReadOnly", "ReadWrite"] {
+            for auth in ["PublicOnly", "AuthenticatedOnly", "Either"] {
+                let table = format!(
+                    r#"auth_policy = "{auth}"
+[sandbox]
+randomness = "{randomness}"
+storage = "{storage}"
+deny_nondeterministic_syscalls = true
+allow_gpu_hints = false
+allow_tee_hints = false
+"#
+                )
+                .parse()
+                .expect("canonical policy strings");
+                let config = ConfigReader::new()
+                    .with_toml_source(TomlSource::inline(table))
+                    .read_and_complete::<user::Compute>()
+                    .expect("all current unit policy variants must work in TOML");
+                assert_eq!(
+                    norito::json::to_value(&config.auth_policy)
+                        .unwrap()
+                        .as_str(),
+                    Some(auth)
+                );
+                assert_eq!(
+                    norito::json::to_value(&config.sandbox.randomness)
+                        .unwrap()
+                        .as_str(),
+                    Some(randomness)
+                );
+                assert_eq!(
+                    norito::json::to_value(&config.sandbox.storage)
+                        .unwrap()
+                        .as_str(),
+                    Some(storage)
+                );
+            }
+        }
+    }
+    for (name, expected) in [
+        ("Low", ComputePriceRiskClass::Low),
+        ("Balanced", ComputePriceRiskClass::Balanced),
+        ("High", ComputePriceRiskClass::High),
+    ] {
+        let table = format!(
+            r#"[price_risk_classes]
+default = "{name}"
+"#
+        )
+        .parse()
+        .expect("canonical risk class string");
+        let economics = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::ComputeEconomics>()
+            .expect("all risk class values must work in TOML");
+        assert_eq!(
+            economics.price_risk_classes[&Name::from_str("default").unwrap()],
+            expected
+        );
+    }
+}
+
+#[test]
+fn ivm_compute_config_rejects_object_valued_unit_policies() {
+    for source in [
+        r#"auth_policy = { mode = "Either" }"#,
+        r#"[sandbox]
+randomness = { randomness = "SeededFromRequest" }
+storage = "ReadOnly"
+deny_nondeterministic_syscalls = true
+allow_gpu_hints = false
+allow_tee_hints = false
+"#,
+        r#"[sandbox]
+randomness = "SeededFromRequest"
+storage = { storage = "ReadOnly" }
+deny_nondeterministic_syscalls = true
+allow_gpu_hints = false
+allow_tee_hints = false
+"#,
+    ] {
+        let table = source
+            .parse()
+            .expect("syntactically valid removed policy envelope");
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Compute>()
+            .expect_err("unit policy envelopes must be rejected");
+        let report = format!("{error:?}");
+        assert!(!report.contains("missing field"), "{report}");
+    }
+    let table = r#"[price_risk_classes]
+default = { class = "Balanced" }
+"#
+    .parse()
+    .expect("syntactically valid removed risk class envelope");
+    let error = ConfigReader::new()
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<user::ComputeEconomics>()
+        .expect_err("object-valued risk classes must be rejected");
+    assert!(!format!("{error:?}").contains("missing field"));
+}

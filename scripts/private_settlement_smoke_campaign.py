@@ -719,14 +719,14 @@ def command(arguments: list[str], repo: Path, environment: dict[str, str], direc
 
 
 def build_commands(repo: Path, target: Path) -> dict[str, list[str]]:
-    """Pin the source's feature-isolated release build commands; no local metadata override."""
+    """Request the Metal smoke capability and its declared native dependencies."""
     prefix = [str(repo / "scripts/cargo_fast.sh"), "--no-sccache", "--no-incremental", "--jobs", "4", "--"]
     common = ["--locked", "--offline", "--release"]
     return {
         "build-validator": prefix + ["build", *common, "-p", "irohad", "--bin", "iroha3d",
                                       "--features", "test-network-message-control", "--target-dir", str(target)],
         "build-integration": prefix + ["test", *common, "-p", "integration_tests", "--test", "nexus_and_streaming",
-            "--features", "atomic-private-settlement-release", "--no-run", "--message-format=json",
+            "--features", "atomic-private-settlement-metal-smoke", "--no-run", "--message-format=json",
             "--target-dir", str(target)],
     }
 

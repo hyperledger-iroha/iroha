@@ -159,6 +159,9 @@ java/iroha_android/.gradle-home/
 # Taira operator-local runtime inputs; keep populated copies out of public repos.
 configs/soranexus/taira/validator_roster.local.toml
 configs/soranexus/taira/validator_secrets.local.toml
+# Runtime signing inputs stay private regardless of their workspace location.
+validator_secrets.local.toml
+runtime*.key
 
 .target_small/
 target-sm/

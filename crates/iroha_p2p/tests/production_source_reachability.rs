@@ -7,10 +7,18 @@ const PRODUCTION_SOURCES: &[&str] = &[
     "src/lib.rs",
     "src/network.rs",
     "src/network/admission.rs",
+    "src/network/connection_arbitration.rs",
     "src/network/best_effort_admission.rs",
     "src/network/reliable_actor.rs",
     "src/peer.rs",
+    "src/peer/post_admission.rs",
     "src/peer/quic_datagram.rs",
+    "src/peer/receive_credit.rs",
+    "src/peer/receive_credit/negotiation.rs",
+    "src/peer/receive_credit/record.rs",
+    "src/peer/receive_credit/stream.rs",
+    "src/peer/run/granted.rs",
+    "src/peer/tenure.rs",
     "src/preauth.rs",
     "src/puzzle_work_admission.rs",
     "src/soranet_handshake_runtime.rs",
@@ -20,11 +28,22 @@ const PRODUCTION_SOURCES: &[&str] = &[
 ];
 
 const TEST_ONLY_SOURCES: &[&str] = &[
+    "src/frame_identity_tests.rs",
+    "src/network/admission_class_tests.rs",
+    "src/network/connection_arbitration/tests.rs",
+    "src/network/connection_lifecycle_tests.rs",
     "src/network/data_frame_wire_len_tests.rs",
+    "src/network/frame_identity_tests.rs",
     "src/network/handle_update_tests.rs",
     "src/network/queue_depth_tests.rs",
     "src/network/runtime_tests.rs",
     "src/network/tcp_listener_bind_tests.rs",
+    "src/payload_codec_tests.rs",
+    "src/peer/receive_credit/progress_fixture.rs",
+    "src/peer/receive_credit/tests.rs",
+    "src/peer/receive_credit/arbitration_tests.rs",
+    "src/peer/run/admission_class_tests.rs",
+    "src/peer/run/payload_codec_tests.rs",
     "src/peer_consensus_mode_test.rs",
     "src/peer_handshake_config_tests.rs",
     "src/peer_state_tests.rs",
@@ -45,6 +64,18 @@ struct ProductionEdge<'a> {
 }
 
 const PRODUCTION_EDGES: &[ProductionEdge<'_>] = &[
+    ProductionEdge {
+        parent: "src/network.rs",
+        declaration: "mod connection_arbitration;",
+        child: "src/network/connection_arbitration.rs",
+        gate: ProductionGate::Unconditional,
+    },
+    ProductionEdge {
+        parent: "src/peer.rs",
+        declaration: "pub(crate) mod tenure;",
+        child: "src/peer/tenure.rs",
+        gate: ProductionGate::Unconditional,
+    },
     ProductionEdge {
         parent: "src/lib.rs",
         declaration: "mod dial_policy;",
@@ -122,6 +153,42 @@ const PRODUCTION_EDGES: &[ProductionEdge<'_>] = &[
         declaration: "pub mod quic;",
         child: "src/streaming/quic.rs",
         gate: ProductionGate::Feature("quic"),
+    },
+    ProductionEdge {
+        parent: "src/peer.rs",
+        declaration: "pub(crate) mod post_admission;",
+        child: "src/peer/post_admission.rs",
+        gate: ProductionGate::Unconditional,
+    },
+    ProductionEdge {
+        parent: "src/peer.rs",
+        declaration: "pub(crate) mod receive_credit;",
+        child: "src/peer/receive_credit.rs",
+        gate: ProductionGate::Unconditional,
+    },
+    ProductionEdge {
+        parent: "src/peer.rs",
+        declaration: "mod granted;",
+        child: "src/peer/run/granted.rs",
+        gate: ProductionGate::Unconditional,
+    },
+    ProductionEdge {
+        parent: "src/peer/receive_credit.rs",
+        declaration: "pub(super) mod negotiation;",
+        child: "src/peer/receive_credit/negotiation.rs",
+        gate: ProductionGate::Unconditional,
+    },
+    ProductionEdge {
+        parent: "src/peer/receive_credit.rs",
+        declaration: "pub(super) mod record;",
+        child: "src/peer/receive_credit/record.rs",
+        gate: ProductionGate::Unconditional,
+    },
+    ProductionEdge {
+        parent: "src/peer/receive_credit.rs",
+        declaration: "pub(super) mod stream;",
+        child: "src/peer/receive_credit/stream.rs",
+        gate: ProductionGate::Unconditional,
     },
 ];
 

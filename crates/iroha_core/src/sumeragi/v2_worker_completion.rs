@@ -1079,13 +1079,14 @@ impl Drop for V2IoWorkerFailureGuard {
         if !self.armed {
             return;
         }
-        if thread::panicking() {
-            self.output_guard.close_admission_for_restart();
-        } else if !self
-            .allow_finalized_disconnect
-            .load(AtomicOrdering::Acquire)
+        if thread::panicking()
+            || !self
+                .allow_finalized_disconnect
+                .load(AtomicOrdering::Acquire)
         {
-            self.output_guard.activate_restart_required();
+            // The owner can be joining this worker while retaining an outer
+            // launch permit. Closing admission must not wait for that joiner.
+            self.output_guard.close_admission_for_restart();
         }
     }
 }

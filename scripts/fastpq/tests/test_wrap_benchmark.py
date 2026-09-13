@@ -18,6 +18,7 @@ def current_cuda_payload():
         "estimated_gpu_transfer_bytes": 1152,
     }
     return {
+        "producer_schema": "cuda_nested",
         "metadata": {
             "generated_at": "2026-03-27T00:00:00Z",
             "platform": "linux",
@@ -45,6 +46,8 @@ def current_cuda_payload():
             ],
         },
         "report": {
+            "producer_schema": "cuda_nested",
+            "column_count": 2,
             "rows": 8,
             "padded_rows": 8,
             "iterations": 1,
@@ -68,6 +71,7 @@ def current_cuda_payload():
 
 def current_metal_report():
     return {
+        "producer_schema": "metal_flat",
         "rows": 8,
         "padded_rows": 8,
         "iterations": 1,
@@ -358,19 +362,17 @@ def test_normalize_report_rejects_inconsistent_cuda_operation_copies():
         wrap_benchmark.normalize_report(payload)
 
 
-def test_producer_schema_uses_current_payload_shape():
-    assert (
-        wrap_benchmark.producer_schema_for_payload({"report": {}})
-        == wrap_benchmark.CUDA_NESTED_SCHEMA
-    )
-    assert (
-        wrap_benchmark.producer_schema_for_payload({"operations": []})
-        == wrap_benchmark.METAL_FLAT_SCHEMA
-    )
+def test_producer_schema_requires_exact_explicit_discriminator():
+    for schema in (wrap_benchmark.CUDA_NESTED_SCHEMA, wrap_benchmark.METAL_FLAT_SCHEMA):
+        assert wrap_benchmark.producer_schema_for_payload({"producer_schema": schema}) == schema
+    for payload in ({"report": {}}, {}, {"producer_schema": "metal"}, {"producer_schema": 1}):
+        with pytest.raises(SystemExit, match="producer_schema"):
+            wrap_benchmark.producer_schema_for_payload(payload)
 
 
 def test_normalize_report_keeps_flat_payloads_unchanged():
     payload = {
+        "producer_schema": "metal_flat",
         "rows": 8,
         "iterations": 1,
         "operations": [{"operation": "fft"}],
@@ -394,14 +396,15 @@ def test_normalize_report_preserves_bn254_warnings_from_nested_bundle():
     assert report["bn254_warnings"] == warnings
 
 
-def test_require_poseidon_telemetry_skips_non_metal_backends():
+def test_six_lane_cuda_evidence_is_required_independently_of_scalar_telemetry():
     report = {
         "gpu_backend": "cuda",
-        "operations": [{"operation": "poseidon_hash_columns"}],
+        "operations": [{"operation": "digest384_trace_columns"}],
+        "poseidon_microbench": {"fake": "scalar"},
+        "metal_dispatch_queue": {"poseidon": {"dispatch_count": 99}},
     }
-
-    wrap_benchmark.require_poseidon_telemetry(report)
-
+    with pytest.raises(SystemExit, match="digest384 must contain exactly"):
+        wrap_benchmark.summarize_operations(report, wrap_benchmark.CUDA_NESTED_SCHEMA)
 
 def test_filter_metric_samples_does_not_fall_back_to_another_device():
     samples = [{"labels": {"device_class": "other"}, "value": 1}]
@@ -419,3 +422,11 @@ def test_poseidon_metric_summary_rejects_another_device(tmp_path):
 
     with pytest.raises(SystemExit, match="missing fastpq_poseidon_pipeline_total samples"):
         wrap_benchmark.build_poseidon_metric_summary(metrics_path, "wanted")
+
+
+def test_threshold_cli_accepts_six_lane_name_and_rejects_old_alias(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["wrap_benchmark.py", "input.json", "output.json", "--require-digest384-columns-mean-ms", "100"])
+    assert wrap_benchmark.parse_args().require_digest384_columns_mean_ms == 100
+    monkeypatch.setattr("sys.argv", ["wrap_benchmark.py", "input.json", "output.json", "--require-poseidon-mean-ms", "100"])
+    with pytest.raises(SystemExit):
+        wrap_benchmark.parse_args()

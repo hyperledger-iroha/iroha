@@ -91,6 +91,7 @@ fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_musubi_ordered_prefix_v1(FindMusubiOrderedPrefixV1),
         visit_find_domain_by_id(FindDomainById),
         visit_find_fee_sponsor_program_by_id(FindFeeSponsorProgramById),
+        visit_find_settlement_receipt_by_id(FindSettlementReceiptById),
     }
 }
 fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
@@ -565,6 +566,9 @@ macro_rules! query_visitors {
             visit_find_fee_sponsor_program_by_id(
                 &$crate::query::nexus::prelude::FindFeeSponsorProgramById
             ),
+            visit_find_settlement_receipt_by_id(
+                &$crate::query::settlement::FindSettlementReceiptById
+            ),
             // Iterable Query visitors
             visit_find_domains(&$crate::query::ErasedIterQuery<$crate::domain::Domain>),
             visit_find_accounts(&$crate::query::ErasedIterQuery<$crate::account::Account>),
@@ -720,6 +724,7 @@ mod tests {
         SingularQueryBox::FindFeeSponsorProgramById(_) => {}
         SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {}
         SingularQueryBox::FindFxCorridorPolicyById(_) => {}
+        SingularQueryBox::FindSettlementReceiptById(_) => {}
         SingularQueryBox::FindGameSessionById(_) => {}
         SingularQueryBox::FindExecutionProofVerificationById(_) => {}
         SingularQueryBox::FindDomainEndorsements(_) => {}
@@ -753,6 +758,29 @@ mod tests {
         ) {
             self.accounts_with_asset += 1;
         }
+    }
+    #[test]
+    fn settlement_receipt_query_uses_its_concrete_visitor_without_fallback() {
+        let _guard = singular_query_tests_guard();
+        reset_singular_query_fallback_guard();
+        struct ReceiptVisitor(usize);
+        impl Visit for ReceiptVisitor {
+            fn visit_find_settlement_receipt_by_id(
+                &mut self,
+                query: &crate::query::settlement::FindSettlementReceiptById,
+            ) {
+                assert_eq!(query.id.to_string(), "visitor_receipt");
+                self.0 += 1;
+            }
+        }
+        let query =
+            SingularQueryBox::from(crate::query::settlement::FindSettlementReceiptById::new(
+                "visitor_receipt".parse().expect("id"),
+            ));
+        let mut visitor = ReceiptVisitor(0);
+        visit_singular_query(&mut visitor, &query);
+        assert_eq!(visitor.0, 1);
+        assert!(!singular_query_fallback_triggered());
     }
     struct NoopVisitor;
     impl Visit for NoopVisitor {}

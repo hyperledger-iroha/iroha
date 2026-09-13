@@ -48,7 +48,7 @@ const MIN_TRACE_LOG2: u8 = 13;
 const MAX_TRACE_LOG2: u8 = 19;
 const MAX_AIR_COLUMNS: usize = 384;
 const RULES:&[u8]=b"iroha-race-rules-v1:ticks=30:max=5400:players=1..8:multiplayer=2..8:laps=3:batch=6:skins=6:grid-progress=-floor(slot/2)*4000:grid-x=even?-1800:1800:grid-speed=0:grid-vx=0:grid-energy=1000:controls=throttle,brake,left,right,drift,boost:boost=bit5&&energy>=25:energy=boost?-25:min(1000,+4):top=boost?3000:2400:accel=brake?-100:throttle?40:-12:speed=clamp(speed+accel,0,top):steer=right-left:vx=clamp(trunc((vx+steer*(drift?28:18))*7/8),-320,320):curve-cell=floor(remEuclid(oldProgress,length)*12/length):force=trunc(curve*speed/120):x=clamp(x+vx+force,-9000,9000):abs(x)>6000=>speed=max(0,speed-90):progress+=speed:contacts=ascending-i-j,abs(dp)<3600&&abs(dx)<1800,push=ceil((1800-abs(dx))/2),low-x-or-low-slot-tie-goes-left,speed=max(0,speed-120):finish=after-contacts,progress>=3*length,clamp-and-freeze:dnf=before-exact-tick,record-key-inactivity-even-after-finish,preserve-earlier-finish-as-history-only,freeze-and-ghost:finished-ghost:terminal=(tick%6==0&&(all-finished-or-dnf||active-keys<2))||tick5400:ranking=eligible-before-all-dnf,then-finish-time,then-distance,slot-display-only:winners=eligible-earliest-finish-ties-else-sole-eligible-survivor-else-tick5400-max-eligible-progress-ties-else-all-forfeit-refund:environment=12-cell-center-floor((2i+1)*length/24):kinds-tree0-sign1-oil2:Tokyo-kinds=0,1,0,2,0,1,2,0,1,0,2,1:Harbor-kinds=1,2,0,1,0,2,1,0,2,1,0,2:Sakura-kinds=0,0,2,1,0,2,0,1,0,2,0,1:object-x=even-negative-odd-positive,magnitudes7400,5600,1800:rain-patterns=Tokyo0010,Harbor0110,Sakura0001:wind-pattern=0,1,2,1,0,-1,-2,-1:wind-strengths=Tokyo4,Harbor16,Sakura8:tree-radius=1400:tree-loss=600:tree-push=1800-clamp9000:sign-radius=1300:sign-loss=260:oil-half-length=9000:oil-half-width=1400:oil-steer=trunc(steer/2):rain-steer=trunc(steer*3/4):slippery-damping=15/16:rain-vx-limit=280:wind=trunc(public90tick8table*speed/2400):rain=public300tick4table:impact=swept-progress-before-ordered-contacts:tracks=NeonTokyo/2000000/[0,1,2,1,0,-1,-2,-1,0,2,-2,0];Harbor/2400000/[0,-2,-2,0,1,3,1,0,-1,-3,-1,0];Sakura/1800000/[0,1,1,0,-2,-1,0,2,3,1,-2,0]";
-const PROFILE:&[u8]=b"iroha-native-execution-race-v1:wire=RCE1/1:eligibility-first-awards:poseidon2-w16-r8-c8-output6:public-replay:trace=2^13..2^19:microcycles=boundary,environment,grip,drive,curve,move,impact,ordered-pair,finish:columns=stage-multiplexed-boolean-radix4-banks:integer-air-degree=4:shared-degree=2:envelope-max=4194304:stark-max=3250000:base-max=392:fri-commitment-error-bits-min=187:aux=118:state=progress,x,speed,vx,energy,finish-tick,dnf-tick-plus-one:all-car-dynamics:all-ordered-contacts:initial-intermediate-final-boundaries";
+const PROFILE:&[u8]=b"iroha-native-execution-race-v1:wire=RCE1/1:eligibility-first-awards:poseidon-x7-goldilocks-six-independent-lanes-6x64:public-replay:trace=2^13..2^19:microcycles=boundary,environment,grip,drive,curve,move,impact,ordered-pair,finish:columns=stage-multiplexed-boolean-radix4-banks:integer-air-degree=4:shared-degree=2:envelope-max=4194304:stark-max=3250000:base-max=392:fri-commitment-error-bits-min=187:aux=118:state=progress,x,speed,vx,energy,finish-tick,dnf-tick-plus-one:all-car-dynamics:all-ordered-contacts:initial-intermediate-final-boundaries";
 const CONTEXT: TransparentStarkDigestContextV1 =
     TransparentStarkDigestContextV1::execution_v1(b"race-stock-proof-v1");
 const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
@@ -139,16 +139,12 @@ pub(super) const RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
         include_bytes!("../../../iroha_data_model/src/execution_proofs.rs"),
     ),
     (
-        "crates/iroha_core/src/execution_proofs/poseidon2.rs",
-        include_bytes!("poseidon2.rs"),
-    ),
-    (
-        "crates/iroha_core/src/execution_proofs/poseidon2_constants.rs",
-        include_bytes!("poseidon2_constants.rs"),
-    ),
-    (
         "crates/iroha_core/src/privacy_engines/transparent_stark.rs",
         include_bytes!("../privacy_engines/transparent_stark.rs"),
+    ),
+    (
+        "crates/fastpq_isi/src/lib.rs",
+        include_bytes!("../../../fastpq_isi/src/lib.rs"),
     ),
     (
         "crates/fastpq_isi/src/params.rs",
@@ -165,6 +161,10 @@ pub(super) const RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
     (
         "crates/fastpq_isi/src/assets/poseidon_goldilocks_width3_v1.bin",
         include_bytes!("../../../fastpq_isi/src/assets/poseidon_goldilocks_width3_v1.bin"),
+    ),
+    (
+        "crates/iroha_core/src/execution_proofs/stark/mod.rs",
+        include_bytes!("stark/mod.rs"),
     ),
     (
         "crates/iroha_core/src/execution_proofs/stark/transparent_stark.rs",

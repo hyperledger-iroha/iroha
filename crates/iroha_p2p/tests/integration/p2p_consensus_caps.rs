@@ -20,7 +20,29 @@ use tokio::time::Duration;
 #[norito_schema(name = "iroha_p2p::tests::integration::p2p_consensus_caps::Dummy")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct Dummy;
-impl iroha_p2p::network::message::ClassifyTopic for Dummy {}
+impl ClassifyTopic for Dummy {
+    // The unit fixture has no Availability or recovery variants. These positive
+    // maxima describe empty fixture variant sets, never production messages.
+    fn availability_frame_maximum(_: &PeerId) -> Result<usize, norito::core::Error> {
+        Ok(1)
+    }
+    fn recovery_frame_maxima(_: &PeerId) -> Result<[usize; 2], norito::core::Error> {
+        Ok([1, 1])
+    }
+    fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
+        norito::core::validate_header_flags(flags)?;
+        // A unit struct is bounded by the one-entry nonhybrid offset table.
+        if payload.len() > 8 {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        let (value, used) = norito::core::decode_field_canonical::<Self>(payload)?;
+        if used != payload.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        Ok(Some(value.topic()))
+    }
+}
 impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical::<Self>(bytes)
@@ -59,6 +81,11 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
         p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
         p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
         p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
+        // These capability-only pairs need at most two live connection tenures
+        // during replacement. Bound the fixture to four connections instead of
+        // inheriting the 97-connection Core profile with only 128 actor ranks.
+        // This reduces source ownership; no queue or byte ceiling is increased.
+        max_total_connections: NonZeroUsize::new(4),
         ..super::test_network_config(
             addr.clone(),
             addr,
@@ -67,6 +94,34 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
             TRUST_GOSSIP,
         )
     }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capability_fixture_rejects_unfunded_default_connection_geometry() {
+    let mut config = cfg(super::next_addr());
+    config.max_total_connections = None;
+    // Exercise real startup admission. Rejection precedes replay-store and
+    // listener creation; an unrelated socket failure must not satisfy this test.
+    let result = NetworkHandle::<Dummy>::start(
+        super::p2p_identity_keys(super::random_node_key_pair()),
+        config,
+        super::test_network_id("capability-invalid-count-geometry"),
+        None,
+        None,
+        ShutdownSignal::new(),
+    )
+    .await;
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("128 actor ranks must not admit the default 97-connection source geometry"),
+    };
+    let iroha_p2p::Error::Io(error) = error else {
+        panic!("unexpected capability fixture admission error: {error:?}");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "ordinary actor count cannot fund mandatory semantic sources"
+    );
 }
 const MATCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MISMATCH_OBSERVATION: Duration = Duration::from_secs(1);
@@ -123,7 +178,7 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
     .await
     {
         Ok(started) => started,
-        Err(_) => return,
+        Err(error) => panic!("capability fixture failed before its required assertion: {error:?}"),
     };
     let (net2, _child2) = match Box::pin(
         NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
@@ -140,8 +195,9 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
     .await
     {
         Ok(started) => started,
-        Err(_) => return,
+        Err(error) => panic!("capability fixture failed before its required assertion: {error:?}"),
     };
+    net2.update_topology(UpdateTopology(HashSet::from([id1.clone()])));
     // Deliberately publish no asynchronous trusted-peer update: source
     // authority must already exist when the zero-delay connection authenticates.
     net1.update_topology(UpdateTopology(HashSet::from([id2.clone()])));
@@ -174,9 +230,9 @@ async fn consensus_caps_match_connects() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return, // Skip if sockets unavailable
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -187,9 +243,13 @@ async fn consensus_caps_match_connects() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_connects(&net1, p2.id()).await;
@@ -225,9 +285,9 @@ async fn consensus_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -238,9 +298,13 @@ async fn consensus_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_stays_offline(&net1, p2.id()).await;
@@ -278,9 +342,9 @@ async fn consensus_config_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -291,9 +355,13 @@ async fn consensus_config_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_stays_offline(&net1, p2.id()).await;
@@ -329,9 +397,9 @@ async fn confidential_caps_match_connects() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -342,9 +410,13 @@ async fn confidential_caps_match_connects() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_connects(&net1, p2.id()).await;
@@ -386,9 +458,9 @@ async fn confidential_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -399,9 +471,13 @@ async fn confidential_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_stays_offline(&net1, p2.id()).await;
@@ -443,9 +519,9 @@ async fn confidential_caps_backend_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -456,9 +532,13 @@ async fn confidential_caps_backend_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_stays_offline(&net1, p2.id()).await;
@@ -507,9 +587,9 @@ async fn confidential_caps_features_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
+    let (net2, _ch2) = match NetworkHandle::<Dummy>::start(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -520,9 +600,13 @@ async fn confidential_caps_features_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_stays_offline(&net1, p2.id()).await;
@@ -566,7 +650,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let shutdown_stale = ShutdownSignal::new();
     let (net2_stale, _child2_stale) = match NetworkHandle::<Dummy>::start(
@@ -585,11 +669,14 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => {
+        Err(error) => {
             shutdown_validator.send();
-            return;
+            panic!("capability alignment fixture must start: {error:?}");
         }
     };
+    net2_stale.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        validator_kp.public_key().clone(),
+    )])));
     let stale_peer =
         iroha_data_model::peer::Peer::new(addr_stale.clone(), peer_kp.public_key().clone());
     net1.update_topology(UpdateTopology(
@@ -624,11 +711,14 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => {
+        Err(error) => {
             shutdown_validator.send();
-            return;
+            panic!("capability alignment fixture must start: {error:?}");
         }
     };
+    net2_fresh.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        validator_kp.public_key().clone(),
+    )])));
     let fresh_peer =
         iroha_data_model::peer::Peer::new(addr_fresh.clone(), peer_kp.public_key().clone());
     net1.update_topology(UpdateTopology(
@@ -655,7 +745,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     drop(net2_fresh);
     let count = match wait_result {
         Ok(count) => count,
-        Err(_) => return,
+        Err(error) => panic!("capability fixture failed before its required assertion: {error:?}"),
     };
     assert!(
         count >= 1,
@@ -687,9 +777,9 @@ async fn crypto_caps_match_connects() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
+    let (net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -701,9 +791,13 @@ async fn crypto_caps_match_connects() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_connects(&net1, p2.id()).await;
@@ -739,9 +833,9 @@ async fn crypto_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
+    let (net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -753,9 +847,13 @@ async fn crypto_caps_mismatch_rejected() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_stays_offline(&net1, p2.id()).await;
@@ -791,9 +889,9 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
-    let (_net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
+    let (net2, _ch2) = match Box::pin(NetworkHandle::<Dummy>::start_with_crypto(
         super::p2p_identity_keys(kp2.clone()),
         cfg(addr2.clone()),
         chain.clone(),
@@ -805,10 +903,47 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     .await
     {
         Ok(ok) => ok,
-        Err(_e) => return,
+        Err(error) => panic!("capability fixture must start: {error:?}"),
     };
     let p2 = iroha_data_model::peer::Peer::new(addr2.clone(), kp2.public_key().clone());
+    // Authorize the actual dialer independently of the capability under test.
+    net2.update_topology(UpdateTopology(HashSet::from([PeerId::from(
+        kp1.public_key().clone(),
+    )])));
     net1.update_topology(UpdateTopology([p2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(p2.id().clone(), addr2.clone())]));
     assert_peer_connects(&net1, p2.id()).await;
+}
+
+#[test]
+fn caps_unit_fixture_raw_layout_is_exact() {
+    use norito::core;
+    let value = Dummy;
+    for requested in [
+        0,
+        core::header_flags::COMPACT_LEN,
+        core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
+        core::header_flags::PACKED_STRUCT
+            | core::header_flags::COMPACT_LEN
+            | core::header_flags::FIELD_BITSET,
+    ] {
+        let (bytes, flags) = {
+            let _flags = core::DecodeFlagsGuard::enter(requested);
+            norito::codec::encode_with_header_flags(&value)
+        };
+        let _flags = core::DecodeFlagsGuard::enter(flags);
+        let (decoded, used) = core::decode_field_canonical::<Dummy>(&bytes).unwrap();
+        assert_eq!(used, bytes.len());
+        assert!(bytes.len() <= 8);
+        assert_eq!(
+            Dummy::inbound_topic(&bytes, flags).unwrap(),
+            Some(decoded.topic())
+        );
+        assert_eq!(
+            Dummy::inbound_admission_class(&bytes, flags).unwrap(),
+            decoded.admission_class()
+        );
+        assert!(Dummy::inbound_topic(&[0], flags).is_err());
+        assert!(Dummy::inbound_topic(&bytes, flags | 0x80).is_err());
+    }
 }

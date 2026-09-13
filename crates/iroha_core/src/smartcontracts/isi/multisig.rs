@@ -549,6 +549,9 @@ fn rekey_account_id(
     // record would strand member actions or release the retained bond under the replacement
     // identity. Reject before any rekey write.
     parliament_rekey::ensure_account_rekey_preserves_bindings(state_transaction, old_account)?;
+    // Rewriting historical participants would invalidate the complete intent hash.
+    // Pin every receipt variant before any account, permission or index mutation.
+    ensure_settlement_receipts_allow_rekey(state_transaction, old_account)?;
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
         .account_aliases_by_account
@@ -885,7 +888,6 @@ fn rekey_account_id(
     replace_account_id_in_kagemusha(state_transaction, old_account, new_account);
     replace_account_id_in_public_lane(state_transaction, old_account, new_account);
     replace_account_id_in_repo_agreements(state_transaction, old_account, new_account);
-    replace_account_id_in_settlements(state_transaction, old_account, new_account);
     replace_account_id_in_citizens(state_transaction, old_account, new_account);
     replace_account_id_in_governance(state_transaction, old_account, new_account);
     replace_account_id_in_oracle(state_transaction, old_account, new_account);
@@ -1314,34 +1316,28 @@ fn replace_account_id_in_repo_agreements(
         }
     }
 }
-fn replace_account_id_in_settlements(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    old: &AccountId,
-    new: &AccountId,
-) {
-    let receipt_ids: Vec<_> = state_transaction
-        .world
-        .settlement_receipts
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect();
-    for receipt_id in receipt_ids {
-        if let Some(receipt) = state_transaction
+fn ensure_settlement_receipts_allow_rekey(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<(), InstructionExecutionError> {
+    if let Some((settlement_id, _)) =
+        state_transaction
             .world
             .settlement_receipts
-            .get_mut(&receipt_id)
-        {
-            replace_account_id(&mut receipt.authority, old, new);
-            for leg in &mut receipt.legs {
-                replace_account_id(&mut leg.leg.from, old, new);
-                replace_account_id(&mut leg.leg.to, old, new);
-            }
-            if let Some(fx_corridor) = receipt.fx_corridor.as_mut() {
-                replace_account_id(&mut fx_corridor.source_account, old, new);
-                replace_account_id(&mut fx_corridor.recipient, old, new);
-            }
-        }
+            .iter()
+            .find(|(_, receipt)| {
+                &receipt.authority == account
+                    || receipt.details.movements().any(|movement| {
+                        movement.source.account() == account
+                            || movement.destination.account() == account
+                    })
+            })
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("cannot rekey account {account}: it is referenced by immutable committed settlement receipt {settlement_id}").into(),
+        ));
     }
+    Ok(())
 }
 fn replace_account_id_in_citizens(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3205,8 +3201,8 @@ mod tests {
             SetKeyValue,
             alias_setup::EnsureAlias,
             settlement::{
-                FxCorridorOracleEvidence, FxCorridorSettlementDetails, SettlementKind,
-                SettlementLeg, SettlementLegRole, SettlementLegSnapshot, SettlementPlan,
+                FxCorridorOracleEvidence, FxCorridorPricingContext, ResolvedSettlementMovement,
+                ResolvedSettlementMovements, SettlementDetails, SettlementExecutionOrder,
                 SettlementReceipt,
             },
         },
@@ -5047,113 +5043,163 @@ mod tests {
         );
     }
     #[test]
-    fn rekey_settlement_receipt_updates_fx_detail_accounts_with_legs() {
-        let state = State::new_with_chain(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            ChainId::from("multisig-rekey-settlement-receipt"),
+    fn rekey_rejects_immutable_settlement_authority_and_every_typed_participant() {
+        // Every variant pins both its authority and exact historical accounts.
+        // Atomic additionally exercises first, middle and final source positions.
+        let recipient = new_account_id(&checked_keypair());
+        let sponsor = new_account_id(&checked_keypair());
+        let definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("receipt", "universal").expect("domain"),
+            "cash".parse().expect("name"),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
-        let mut tx = block.transaction();
-        let old_account = new_account_id(&checked_keypair());
-        let new_account = new_account_id(&checked_keypair());
-        let counterparty = new_account_id(&checked_keypair());
-        let domain_id = DomainId::try_new("fx", "universal").expect("domain id");
-        let source_asset_definition_id = AssetDefinitionId::derive_from_components(
-            domain_id.clone(),
-            "source".parse().expect("asset name"),
-        );
-        let destination_asset_definition_id = AssetDefinitionId::derive_from_components(
-            domain_id,
-            "destination".parse().expect("asset name"),
-        );
-        let settlement_id: iroha_data_model::isi::settlement::SettlementId =
-            "fx_rekey_receipt".parse().expect("settlement id");
-        let request_hash = Hash::new(b"fx-rekey-receipt-oracle-request");
-        let oracle_event = FeedEvent {
-            feed_id: "fx_rate".parse().expect("feed id"),
+        let mut movements = (0..255)
+            .map(|_| {
+                let account = new_account_id(&checked_keypair());
+                ResolvedSettlementMovement {
+                    source: AssetId::with_scope(
+                        definition.clone(),
+                        account,
+                        iroha_data_model::asset::AssetBalanceScope::Global,
+                    ),
+                    destination: AssetId::with_scope(
+                        definition.clone(),
+                        recipient.clone(),
+                        iroha_data_model::asset::AssetBalanceScope::Global,
+                    ),
+                    quantity: Quantity::one(),
+                    metadata: Metadata::default(),
+                }
+            })
+            .collect::<Vec<_>>();
+        movements.sort_by(|a, b| (&a.source, &a.destination).cmp(&(&b.source, &b.destination)));
+        let event = FeedEvent {
+            feed_id: "rate".parse().expect("feed"),
             feed_config_version: FeedConfigVersion(1),
             slot: 1,
-            request_hash,
+            request_hash: Hash::new(b"immutable-fx-receipt"),
             outcome: FeedEventOutcome::Success(FeedSuccess {
                 value: ObservationValue::new(1, 0),
                 entries: Vec::new(),
             }),
         };
-        let receipt = SettlementReceipt {
-            kind: SettlementKind::FxCorridor,
-            authority: old_account.clone(),
-            plan: SettlementPlan::default(),
-            metadata: Metadata::default(),
-            block_height: 1,
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0; Hash::LENGTH],
-            )),
-            executed_at_ms: 1,
-            legs: [
-                SettlementLegSnapshot {
-                    role: SettlementLegRole::FxSource,
-                    leg: SettlementLeg::new(
-                        source_asset_definition_id.clone(),
-                        Quantity::one(),
-                        old_account.clone(),
-                        counterparty.clone(),
-                    ),
-                },
-                SettlementLegSnapshot {
-                    role: SettlementLegRole::FxDestination,
-                    leg: SettlementLeg::new(
-                        destination_asset_definition_id.clone(),
-                        Quantity::one(),
-                        counterparty.clone(),
-                        old_account.clone(),
-                    ),
-                },
-            ],
-            fx_corridor: Some(FxCorridorSettlementDetails {
-                policy_id: "corridor".parse().expect("policy id"),
-                policy_revision: 1,
-                source_dataspace: DataSpaceId::new(1),
-                destination_dataspace: DataSpaceId::new(2),
-                owner: old_account.clone(),
-                oracle_evidence: FxCorridorOracleEvidence {
-                    feed_id: oracle_event.feed_id.clone(),
-                    feed_config_version: oracle_event.feed_config_version,
-                    slot: oracle_event.slot,
-                    request_hash: oracle_event.request_hash,
-                    event_hash: HashOf::new(&oracle_event),
-                },
-                oracle_recorded_at_ms: 1,
-                oracle_rate: ObservationValue::new(1, 0),
-                source_account: old_account.clone(),
-                destination_escrow: old_account.clone(),
-                recipient: old_account.clone(),
-                source_asset_definition_id,
-                destination_asset_definition_id,
-                source_amount: Quantity::one(),
-                destination_amount: Quantity::one(),
-            }),
+        let context = FxCorridorPricingContext {
+            policy_id: "corridor".parse().expect("policy"),
+            policy_revision: 1,
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: event.feed_id.clone(),
+                feed_config_version: event.feed_config_version,
+                slot: event.slot,
+                request_hash: event.request_hash,
+                event_hash: HashOf::new(&event),
+            },
+            oracle_recorded_at_ms: 1,
+            oracle_rate: ObservationValue::new(1, 0),
         };
-        tx.world
-            .settlement_receipts
-            .insert(settlement_id.clone(), receipt);
-        replace_account_id_in_settlements(&mut tx, &old_account, &new_account);
-        let receipt = tx
-            .world
-            .settlement_receipts
-            .get(&settlement_id)
-            .expect("rekeyed settlement receipt");
-        assert_eq!(receipt.authority, new_account);
-        assert_eq!(receipt.legs[0].leg.from(), &new_account);
-        assert_eq!(receipt.legs[0].leg.to(), &counterparty);
-        assert_eq!(receipt.legs[1].leg.from(), &counterparty);
-        assert_eq!(receipt.legs[1].leg.to(), &new_account);
-        let details = receipt.fx_corridor.as_ref().expect("FX receipt details");
-        assert_eq!(details.source_account, new_account);
-        assert_eq!(details.recipient, new_account);
-        assert_eq!(details.owner, old_account);
-        assert_eq!(details.destination_escrow, old_account);
+        let variants = [
+            SettlementDetails::Dvp(iroha_data_model::isi::DvpSettlementDetails {
+                delivery: movements[0].clone(),
+                payment: movements[254].clone(),
+                order: SettlementExecutionOrder::DeliveryThenPayment,
+            }),
+            SettlementDetails::Pvp(iroha_data_model::isi::PvpSettlementDetails {
+                primary: movements[0].clone(),
+                counter: movements[254].clone(),
+                order: SettlementExecutionOrder::PaymentThenDelivery,
+            }),
+            SettlementDetails::FxCorridor(iroha_data_model::isi::FxCorridorSettlementDetails {
+                source: movements[0].clone(),
+                destination: movements[254].clone(),
+                context,
+            }),
+            SettlementDetails::Atomic(iroha_data_model::isi::AtomicSettlementDetails {
+                movements: ResolvedSettlementMovements::try_from(movements)
+                    .expect("exact canonical vector"),
+                intent_hash: Hash::new(b"immutable-complete-intent"),
+            }),
+        ];
+        for details in variants {
+            let mut accounts = vec![sponsor.clone(), recipient.clone()];
+            accounts.extend(
+                details
+                    .movements()
+                    .enumerate()
+                    .filter(|(index, _)| [0, 1, 127, 254].contains(index))
+                    .map(|(_, movement)| movement.source.account().clone()),
+            );
+            for old_account in accounts {
+                let new_account = new_account_id(&checked_keypair());
+                let state = State::new_with_chain(
+                    World::new(),
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                    ChainId::from("immutable-settlement-rekey"),
+                );
+                let mut block =
+                    state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+                let mut tx = block.transaction();
+                Register::account(Account::new(old_account.clone()))
+                    .execute(&old_account, &mut tx)
+                    .expect("register current identity");
+                let settlement_id = "immutable_receipt".parse().expect("id");
+                let receipt = SettlementReceipt {
+                    authority: sponsor.clone(),
+                    metadata: Metadata::default(),
+                    block_height: 1,
+                    block_hash: tx._curr_block.hash(),
+                    executed_at_ms: 0,
+                    details: details.clone(),
+                };
+                tx.world.settlement_receipts.insert(settlement_id, receipt);
+                let receipts_before = norito::encode_canonical(
+                    &tx.world
+                        .settlement_receipts
+                        .iter()
+                        .map(|(id, receipt)| (id.clone(), receipt.clone()))
+                        .collect::<Vec<_>>(),
+                )
+                .expect("receipt bytes");
+                let account_before = tx
+                    .world
+                    .accounts
+                    .get(&old_account)
+                    .expect("account")
+                    .clone();
+                let events_before = tx
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .map(|event| norito::encode_canonical(event.as_ref()).expect("event bytes"))
+                    .collect::<Vec<_>>();
+                let error = rekey_account_id(&mut tx, &old_account, &new_account, None)
+                    .expect_err("signed receipt history must not be rewritten");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("immutable committed settlement receipt")
+                );
+                assert_eq!(tx.world.accounts.get(&old_account), Some(&account_before));
+                assert!(tx.world.accounts.get(&new_account).is_none());
+                assert_eq!(
+                    norito::encode_canonical(
+                        &tx.world
+                            .settlement_receipts
+                            .iter()
+                            .map(|(id, receipt)| (id.clone(), receipt.clone()))
+                            .collect::<Vec<_>>()
+                    )
+                    .expect("receipt bytes"),
+                    receipts_before
+                );
+                assert_eq!(
+                    tx.world
+                        .internal_event_buf
+                        .iter()
+                        .map(|event| norito::encode_canonical(event.as_ref()).expect("event bytes"))
+                        .collect::<Vec<_>>(),
+                    events_before
+                );
+            }
+        }
     }
     #[test]
     fn rekey_public_lane_validators_ignores_mismatched_rows() {

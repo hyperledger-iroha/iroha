@@ -266,7 +266,7 @@ descriptorTest("retired confidential builders are absent from runtime and declar
   }
 });
 
-descriptorTest("public and native-backed instruction adapters reject every retired confidential instruction", () => {
+descriptorTest("public native instruction adapters reject every retired confidential instruction", () => {
   for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
     const instruction = retiredInstruction(variant);
     assertRetiredInstructionRejected(
@@ -287,7 +287,7 @@ descriptorTest("public and native-backed instruction adapters reject every retir
           Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"), 753,
         ),
       ),
-    /instruction contains non-zero alignment padding or trailing bytes/u,
+    { message: "length mismatch" },
   );
 });
 

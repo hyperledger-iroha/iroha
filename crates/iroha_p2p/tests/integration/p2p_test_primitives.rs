@@ -3,8 +3,28 @@
 #[derive(Clone, Debug, Decode, Encode)]
 struct ConsensusMessage(u32);
 impl iroha_p2p::network::message::ClassifyTopic for ConsensusMessage {
+    // This synthetic type has no availability or recovery variants. Positive
+    // empty-class bounds fund mandatory transport geometry only for this fixture.
+    fn availability_frame_maximum(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<usize, norito::core::Error> {
+        Ok(1)
+    }
+    fn recovery_frame_maxima(
+        _: &iroha_model_base::peer::PeerId,
+    ) -> Result<[usize; 2], norito::core::Error> {
+        Ok([1, 1])
+    }
+    fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
+        fixed_fixture_topic::<Self>(payload, flags)
+    }
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         iroha_p2p::network::message::Topic::Consensus
+    }
+    fn progress_reconstruction(&self) -> iroha_p2p::network::message::ProgressReconstruction {
+        // Tests retain this scalar request until exact delivery. Replaying the
+        // same value has no stateful effect in the synthetic subscriber.
+        iroha_p2p::network::message::ProgressReconstruction::Retransmit
     }
 }
 fn setup_logger() {
@@ -33,4 +53,58 @@ fn test_encryption() {
         .decrypt_easy(aad.as_ref(), ciphertext.as_slice())
         .unwrap();
     assert_eq!(decrypted.as_slice(), message);
+}
+
+#[test]
+fn scalar_fixture_raw_topics_match_every_declared_layout() {
+    use norito::core;
+    for requested in [
+        0,
+        core::header_flags::COMPACT_LEN,
+        core::header_flags::PACKED_STRUCT | core::header_flags::COMPACT_LEN,
+        core::header_flags::PACKED_STRUCT
+            | core::header_flags::COMPACT_LEN
+            | core::header_flags::FIELD_BITSET,
+    ] {
+        for chan in [0, 1, 2, 3, u8::MAX] {
+            let value = MultiTopic {
+                chan,
+                payload: u32::MAX,
+            };
+            let (bytes, flags) = {
+                let _flags = core::DecodeFlagsGuard::enter(requested);
+                norito::codec::encode_with_header_flags(&value)
+            };
+            assert!(bytes.len() <= 29);
+            assert_eq!(
+                MultiTopic::inbound_topic(&bytes, flags).unwrap(),
+                Some(value.topic())
+            );
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(MultiTopic::inbound_topic(&trailing, flags).is_err());
+            assert!(MultiTopic::inbound_topic(&bytes[..bytes.len() - 1], flags).is_err());
+        }
+        let value = ConsensusMessage(u32::MAX);
+        let (bytes, flags) = {
+            let _flags = core::DecodeFlagsGuard::enter(requested);
+            norito::codec::encode_with_header_flags(&value)
+        };
+        assert_eq!(
+            ConsensusMessage::inbound_topic(&bytes, flags).unwrap(),
+            Some(Topic::Consensus)
+        );
+        assert!(ConsensusMessage::inbound_topic(&bytes[..bytes.len() - 1], flags).is_err());
+        let text = TestMessage("bounded classification before charged string decode".to_owned());
+        let (bytes, flags) = {
+            let _flags = core::DecodeFlagsGuard::enter(requested);
+            norito::codec::encode_with_header_flags(&text)
+        };
+        assert_eq!(
+            TestMessage::inbound_topic(&bytes, flags).unwrap(),
+            Some(Topic::Other)
+        );
+        assert!(TestMessage::inbound_topic(&[], flags).is_err());
+    }
+    assert!(MultiTopic::inbound_topic(&[0; 30], 0).is_err());
 }

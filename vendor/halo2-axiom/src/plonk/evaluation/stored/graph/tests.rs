@@ -1,11 +1,14 @@
 //! Retained-graph oracle, bounded reads and failure cleanup for both Pasta directions.
 
 use super::*;
+use crate::poly::stored_advice::{StoredLookupSideV1, StoredPolynomialRoleV1};
 use crate::{
     plonk::evaluation::CalculationInfo,
     poly::{
         EvaluationDomain,
-        stored_advice::{StoredAdviceErrorV1, StoredAdviceLayoutV1, StoredPolynomialBasisV1},
+        stored_advice::{
+            StoredPolynomialBasisV1, StoredPolynomialErrorV1, StoredPolynomialLayoutV1,
+        },
     },
 };
 use ff::{Field, PrimeField};
@@ -31,32 +34,32 @@ impl Drop for Window {
     }
 }
 struct Snapshot {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     values: Vec<[u8; 32]>,
     recording: Rc<Recording>,
     poisoned: bool,
 }
-impl StoredAdviceSnapshotV1 for Snapshot {
-    fn layout(&self) -> StoredAdviceLayoutV1 {
+impl StoredPolynomialSnapshotV1 for Snapshot {
+    fn layout(&self) -> StoredPolynomialLayoutV1 {
         self.layout
     }
     fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        consume: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         if self.poisoned {
-            return Err(StoredAdviceErrorV1::Poisoned);
+            return Err(StoredPolynomialErrorV1::Poisoned);
         }
         if expected != self.layout {
-            return Err(StoredAdviceErrorV1::Context);
+            return Err(StoredPolynomialErrorV1::Context);
         }
         let len = expected.chunk_scalar_count(chunk)?;
         assert!(!self.recording.busy.replace(true), "no nested reads");
         let _window = Window(Rc::clone(&self.recording));
         self.poisoned = true;
-        let location = (expected.column(), chunk);
+        let location = (expected.advice_coordinates().unwrap().0, chunk);
         self.recording.calls.borrow_mut().push(location);
         assert_ne!(
             self.recording.unwind.get(),
@@ -64,7 +67,7 @@ impl StoredAdviceSnapshotV1 for Snapshot {
             "injected read panic"
         );
         if self.recording.fail.get() == Some(location) {
-            return Err(StoredAdviceErrorV1::Storage);
+            return Err(StoredPolynomialErrorV1::Storage);
         }
         let start = chunk as usize * TILE;
         let mut encoded = self.values[start..start + len].to_vec();
@@ -77,9 +80,9 @@ impl StoredAdviceSnapshotV1 for Snapshot {
     }
     fn with_column<R>(
         &mut self,
-        _: StoredAdviceLayoutV1,
-        _: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredAdviceErrorV1>,
-    ) -> Result<R, StoredAdviceErrorV1> {
+        _: StoredPolynomialLayoutV1,
+        _: impl FnOnce(&[[u8; 32]]) -> Result<R, StoredPolynomialErrorV1>,
+    ) -> Result<R, StoredPolynomialErrorV1> {
         panic!("full column reads forbidden")
     }
 }
@@ -88,15 +91,14 @@ fn layout<F: StoredAssignmentFieldV1>(
     k: u32,
     column: u32,
     basis: StoredPolynomialBasisV1,
-) -> StoredAdviceLayoutV1 {
-    StoredAdviceLayoutV1::new(
+) -> StoredPolynomialLayoutV1 {
+    StoredPolynomialLayoutV1::new(
         [91; 32],
         10 + u64::from(column),
         F::STORED_FIELD,
         basis,
         k,
-        column,
-        0,
+        StoredPolynomialRoleV1::Advice { column, phase: 0 },
     )
     .unwrap()
 }
@@ -714,4 +716,48 @@ fn graph_final_target_and_reused_slot_order_match_existing_evaluator() {
         },
     )
     .unwrap();
+}
+
+fn reject_lookup_graph_advice<C: CurveAffine>()
+where
+    C::Scalar: StoredAssignmentFieldV1,
+{
+    let mut graph = GraphEvaluator::<C>::default();
+    graph.finish_building();
+    for side in [StoredLookupSideV1::Input, StoredLookupSideV1::Table] {
+        for basis in [
+            StoredPolynomialBasisV1::Lagrange,
+            StoredPolynomialBasisV1::CosetPart {
+                extension_log: 1,
+                part: 1,
+            },
+        ] {
+            let wrong = StoredPolynomialLayoutV1::new(
+                [91; 32],
+                10,
+                C::Scalar::STORED_FIELD,
+                basis,
+                9,
+                StoredPolynomialRoleV1::LookupCompressed { lookup: 0, side },
+            )
+            .unwrap();
+            let context = StoredExpressionContextV1 {
+                domain: wrong,
+                advice: &[wrong],
+                fixed_columns: 0,
+                instance_columns: 0,
+                challenge_phases: &[],
+            };
+            assert!(matches!(
+                prepare_stored_graph_v1(&graph, context, usize::MAX),
+                Err(StoredExpressionErrorV1::Context)
+            ));
+        }
+    }
+}
+
+#[test]
+fn both_pasta_graph_plans_reject_unused_self_consistent_lookup_advice_roles() {
+    reject_lookup_graph_advice::<EqAffine>();
+    reject_lookup_graph_advice::<EpAffine>();
 }

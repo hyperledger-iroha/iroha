@@ -265,6 +265,10 @@ STAGES = (
         "taira::tests::prepared_server_confirmation_rejects_malformed_status_without_resubmission",
     )),
     ("stopped owner runtime cleanup", (
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_binds_all_four_units_and_failed_installed_runtime",
+        "taira_public_reset::host::maintenance::tests::maintenance_flock_requires_one_exact_live_updater_owner",
+        "taira_public_reset::host::maintenance::tests::maintenance_process_identity_handles_names_and_rejects_dead_owner",
+        "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cohort_preflight_preserves_workers_until_every_slot_is_admitted",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_releases_only_empty_own_workers_and_replays",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_rejects_live_nested_forged_and_replaced_workers",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_keeps_barriers_when_process_absence_is_unproven",
@@ -447,8 +451,6 @@ CORE_STAGES += (("resolved validation and exact application ownership", (
     "sumeragi::v2_lifecycle_coordinator::work_registry::tests::cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks",
     "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::recovered_released_decision_apply_does_not_hide_current_source_with_changed_owner",
     "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::resolved_report_owner_tracks_terminal_and_statement_not_retry_encoding",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
-    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
     "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_body_keys_distinguish_prepare_and_decision_authority",
     "sumeragi::v2_lifecycle_coordinator::ledger::lifecycle_phase_codes_round_trip_without_aliases",
     "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::decision_body_retirement_preserves_current_winner_and_rejects_future_tags",
@@ -685,11 +687,53 @@ CORE_ADMISSION_STARTUP_STAGES += (("current reducer mode and fresh queue pressur
     "telemetry::tests::queue_age_pressure_is_not_capacity_backpressure",
     "telemetry::tests::fresh_queue_metrics_replace_stale_pressure_on_an_idle_node",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("nested failure closes admission without blocking its owner", (
+    "sumeragi::v2_effects::tests::executor_fatal_callbacks_close_before_outer_operation_releases",
+    "sumeragi::v2_worker::tests::service_failure_and_drop_finish_before_outer_operation_drains",
+    "sumeragi::v2_worker::tests::abnormal_io_worker_exit_finishes_before_outer_operation_drains",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("live Decision cleanup after an idle runtime turn", (
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::live_idle_decision_cleanup_reconciles_runner_frontier",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("recovered Decision Fetch and periodic runtime ownership", (
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_fences_later_ordinary_body_coordinates",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_body_owners_cold_reopen_under_durable_commit",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::active_prepare_validate_cold_reopen_after_timeout_and_durable_commit",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("cold Decision body publication and owner-open ledger recovery", (
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_commits_catalogs_and_marker_together",
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_partial_or_conflicting_catalogs",
+    "sumeragi::v2_effects::tests::recovered_decision_fetch_store_publication_rejects_overlapping_body_stage",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::cold_decision_fetch_publishes_first_network_body_through_completion_and_apply",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::owner_open_publication_chain_requires_every_exact_cas_and_is_consumed_once",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("authenticated retained body custody and proposal recovery", (
+    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_restores_work_without_voting_authority",
+    "sumeragi::v2_core::reducer::source_link_tests::retained_local_body_custody_coalesces_without_downgrading_or_revalidating",
+    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_rejects_foreign_identity_and_safety_debt_atomically",
+    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_recovery_respects_the_exact_durable_decision",
+    "sumeragi::v2_core::reducer::source_link_tests::retained_body_custody_preserves_normal_proposal_validation_vote_authority",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_restores_proposal_validate_without_wal_authority",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_coalesces_proposal_validate_with_retained_prepare_qc",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_cancels_timeout_superseded_body_before_replay",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_preserves_current_body_after_timeout_recovery",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::real_cold_owner_rejects_future_body_generation_without_retirement",
+)),)
 CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart recovery", (
     "sumeragi::v2_effects::tests::hybrid_proposal_fetch_completes_store_and_validate_with_exact_replay_root",
     "sumeragi::v2_effects::tests::proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates",
     "sumeragi::v2_runtime::tests::authenticated_proposal_store_retains_root_after_fetch_or_queued_completion_upgrade",
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_cancels_only_exact_proposal_child_below_installed_view",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_cancels_same_view_proposal_after_authenticated_decision_without_timeout",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_decision_proposal_cancellation_preserves_authentication_boundaries",
+    "sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+    "sumeragi::v2::tests::production_complete_tip_activates_recovered_unapplied_decision",
+    "sumeragi::v2::tests::complete_tip_decision_activation_requires_exact_replayed_wal",
+    "sumeragi::v2::tests::complete_tip_decision_activation_rejects_incomplete_pending_and_applied_state",
+    "sumeragi::v2::tests::complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cache",
+    "sumeragi::v2_core::refinement::tests::recovered_decided_successor_kernel_keeps_canonical_parent_and_commit_frontier_distinct",
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_current_and_future_proposal_cancellation",
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_proposal_without_authenticated_installed_timeout",
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_rejects_foreign_installed_timeout_frontier",
@@ -699,6 +743,22 @@ CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_preserves_row_and_skips_output_service",
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_waits_for_older_ready_output",
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_failure_retains_ready_owner_without_output",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("bounded fair-ingress ownership projection work", (
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("same-round timeout recovery and bounded frontier reads", (
+    "sumeragi::v2::tests::same_round_timeout_cancellation_uses_exact_durable_proposal_intent",
+    "sumeragi::v2::tests::same_round_timeout_cold_owner_cancels_exact_retained_proposal",
+    "sumeragi::lane_planner::tests::canonical_frontier_reads_scale_with_distinct_routes_including_absence",
+    "sumeragi::lane_planner::tests::canonical_frontier_reads_preserve_first_storage_failure_and_stop",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("terminal validation history and shared outcome recovery", (
+    "sumeragi::v2::tests::same_round_timeout_cold_owner_preserves_retired_terminal_validation_history",
+    "sumeragi::v2_body_store::tests::terminal_validate_shared_outcomes_keep_one_latest_retry_origin",
+    "sumeragi::v2_body_store::tests::retired_terminal_claim_comparison_never_promotes_marker_authority",
 )),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
@@ -1920,8 +1980,8 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # Build early library/HTTP, network and CLI test harnesses in one Cargo graph.
     # A separate CLI test build after the production node build changes the
     # package/dev-dependency feature union and recompiles shared dependencies.
-    # Run CLI contracts first so deployment argv defects surface before the
-    # expensive consensus regressions, without changing the combined Cargo graph.
+    # Run startup recovery first, then CLI contracts, so mandatory restart
+    # failures surface before unrelated groups without changing the Cargo graph.
     # Run every independent immutable test copy before starting
     # the shipping binary graph or four-peer fixture. Aggregate test failures;
     # missing tests, artifact custody failures and other infrastructure errors
@@ -1965,18 +2025,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # it available to a later attempt whose artifacts happen to match.
                 update_independent_checks(None)
             # Startup fixtures are part of the same canonical census/checkpoint, but
-            # execute before long consensus/proof groups. Retain each immutable copy
+            # execute before CLI and long consensus/proof groups. Retain each immutable copy
             # until its remaining stages finish; no test runs twice or gains a skip flag.
             startup = {"core": CORE_STARTUP_STAGES, "daemon": DAEMON_STARTUP_STAGES, "torii-unit": TORII_STARTUP_STAGES}
             preflight = tuple((name, tuple(stage for stage in stages if stage in startup.get(name, ())))
                               for name, stages in early_stages)
-            if STAGES:
-                if not reuse_independent:
-                    try:
-                        run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds)
-                    except SelectedRegressionFailures as error:
-                        failures.extend(error.failures)
-                harnesses.release("cli")
             if not reuse_independent:
                 startup_failures = []
                 for name, stages in preflight:
@@ -1988,7 +2041,14 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # Collect all startup groups, then avoid expensive unrelated tests
                 # when a restart's mandatory storage or policy boundary already failed.
                 if startup_failures:
-                    raise SelectedRegressionFailures(failures + startup_failures)
+                    raise SelectedRegressionFailures(startup_failures)
+            if STAGES:
+                if not reuse_independent:
+                    try:
+                        run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds)
+                    except SelectedRegressionFailures as error:
+                        failures.extend(error.failures)
+                harnesses.release("cli")
             for name, stages in early_stages:
                 remaining = tuple(stage for stage in stages if stage not in startup.get(name, ()))
                 if not reuse_independent and remaining:

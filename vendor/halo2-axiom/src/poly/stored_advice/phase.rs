@@ -27,8 +27,9 @@ use halo2curves::CurveAffine;
 use rand_core::RngCore;
 
 use super::{
-    STORED_MAX_K_V1, STORED_SCALARS_PER_CHUNK_V1, StoredAdviceErrorV1, StoredAdviceLayoutV1,
-    StoredAdviceSnapshotV1, StoredAdviceWriterV1, StoredPastaFieldV1, StoredPolynomialBasisV1,
+    STORED_MAX_K_V1, STORED_SCALARS_PER_CHUNK_V1, StoredPastaFieldV1, StoredPolynomialBasisV1,
+    StoredPolynomialErrorV1, StoredPolynomialLayoutV1, StoredPolynomialRoleV1,
+    StoredPolynomialSnapshotV1, StoredPolynomialWriterV1,
     assignment::{StoredAdviceAssignmentV1, StoredAssignmentErrorV1, StoredAssignmentFieldV1},
 };
 use crate::{
@@ -49,7 +50,7 @@ pub(crate) enum StoredPhaseErrorV1 {
     /// A per-column assignment failed.
     Assignment(StoredAssignmentErrorV1),
     /// An authenticated backend operation failed.
-    Store(StoredAdviceErrorV1),
+    Store(StoredPolynomialErrorV1),
     /// A previous failed or unwound assignment or completed-column read destroyed this owner.
     Poisoned,
     /// A reference-returning assignment was refused.
@@ -66,8 +67,8 @@ impl fmt::Display for StoredPhaseErrorV1 {
     }
 }
 impl std::error::Error for StoredPhaseErrorV1 {}
-impl From<StoredAdviceErrorV1> for StoredPhaseErrorV1 {
-    fn from(error: StoredAdviceErrorV1) -> Self {
+impl From<StoredPolynomialErrorV1> for StoredPhaseErrorV1 {
+    fn from(error: StoredPolynomialErrorV1) -> Self {
         Self::Store(error)
     }
 }
@@ -81,7 +82,7 @@ fn reserved<T>(count: usize) -> Result<Vec<T>, StoredPhaseErrorV1> {
     let mut values = Vec::new();
     values
         .try_reserve_exact(count)
-        .map_err(|_| StoredAdviceErrorV1::Allocation)?;
+        .map_err(|_| StoredPolynomialErrorV1::Allocation)?;
     Ok(values)
 }
 
@@ -207,6 +208,8 @@ impl<F: StoredAssignmentFieldV1> Drop for SecretBlind<F> {
         compiler_fence(Ordering::SeqCst);
         #[cfg(test)]
         tests::record_blind_drop(self.0.0);
+        #[cfg(test)]
+        conversion::retirement::record_blind_clear(self.0.0 == F::ZERO);
     }
 }
 
@@ -238,7 +241,7 @@ struct StoredColumn<C: CurveAffine, S>
 where
     C::Scalar: StoredAssignmentFieldV1,
 {
-    layout: StoredAdviceLayoutV1,
+    layout: StoredPolynomialLayoutV1,
     snapshot: S,
     blind: SecretBlind<C::Scalar>,
 }
@@ -255,7 +258,7 @@ where
     challenges: Vec<Option<C::Scalar>>,
 }
 
-struct Active<'params, C: CurveAffine, W: StoredAdviceWriterV1>
+struct Active<'params, C: CurveAffine, W: StoredPolynomialWriterV1>
 where
     C::Scalar: StoredAssignmentFieldV1,
 {
@@ -267,7 +270,7 @@ where
 ///
 /// No general synthesis callback is accepted. Callers supply only known values from a reviewed
 /// producer and propagate errors. A caught panic also leaves this owner poisoned.
-pub(crate) struct StoredPhaseAssignmentsV1<'params, C: CurveAffine, W: StoredAdviceWriterV1>
+pub(crate) struct StoredPhaseAssignmentsV1<'params, C: CurveAffine, W: StoredPolynomialWriterV1>
 where
     C::Scalar: StoredAssignmentFieldV1,
 {
@@ -310,7 +313,7 @@ impl<'params, C, W> StoredPhaseAssignmentsV1<'params, C, W>
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    W: StoredAdviceWriterV1,
+    W: StoredPolynomialWriterV1,
 {
     /// Begin phase zero from an admitted schedule and exact ordered writer set.
     ///
@@ -359,8 +362,7 @@ where
                 || layout.field() != session.plan.field
                 || layout.k() != session.plan.k
                 || layout.basis() != StoredPolynomialBasisV1::Lagrange
-                || layout.phase() as usize != session.next_phase
-                || layout.column() as usize != *column
+                || !matches!(layout.role(), StoredPolynomialRoleV1::Advice { column: actual, phase } if actual as usize == *column && phase as usize == session.next_phase)
                 || session
                     .proof_context
                     .is_some_and(|context| context != layout.proof_context)
@@ -468,24 +470,24 @@ where
             let mut polynomial = GuardedPolynomial::<C::Scalar>::zeroed(expected.scalar_count())?;
             for chunk in 0..expected.chunk_count() as u64 {
                 if snapshot.layout() != expected {
-                    return Err(StoredAdviceErrorV1::Context.into());
+                    return Err(StoredPolynomialErrorV1::Context.into());
                 }
                 let count = expected.chunk_scalar_count(chunk)?;
                 let start = chunk as usize * STORED_SCALARS_PER_CHUNK_V1;
                 snapshot.with_chunk(expected, chunk, |encoded| {
                     if encoded.len() != count {
-                        return Err(StoredAdviceErrorV1::Encoding);
+                        return Err(StoredPolynomialErrorV1::Encoding);
                     }
                     for (index, value) in encoded.iter().enumerate() {
                         polynomial.0.values[start + index] =
                             Option::<C::Scalar>::from(C::Scalar::from_repr(*value))
-                                .ok_or(StoredAdviceErrorV1::Encoding)?;
+                                .ok_or(StoredPolynomialErrorV1::Encoding)?;
                     }
                     Ok(())
                 })?;
             }
             if snapshot.layout() != expected {
-                return Err(StoredAdviceErrorV1::Context.into());
+                return Err(StoredPolynomialErrorV1::Context.into());
             }
             projective.push(params.commit_lagrange(&polynomial.0, blind.0));
             // The polynomial guard drops before the next snapshot materializes. MSM scratch
@@ -510,7 +512,7 @@ impl<'params, C, S> PreparedStoredPhaseV1<'params, C, S>
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    S: StoredAdviceSnapshotV1,
+    S: StoredPolynomialSnapshotV1,
 {
     /// Write all advice points before squeezing any phase challenge. On an I/O error the
     /// owner is consumed, no challenge is squeezed, and the caller must discard the transcript.
@@ -535,7 +537,7 @@ where
                 .iter()
                 .zip(&phase.columns)
                 .any(|(column, index)| {
-                    column.layout.column() as usize != *index
+                    !matches!(column.layout.role(), StoredPolynomialRoleV1::Advice { column: actual, phase: actual_phase } if actual as usize == *index && actual_phase as usize == self.session.next_phase)
                         || column.snapshot.layout() != column.layout
                 })
         {
@@ -562,7 +564,7 @@ impl<'params, C, S> CommittedStoredPhaseV1<'params, C, S>
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    S: StoredAdviceSnapshotV1,
+    S: StoredPolynomialSnapshotV1,
 {
     /// Return a challenge only after its authoritative phase has successfully absorbed.
     pub(crate) fn challenge(&self, index: usize) -> Option<C::Scalar> {
@@ -609,8 +611,7 @@ where
                 let column = columns.next().ok_or(StoredPhaseErrorV1::Admission)?;
                 let layout = column.layout;
                 if *index >= plan.columns
-                    || layout.column() as usize != *index
-                    || layout.phase() as usize != phase_index
+                    || !matches!(layout.role(), StoredPolynomialRoleV1::Advice { column: actual, phase } if actual as usize == *index && phase as usize == phase_index)
                     || layout.field() != plan.field
                     || layout.k() != plan.k
                     || layout.basis() != StoredPolynomialBasisV1::Lagrange
@@ -634,12 +635,25 @@ where
         // copies a blind or allocates storage proportional to the witness scalar count.
         session
             .columns
-            .sort_unstable_by_key(|column| column.layout.column());
+            .sort_unstable_by_key(|column| match column.layout.role() {
+                StoredPolynomialRoleV1::Advice { column, .. } => column,
+                StoredPolynomialRoleV1::LookupCompressed { .. }
+                | StoredPolynomialRoleV1::LookupSorted { .. }
+                | StoredPolynomialRoleV1::LookupLeftoverTable { .. }
+                | StoredPolynomialRoleV1::LookupPermuted { .. }
+                | StoredPolynomialRoleV1::CopyPermutationProduct { .. }
+                | StoredPolynomialRoleV1::LookupProduct { .. }
+                | StoredPolynomialRoleV1::Instance { .. }
+                | StoredPolynomialRoleV1::VanishingRandom
+                | StoredPolynomialRoleV1::QuotientNumerator
+                | StoredPolynomialRoleV1::QuotientAliasedPart { .. }
+                | StoredPolynomialRoleV1::QuotientPiece { .. } => u32::MAX,
+            });
         if session
             .columns
             .iter()
             .enumerate()
-            .any(|(index, column)| column.layout.column() as usize != index)
+            .any(|(index, column)| !matches!(column.layout.role(), StoredPolynomialRoleV1::Advice { column, .. } if column as usize == index))
         {
             return Err(StoredPhaseErrorV1::Admission);
         }
@@ -655,7 +669,7 @@ where
         writers: Vec<W>,
     ) -> Result<StoredPhaseAssignmentsV1<'params, C, W>, StoredPhaseErrorV1>
     where
-        W: StoredAdviceWriterV1<Snapshot = S>,
+        W: StoredPolynomialWriterV1<Snapshot = S>,
     {
         StoredPhaseAssignmentsV1::begin_session(self.session, writers)
     }
@@ -665,7 +679,7 @@ impl<'params, C, S> CompleteStoredAdviceV1<'params, C, S>
 where
     C: CurveAffine,
     C::Scalar: StoredAssignmentFieldV1,
-    S: StoredAdviceSnapshotV1,
+    S: StoredPolynomialSnapshotV1,
 {
     fn session(&self) -> Result<&Session<'params, C, S>, StoredPhaseErrorV1> {
         self.session.as_ref().ok_or(StoredPhaseErrorV1::Poisoned)
@@ -684,7 +698,8 @@ where
     /// Iterate immutable layouts in global advice-column order, independent of phase order.
     pub(crate) fn layouts(
         &self,
-    ) -> Result<impl ExactSizeIterator<Item = StoredAdviceLayoutV1> + '_, StoredPhaseErrorV1> {
+    ) -> Result<impl ExactSizeIterator<Item = StoredPolynomialLayoutV1> + '_, StoredPhaseErrorV1>
+    {
         Ok(self.session()?.columns.iter().map(|column| column.layout))
     }
 
@@ -711,17 +726,17 @@ where
     /// this method cannot roll back side effects performed by a callback.
     pub(crate) fn with_chunk<R>(
         &mut self,
-        expected: StoredAdviceLayoutV1,
+        expected: StoredPolynomialLayoutV1,
         chunk: u64,
-        consume: impl FnOnce(&[[u8; 32]], Blind<C::Scalar>) -> Result<R, StoredAdviceErrorV1>,
+        consume: impl FnOnce(&[[u8; 32]], Blind<C::Scalar>) -> Result<R, StoredPolynomialErrorV1>,
     ) -> Result<R, StoredPhaseErrorV1> {
         let mut session = self.session.take().ok_or(StoredPhaseErrorV1::Poisoned)?;
         let column = session
             .columns
-            .get_mut(expected.column() as usize)
+            .get_mut(expected.advice_coordinates()?.0 as usize)
             .ok_or(StoredPhaseErrorV1::Admission)?;
         if column.layout != expected || column.snapshot.layout() != expected {
-            return Err(StoredAdviceErrorV1::Context.into());
+            return Err(StoredPolynomialErrorV1::Context.into());
         }
         let count = expected.chunk_scalar_count(chunk)?;
         let result = column.snapshot.with_chunk(expected, chunk, |encoded| {
@@ -730,17 +745,25 @@ where
                     .iter()
                     .any(|value| !expected.field().is_canonical(value))
             {
-                return Err(StoredAdviceErrorV1::Encoding);
+                return Err(StoredPolynomialErrorV1::Encoding);
             }
             consume(encoded, column.blind.0)
         })?;
         if column.snapshot.layout() != expected {
-            return Err(StoredAdviceErrorV1::Context.into());
+            return Err(StoredPolynomialErrorV1::Context.into());
         }
         self.session = Some(session);
         Ok(result)
     }
 }
+
+mod conversion;
+pub(crate) use conversion::{
+    CoefficientStoredAdviceV1,
+    retirement::{CoefficientHandoffAllocationV1, CoefficientOnlyStoredAdviceV1},
+};
+
+mod evaluation;
 
 /// Strict internal single-phase bridge; complete producer admission is a separate boundary.
 pub(crate) mod synthesis;

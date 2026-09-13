@@ -16,7 +16,8 @@ use crate::{
     smartcontracts::{
         code,
         isi::settlement::{
-            admission_validate_dvp, admission_validate_fx_corridor, admission_validate_pvp,
+            admission_validate_atomic, admission_validate_dvp, admission_validate_fx_corridor,
+            admission_validate_pvp,
         },
         ivm::{
             cache::{ExecutableProgramSummary, GenericProgramSummary, IvmCache, ProgramSummary},
@@ -35,7 +36,7 @@ use iroha_data_model::{
     executor::{IvmAdmissionError, ManifestCodeHashMismatchInfo},
     isi::{
         InstructionBox,
-        settlement::{DvpIsi, PvpIsi, SettleFxCorridor, SettlementInstructionBox},
+        settlement::{DvpIsi, PvpIsi, SettleAtomic, SettleFxCorridor, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
@@ -1856,7 +1857,10 @@ impl TxOverlay {
                     }
                     let effect_authority =
                         execution_context.map_or(authority, |context| &context.authority);
-                    if let Some(dvp) = instr.as_any().downcast_ref::<DvpIsi>() {
+                    if let Some(atomic) = instr.as_any().downcast_ref::<SettleAtomic>() {
+                        admission_validate_atomic(effect_authority, state_tx, atomic)
+                            .map_err(ValidationFail::from)?;
+                    } else if let Some(dvp) = instr.as_any().downcast_ref::<DvpIsi>() {
                         admission_validate_dvp(effect_authority, state_tx, dvp)
                             .map_err(ValidationFail::from)?;
                     } else if let Some(pvp) = instr.as_any().downcast_ref::<PvpIsi>() {
@@ -1869,6 +1873,10 @@ impl TxOverlay {
                         instr.as_any().downcast_ref::<SettlementInstructionBox>()
                     {
                         match settlement {
+                            SettlementInstructionBox::Atomic(atomic) => {
+                                admission_validate_atomic(effect_authority, state_tx, atomic)
+                                    .map_err(ValidationFail::from)?;
+                            }
                             SettlementInstructionBox::Dvp(dvp) => {
                                 admission_validate_dvp(effect_authority, state_tx, dvp)
                                     .map_err(ValidationFail::from)?;
@@ -11221,3 +11229,7 @@ mod trace_frame_identity_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "overlay_atomic_settlement_tests.rs"]
+mod atomic_settlement_overlay_tests;

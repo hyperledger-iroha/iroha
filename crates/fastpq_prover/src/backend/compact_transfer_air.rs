@@ -8,19 +8,32 @@
 //! The caller must establish the public transfer arithmetic, identities, native
 //! leaf hashes and collision-resolved paths, and authenticate external roots.
 //!
+//! The complete arithmetic evaluator accepts canonical base or quartic-extension
+//! points and cells, preserving all 923 slots. The existing compact proof still
+//! uses its fixed base-field openings and unchanged transcript/profile.
 //! Verification evaluates only the two complete openings and bounded public
 //! polynomials. It never constructs a witness, FFT or LDE. Prover preparation
 //! expands exactly 49 fixed public columns once and shares those immutable LDEs
 //! plus the periodic phase/hash masks across worker-local arithmetic scratch.
-//! Fixed hash numerators have degree <3N and SMT numerators degree <2N. A valid
-//! combined numerator is divisible by X^N-1, with quotient degree <2N, as required
-//! by the private protocol's independently proved trace/quotient degree bounds.
+//! Under the existing unmasked column bound <N, hash numerators have degree <3N
+//! and SMT numerators degree <2N. Exact division of a vanishing combined numerator
+//! then yields quotient degree <2N. Explicit masked column degrees require the
+//! separate full-polynomial degree calculation and new degree authentication.
 //!
 //! TODO: Qualify the complete protocol's soundness and public resource envelope
 //! before changing production admission. This internal prototype proves one
 //! declared two-update SMT statement; it changes no query/profile/default limit
 //! and does not replace the production verifier's mandatory replay.
 
+#[cfg(test)]
+use super::{
+    air_degree::{AirDegreeBounds, PolynomialDegree},
+    compact_hash_quotient::PolynomialHashEvaluator,
+    masked_quotient::{checked_add, checked_mul, transform_work},
+    polynomial_transform::{PolynomialDomain, PolynomialLanes, reserved},
+};
+#[cfg(test)]
+use crate::field::GoldilocksFp4V1;
 use fastpq_isi::FASTPQ_FINAL_V1;
 use norito::{NoritoSerialize, codec::Encode as NoritoEncode};
 
@@ -28,12 +41,13 @@ use super::{
     compact_hash_quotient::{CompactHashQuotient, HashNumerators, LOCAL_SLOTS, TRANSITION_SLOTS},
     compact_protocol::{FixedAir, FixedAirSchema},
     compact_smt_quotient::{CompactSmtFixedColumns, CompactSmtQuotient, RESIDUE_COUNT},
+    polynomial_field::PolynomialField,
 };
 use crate::{
     Error, Result,
     gadgets::{
         compact_smt_air::{COLUMN_COUNT, DigestLimbs, PHYSICAL_ROW_COUNT, PublicStatement},
-        compact_trace_columns::decode_smt_row,
+        compact_trace_columns::{decode_smt_row, smt_row_from_cells},
     },
     proof::VerifyLimits,
 };
@@ -158,6 +172,167 @@ impl CompactTransferAir {
         Ok(bytes)
     }
 
+    /// Evaluate all 923 fixed slots at the exact canonical field point.
+    ///
+    /// Current and next values are evaluations at x and g*x supplied by the
+    /// surrounding polynomial protocol. This arithmetic authenticates neither
+    /// those evaluations nor a proof. All dimensions and coefficients are
+    /// checked before constructing public fixed tables or evaluating selectors.
+    pub(super) fn evaluate_at<F: PolynomialField>(
+        &self,
+        point: F,
+        current: &[F],
+        next: &[F],
+    ) -> Result<Vec<F>> {
+        let current: &[F; COLUMN_COUNT] = current
+            .try_into()
+            .map_err(|_| shape("compact_smt_opening needs exactly 342 cells"))?;
+        let next: &[F; COLUMN_COUNT] = next
+            .try_into()
+            .map_err(|_| shape("compact_smt_opening needs exactly 342 cells"))?;
+        for row in [current, next] {
+            for (column, &value) in row.iter().enumerate() {
+                value.validate("compact_smt_opening", &[column])?;
+            }
+        }
+        point.validate("fixed_schedule_evaluation_point", &[])?;
+        let current = smt_row_from_cells(current);
+        let next = smt_row_from_cells(next);
+        let hash = self.hash.evaluate(point, &current.hash, &next.hash)?;
+        let smt = CompactSmtQuotient::new(&FASTPQ_FINAL_V1, &self.fixed)?;
+        let fixed = smt.evaluate_fixed(point)?;
+        Ok(combine(hash, smt.residues(&fixed, &current, &next)))
+    }
+
+    /// Bound all full polynomial numerators under explicit per-column degrees.
+    ///
+    /// Bounds are exclusive and must be positive for all 342 columns. They are
+    /// caller obligations, not authenticated by this arithmetic. In particular,
+    /// a padded coefficient extent does not prove a tighter column degree.
+    /// Rotation by the nonzero trace generator preserves these degrees. This
+    /// follows the exact compiled hash and SMT slot order without evaluating a
+    /// trace, selecting mask entropy or interpolating subgroup residues.
+    #[cfg(test)]
+    pub(super) fn numerator_degree_bounds(&self, columns: &[usize]) -> Result<AirDegreeBounds> {
+        let columns: &[usize; COLUMN_COUNT] = columns
+            .try_into()
+            .map_err(|_| shape("compact degree declaration needs exactly 342 columns"))?;
+        if columns.contains(&0) {
+            return Err(shape("compact column degree bounds must be positive"));
+        }
+        let columns = columns.map(PolynomialDegree::from_exclusive);
+        let row = smt_row_from_cells(&columns);
+        let hash = self.hash.numerator_degree_bounds(
+            &crate::gadgets::compact_trace_columns::hash_row_cells(&row.hash),
+        )?;
+        let smt = self.fixed.numerator_degree_bounds(&columns)?;
+        AirDegreeBounds::new(PHYSICAL_ROW_COUNT, combine(hash, smt))
+    }
+
+    /// Bound the actual fixed-column/cycle preparation without allocating it.
+    #[cfg(test)]
+    pub(super) fn polynomial_preparation_cost(
+        &self,
+        domain: PolynomialDomain,
+    ) -> Result<PolynomialPreparationCost> {
+        domain.numerator_rotation(PHYSICAL_ROW_COUNT)?;
+        let cycle = domain.rows() / (PHYSICAL_ROW_COUNT / PHYSICAL_HASH_ROWS);
+        check_limit("max_compact_polynomial_phase_cycle", cycle, MASK_CYCLE_ROWS)?;
+        let graph = self.hash.metrics();
+        let fixed = checked_mul(FIXED_COLUMN_COUNT, domain.rows())?;
+        let phases = checked_mul(cycle, PHYSICAL_HASH_ROWS)?;
+        let masks = checked_mul(cycle, graph.selector_masks)?;
+        // Retained fixed lanes, public phases/masks, private graph scratch, one
+        // temporary public coefficient conversion and selector/mask scratch.
+        let cells = checked_add(
+            checked_add(fixed, phases)?,
+            checked_add(masks, graph.nodes)?,
+        )?;
+        let transient = checked_add(
+            PHYSICAL_ROW_COUNT,
+            checked_add(2 * PHYSICAL_HASH_ROWS, graph.selector_masks)?,
+        )?;
+        let payload_bytes = checked_add(
+            checked_mul(checked_add(cells, transient)?, GoldilocksFp4V1::BYTES)?,
+            checked_mul(
+                PHYSICAL_ROW_COUNT + FIXED_COLUMN_COUNT * FIXED_ROW_COUNT,
+                core::mem::size_of::<u64>(),
+            )?,
+        )?;
+        let fixed_work = checked_mul(
+            FIXED_COLUMN_COUNT,
+            checked_add(
+                transform_work(PHYSICAL_ROW_COUNT)?,
+                transform_work(domain.rows())?,
+            )?,
+        )?;
+        // Each selector phase uses at most eight field operations after one
+        // bounded inversion/exponentiation. Prefix sums and every mask run are
+        // counted separately; this is structural work, not CPU instructions.
+        let phase_work = checked_add(
+            checked_add(
+                9 * PHYSICAL_HASH_ROWS + 4096,
+                checked_mul(3, graph.selector_runs)?,
+            )?,
+            graph.selector_masks,
+        )?;
+        let work_units = checked_add(
+            checked_add(fixed_work, checked_mul(cycle, phase_work)?)?,
+            graph.nodes,
+        )?;
+        // The direct SMT owner has 243 slots; its largest port slot contains a
+        // 32-bit pack (96 field operations) plus selector/port arithmetic. 256
+        // operations per slot also cover all shorter equations and writes. The
+        // executing selector sum and complete canonical opening checks are extra.
+        // Do not substitute a CSE graph size for the direct SMT evaluator's work.
+        let point_work_units = checked_add(
+            checked_add(graph.nodes, checked_mul(2, graph.output_terms)?)?,
+            RESIDUE_COUNT * 256
+                + 24 * COLUMN_COUNT
+                + 5 * (PHYSICAL_HASH_ROWS + FIXED_COLUMN_COUNT)
+                + CONSTRAINT_COUNT,
+        )?;
+        Ok(PolynomialPreparationCost {
+            payload_bytes,
+            work_units,
+            point_work_units,
+        })
+    }
+
+    /// Prepare actual public fixed polynomials on the checked full Fp4 coset.
+    #[cfg(test)]
+    pub(super) fn prepare_polynomial_evaluator(
+        &self,
+        domain: PolynomialDomain,
+    ) -> Result<PreparedPolynomialAir<'_>> {
+        // The outer masked plan applies its explicit limits before reaching here.
+        // Rechecking geometry keeps this internal preparation independently bound.
+        self.polynomial_preparation_cost(domain)?;
+        let (phases, hash) = self.hash.polynomial_evaluator(domain)?;
+        let mut fixed = reserved(FIXED_COLUMN_COUNT)?;
+        let planner = Planner::new(&FASTPQ_FINAL_V1);
+        for column in 0..FIXED_COLUMN_COUNT {
+            // These coefficients are public statement data, never witness or mask
+            // storage. The existing N-point base IFFT is their interpolation owner.
+            let mut base = reserved(PHYSICAL_ROW_COUNT)?;
+            base.resize(PHYSICAL_ROW_COUNT, 0);
+            for (&position, row) in self.fixed.positions().iter().zip(self.fixed.rows()) {
+                base[position] = row[column];
+            }
+            planner.ifft_columns(core::slice::from_mut(&mut base));
+            let mut coefficients = reserved(PHYSICAL_ROW_COUNT)?;
+            coefficients.extend(base.iter().copied().map(GoldilocksFp4V1::embed_base));
+            fixed.push(domain.evaluate(&coefficients, PHYSICAL_ROW_COUNT)?);
+        }
+        Ok(PreparedPolynomialAir {
+            domain,
+            smt: CompactSmtQuotient::new(&FASTPQ_FINAL_V1, &self.fixed)?,
+            phases,
+            fixed,
+            hash,
+        })
+    }
+
     fn prepare(&self) -> Result<PreparedTransferAir<'_>> {
         let lde_rows = PHYSICAL_ROW_COUNT
             .checked_mul(FASTPQ_FINAL_V1.fri.blowup_factor as usize)
@@ -241,12 +416,7 @@ impl FixedAir for CompactTransferAir {
     }
 
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
-        let current = decode_smt_row(current)?;
-        let next = decode_smt_row(next)?;
-        let hash = self.hash.evaluate(point, &current.hash, &next.hash)?;
-        let smt = CompactSmtQuotient::new(&FASTPQ_FINAL_V1, &self.fixed)?;
-        let fixed = smt.evaluate_fixed(point)?;
-        Ok(combine(hash, smt.residues(&fixed, &current, &next)))
+        self.evaluate_at(point, current, next)
     }
 
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
@@ -265,7 +435,7 @@ struct PreparedTransferAir<'a> {
 }
 
 impl PreparedTransferAir<'_> {
-    fn fixed_at(&self, index: usize, point: u64) -> Result<CompactSmtFixedValues> {
+    fn fixed_at(&self, index: usize, point: u64) -> Result<CompactSmtFixedValues<u64>> {
         if index >= LDE_ROWS {
             return Err(Error::QueryIndexOutOfRange {
                 index,
@@ -308,12 +478,87 @@ impl PreparedAir for PreparedTransferAir<'_> {
     }
 }
 
-fn combine(hash: HashNumerators<u64>, smt: [u64; RESIDUE_COUNT]) -> Vec<u64> {
-    let mut result = Vec::with_capacity(CONSTRAINT_COUNT);
-    result.extend(hash.local);
-    result.extend(hash.transitions);
-    result.extend(smt);
-    result
+/// Public geometry-only costs; no witness or mask values are retained.
+#[cfg(test)]
+pub(super) struct PolynomialPreparationCost {
+    pub(super) payload_bytes: usize,
+    pub(super) work_units: usize,
+    pub(super) point_work_units: usize,
+}
+
+/// Exact public polynomial caches plus a guarded private hash scratch buffer.
+#[cfg(test)]
+pub(super) struct PreparedPolynomialAir<'a> {
+    domain: PolynomialDomain,
+    smt: CompactSmtQuotient<'a>,
+    phases: Vec<[GoldilocksFp4V1; PHYSICAL_HASH_ROWS]>,
+    fixed: Vec<PolynomialLanes>,
+    hash: PolynomialHashEvaluator<'a>,
+}
+
+#[cfg(test)]
+impl PreparedPolynomialAir<'_> {
+    /// Write every actual AIR slot into the caller's fixed guarded output slice.
+    pub(super) fn evaluate_into(
+        &mut self,
+        index: usize,
+        current: &[GoldilocksFp4V1],
+        next: &[GoldilocksFp4V1],
+        output: &mut [GoldilocksFp4V1],
+    ) -> Result<()> {
+        if index >= self.domain.rows() {
+            return Err(Error::QueryIndexOutOfRange {
+                index,
+                len: self.domain.rows(),
+            });
+        }
+        let current: &[GoldilocksFp4V1; COLUMN_COUNT] = current
+            .try_into()
+            .map_err(|_| shape("polynomial AIR needs exactly 342 current cells"))?;
+        let next: &[GoldilocksFp4V1; COLUMN_COUNT] = next
+            .try_into()
+            .map_err(|_| shape("polynomial AIR needs exactly 342 next cells"))?;
+        if output.len() != CONSTRAINT_COUNT {
+            return Err(shape("polynomial AIR output needs exactly 923 slots"));
+        }
+        for row in [current, next] {
+            for (column, &value) in row.iter().enumerate() {
+                value.validate("polynomial_air_opening", &[column])?;
+            }
+        }
+        let mut sparse = [GoldilocksFp4V1::ZERO; FIXED_COLUMN_COUNT];
+        for (value, column) in sparse.iter_mut().zip(&self.fixed) {
+            *value = column.value(index)?;
+        }
+        let fixed = CompactSmtFixedValues::new(self.phases[index % self.phases.len()], sparse)?;
+        let current = smt_row_from_cells(current);
+        let next = smt_row_from_cells(next);
+        let hash = self.hash.evaluate(index, &current.hash, &next.hash)?;
+        combine_into(hash, self.smt.residues(&fixed, &current, &next), output)
+    }
+}
+
+fn combined_slots<F>(hash: HashNumerators<F>, smt: [F; RESIDUE_COUNT]) -> impl Iterator<Item = F> {
+    hash.local.into_iter().chain(hash.transitions).chain(smt)
+}
+
+fn combine<F>(hash: HashNumerators<F>, smt: [F; RESIDUE_COUNT]) -> Vec<F> {
+    combined_slots(hash, smt).collect()
+}
+
+#[cfg(test)]
+fn combine_into<F>(
+    hash: HashNumerators<F>,
+    smt: [F; RESIDUE_COUNT],
+    output: &mut [F],
+) -> Result<()> {
+    if output.len() != CONSTRAINT_COUNT {
+        return Err(shape("polynomial AIR output needs exactly 923 slots"));
+    }
+    for (output, value) in output.iter_mut().zip(combined_slots(hash, smt)) {
+        *output = value;
+    }
+    Ok(())
 }
 
 fn checked_matrix_bytes(columns: usize, rows: usize, maximum: usize) -> Result<usize> {
@@ -686,6 +931,233 @@ mod tests {
         (statement, witness)
     }
 
+    #[test]
+    fn polynomial_slot_writer_preserves_all_923_positions() {
+        let hash = HashNumerators {
+            local: core::array::from_fn(|i| i),
+            transitions: core::array::from_fn(|i| LOCAL_SLOTS + i),
+        };
+        let smt = core::array::from_fn(|i| LOCAL_SLOTS + TRANSITION_SLOTS + i);
+        let mut output = [usize::MAX; CONSTRAINT_COUNT];
+        combine_into(hash, smt, &mut output).unwrap();
+        assert_eq!(output, core::array::from_fn(|i| i));
+        let hash = HashNumerators {
+            local: [1; LOCAL_SLOTS],
+            transitions: [2; TRANSITION_SLOTS],
+        };
+        let mut short = [7; CONSTRAINT_COUNT - 1];
+        assert!(combine_into(hash, [3; RESIDUE_COUNT], &mut short).is_err());
+        assert_eq!(short, [7; CONSTRAINT_COUNT - 1]);
+    }
+
+    #[test]
+    #[ignore = "explicit complete Fp4 public polynomial preparation and actual AIR point oracle"]
+    fn full_polynomial_preparation_matches_existing_air_at_cycle_boundaries() {
+        let air = CompactTransferAir::new(&statement(), None).unwrap();
+        let domain = PolynomialDomain::new(
+            262_144,
+            GoldilocksFp4V1::new([2, 3, 5, 7]).unwrap(),
+            524_288,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        let cost = air.polynomial_preparation_cost(domain).unwrap();
+        assert!(cost.payload_bytes > FIXED_COLUMN_COUNT * domain.rows() * GoldilocksFp4V1::BYTES);
+        assert!(cost.work_units > 0 && cost.point_work_units > 0);
+        let mut prepared = air.prepare_polynomial_evaluator(domain).unwrap();
+        let current = core::array::from_fn::<_, COLUMN_COUNT, _>(|column| {
+            GoldilocksFp4V1::new([3 + column as u64, 5, 7, 11]).unwrap()
+        });
+        let next = current.map(|value| value.add(GoldilocksFp4V1::new([13, 17, 19, 23]).unwrap()));
+        for index in [0, 1, 2047, 2048, 262_143] {
+            let mut output = [GoldilocksFp4V1::ZERO; CONSTRAINT_COUNT];
+            prepared
+                .evaluate_into(index, &current, &next, &mut output)
+                .unwrap();
+            assert_eq!(
+                &output[..],
+                air.evaluate_at(domain.point(index).unwrap(), &current, &next)
+                    .unwrap()
+            );
+        }
+        let mut output = [GoldilocksFp4V1::ONE; CONSTRAINT_COUNT];
+        assert!(
+            prepared
+                .evaluate_into(domain.rows(), &current, &next, &mut output)
+                .is_err()
+        );
+        assert!(
+            prepared
+                .evaluate_into(0, &current[..341], &next, &mut output)
+                .is_err()
+        );
+        assert!(
+            prepared
+                .evaluate_into(0, &current, &next, &mut output[..922])
+                .is_err()
+        );
+        let mut malformed = current;
+        malformed[341] =
+            GoldilocksFp4V1::from_coefficients_unchecked_for_test([0, 0, 0, GOLDILOCKS_MODULUS]);
+        assert!(
+            prepared
+                .evaluate_into(0, &malformed, &next, &mut output)
+                .is_err()
+        );
+        assert!(output.iter().all(|&value| value == GoldilocksFp4V1::ONE));
+    }
+
+    #[test]
+    #[ignore = "explicit full 65536x342 masked Fp4 numerator/quotient diagnostic; several GiB, no PCS qualification"]
+    fn complete_masked_numerator_divides_exactly_and_matches_actual_air() {
+        use super::super::{
+            coefficient_masking::MaskingShape,
+            masked_quotient::{MaskedQuotientLimits, MaskedQuotientPlan, PreparedMaskedTrace},
+            secret_polynomial::SecretPolynomial,
+        };
+        type F = GoldilocksFp4V1;
+        let (statement, witness) = physical_fixture();
+        let air = CompactTransferAir::new(&statement, None).unwrap();
+        let mut trace: Vec<SecretPolynomial<F>> = (0..COLUMN_COUNT)
+            .map(|_| SecretPolynomial::zeroed(PHYSICAL_ROW_COUNT).unwrap())
+            .collect();
+        for (index, row) in witness.rows().iter().enumerate() {
+            for (column, value) in trace.iter_mut().zip(smt_row_cells(row)) {
+                column[index] = F::embed_base(value);
+            }
+        }
+        drop(witness);
+        // Explicit deterministic arithmetic test coefficients, never production hiding coins.
+        let masks: Vec<_> = (0..COLUMN_COUNT)
+            .map(|column| [F::new([31 + column as u64, 37, 41, 43]).unwrap()])
+            .collect();
+        let shape = MaskingShape {
+            trace_coefficients: PHYSICAL_ROW_COUNT,
+            trace_degree_bound: PHYSICAL_ROW_COUNT,
+            mask_coefficients: 1,
+            mask_degree_bound: 1,
+        };
+        let limits = MaskedQuotientLimits {
+            max_payload_bytes: usize::try_from(8_u64 * 1024 * 1024 * 1024).unwrap(),
+            max_work_units: usize::MAX,
+            max_interpolation_rows: 524_288,
+            max_mask_coefficients: 1,
+            max_masked_coefficients: PHYSICAL_ROW_COUNT + 1,
+        };
+        let trace_refs: Vec<_> = trace.iter().map(|values| &**values).collect();
+        let mask_refs: Vec<_> = masks.iter().map(|values| &values[..]).collect();
+        let prepared = PreparedMaskedTrace::prepare(
+            &trace_refs,
+            &mask_refs,
+            &vec![shape; COLUMN_COUNT],
+            limits,
+        )
+        .unwrap();
+        drop(trace_refs);
+        drop(trace);
+        assert!(
+            prepared
+                .degree_bounds()
+                .iter()
+                .all(|&degree| degree == PHYSICAL_ROW_COUNT + 1)
+        );
+        assert_eq!(prepared.column(0).unwrap().len(), PHYSICAL_ROW_COUNT + 1);
+        assert!(prepared.column(COLUMN_COUNT).is_err());
+        let offset = F::new([2, 3, 5, 7]).unwrap();
+        assert!(
+            MaskedQuotientPlan::new(&air, &prepared, 131_072, offset, 131_072, limits).is_err()
+        );
+        assert!(
+            MaskedQuotientPlan::new(&air, &prepared, 262_144, F::ONE, 131_072, limits).is_err()
+        );
+        assert!(MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 1, limits).is_err());
+        let plan =
+            MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 131_072, limits).unwrap();
+        let bytes = plan.payload_bytes();
+        let work = plan.work_units();
+        assert!(
+            MaskedQuotientPlan::new(
+                &air,
+                &prepared,
+                262_144,
+                offset,
+                131_072,
+                MaskedQuotientLimits {
+                    max_payload_bytes: bytes - 1,
+                    ..limits
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            MaskedQuotientPlan::new(
+                &air,
+                &prepared,
+                262_144,
+                offset,
+                131_072,
+                MaskedQuotientLimits {
+                    max_work_units: work - 1,
+                    ..limits
+                }
+            )
+            .is_err()
+        );
+        assert!(plan.build(&[F::ONE; 922]).is_err());
+        let plan =
+            MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 131_072, limits).unwrap();
+        let mut alpha = [F::ONE; CONSTRAINT_COUNT];
+        alpha[922] = F::from_coefficients_unchecked_for_test([0, 0, GOLDILOCKS_MODULUS, 0]);
+        assert!(plan.build(&alpha).is_err());
+        let alpha: Vec<_> = (0..CONSTRAINT_COUNT)
+            .map(|i| F::new([i as u64 + 1, 47, 53, 59]).unwrap())
+            .collect();
+        let result = MaskedQuotientPlan::new(&air, &prepared, 262_144, offset, 131_072, limits)
+            .unwrap()
+            .build(&alpha)
+            .unwrap();
+        assert_eq!(result.numerator().len(), 262_144);
+        assert_eq!(result.quotient().coefficients().len(), 131_072);
+        assert!(
+            result.numerator()[result.degrees().combined_numerator()..]
+                .iter()
+                .all(|&c| c == F::ZERO)
+        );
+        let horner = |coefficients: &[F], point: F| {
+            coefficients
+                .iter()
+                .rev()
+                .fold(F::ZERO, |sum, &value| sum.mul(point).add(value))
+        };
+        let omega = FixedTraceDomain::new(&FASTPQ_FINAL_V1, PHYSICAL_ROW_COUNT)
+            .unwrap()
+            .generator;
+        for index in [0, 2048, 262_143] {
+            let point = result.domain().point(index).unwrap();
+            let current: Vec<_> = (0..COLUMN_COUNT)
+                .map(|column| horner(prepared.column(column).unwrap(), point))
+                .collect();
+            let next: Vec<_> = (0..COLUMN_COUNT)
+                .map(|column| horner(prepared.column(column).unwrap(), point.mul_base(omega)))
+                .collect();
+            let expected = air
+                .evaluate_at(point, &current, &next)
+                .unwrap()
+                .iter()
+                .zip(&alpha)
+                .fold(F::ZERO, |sum, (&value, &weight)| sum.add(value.mul(weight)));
+            let numerator = horner(result.numerator(), point);
+            assert_eq!(numerator, expected);
+            assert_eq!(
+                numerator,
+                point
+                    .power(PHYSICAL_ROW_COUNT as u64)
+                    .sub(F::ONE)
+                    .mul(horner(result.quotient().coefficients(), point))
+            );
+        }
+    }
+
     /// Materialise exact base columns only in explicit prover resource tests.
     fn physical_columns(witness: &PhysicalSmtWitness) -> Vec<Vec<u64>> {
         let mut columns = (0..COLUMN_COUNT)
@@ -769,5 +1241,205 @@ mod tests {
         assert!(
             super::super::compact_protocol::verify(&changed, &proof, diagnostic_limits).is_err()
         );
+    }
+
+    #[test]
+    fn complete_air_field_points_preserve_all_923_slots_and_base_embeddings() {
+        use super::super::polynomial_reference;
+        use crate::field::GoldilocksFp4V1 as F;
+        let air = CompactTransferAir::new(&statement(), None).unwrap();
+        let current = smt_row_cells(&arbitrary_row(13));
+        let next = smt_row_cells(&arbitrary_row(73));
+        for point in [0, 1, 7, FASTPQ_FINAL_V1.omega_coset] {
+            let base = air.evaluate(point, &current, &next).unwrap();
+            let extension = air
+                .evaluate_at(
+                    F::embed_base(point),
+                    &current.map(F::embed_base),
+                    &next.map(F::embed_base),
+                )
+                .unwrap();
+            assert_eq!(
+                extension,
+                base.into_iter().map(F::embed_base).collect::<Vec<_>>()
+            );
+        }
+        let current = smt_row_from_cells(&core::array::from_fn(|column| {
+            F::new([column as u64 + 1, 3, 5, 7]).unwrap()
+        }));
+        let next = smt_row_from_cells(&core::array::from_fn(|column| {
+            F::new([column as u64 + 11, 13, 17, 19]).unwrap()
+        }));
+        let smt = CompactSmtQuotient::new(&FASTPQ_FINAL_V1, &air.fixed).unwrap();
+        for point in polynomial_reference::points().into_iter().skip(5) {
+            let actual = air
+                .evaluate_at(point, &smt_row_cells(&current), &smt_row_cells(&next))
+                .unwrap();
+            let hash = air.hash.evaluate(point, &current.hash, &next.hash).unwrap();
+            let semantic = smt.residues(&smt.evaluate_fixed(point).unwrap(), &current, &next);
+            assert_eq!(actual.len(), 923);
+            assert_eq!(actual[..597], hash.local);
+            assert_eq!(actual[597..680], hash.transitions);
+            assert_eq!(actual[680..], semantic);
+        }
+    }
+
+    #[test]
+    fn complete_air_rejects_dimensions_and_every_point_or_cell_coordinate() {
+        use crate::field::GoldilocksFp4V1 as F;
+        let air = CompactTransferAir::new(&statement(), None).unwrap();
+        let zero = [F::ZERO; COLUMN_COUNT];
+        for width in [0, COLUMN_COUNT - 1, COLUMN_COUNT + 1] {
+            let wrong = vec![F::ZERO; width];
+            assert!(matches!(
+                air.evaluate_at(F::ONE, &wrong, &zero),
+                Err(Error::InvalidTraceShape { .. })
+            ));
+            assert!(matches!(
+                air.evaluate_at(F::ONE, &zero, &wrong),
+                Err(Error::InvalidTraceShape { .. })
+            ));
+        }
+        for lane in 0..4 {
+            let mut words = [0; 4];
+            words[lane] = GOLDILOCKS_MODULUS;
+            let bad = F::from_coefficients_unchecked_for_test(words);
+            assert!(
+                matches!(air.evaluate_at(bad, &zero, &zero), Err(Error::NonCanonicalGoldilocksElement { context: "fixed_schedule_evaluation_point", indices }) if indices == [lane])
+            );
+            for column in 0..COLUMN_COUNT {
+                let mut row = zero;
+                row[column] = bad;
+                for (current, next) in [(&row, &zero), (&zero, &row)] {
+                    assert!(
+                        matches!(air.evaluate_at(F::ONE, current, next), Err(Error::NonCanonicalGoldilocksElement { context: "compact_smt_opening", indices }) if indices == [column,lane])
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn masked_degree_owner_preserves_all_923_slots_and_full_numerator_bounds() {
+        let air = CompactTransferAir::new(&statement(), None).unwrap();
+        let n = PHYSICAL_ROW_COUNT;
+        for d in [1, n, n + 1, n + 65, 2 * n] {
+            let bounds = air.numerator_degree_bounds(&[d; COLUMN_COUNT]).unwrap();
+            let periodic = n - n / PHYSICAL_HASH_ROWS;
+            let hash = 2 * d - 1 + periodic;
+            let smt = d + n - 1;
+            assert_eq!(
+                bounds.numerators()[..LOCAL_SLOTS + TRANSITION_SLOTS]
+                    .iter()
+                    .copied()
+                    .max(),
+                Some(hash)
+            );
+            assert_eq!(
+                bounds.numerators()[LOCAL_SLOTS + TRANSITION_SLOTS..]
+                    .iter()
+                    .copied()
+                    .max(),
+                Some(smt)
+            );
+            assert_eq!(bounds.combined_numerator(), hash.max(smt));
+            let conditional = bounds.conditional_quotients();
+            assert_eq!(conditional.combined, hash.max(smt).saturating_sub(n));
+            for (slot, &degree) in bounds.numerators()[LOCAL_SLOTS + TRANSITION_SLOTS..]
+                .iter()
+                .enumerate()
+            {
+                assert_eq!(
+                    degree,
+                    if slot < 155 { periodic + d } else { n + d - 1 },
+                    "SMT slot {slot}, d={d}"
+                );
+            }
+        }
+        let unmasked = air.numerator_degree_bounds(&[n; COLUMN_COUNT]).unwrap();
+        assert_eq!(unmasked.combined_numerator() - 1, 196_478);
+        assert_eq!(unmasked.conditional_quotients().combined, 130_943);
+        let masked = air
+            .numerator_degree_bounds(&[n + 65; COLUMN_COUNT])
+            .unwrap();
+        assert_eq!(masked.conditional_quotients().combined, 2 * n + 1);
+        assert!(masked.conditional_quotients().combined > 2 * n);
+    }
+
+    #[test]
+    fn heterogeneous_column_degrees_preserve_owner_and_rotation_dependencies() {
+        let air = CompactTransferAir::new(&statement(), None).unwrap();
+        let baseline = air.numerator_degree_bounds(&[1; COLUMN_COUNT]).unwrap();
+        let mut columns = [1; COLUMN_COUNT];
+        // Starting root limb zero is column 334; its next-row carry must retain
+        // the same bound, while unrelated hash cells and limbs remain unchanged.
+        columns[334] = PHYSICAL_ROW_COUNT + 27;
+        let changed = air.numerator_degree_bounds(&columns).unwrap();
+        let hash_slots = LOCAL_SLOTS + TRANSITION_SLOTS;
+        assert_eq!(
+            &changed.numerators()[..hash_slots],
+            &baseline.numerators()[..hash_slots]
+        );
+        assert_eq!(
+            changed.numerators()[hash_slots + 187],
+            PHYSICAL_ROW_COUNT + columns[334] - 1
+        );
+        assert_eq!(
+            changed.numerators()[hash_slots + 211],
+            PHYSICAL_ROW_COUNT + columns[334] - 1
+        );
+        assert_eq!(
+            changed.numerators()[hash_slots + 188],
+            baseline.numerators()[hash_slots + 188]
+        );
+        for (&before, &after) in baseline.numerators().iter().zip(changed.numerators()) {
+            assert!(after >= before);
+        }
+        let row = smt_row_from_cells(&columns.map(PolynomialDegree::from_exclusive));
+        let hash = air
+            .hash
+            .numerator_degree_bounds(&crate::gadgets::compact_trace_columns::hash_row_cells(
+                &row.hash,
+            ))
+            .unwrap();
+        let smt = air
+            .fixed
+            .numerator_degree_bounds(&columns.map(PolynomialDegree::from_exclusive))
+            .unwrap();
+        let expected: Vec<_> = hash
+            .local
+            .into_iter()
+            .chain(hash.transitions)
+            .chain(smt)
+            .map(PolynomialDegree::exclusive)
+            .collect();
+        assert_eq!(changed.numerators().as_slice(), expected);
+    }
+
+    #[test]
+    fn masked_degree_declarations_reject_wrong_shapes_zero_bounds_and_overflow() {
+        let air = CompactTransferAir::new(&statement(), None).unwrap();
+        for width in [COLUMN_COUNT - 1, COLUMN_COUNT + 1] {
+            assert!(air.numerator_degree_bounds(&vec![1; width]).is_err());
+        }
+        for column in 0..COLUMN_COUNT {
+            let mut degrees = [1; COLUMN_COUNT];
+            degrees[column] = 0;
+            assert!(
+                air.numerator_degree_bounds(&degrees).is_err(),
+                "column {column}"
+            );
+        }
+        assert!(
+            air.numerator_degree_bounds(&[usize::MAX; COLUMN_COUNT])
+                .is_err()
+        );
+        for column in [310, 318, 326, 334] {
+            let mut degrees = [1; COLUMN_COUNT];
+            degrees[column] = usize::MAX;
+            assert!(
+                air.numerator_degree_bounds(&degrees).is_err(),
+                "column {column}"
+            );
+        }
     }
 }

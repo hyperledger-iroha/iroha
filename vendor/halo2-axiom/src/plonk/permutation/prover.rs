@@ -325,3 +325,23 @@ impl<C: CurveAffine> Evaluated<C> {
             )
     }
 }
+
+/// Test-only values from the actual ordinary copy-product commitment implementation.
+#[cfg(test)]
+pub(crate) struct StoredCopyProductOrdinaryOracleV1<C: CurveAffine> {
+    pub(crate) coefficient: Vec<C::Scalar>,
+    pub(crate) blind: Blind<C::Scalar>,
+}
+#[cfg(test)]
+impl<C: CurveAffine> Committed<C> {
+    /// Observe real committed products for differential tests without another product algorithm.
+    pub(crate) fn stored_product_oracle_values(self) -> Vec<StoredCopyProductOrdinaryOracleV1<C>> {
+        self.sets
+            .into_iter()
+            .map(|set| StoredCopyProductOrdinaryOracleV1 {
+                coefficient: set.permutation_product_poly.to_vec(),
+                blind: set.permutation_product_blind,
+            })
+            .collect()
+    }
+}

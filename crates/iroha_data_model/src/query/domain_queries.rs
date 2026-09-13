@@ -627,8 +627,20 @@ pub mod da {
 }
 pub mod settlement {
     //! Native settlement query definitions.
+    use crate::isi::SettlementId;
     use iroha_model_base::name::Name;
     queries! {
+        /// Fetch an immutable native settlement receipt by its business identifier.
+        ///
+        /// The native executor requires ledger-wide read permission because a receipt
+        /// can contain movements belonging to multiple accounts and dataspaces.
+        #[repr(transparent)]
+        #[norito(deny_unknown_fields)]
+        #[norito_schema(name = "iroha_data_model::query::settlement::model::FindSettlementReceiptById")]
+        pub struct FindSettlementReceiptById {
+            /// Exact committed business settlement identifier.
+            pub id: SettlementId,
+        }
         /// Fetch the complete protected native FX corridor policy registry.
         #[derive(Copy)]
         #[norito_schema(name = "iroha_data_model::query::settlement::model::FindFxCorridorPolicyRegistry")]
@@ -649,7 +661,9 @@ pub mod settlement {
     }
     pub mod prelude {
         //! Prelude re-exports for native settlement queries.
-        pub use super::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry};
+        pub use super::{
+            FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry, FindSettlementReceiptById,
+        };
     }
 }
 pub mod nexus {

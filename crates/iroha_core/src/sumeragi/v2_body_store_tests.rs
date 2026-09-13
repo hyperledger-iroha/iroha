@@ -11,7 +11,7 @@ mod tests {
     };
     use crate::sumeragi::{
         v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
-        v2_chunks::encode_payload,
+        v2_chunks::encode_payload, v2_lifecycle_coordinator::TerminalValidateNoSuccessorClaim,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
@@ -1542,6 +1542,199 @@ mod tests {
         assert_eq!(store.rejected, rejected_before);
         assert_eq!(durable_files_snapshot(directory.path()), files_before);
     }
+    #[test]
+    fn terminal_validate_shared_outcomes_keep_one_latest_retry_origin() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = store_with_promoted_terminal_outcomes(directory.path(), &context, &keys);
+        let success = store.validated.values().next().unwrap().durable().clone();
+        let rejection = store.rejected.values().next().unwrap().durable.clone();
+        let claim = |receipt: &super::DurableBodyReceipt, view, ordinal| {
+            TerminalValidateNoSuccessorClaim::for_test_durable_claim(
+                &context, receipt, view, ordinal,
+            )
+        };
+        let old_success = claim(&success, 2, 10);
+        let new_success = claim(&success, 5, 20);
+        let old_rejection = claim(&rejection, 3, 30);
+        let new_rejection = claim(&rejection, 6, 40);
+        let before = durable_files_snapshot(directory.path());
+        let mut catalog = store.detach_terminal_validate_outcome_catalog().unwrap();
+        for claim in [&old_success, &new_success, &new_rejection, &old_rejection] {
+            assert!(catalog.select_exact_terminal_validate(claim));
+            assert!(
+                !catalog.select_exact_terminal_validate(claim),
+                "an exact claim remains one-shot"
+            );
+        }
+        assert_eq!(catalog.selected_validated.len(), 1);
+        assert_eq!(catalog.selected_rejected.len(), 1);
+        assert!(
+            !catalog.select_exact_successful_terminal_validate(&new_success),
+            "sharing historical evidence never grants a second released Apply selection"
+        );
+        assert!(catalog.retain_selected_terminal_retries([
+            new_success,
+            old_success,
+            old_rejection,
+            new_rejection,
+        ]));
+        catalog.commit_selected();
+        let retained = store.take_recovered_terminal_results();
+        assert_eq!(retained.len(), 2);
+        assert_eq!(
+            retained[&(success.round(), success.subject())].ordinal(),
+            20
+        );
+        assert_eq!(
+            retained[&(rejection.round(), rejection.subject())].ordinal(),
+            40
+        );
+        assert!(
+            retained[&(success.round(), success.subject())]
+                .validated_receipt()
+                .is_some()
+        );
+        assert!(
+            retained[&(rejection.round(), rejection.subject())]
+                .validated_receipt()
+                .is_none()
+        );
+        assert!(store.validated.is_empty() && store.rejected.is_empty());
+        assert_eq!(durable_files_snapshot(directory.path()), before);
+        let released_directory = TempDir::new().unwrap();
+        let mut released_store =
+            store_with_promoted_terminal_outcomes(released_directory.path(), &context, &keys);
+        let receipt = released_store
+            .validated
+            .values()
+            .next()
+            .unwrap()
+            .durable()
+            .clone();
+        let released_claim = claim(&receipt, 2, 50);
+        let other_history = claim(&receipt, 5, 60);
+        let mut catalog = released_store
+            .detach_terminal_validate_outcome_catalog()
+            .unwrap();
+        assert!(catalog.select_exact_successful_terminal_validate(&released_claim));
+        assert!(catalog.select_exact_terminal_validate(&other_history));
+        assert!(!catalog.select_exact_successful_terminal_validate(&other_history));
+        assert!(catalog.retain_selected_terminal_retries([released_claim, other_history]));
+        let released = catalog
+            .commit_selected_with_released_validate(released_claim)
+            .unwrap();
+        assert_eq!(released.ordinal(), 50);
+        assert!(
+            released_store.take_recovered_terminal_results().is_empty(),
+            "all historical claims for the released body remain inert beside its sole Apply"
+        );
+        assert_eq!(
+            released_store.rejected.len(),
+            1,
+            "unselected rejection remains in its original catalog"
+        );
+    }
+
+    #[test]
+    fn retired_terminal_claim_comparison_never_promotes_marker_authority() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let store = store_with_promoted_terminal_outcomes(directory.path(), &context, &keys);
+        let success = store.validated.values().next().unwrap().durable().clone();
+        let rejection = store.rejected.values().next().unwrap().durable.clone();
+        drop(store);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+        let success_claim =
+            TerminalValidateNoSuccessorClaim::for_test_durable_claim(&context, &success, 2, 10);
+        let rejection_claim =
+            TerminalValidateNoSuccessorClaim::for_test_durable_claim(&context, &rejection, 3, 20);
+        assert!(!store.retired_terminal_claim_matches(&success_claim));
+        store
+            .retain_recovered_markers_for_authority(RecoveredValidationAuthority::for_test(
+                &context,
+                [],
+            ))
+            .unwrap();
+        let markers = store.retired_revalidation.clone();
+        let files = durable_files_snapshot(directory.path());
+        assert!(store.retired_terminal_claim_matches(&success_claim));
+        assert!(store.retired_terminal_claim_matches(&rejection_claim));
+        let mut foreign = success.clone();
+        foreign.frame_hash = Hash::new(b"foreign terminal body frame");
+        let foreign_claim =
+            TerminalValidateNoSuccessorClaim::for_test_durable_claim(&context, &foreign, 2, 30);
+        assert!(!store.retired_terminal_claim_matches(&foreign_claim));
+        assert!(store.pending_revalidation.is_empty());
+        assert!(store.validated.is_empty() && store.rejected.is_empty());
+        assert!(store.take_recovered_terminal_results().is_empty());
+        assert_eq!(store.retired_revalidation, markers);
+        assert_eq!(durable_files_snapshot(directory.path()), files);
+        drop(store);
+        let mut protected = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+        let later_round = wire::ConsensusRound {
+            view: success.round().view + 1,
+            ..success.round()
+        };
+        protected
+            .retain_recovered_markers_for_authority(RecoveredValidationAuthority::for_test(
+                &context,
+                [(later_round, success.subject())],
+            ))
+            .unwrap();
+        assert!(
+            !protected.retired_terminal_claim_matches(&success_claim),
+            "a first replay effect protects the entire immutable subject across proposal rounds"
+        );
+        drop(protected);
+        let mut deferred = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+        deferred
+            .retain_recovered_markers_for_authority(RecoveredValidationAuthority::for_test(
+                &context,
+                [(success.round(), success.subject())],
+            ))
+            .unwrap();
+        let reference = missing_merge_reference(&success);
+        deferred
+            .revalidate_recovered_markers(|_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
+                    reference.clone(),
+                ))
+            })
+            .unwrap();
+        assert!(
+            deferred
+                .retired_revalidation
+                .contains_key(&(success.round(), success.subject()))
+        );
+        assert!(
+            !deferred.retired_terminal_claim_matches(&success_claim),
+            "semantic sidecar deferral cannot manufacture closed-frontier retirement"
+        );
+        drop(deferred);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+        store
+            .retain_recovered_markers_for_authority(RecoveredValidationAuthority::for_test(
+                &context,
+                [],
+            ))
+            .unwrap();
+        store
+            .retired_revalidation
+            .get_mut(&(rejection.round(), rejection.subject()))
+            .unwrap()
+            .outcome = ValidationOutcomeMarkerKind::Rejected(255);
+        assert!(!store.retired_terminal_claim_matches(&rejection_claim));
+        store.retired_revalidation = markers;
+        fs::write(
+            store.path_for(success.round(), success.subject()),
+            b"changed frame",
+        )
+        .unwrap();
+        assert!(!store.retired_terminal_claim_matches(&success_claim));
+        assert!(store.validated.is_empty() && store.rejected.is_empty());
+    }
+
     #[test]
     fn terminal_validate_outcome_catalog_drop_restores_both_maps_and_retired_seals() {
         let directory = TempDir::new().expect("temporary directory");

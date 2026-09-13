@@ -1,0 +1,648 @@
+//! State-backed atomic settlement execution and reference-retention controls.
+
+use super::*;
+use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::isi::{
+    AtomicSettlementMovement, AtomicSettlementMovements, SettleAtomic, SettlementDetails,
+};
+use iroha_data_model::query::error::FindError;
+use std::num::NonZeroU64;
+
+fn atomic_state(count: usize) -> (State, Vec<AtomicSettlementMovement>, AssetDefinitionId) {
+    atomic_state_in_scope(count, AssetBalanceScope::Global, AssetBalancePolicy::Global)
+}
+fn atomic_state_in_scope(
+    count: usize,
+    scope: AssetBalanceScope,
+    policy: AssetBalancePolicy,
+) -> (State, Vec<AtomicSettlementMovement>, AssetDefinitionId) {
+    let domain_id = DomainId::try_new("atomic", "universal").expect("domain");
+    let definition =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "cash".parse().expect("name"));
+    let mut accounts = vec![Account::new(CARPENTER_ID.clone()).build(&CARPENTER_ID)];
+    let mut assets = Vec::new();
+    let mut movements = Vec::new();
+    for index in 0..count {
+        let mut seed = vec![0xA5; 32];
+        seed[..2].copy_from_slice(&(index as u16).to_le_bytes());
+        let owner = AccountId::new(
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+                .expect("fixture key")
+                .public_key()
+                .clone(),
+        );
+        accounts.push(Account::new(owner.clone()).build(&CARPENTER_ID));
+        let source = AssetId::with_scope(definition.clone(), owner, scope);
+        assets.push(Asset::new(source.clone(), Quantity::from(10_u32)));
+        movements.push(AtomicSettlementMovement {
+            source,
+            recipient: CARPENTER_ID.clone(),
+            quantity: Quantity::one(),
+        });
+    }
+    movements.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
+    let world = World::with_assets(
+        [Domain::new(domain_id.clone()).build(&CARPENTER_ID)],
+        accounts,
+        [AssetDefinition::numeric(
+            definition.clone(),
+            "cash".to_owned(),
+            policy,
+            (policy == AssetBalancePolicy::DataspaceRestricted).then_some(domain_id),
+        )
+        .build(&CARPENTER_ID)],
+        assets,
+        [],
+    );
+    (
+        State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ),
+        movements,
+        definition,
+    )
+}
+fn atomic_instruction(
+    stx: &StateTransaction<'_, '_>,
+    movements: Vec<AtomicSettlementMovement>,
+) -> SettleAtomic {
+    SettleAtomic::new(
+        stx.network_id.clone(),
+        "atomic_business".parse().expect("id"),
+        AtomicSettlementMovements::try_from(movements).expect("canonical vector"),
+        nonzero!(100_u64),
+        Metadata::default(),
+    )
+}
+fn install_atomic_consents(
+    stx: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &SettleAtomic,
+    omit: Option<usize>,
+) {
+    stx.tx_call_hash = Some(Hash::new(b"atomic-fixture-carrier"));
+    let intent_hash = instruction.intent_hash().expect("complete intent");
+    let omitted_source = omit.map(|index| &instruction.movements().as_slice()[index].source);
+    let mut granted_sources = BTreeSet::new();
+    for movement in instruction.movements().as_slice() {
+        if Some(&movement.source) != omitted_source
+            && granted_sources.insert(movement.source.clone())
+        {
+            // Exercise the canonical grant mutation as the source owner. The
+            // separate default-executor issuer policy is not bypass-tested here.
+            // One source-bucket consent covers every debit in the same intent.
+            let permission: Permission = CanExecuteSettlement {
+                debited_asset: movement.source.clone(),
+                settlement_id: instruction.settlement_id().clone(),
+                intent_hash,
+            }
+            .into();
+            Grant::account_permission(permission, authority.clone())
+                .execute(movement.source.account(), stx)
+                .expect("owner grants exact consent");
+        }
+    }
+}
+fn atomic_observable_state(stx: &StateTransaction<'_, '_>) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, usize) {
+    macro_rules! capture {
+        ($field:ident) => {
+            norito::encode_canonical(
+                &stx.world
+                    .$field
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+            )
+            .expect("state fixture encoding")
+        };
+    }
+    let assets = stx
+        .world
+        .assets
+        .iter()
+        .map(|(key, value)| (key.clone(), value.as_ref().clone()))
+        .collect::<Vec<_>>();
+    let accounts = stx
+        .world
+        .accounts
+        .iter()
+        .map(|(key, value)| (key.clone(), value.metadata().clone()))
+        .collect::<Vec<_>>();
+    (
+        vec![
+            norito::encode_canonical(&assets).expect("assets"),
+            norito::encode_canonical(&accounts).expect("account controls"),
+            capture!(settlement_receipts),
+            capture!(asset_definition_assets),
+            capture!(assets_by_account),
+            capture!(assets_by_domain),
+            capture!(asset_definition_nonzero_holders),
+        ],
+        stx.world
+            .internal_event_buf
+            .iter()
+            .map(|event| norito::encode_canonical(event.as_ref()).expect("event bytes"))
+            .collect(),
+        stx.pending_transfer_transcript_count_for_testing(),
+    )
+}
+
+#[test]
+fn atomic_settlement_executes_three_and_255_exact_payments_once() {
+    for count in [3, 255] {
+        let (state, movements, definition) = atomic_state(count);
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut stx = block.transaction();
+        let instruction = atomic_instruction(&stx, movements);
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+        let transcripts = stx.pending_transfer_transcript_count_for_testing();
+        admission_validate_atomic(&CARPENTER_ID, &mut stx, &instruction)
+            .expect("same complete admission plan");
+        instruction
+            .clone()
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect("atomic execution");
+        assert_eq!(
+            stx.pending_transfer_transcript_count_for_testing(),
+            transcripts + 1
+        );
+        for movement in instruction.movements().as_slice() {
+            assert_eq!(
+                asset_balance_or_zero(&stx, &movement.source),
+                Quantity::from(9_u32)
+            );
+        }
+        assert_eq!(
+            asset_balance_or_zero(&stx, &AssetId::new(definition, CARPENTER_ID.clone())),
+            Quantity::from(count as u64)
+        );
+        let receipt = stx
+            .world
+            .settlement_receipts
+            .get(instruction.settlement_id())
+            .expect("one receipt");
+        let SettlementDetails::Atomic(iroha_data_model::isi::AtomicSettlementDetails {
+            movements,
+            intent_hash,
+        }) = &receipt.details
+        else {
+            panic!("atomic details");
+        };
+        assert_eq!(
+            movements,
+            &instruction
+                .movements()
+                .resolve()
+                .expect("exact signed movements")
+        );
+        assert_eq!(
+            *intent_hash,
+            instruction.intent_hash().expect("complete intent")
+        );
+        assert_eq!(receipt.details.movements().count(), count);
+    }
+}
+
+#[test]
+fn atomic_settlement_missing_consent_at_every_position_changes_nothing() {
+    for count in [3, 255] {
+        let (state, movements, _) = atomic_state(count);
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        for omit in 0..count {
+            let mut stx = block.transaction();
+            let instruction = atomic_instruction(&stx, movements.clone());
+            install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, Some(omit));
+            let before = atomic_observable_state(&stx);
+            let error = instruction
+                .execute(&CARPENTER_ID, &mut stx)
+                .expect_err("one missing owner consent must reject the whole vector");
+            assert!(error.to_string().contains("whole-intent consent"));
+            assert_eq!(atomic_observable_state(&stx), before);
+        }
+    }
+}
+
+#[test]
+fn atomic_settlement_metadata_or_amount_substitution_requires_fresh_whole_intent_consent() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    for change in 0..2 {
+        let mut stx = block.transaction();
+        let original = atomic_instruction(&stx, movements.clone());
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &original, None);
+        let mut changed_movements = movements.clone();
+        let mut metadata = Metadata::default();
+        if change == 0 {
+            changed_movements[2].quantity = Quantity::from(2_u32);
+        } else {
+            metadata.insert("reference".parse().expect("key"), Json::new("substituted"));
+        }
+        let changed = SettleAtomic::new(
+            stx.network_id.clone(),
+            original.settlement_id().clone(),
+            AtomicSettlementMovements::try_from(changed_movements).expect("canonical"),
+            *original.expires_at_height(),
+            metadata,
+        );
+        let before = atomic_observable_state(&stx);
+        assert!(
+            changed
+                .execute(&CARPENTER_ID, &mut stx)
+                .expect_err("changed whole intent")
+                .to_string()
+                .contains("whole-intent consent")
+        );
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}
+
+#[test]
+fn atomic_settlement_wrong_network_or_expired_height_changes_nothing() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    for expired in [false, true] {
+        let mut stx = block.transaction();
+        let network = if expired {
+            stx.network_id.clone()
+        } else {
+            iroha_data_model::NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"other-network")),
+            )
+        };
+        let instruction = SettleAtomic::new(
+            network,
+            "atomic_expiry".parse().expect("id"),
+            AtomicSettlementMovements::try_from(movements.clone()).expect("canonical"),
+            NonZeroU64::new(if expired { 1 } else { 100 }).expect("expiry"),
+            Metadata::default(),
+        );
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+        let before = atomic_observable_state(&stx);
+        let error = instruction
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect_err("wrong network or expired");
+        assert!(
+            error
+                .to_string()
+                .contains(if expired { "expiry" } else { "network" })
+        );
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}
+
+#[test]
+fn atomic_settlement_inclusive_expiry_height_is_accepted() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(100_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    instruction
+        .execute(&CARPENTER_ID, &mut stx)
+        .expect("inclusive last allowed height");
+}
+
+#[test]
+fn atomic_settlement_rejects_intrabundle_financing_of_repeated_outgoing_debits() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    let earlier = movements[0].source.clone();
+    let later = movements[1].source.clone();
+    for source in [&earlier, &later] {
+        crate::smartcontracts::isi::asset::isi::replace_numeric_asset_balance_for_corruption_test(
+            &mut stx.world,
+            source,
+            Quantity::one(),
+        );
+    }
+    let mut payments = vec![
+        AtomicSettlementMovement {
+            source: earlier.clone(),
+            recipient: later.account().clone(),
+            quantity: Quantity::one(),
+        },
+        AtomicSettlementMovement {
+            source: later.clone(),
+            recipient: earlier.account().clone(),
+            quantity: Quantity::one(),
+        },
+        AtomicSettlementMovement {
+            source: later,
+            recipient: CARPENTER_ID.clone(),
+            quantity: Quantity::one(),
+        },
+    ];
+    payments.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
+    let instruction = atomic_instruction(&stx, payments);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    let before = atomic_observable_state(&stx);
+    assert!(matches!(
+        instruction.execute(&CARPENTER_ID, &mut stx),
+        Err(InstructionExecutionError::Math(
+            MathError::NotEnoughQuantity
+        ))
+    ));
+    assert_eq!(atomic_observable_state(&stx), before);
+}
+
+#[test]
+fn atomic_settlement_final_aggregate_holding_limit_failure_changes_nothing() {
+    for count in [3, 255] {
+        let (state, movements, definition) = atomic_state(count);
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut stx = block.transaction();
+        SetAssetHoldingLimit::new(
+            CARPENTER_ID.clone(),
+            definition,
+            Some(Quantity::from(count as u64 - 1)),
+        )
+        .execute(&CARPENTER_ID, &mut stx)
+        .expect("install aggregate destination limit");
+        let instruction = atomic_instruction(&stx, movements);
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+        let before = atomic_observable_state(&stx);
+        let error = instruction
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect_err("last aggregated credit exceeds limit");
+        assert_holding_limit_error(&error);
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}
+
+#[test]
+fn atomic_settlement_missing_carrier_identity_changes_nothing() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    stx.tx_call_hash = None;
+    let before = atomic_observable_state(&stx);
+    assert!(
+        instruction
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect_err("carrier identity required")
+            .to_string()
+            .contains("call_hash")
+    );
+    assert_eq!(atomic_observable_state(&stx), before);
+}
+
+#[test]
+fn atomic_settlement_exact_signed_owner_needs_no_delegation_for_its_own_bucket() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    let authority = movements[1].source.account().clone();
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &authority, &instruction, Some(1));
+    instruction
+        .execute(&authority, &mut stx)
+        .expect("signed exact owner plus other owners' exact consents");
+}
+
+#[test]
+fn atomic_settlement_fresh_carrier_cannot_replay_the_business_identifier() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    instruction
+        .clone()
+        .execute(&CARPENTER_ID, &mut stx)
+        .expect("first execution");
+    stx.tx_call_hash = Some(Hash::new(b"different-valid-carrier"));
+    let before = atomic_observable_state(&stx);
+    assert!(
+        instruction
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect_err("business replay")
+            .to_string()
+            .contains("already been committed")
+    );
+    assert_eq!(atomic_observable_state(&stx), before);
+}
+
+#[test]
+fn atomic_settlement_reference_retention_includes_the_final_movement() {
+    let (state, movements, _) = atomic_state(255);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    instruction
+        .clone()
+        .execute(&CARPENTER_ID, &mut stx)
+        .expect("atomic execution");
+    for index in [0, 127, 254] {
+        let before = atomic_observable_state(&stx);
+        let account = instruction.movements().as_slice()[index]
+            .source
+            .account()
+            .clone();
+        let error = Unregister::account(account)
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect_err("every committed payer must remain referenced");
+        assert!(error.to_string().contains("committed settlement receipt"));
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}
+
+#[test]
+fn atomic_settlement_actual_grant_then_revoke_rejects_without_movement() {
+    let (state, movements, _) = atomic_state(255);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    for revoked in [0, 127, 254] {
+        let mut stx = block.transaction();
+        let instruction = atomic_instruction(&stx, movements.clone());
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+        admission_validate_atomic(&CARPENTER_ID, &mut stx, &instruction)
+            .expect("all current consents permit admission");
+        let source = &instruction.movements().as_slice()[revoked].source;
+        let permission: Permission = CanExecuteSettlement {
+            debited_asset: source.clone(),
+            settlement_id: instruction.settlement_id().clone(),
+            intent_hash: instruction.intent_hash().expect("intent"),
+        }
+        .into();
+        Revoke::account_permission(permission, CARPENTER_ID.clone())
+            .execute(source.account(), &mut stx)
+            .expect("actual owner revokes its grant");
+        let before = atomic_observable_state(&stx);
+        assert!(
+            instruction
+                .execute(&CARPENTER_ID, &mut stx)
+                .expect_err("current consent must be checked again at execution")
+                .to_string()
+                .contains("whole-intent consent")
+        );
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}
+
+#[test]
+fn atomic_settlement_other_scope_or_owner_consent_cannot_cover_signed_source() {
+    let (state, movements, _) = atomic_state(3);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    for wrong_scope in [false, true] {
+        let mut stx = block.transaction();
+        let instruction = atomic_instruction(&stx, movements.clone());
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, Some(2));
+        let source = &instruction.movements().as_slice()[2].source;
+        let incorrect = AssetId::with_scope(
+            source.definition().clone(),
+            if wrong_scope {
+                source.account().clone()
+            } else {
+                CARPENTER_ID.clone()
+            },
+            if wrong_scope {
+                AssetBalanceScope::Dataspace(DataSpaceId::new(7))
+            } else {
+                *source.scope()
+            },
+        );
+        let permission: Permission = CanExecuteSettlement {
+            debited_asset: incorrect.clone(),
+            settlement_id: instruction.settlement_id().clone(),
+            intent_hash: instruction.intent_hash().expect("intent"),
+        }
+        .into();
+        Grant::account_permission(permission, CARPENTER_ID.clone())
+            .execute(incorrect.account(), &mut stx)
+            .expect("grant another exact bucket only");
+        let before = atomic_observable_state(&stx);
+        assert!(
+            instruction
+                .execute(&CARPENTER_ID, &mut stx)
+                .expect_err("no scope or owner inference")
+                .to_string()
+                .contains("whole-intent consent")
+        );
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}
+
+#[test]
+fn atomic_settlement_signed_scope_must_match_definition_and_execution_policies() {
+    for (scope, policy, route, expected) in [
+        (
+            AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted,
+            DataSpaceId::UNIVERSAL,
+            "requires an exact public balance scope",
+        ),
+        (
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            AssetBalancePolicy::Global,
+            DataSpaceId::UNIVERSAL,
+            "requires the global public balance scope",
+        ),
+        (
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            AssetBalancePolicy::DataspaceRestricted,
+            DataSpaceId::new(8),
+            "does not match execution dataspace",
+        ),
+    ] {
+        // Deliberately inconsistent State fixtures prove fail-closed policy
+        // handling, rather than relying on the source balance being absent.
+        let (state, movements, _) = atomic_state_in_scope(3, scope, policy);
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut stx = block.transaction();
+        stx.current_dataspace_id = Some(route);
+        stx.world.current_dataspace_id = Some(route);
+        let instruction = atomic_instruction(&stx, movements);
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+        let before = atomic_observable_state(&stx);
+        let error = instruction
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect_err("signed bucket cannot be silently resolved to another partition");
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}
+
+#[test]
+fn atomic_settlement_restricted_exact_bucket_survives_universal_coordinator_execution() {
+    let scope = AssetBalanceScope::Dataspace(DataSpaceId::new(7));
+    let (state, movements, definition) =
+        atomic_state_in_scope(3, scope, AssetBalancePolicy::DataspaceRestricted);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut stx = block.transaction();
+    stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    let instruction = atomic_instruction(&stx, movements);
+    install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+    instruction
+        .clone()
+        .execute(&CARPENTER_ID, &mut stx)
+        .expect("explicit restricted bucket on coordinator");
+    let receipt = stx
+        .world
+        .settlement_receipts
+        .get(instruction.settlement_id())
+        .expect("receipt");
+    assert!(receipt.details.movements().all(
+        |movement| *movement.source.scope() == scope && *movement.destination.scope() == scope
+    ));
+    assert_eq!(
+        asset_balance_or_zero(
+            &stx,
+            &AssetId::with_scope(definition.clone(), CARPENTER_ID.clone(), scope)
+        ),
+        Quantity::from(3_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(
+            &stx,
+            &AssetId::with_scope(definition, CARPENTER_ID.clone(), AssetBalanceScope::Global)
+        ),
+        Quantity::zero()
+    );
+}
+
+#[test]
+fn atomic_settlement_final_source_or_destination_failure_preserves_all_prior_movements() {
+    let (state, movements, _) = atomic_state(255);
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    for missing_destination in [false, true] {
+        let mut stx = block.transaction();
+        let mut payments = movements.clone();
+        if missing_destination {
+            let missing = AccountId::new(
+                KeyPair::try_from_seed(vec![0xEE; 32], Algorithm::Ed25519)
+                    .expect("fixture key")
+                    .public_key()
+                    .clone(),
+            );
+            assert!(stx.world.accounts.get(&missing).is_none());
+            payments.last_mut().expect("255 payments").recipient = missing;
+        } else {
+            let source = &payments.last().expect("255 payments").source;
+            crate::smartcontracts::isi::asset::isi::replace_numeric_asset_balance_for_corruption_test(&mut stx.world, source, Quantity::zero());
+        }
+        let instruction = atomic_instruction(&stx, payments);
+        install_atomic_consents(&mut stx, &CARPENTER_ID, &instruction, None);
+        let before = atomic_observable_state(&stx);
+        let error = instruction
+            .execute(&CARPENTER_ID, &mut stx)
+            .expect_err("the last failing payment must reject the whole prepared batch");
+        if missing_destination {
+            assert!(matches!(
+                error,
+                InstructionExecutionError::Find(FindError::Account(_))
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                InstructionExecutionError::Math(MathError::NotEnoughQuantity)
+            ));
+        }
+        assert_eq!(atomic_observable_state(&stx), before);
+    }
+}

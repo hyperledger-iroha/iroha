@@ -1754,7 +1754,10 @@ mod tests {
             [order_seed.wrapping_add(0x40); 32],
             [order_seed.wrapping_add(0x50); 32],
             4_096,
-            PinPolicy::default(),
+            PinPolicy {
+                retention_epoch: 100,
+                ..PinPolicy::default()
+            },
             account(1),
             1,
             None,
@@ -2348,6 +2351,8 @@ mod tests {
                     expected_owner: None,
                     expected_signer_policy: None,
                     orders: vec![
+                        // A continuation must name an actual immutable predecessor.
+                        replay_safe_archived_order(0x01, provider_id),
                         replay_safe_archived_order(0x61, provider_id),
                         replay_safe_archived_order(0x62, provider_id),
                     ],
@@ -2371,6 +2376,11 @@ mod tests {
                 max_kura_tip_lag_blocks: 0,
                 activation_gate: ArchiveActivationGateV1::StrictLive,
             },
+        );
+        assert_eq!(
+            query.read_replay_safe_exact_capture_source_page(&first_key, Some([0x02; 32]), 1),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable),
+            "an absent predecessor must not become a fabricated archive continuation"
         );
         let first_source_page = query
             .read_replay_safe_exact_capture_source_page(&first_key, Some([0x01; 32]), 1)
@@ -2451,17 +2461,39 @@ mod tests {
             })
             .expect("generation-two signed page");
         assert_eq!(query.signed_capture_source_reads.load(Ordering::SeqCst), 2);
+        let advanced_projection = ProviderIngestFinalizedProjectionV1 {
+            key: ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 2, [0x68; 32], 2_000)
+                .expect("advanced archive key"),
+            providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
+                provider_id,
+                expected_owner: None,
+                expected_signer_policy: None,
+                // Every previously pending order remains in immutable committed history.
+                orders: vec![
+                    replay_safe_archived_order(0x01, provider_id),
+                    replay_safe_archived_order(0x61, provider_id),
+                    replay_safe_archived_order(0x62, provider_id),
+                    replay_safe_archived_order(0x63, provider_id),
+                ],
+            }],
+        };
+        for missing in [0x01, 0x61, 0x62] {
+            let mut lost_pending = advanced_projection.clone();
+            lost_pending.providers[0].orders.retain(|order| {
+                order.replication_order.order_id != ReplicationOrderId::new([missing; 32])
+            });
+            assert!(
+                matches!(
+                    archive.insert(lost_pending),
+                    Err(ProviderIngestFinalizedArchiveErrorV1::InvalidTransition {
+                        reason: "pending replication order disappeared from committed history"
+                    })
+                ),
+                "dropping pending order {missing:02x} must not advance the archive"
+            );
+        }
         archive
-            .insert(ProviderIngestFinalizedProjectionV1 {
-                key: ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 2, [0x68; 32], 2_000)
-                    .expect("advanced archive key"),
-                providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
-                    provider_id,
-                    expected_owner: None,
-                    expected_signer_policy: None,
-                    orders: vec![replay_safe_archived_order(0x63, provider_id)],
-                }],
-            })
+            .insert(advanced_projection)
             .expect("advance immutable archive after signed response");
         let second_retry = query
             .read_and_sign_completed_musubi_capture_page_with(request_two, || {

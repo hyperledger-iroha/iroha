@@ -89,7 +89,7 @@ test('retained equipment event records validate common terminal return heights a
   const record = { slot: 0, nft_id: clause.nft_id, metadata_hash: clause.expected_metadata_hash, role_id: clause.role_id, policy, original_owner: account(1), custody: account(3), reserved_at_height: '10', released_at_height: '20' };
   assert.deepEqual(validateGameResourceRecordsV1([record], [account(1), account(2)]), [record]);
   assert.throws(() => validateGameResourceRecordsV1([record], [account(2), account(1)]));
-  const event = { session_id: join.session_id, revision: '2', phase: 6, dispute_root: hash(17), payout_claims: [], item_stakes: [], resources: [record], terminal_at_height: '20' };
+  const event = { session_id: join.session_id, revision: 2, phase: 6, dispute_root: hash(17), payout_claims: [], item_stakes: [], resources: [record], terminal_at_height: 20 };
   assert.deepEqual(decodeGameValueV1('GameSessionEventV1', encodeGameValueV1('GameSessionEventV1', event)), event);
 });
 

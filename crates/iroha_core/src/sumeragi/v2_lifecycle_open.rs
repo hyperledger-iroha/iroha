@@ -102,9 +102,9 @@ use crate::sumeragi::{
 };
 /// Storage-authenticated identity of one terminal Validate with no successor.
 ///
-/// The body outcome is consumed while this seal is minted and cannot be
-/// replayed or rebound afterward. The historical no-child reducer branch is
-/// represented by the checksummed typed ledger tombstone itself.
+/// An active outcome or an independently authenticated closed-source proof
+/// mints this inert seal. Only the active outcome may separately retain retry
+/// custody. The historical no-child branch remains the typed ledger tombstone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AuthenticatedValidateNoSuccessorRecovery {
     key: LifecycleKey,
@@ -139,6 +139,66 @@ impl TerminalValidateNoSuccessorClaim {
         terminal_validate_no_successor_claim(context, record)
             .ok()
             .flatten()
+    }
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test_durable_claim(
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+        receipt: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+        current_view: u64,
+        ordinal: u128,
+    ) -> Self {
+        let context = super::projection::lifecycle_context(context);
+        let mut root = [0xC4; 32];
+        root[..16].copy_from_slice(&ordinal.to_le_bytes());
+        let causal_root = CausalRoot::new(LifecycleDigest::new(root));
+        Self {
+            context,
+            ordinal,
+            key: LifecycleKey::new(
+                context.id(),
+                super::schema::LifecycleRound::new(context.height(), current_view),
+                Some(super::schema::LifecycleRound::new(
+                    receipt.round().height,
+                    receipt.round().view,
+                )),
+                Some(super::projection::block_subject(receipt.subject())),
+                super::schema::LifecyclePhase::Validate,
+                None,
+            ),
+            owner: OwnerId::new(causal_root, ordinal),
+            reconstruction_source: causal_root.digest(),
+            stage: LifecycleStage::new(
+                LifecycleStageKind::ValidateBody,
+                PredecessorScope::Independent,
+            ),
+            payload: DurablePayloadReference::BodyFrame(
+                super::projection::durable_body_frame_reference(context, receipt)
+                    .expect("exact body frame"),
+            ),
+            row_identity: LifecycleDigest::new([0xC5; 32]),
+        }
+    }
+
+    /// Compare retired bytes without treating their marker as a successful
+    /// execution. The caller must separately prove the source and closed WAL
+    /// frontier; this method grants no validation or retry authority.
+    pub(in crate::sumeragi) fn matches_retired_body_marker(
+        &self,
+        durable: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+        success: Option<iroha_data_model::block::consensus_v2::ExecutionCommitment>,
+    ) -> bool {
+        super::projection::recovered_validate_no_successor_durable_identity_is_authenticated(
+            self.context,
+            self.key,
+            self.owner.causal_root(),
+            self.reconstruction_source,
+            self.stage,
+            self.payload,
+            durable,
+        ) && self.key.execution_commitment().is_none_or(|expected| {
+            success
+                .is_some_and(|actual| super::projection::execution_commitment(actual) == expected)
+        })
     }
 
     /// Return the immutable coordinates of this checksummed terminal claim.
@@ -741,14 +801,14 @@ impl AuthenticatedLifecycleRecoveryCut {
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         recovered_wal: RecoveredWalStartupProjectionV1<'_>,
-        body_pipeline: Option<&mut PreparedDurableCertifiedBodyPipelineStartupV1>,
+        mut body_pipeline: Option<&mut PreparedDurableCertifiedBodyPipelineStartupV1>,
     ) -> Result<Self, LifecycleRecoveryAssemblyError> {
         let (candidates, claims, lifecycle_outputs) =
             match assemble_storage_only_candidates_and_terminal_validate_claims(
                 &ledger,
                 &serve_payloads,
                 recovered_wal,
-                body_pipeline,
+                body_pipeline.as_deref_mut(),
             ) {
                 Ok(assembled) => assembled,
                 Err(kind) => {
@@ -798,6 +858,31 @@ impl AuthenticatedLifecycleRecoveryCut {
                 serve_payloads,
             });
         }
+        // A historical completed row is not an executable body result. Its
+        // original source and immutable body must still authenticate against
+        // the actual closed WAL frontier before a retired marker can satisfy
+        // ledger coverage. Keep these claims out of every retry/result map.
+        let retired_claims = claims
+            .values()
+            .filter(|claim| {
+                released_claim != Some(**claim)
+                    && body_store.retired_terminal_claim_matches(claim)
+                    && body_pipeline.as_deref().is_some_and(|pipeline| {
+                        let Some(frontier) = pipeline.output_frontier() else {
+                            return false;
+                        };
+                        ledger.records().iter().any(|record| {
+                            claim.exactly_matches_ledger_record(record)
+                                && record.authenticates_retired_terminal_validate_source(
+                                    pipeline.verified(),
+                                    frontier,
+                                    body_store,
+                                )
+                        })
+                    })
+            })
+            .map(|claim| claim.key)
+            .collect::<BTreeSet<_>>();
         let mut catalog = match body_store.detach_terminal_validate_outcome_catalog() {
             Ok(catalog) => catalog,
             Err(error) => {
@@ -819,6 +904,9 @@ impl AuthenticatedLifecycleRecoveryCut {
             }
         };
         for claim in claims.values() {
+            if retired_claims.contains(&claim.key) {
+                continue;
+            }
             let selected = if released_claim == Some(*claim) {
                 catalog.select_exact_successful_terminal_validate(claim)
             } else {
@@ -856,10 +944,9 @@ impl AuthenticatedLifecycleRecoveryCut {
         // Keep real terminal outcomes for later current-view certified retries.
         // The already-recovered Apply owns its separate selected success.
         if !catalog.retain_selected_terminal_retries(
-            claims
-                .values()
-                .copied()
-                .filter(|claim| Some(*claim) != released_claim),
+            claims.values().copied().filter(|claim| {
+                Some(*claim) != released_claim && !retired_claims.contains(&claim.key)
+            }),
         ) {
             return Err(LifecycleRecoveryAssemblyError {
                 kind: LifecycleRecoveryAssemblyErrorKind::TerminalValidateOutcomeCatalog(

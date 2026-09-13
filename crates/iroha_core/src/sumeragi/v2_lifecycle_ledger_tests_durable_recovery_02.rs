@@ -1070,6 +1070,251 @@ fn production_owner_cold_opens_exact_standalone_remote_proposal_validate() {
 }
 
 #[test]
+fn real_cold_owner_restores_proposal_validate_without_wal_authority() {
+    run_durable_recovery_test_on_stack(|| real_cold_proposal_validate_fixture(false));
+}
+
+#[test]
+fn real_cold_owner_coalesces_proposal_validate_with_retained_prepare_qc() {
+    run_durable_recovery_test_on_stack(|| real_cold_proposal_validate_fixture(true));
+}
+
+#[allow(clippy::too_many_lines)]
+fn real_cold_proposal_validate_fixture(retain_prepare: bool) {
+    use crate::sumeragi::{
+        v2::{
+            AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, SumeragiV2Adapter,
+        },
+        v2_core::{BodyState, WalRecord},
+    };
+
+    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let fixture = RecoveryFixture::new("real-cold-proposal-validate", 0x59);
+    let context = fixture.verified.context();
+    let body_directory = TempDir::new().expect("real cold Proposal body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let record = standalone_validate_record(
+        &fixture,
+        &mut body_store,
+        0,
+        0x69,
+        9,
+        StandaloneValidateOriginFixture::RemoteProposal {
+            valid_signature: true,
+        },
+    );
+    let expected_owner = record.owner();
+    let expected_authority = record.replay_authority.clone();
+    let mut catalog = body_store
+        .recovery_catalog()
+        .expect("read exact body catalog");
+    assert_eq!(catalog.len(), 1);
+    let (_, (manifest, durable)) = catalog.pop_first().expect("one retained Proposal body");
+    let tag = EventTag::new(context.height, 0, Generation::new(0x69));
+    let leader = context.leader(0);
+    let leader_index = usize::try_from(leader).expect("leader index fits usize");
+    let mut proposal = wire::Proposal {
+        round: manifest.round,
+        proposer: leader,
+        subject: manifest.subject,
+        manifest: manifest.clone(),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
+        signature: Vec::new(),
+    };
+    proposal.signature = Signature::new(
+        fixture.keys[leader_index].private_key(),
+        &proposal.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let safety_directory = TempDir::new().expect("real cold Proposal safety WAL");
+    let wal_path = safety_directory.path().join("proposal.wal");
+    let open_adapter = || {
+        SumeragiV2Adapter::open(
+            &wal_path,
+            fixture.verified.clone(),
+            Some(leader),
+            tag.generation(),
+            [0x69; 32],
+            AdapterFingerprints {
+                node: Hash::new(b"real cold Proposal node"),
+                build: Hash::new(b"real cold Proposal build"),
+                config: Hash::new(b"real cold Proposal config"),
+            },
+            DeferredAdmissionOrdinalSource::new(0),
+        )
+        .expect("open real four-validator adapter")
+    };
+    let (mut warm, startup) = open_adapter();
+    assert!(startup.is_empty());
+    let authenticated = warm
+        .authenticate(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal),
+        ))
+        .expect("authenticate the actual signed Proposal");
+    let fetched = warm
+        .receive_authenticated(authenticated)
+        .expect("admit the actual signed Proposal")
+        .into_effects();
+    assert!(matches!(fetched.as_slice(), [AdapterEffect::FetchBody {
+        tag: actual_tag, round, subject, certificate: None, ..
+    }] if *actual_tag == tag && *round == manifest.round && *subject == manifest.subject));
+    assert!(matches!(
+        warm.body_available(tag, manifest.clone())
+            .expect("advance actual Proposal Fetch")
+            .effects(),
+        [AdapterEffect::StoreBody { .. }]
+    ));
+    assert!(matches!(
+        warm.body_stored(tag, manifest.round, manifest.subject, &durable)
+            .expect("advance actual Proposal Store")
+            .effects(),
+        [AdapterEffect::ValidateBody { .. }]
+    ));
+    let validated = ValidatedBodyReceipt::for_test(durable.clone());
+    if retain_prepare {
+        let execution_commitment = validated.execution_commitment();
+        let preimage = wire::Vote {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = fixture.keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::new(key.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let certificate = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate the matching PrepareQC"),
+        };
+        let authenticated = warm
+            .authenticate(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+            ))
+            .expect("authenticate the matching PrepareQC");
+        warm.receive_authenticated(authenticated)
+            .expect("persist matching Prepare evidence before the crash");
+    }
+    assert_eq!(
+        warm.body_state_for_test(manifest.round, manifest.subject),
+        BodyState::Durable,
+    );
+    drop(warm);
+    let ledger_directory = TempDir::new().expect("real cold Proposal ledger");
+    let ledger = fixture.ledger(vec![record]);
+    drop(fixture.persist_ledger(&ledger_directory, &ledger));
+    drop(body_store);
+    let wal_before = fs::read(&wal_path).expect("capture pre-restart WAL");
+    let body_store = fixture.open_store(&body_directory);
+    let (ledger_store, ledger) =
+        LifecycleLedgerStoreV1::open(ledger_directory.path(), fixture.lifecycle_context())
+            .expect("physically reopen retained Proposal ledger");
+    let payload_directory = TempDir::new().expect("real cold Proposal Serve store");
+    let (payload_store, payloads) =
+        fixture.open_empty_serve_payloads(&payload_directory, &body_store);
+    let cut = ledger
+        .into_durable_certified_body_pipeline_storage_recovery_cut(
+            fixture.verified.clone(),
+            ledger_store,
+            body_store,
+        )
+        .expect("authenticate retained Proposal and exact durable body");
+    let (cold, startup) = open_adapter();
+    assert!(
+        startup.is_empty(),
+        "neither branch creates a WAL Sign at cold open"
+    );
+    let authority = authority::lifecycle_storage_owner_test_authority(&fixture.verified, 1, 0)
+        .expect("one retained Validate owner capacity");
+    let mut owner = cut
+        .open_owner_with_authority(
+            authority,
+            payload_store,
+            payloads,
+            ProductionLifecycleAdapterStartupV1::recovered_for_test(cold, startup),
+        )
+        .expect("real cold reducer must recover retained Proposal before BodyAvailable/Stored");
+    assert!(owner.exact_recovered_body_pipeline_join_for_test());
+    assert_eq!(owner.live_body_pipeline_counts_for_test(), (0, 0, 1));
+    assert_eq!(owner.coordinator.records[&9].owner, expected_owner);
+    assert_eq!(
+        owner.coordinator.durable_records[&9].replay_authority,
+        expected_authority
+    );
+    assert_eq!(
+        fs::read(&wal_path).expect("read recovered WAL"),
+        wal_before,
+        "cold body custody must not append voting authority"
+    );
+    let (mut cold, startup) = owner
+        .adapter_startup
+        .take()
+        .expect("real owner retains its recovered adapter")
+        .into_adapter_for_test();
+    assert!(startup.is_empty());
+    assert_eq!(
+        cold.body_state_for_test(manifest.round, manifest.subject),
+        BodyState::Durable
+    );
+    let next_vote = cold
+        .preview_cold_body_validation_wal_for_test(
+            tag,
+            manifest.round,
+            manifest.subject,
+            &validated,
+        )
+        .expect("recovered Validate reaches the normal voting decision");
+    if retain_prepare {
+        assert!(matches!(next_vote, Some(WalRecord::LockAndCommit { .. })));
+    } else {
+        assert!(matches!(next_vote, Some(WalRecord::PrepareIntent(_))));
+    }
+    assert_eq!(
+        cold.body_state_for_test(manifest.round, manifest.subject),
+        BodyState::Durable,
+        "preview remains inert before its durable completion transaction"
+    );
+    let retry = cold
+        .retransmit_elapsed(tag)
+        .expect("retry recovered body ownership")
+        .into_effects();
+    assert_eq!(
+        retry
+            .iter()
+            .filter(|effect| matches!(effect, AdapterEffect::ValidateBody {
+        tag: actual_tag, round, subject,
+    } if *actual_tag == tag && *round == manifest.round && *subject == manifest.subject))
+            .count(),
+        1
+    );
+    assert!(
+        !retry
+            .iter()
+            .any(|effect| matches!(effect, AdapterEffect::FetchBody { .. })),
+        "the retained Validate must never acquire a second Fetch owner"
+    );
+}
+
+#[test]
 fn production_owner_cold_opens_refined_standalone_remote_proposal_validate() {
     for (phase, marker, ordinal) in [
         (wire::GlobalPhase::Prepare, 0x66, 10),

@@ -576,6 +576,40 @@ test("VPN requests reject unknown fields before dispatch", async () => {
   assert.equal(dispatched, false);
 });
 
+test("VPN payment hashes reject aliases and missing markers before dispatch", async () => {
+  const canonicalAuth = {
+    accountId: CANONICAL_AUTH_ALIAS,
+    privateKey: Buffer.alloc(32, 3),
+  };
+  let dispatched = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      dispatched = true;
+      throw new Error("noncanonical payment hash reached dispatch");
+    },
+  });
+  const hash = "ef".repeat(32);
+  const cases = [
+    ["prefix", `0x${hash}`],
+    ["uppercase", hash.toUpperCase()],
+    ["leading whitespace", ` ${hash}`],
+    ["trailing whitespace", `${hash} `],
+    ["unmarked", "ee".repeat(32)],
+  ];
+  for (const [caseName, paymentTxHash] of cases) {
+    await assert.rejects(
+      () => client.createVpnSession({
+        quoteId: "cd".repeat(32),
+        paymentTxHash,
+        meteringPublicKeyHex: "ab".repeat(32),
+      }, { canonicalAuth }),
+      /paymentTxHash must be an exact lowercase 32-byte hex string|paymentTxHash must carry the canonical Iroha hash marker|paymentTxHash must not contain surrounding whitespace/u,
+      caseName,
+    );
+  }
+  assert.equal(dispatched, false);
+});
+
 test("VPN session paths normalize hex before signing and reject malformed IDs", async () => {
   const normalizedSessionId = "ab".repeat(16);
   const inputSessionId = `0X${normalizedSessionId.toUpperCase()}`;
@@ -1001,7 +1035,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
     {
       exitClass: "low-latency",
       quoteId,
-      paymentTxHash: `0x${paymentTxHash.toUpperCase()}`,
+      paymentTxHash,
       meteringPublicKeyHex: `0X${meteringPublicKeyHex.toUpperCase()}`,
     },
     { canonicalAuth },
@@ -1243,7 +1277,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
   };
   const quoteId = "12".repeat(32);
   const sessionId = "56".repeat(16);
-  const paymentTxHash = "34".repeat(32);
+  const paymentTxHash = `${"34".repeat(31)}35`;
   const settleInstruction = {
     wire_id: "SettleVpnLease",
     payload_hex: "cafe",
@@ -1324,4 +1358,23 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     leaseIdHex: quoteId,
     settleLeaseInstruction: { wireId: "SettleVpnLease", payloadHex: "cafe" },
   });
+});
+
+test("VPN receipt responses reject noncanonical payment hashes", async () => {
+  const hash = "ef".repeat(32);
+  const cases = [
+    ["prefix", `0x${hash}`],
+    ["uppercase", hash.toUpperCase()],
+    ["whitespace", ` ${hash}`],
+    ["unmarked", "ee".repeat(32)],
+  ];
+  for (const [caseName, paymentTxHash] of cases) {
+    const payload = sampleVpnReceiptPayload();
+    payload.payment_tx_hash = paymentTxHash;
+    await assert.rejects(
+      () => parseVpnTestResponse("receipt", payload),
+      /payment_tx_hash must be an exact lowercase 32-byte hex string|payment_tx_hash must carry the canonical Iroha hash marker|payment_tx_hash must not contain surrounding whitespace/u,
+      caseName,
+    );
+  }
 });

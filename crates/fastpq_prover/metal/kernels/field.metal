@@ -4,42 +4,17 @@
 constant ulong FIELD_MODULUS = 0xffffffff00000001UL;
 constant ulong FIELD_GENERATOR = 7UL;
 
+// Exact unsigned 128-bit Goldilocks fold; ulong arithmetic wraps modulo 2^64.
 inline ulong reduce_goldilocks(ulong lo, ulong hi) {
-    uint hi_lo = (uint)(hi & 0xffffffffUL);
-    uint hi_hi = (uint)(hi >> 32);
-
-    ulong shifted = (ulong)(hi_lo) << 32;
-    ulong acc = lo + shifted;
-    bool carry = acc < lo;
-    if (acc >= FIELD_MODULUS) {
-        acc -= FIELD_MODULUS;
-    }
-    if (carry) {
-        acc += 0xffffffffUL;
-        if (acc >= FIELD_MODULUS) {
-            acc -= FIELD_MODULUS;
-        }
-    }
-
-    ulong sub = (ulong)(hi_lo);
-    if (acc < sub) {
-        acc += FIELD_MODULUS;
-    }
-    acc -= sub;
-
-    sub = (ulong)(hi_hi);
-    if (acc < sub) {
-        acc += FIELD_MODULUS;
-    }
-    acc -= sub;
-
-    if (acc >= FIELD_MODULUS) {
-        acc -= FIELD_MODULUS;
-    }
-    if (acc >= FIELD_MODULUS) {
-        acc -= FIELD_MODULUS;
-    }
-    return acc;
+    const ulong epsilon = 0xffffffffUL;
+    ulong high_high = hi >> 32;
+    ulong low = lo - high_high;
+    bool borrowed = lo < high_high;
+    low = borrowed ? low - epsilon : low;
+    ulong folded = low + (hi & epsilon) * epsilon;
+    bool carried = folded < low;
+    folded = carried ? folded + epsilon : folded;
+    return folded >= FIELD_MODULUS ? folded - FIELD_MODULUS : folded;
 }
 
 inline ulong reduce_goldilocks(ulong2 wide) {

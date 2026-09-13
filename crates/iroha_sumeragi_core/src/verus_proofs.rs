@@ -4693,14 +4693,22 @@ pub proof fn production_recovered_successor_trace_refines_indexed_activation(
         check_production_recovered_successor_transition(projection) == Some(projection) ==> (
             production_recovered_successor_trace_refines_indexed_activation_kernel(projection)
             && projection.published_status_height_before == 0u64
-            && projection.successor.last_committed_height < u64::MAX
-            && projection.successor.height
-                == projection.successor.last_committed_height + 1u64
+            && (if projection.authority_kind
+                == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP) {
+                projection.predecessor.height < u64::MAX
+                    && projection.successor.height == projection.predecessor.height + 1u64
+                    && projection.successor.last_committed_height == projection.successor.height
+            } else {
+                projection.successor.last_committed_height < u64::MAX
+                    && projection.successor.height == projection.successor.last_committed_height + 1u64
+            })
             && (
                 projection.authority_kind
                     == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP)
                 || projection.authority_kind
                     == refinement_tag_value!(SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP)
+                || projection.authority_kind
+                    == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP)
             )
         ),
 {

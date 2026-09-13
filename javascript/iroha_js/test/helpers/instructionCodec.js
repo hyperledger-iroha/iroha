@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import {
-  _createNoritoInstructionApi,
-} from "../../src/norito.js";
-import { createNativeRuntime } from "../../src/nativeRuntime.js";
+  noritoDecodeInstruction,
+  noritoEncodeInstruction,
+} from "../../src/public/norito.js";
 import { nativeBinding } from "./native.js";
 
-const NATIVE_INSTRUCTION_API = _createNoritoInstructionApi(
-  createNativeRuntime(),
-);
+const NATIVE_INSTRUCTION_API = Object.freeze({
+  noritoDecodeInstruction,
+  noritoEncodeInstruction,
+});
 
-/** Exercise the JavaScript adapter backed by the canonical native instruction owner. */
+/** Run a callback through the public native instruction adapter. */
 export function withNativeInstructionCodec(body) {
   return body(NATIVE_INSTRUCTION_API);
 }
@@ -19,8 +20,8 @@ export function toByteArray(bytes) {
   return Array.from(Buffer.from(bytes));
 }
 
-/** Check adapter serialization and projection against direct calls to the same native owner. */
-export function assertNativeInstructionAdapterRoundTrip(instruction, context) {
+/** Compare public object/binary adaptation with the native JSON codec owner. */
+export function assertNativeInstructionAdapterParity(instruction, context) {
   const adapterEncoded = Buffer.from(
     withNativeInstructionCodec(({ noritoEncodeInstruction }) =>
       noritoEncodeInstruction(instruction, 753)),

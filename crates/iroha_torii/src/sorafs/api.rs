@@ -29885,7 +29885,24 @@ mod app_api_tests {
     }
     #[test]
     fn pin_manifest_readback_query_requires_one_complete_canonical_cursor() {
-        let block_hash = "11".repeat(32);
+        let block_hash = "ab".repeat(32);
+        let uppercase_block_hash = block_hash.to_ascii_uppercase();
+        assert_ne!(
+            uppercase_block_hash, block_hash,
+            "uppercase mutation must change the fixture"
+        );
+        let encoded_block_hash = format!("%61{}", &block_hash[1..]);
+        let encoded_hash_query = format!("expected_finalized_block_hash_hex={encoded_block_hash}");
+        assert_eq!(
+            url::form_urlencoded::parse(encoded_hash_query.as_bytes())
+                .into_owned()
+                .collect::<Vec<_>>(),
+            vec![(
+                "expected_finalized_block_hash_hex".to_owned(),
+                block_hash.clone()
+            )],
+            "encoded mutation must decode to the exact canonical hash"
+        );
         let query = PinManifestReadbackQuery::parse(Some(&format!(
             "expected_finalized_height=2&expected_finalized_block_hash_hex={block_hash}"
         )))
@@ -29894,7 +29911,7 @@ mod app_api_tests {
             query.expected_finalized_cursor().expect("build cursor"),
             Some(PinManifestFinalizedCursorV1 {
                 height: 2,
-                block_hash: [0x11; 32],
+                block_hash: [0xAB; 32],
             })
         );
         for invalid in [
@@ -29909,12 +29926,9 @@ mod app_api_tests {
             format!("expected_finalized_height=%32&expected_finalized_block_hash_hex={block_hash}"),
             format!(
                 "expected_finalized_height=2&expected_finalized_block_hash_hex={}",
-                block_hash.to_ascii_uppercase()
+                uppercase_block_hash
             ),
-            format!(
-                "expected_finalized_height=2&expected_finalized_block_hash_hex=%31{}",
-                &block_hash[2..]
-            ),
+            format!("expected_finalized_height=2&{encoded_hash_query}"),
             format!(
                 "expected_finalized_height=2&expected_finalized_block_hash_hex={}",
                 "00".repeat(32)

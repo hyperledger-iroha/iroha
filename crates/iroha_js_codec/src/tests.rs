@@ -5,7 +5,13 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::{AccountId, NewAccount, address::AccountAddress},
     escrow::EscrowId,
-    isi::{InstructionBox, escrow::CancelAssetLock},
+    isi::{
+        InstructionBox,
+        escrow::CancelAssetLock,
+        smart_contract_code::{
+            CommitContractDeployment, FinalizeSmartContractCodeUpload, UploadSmartContractCodeChunk,
+        },
+    },
     smart_contract::manifest::ContractManifest,
 };
 use iroha_primitives::numeric::Quantity;
@@ -260,31 +266,31 @@ fn cancel_lock_strict_fields_and_quantities_survive_extraction() {
 }
 
 #[test]
-fn register_account_requires_metadata_and_rejects_unknown_envelopes() {
+fn register_account_requires_canonical_fields_and_rejects_unknown_envelopes() {
     let _network = ChainDiscriminantGuard::enter(FIXTURE_NETWORK_PREFIX);
     let account_json = json::to_value(&NewAccount::new(account())).expect("new account JSON");
-    let registration = object([("Register", object([("Account", account_json.clone())]))]);
-    let canonical = text(&registration);
-    encode_instruction_frame(&canonical, FIXTURE_NETWORK_PREFIX)
-        .expect("complete canonical account registration");
-    encode_instruction_archive(&canonical, FIXTURE_NETWORK_PREFIX)
-        .expect("complete canonical account archive");
-    let mut missing_metadata = account_json.clone();
-    missing_metadata
-        .as_object_mut()
-        .expect("account object")
-        .remove("metadata");
-    for encode in [encode_instruction_frame, encode_instruction_archive] {
-        let error = encode(
-            &text(&object([(
-                "Register",
-                object([("Account", missing_metadata.clone())]),
-            )])),
-            FIXTURE_NETWORK_PREFIX,
-        )
-        .expect_err("native account requires metadata");
-        assert_eq!(error.kind(), CodecErrorKind::Failure);
-        assert!(error.reason().contains("metadata"));
+    let canonical = object([("Register", object([("Account", account_json.clone())]))]);
+    encode_instruction_frame(&text(&canonical), FIXTURE_NETWORK_PREFIX)
+        .expect("canonical account registration");
+    encode_instruction_archive(&text(&canonical), FIXTURE_NETWORK_PREFIX)
+        .expect("canonical account registration archive");
+    for field in ["id", "metadata", "label", "uaid", "opaque_ids"] {
+        let mut incomplete = account_json.clone();
+        incomplete
+            .as_object_mut()
+            .expect("account object")
+            .remove(field)
+            .expect("required canonical field");
+        let payload = text(&object([("Register", object([("Account", incomplete)]))]));
+        for encode in [encode_instruction_frame, encode_instruction_archive] {
+            let error = encode(&payload, FIXTURE_NETWORK_PREFIX)
+                .expect_err("canonical account fields are required");
+            assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");
+            assert!(
+                error.reason().contains(&format!("missing field `{field}`")),
+                "{error}"
+            );
+        }
     }
     let mut unknown = account_json.clone();
     unknown
@@ -300,7 +306,7 @@ fn register_account_requires_metadata_and_rejects_unknown_envelopes() {
             FIXTURE_NETWORK_PREFIX,
         )
         .expect_err("native account rejects unknown fields");
-        assert_eq!(error.kind(), CodecErrorKind::Failure);
+        assert_eq!(error.kind(), CodecErrorKind::InvalidArgument);
     }
     assert_strict_rejection(&object([(
         "Register",
@@ -586,7 +592,22 @@ fn all_browser_game_instruction_families_roundtrip_native_json() {
                 }
             };
         }
-        let instruction = typed_browser_instruction_catalog!(native_from_catalog);
+        let instruction = native_from_catalog! {
+            OpenGameSessionV1 => iroha_data_model::isi::game::OpenGameSessionV1,
+            JoinGameSessionV1 => iroha_data_model::isi::game::JoinGameSessionV1,
+            StartGameSessionV1 => iroha_data_model::isi::game::StartGameSessionV1,
+            CommitGameCheckpointV1 => iroha_data_model::isi::game::CommitGameCheckpointV1,
+            ChallengeGameSessionV1 => iroha_data_model::isi::game::ChallengeGameSessionV1,
+            CommitGameInputsV1 => iroha_data_model::isi::game::CommitGameInputsV1,
+            RevealGameInputsV1 => iroha_data_model::isi::game::RevealGameInputsV1,
+            AdvanceGameDeadlineV1 => iroha_data_model::isi::game::AdvanceGameDeadlineV1,
+            SettleGameSessionV1 => iroha_data_model::isi::game::SettleGameSessionV1,
+            ExpireGameSessionV1 => iroha_data_model::isi::game::ExpireGameSessionV1,
+            ClaimGamePayoutV1 => iroha_data_model::isi::game::ClaimGamePayoutV1,
+            StakeGameItemV1 => iroha_data_model::isi::game::StakeGameItemV1,
+            RegisterExecutionProofProfileV1 => iroha_data_model::isi::game::RegisterExecutionProofProfileV1,
+            VerifyExecutionProofV1 => iroha_data_model::isi::game::VerifyExecutionProofV1,
+        };
         assert_typed_instruction_roundtrip(instruction, object([(name, payload)]));
     }
 }
@@ -599,7 +620,15 @@ fn all_browser_nft_market_instruction_families_preserve_native_fixture_frames() 
     ))
     .expect("native NFT fixture");
     for name in ["OfferNftV1", "BuyNftV1", "CancelNftOfferV1"] {
-        let payload = fixture_value(&fixture, name);
+        let mut payload = fixture_value(&fixture, name);
+        let terms = if name == "BuyNftV1" {
+            payload.as_object_mut().unwrap().get_mut("offer").unwrap()
+        } else {
+            &mut payload
+        };
+        if let Some(expiry) = terms.as_object_mut().unwrap().get_mut("expires_at_height") {
+            *expiry = Value::String(expiry.as_u64().unwrap().to_string());
+        }
         let row = fixture["vectors"]
             .as_array()
             .unwrap()
@@ -643,6 +672,15 @@ fn browser_kagemusha_top_up_roundtrips_existing_native_identity_fixture() {
     )
     .expect("native top-up instruction");
     let value = instruction_to_json_value(&instruction).expect("native top-up JSON");
+    let payload = value["TopUpKagemushaV1"].as_object().unwrap();
+    for field in payload.keys() {
+        let mut missing = payload.clone();
+        missing.remove(field);
+        assert_strict_rejection(&object([("TopUpKagemushaV1", Value::Object(missing))]));
+    }
+    assert_strict_rejection(&Value::String(
+        STANDARD.encode(norito::encode_canonical(&instruction).unwrap()),
+    ));
     assert_typed_instruction_roundtrip(instruction, value);
 }
 
@@ -874,7 +912,7 @@ fn typed_registration_respects_selected_context_and_native_error_categories() {
         assert_eq!(chain_discriminant(), 42);
         assert_eq!(
             encode(&source, 42).unwrap_err().kind(),
-            CodecErrorKind::Failure
+            CodecErrorKind::InvalidArgument
         );
         assert_eq!(chain_discriminant(), 42);
     }

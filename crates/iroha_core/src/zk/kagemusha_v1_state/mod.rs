@@ -13,10 +13,15 @@ pub use bootstrap_checkpoint::{
     KagemushaBootstrapCheckpointV1, KagemushaBootstrapJournalStageV1, KagemushaBootstrappedWalletV1,
 };
 #[cfg(unix)]
+mod recovery_journal_bundle;
+#[cfg(unix)]
+pub use recovery_journal_bundle::KagemushaPendingRecoveryJournalsV1;
+#[cfg(unix)]
 mod response_evidence_archive;
 #[cfg(unix)]
 pub use response_evidence_archive::{
     KagemushaResponseEvidenceArchiveErrorV1, KagemushaResponseEvidenceArchiveV1,
+    KagemushaResponseEvidenceContextV1,
 };
 mod candidate_lifecycle;
 mod commitments;

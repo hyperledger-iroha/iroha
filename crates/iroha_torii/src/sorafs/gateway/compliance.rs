@@ -604,6 +604,46 @@ pub struct GatewayComplianceAcknowledgementPayloadV1 {
     /// Payload-free rejection code when `accepted` is false.
     pub rejection_code: Option<String>,
 }
+impl GatewayComplianceAcknowledgementPayloadV1 {
+    /// Validate context-free canonical fields before signing or verification.
+    fn validate(&self) -> Result<(), GatewayComplianceError> {
+        if self.version != GATEWAY_COMPLIANCE_ACK_VERSION_V1 {
+            return Err(GatewayComplianceError::InvalidAcknowledgement(
+                "unsupported acknowledgement version".into(),
+            ));
+        }
+        validate_token(&self.gateway_id, "gateway_id")?;
+        if self.observed_at_unix == 0 {
+            return Err(GatewayComplianceError::InvalidAcknowledgement(
+                "acknowledgement timestamp is invalid".into(),
+            ));
+        }
+        match (self.accepted, self.rejection_code.as_ref()) {
+            (true, None) => Ok(()),
+            (false, Some(code)) => validate_token(code, "rejection_code"),
+            _ => Err(GatewayComplianceError::InvalidAcknowledgement(
+                "accepted acknowledgements omit rejection_code; rejected acknowledgements require it"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Return the exact domain-separated digest a regional gateway signs.
+    ///
+    /// # Errors
+    ///
+    /// Rejects noncanonical payload fields or an unencodable bounded payload.
+    /// This does not authenticate the gateway, authorize the catalog, or establish
+    /// freshness relative to a controller's clock; verification owns those checks.
+    pub fn signing_digest(&self) -> Result<[u8; 32], GatewayComplianceError> {
+        self.validate()?;
+        hash_canonical(
+            ACK_SIGNING_DOMAIN_V1,
+            self,
+            MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+        )
+    }
+}
 /// Signed regional gateway acknowledgement.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -626,19 +666,13 @@ impl GatewayComplianceAcknowledgementV1 {
         observed_at_unix: u64,
         max_clock_skew_secs: u64,
     ) -> Result<(), GatewayComplianceError> {
-        if self.payload.version != GATEWAY_COMPLIANCE_ACK_VERSION_V1 {
-            return Err(GatewayComplianceError::InvalidAcknowledgement(
-                "unsupported acknowledgement version".into(),
-            ));
-        }
-        validate_token(&self.payload.gateway_id, "gateway_id")?;
+        let digest = self.payload.signing_digest()?;
         if self.payload.catalog_digest != expected_catalog_digest {
             return Err(GatewayComplianceError::InvalidAcknowledgement(
                 "catalog digest mismatch".into(),
             ));
         }
-        if self.payload.observed_at_unix == 0
-            || self.payload.observed_at_unix > observed_at_unix.saturating_add(max_clock_skew_secs)
+        if self.payload.observed_at_unix > observed_at_unix.saturating_add(max_clock_skew_secs)
             || self
                 .payload
                 .observed_at_unix
@@ -648,18 +682,6 @@ impl GatewayComplianceAcknowledgementV1 {
             return Err(GatewayComplianceError::InvalidAcknowledgement(
                 "acknowledgement timestamp is invalid".into(),
             ));
-        }
-        match (self.payload.accepted, self.payload.rejection_code.as_ref()) {
-            (true, None) => {}
-            (false, Some(code)) => {
-                validate_token(code, "rejection_code")?;
-            }
-            _ => {
-                return Err(GatewayComplianceError::InvalidAcknowledgement(
-                    "accepted acknowledgements omit rejection_code; rejected acknowledgements require it"
-                        .into(),
-                ));
-            }
         }
         let trusted = policy
             .gateway_signer(&self.payload.gateway_id)
@@ -674,11 +696,6 @@ impl GatewayComplianceAcknowledgementV1 {
                 self.payload.gateway_id.clone(),
             ));
         }
-        let digest = hash_canonical(
-            ACK_SIGNING_DOMAIN_V1,
-            &self.payload,
-            MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-        )?;
         verify_ed25519(
             &trusted.public_key,
             &self.signature,
@@ -2549,12 +2566,9 @@ pub(crate) fn allow_all_gateway_compliance_controller_for_tests() -> Arc<Gateway
         accepted: true,
         rejection_code: None,
     };
-    let acknowledgement_digest = hash_canonical(
-        ACK_SIGNING_DOMAIN_V1,
-        &acknowledgement_payload,
-        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
-    )
-    .expect("test acknowledgement must encode");
+    let acknowledgement_digest = acknowledgement_payload
+        .signing_digest()
+        .expect("test acknowledgement must encode");
     controller
         .acknowledge(
             GatewayComplianceAcknowledgementV1 {

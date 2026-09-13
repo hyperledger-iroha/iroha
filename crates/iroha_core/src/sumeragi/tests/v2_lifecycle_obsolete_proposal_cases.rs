@@ -205,6 +205,429 @@ fn obsolete_proposal_frontier(
     .expect("seal cryptographically verified installed-timeout frontier")
 }
 
+fn obsolete_proposal_decision(
+    verified: &VerifiedHeightContext,
+    keys: &[KeyPair],
+    proposal: &wire::Proposal,
+) -> wire::QuorumCertificate {
+    let mut decision = prepare_certificate(verified, keys, proposal.round, proposal.subject, false);
+    decision.phase = wire::GlobalPhase::Commit;
+    let preimage = wire::Vote {
+        round: decision.round,
+        proposal_round: decision.proposal_round,
+        phase: decision.phase,
+        subject: decision.subject,
+        execution_commitment: decision.execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = decision
+        .signers
+        .iter()
+        .map(|signer| {
+            Signature::new(
+                keys[usize::try_from(*signer).expect("fixture Decision signer")].private_key(),
+                &preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    decision.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate Decision signatures");
+    decision
+}
+
+fn pending_kura_incident_output_record(
+    verified: &VerifiedHeightContext,
+    effect: AdapterEffect,
+    owner_ordinal: u128,
+    ordinal: u128,
+) -> LifecycleLedgerRecordV1 {
+    let context = super::super::projection::lifecycle_context(verified.context());
+    let tag = EventTag::new(verified.context().height, 0, Generation::INITIAL);
+    // A lifecycle ordinal does not enter fresh_for_test's causal root. Name
+    // each incident owner explicitly; outputs of one owner share that name.
+    let mut semantic_identity = b"pending Kura incident output owner".to_vec();
+    semantic_identity.extend_from_slice(&owner_ordinal.to_le_bytes());
+    let ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&effect),
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                owner_ordinal,
+                &semantic_identity,
+            ),
+        ],
+    )
+    .expect("bind the incident's independently named output owner")
+    .pop()
+    .expect("one incident output owner");
+    let pending = ownership
+        .exact_pending_adapter_effect_binding(&effect)
+        .expect("bind the exact incident output");
+    let prepared = super::super::work_registry::PreparedLifecycleAdmissionV1::direct_signed(
+        context, verified, effect, pending,
+    )
+    .unwrap_or_else(|_| panic!("prepare the authenticated incident output"));
+    let candidate = prepared.candidate().clone();
+    LifecycleLedgerRecordV1::new(
+        candidate.key,
+        OwnerId::new(candidate.causal_root, owner_ordinal),
+        ordinal,
+        candidate.work_class,
+        candidate.stage,
+        None,
+        candidate.reconstruction_source,
+        candidate.payload,
+        candidate.replay_authority,
+        DurableContinuation::None,
+    )
+    .expect("construct the exact incident output row")
+}
+
+impl super::super::ProductionLifecycleOwnerV1 {
+    /// Persist the complete eight-row cut retained by the production incident.
+    pub(in crate::sumeragi) fn persist_pending_kura_incident_outputs_for_test(
+        verified: &VerifiedHeightContext,
+        proposal: wire::Proposal,
+        durable: &DurableBodyReceipt,
+        prepare_vote: wire::Vote,
+        prepare_qc: wire::QuorumCertificate,
+        commit_vote: wire::Vote,
+        decision: wire::QuorumCertificate,
+        root: &Path,
+    ) -> LifecycleLedgerV1 {
+        verified
+            .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+            ))
+            .expect("authenticate pending Kura Proposal fixture");
+        let context = super::super::projection::lifecycle_context(verified.context());
+        let tag = EventTag::new(
+            proposal.round.height,
+            proposal.round.view,
+            Generation::INITIAL,
+        );
+        let validate = super::super::replay_authority::exact_local_body_record_fixture(
+            context,
+            tag,
+            proposal.manifest.clone(),
+            durable,
+            LifecycleStageKind::ValidateBody,
+        )
+        .expect("derive the exact retained local Validate row");
+        let validate_root = CausalRoot::new(LifecycleDigest::new(
+            *Hash::new(b"pending Kura incident local Validate owner").as_ref(),
+        ));
+        let mut records = vec![
+            LifecycleLedgerRecordV1::new(
+                validate.key,
+                OwnerId::new(validate_root, 542069),
+                542069,
+                validate.work_class,
+                validate.stage,
+                Some(TerminalOutcome::Advanced),
+                validate_root.digest(),
+                validate.payload,
+                validate.authority,
+                DurableContinuation::AdvancedNoSuccessor,
+            )
+            .expect("retain the successful Validate tombstone"),
+        ];
+        records.extend(obsolete_proposal_pair(verified, proposal, 542077, 542080));
+
+        let mut unsigned = prepare_vote.clone();
+        unsigned.signature.clear();
+        let [parent, child] = super::super::replay_authority::exact_prepare_sign_broadcast_fixture(
+            context,
+            unsigned,
+            prepare_vote.clone(),
+        );
+        let prepare_output = pending_kura_incident_output_record(
+            verified,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(prepare_vote),
+            )),
+            542081,
+            542083,
+        );
+        let prepare_owner = prepare_output.owner();
+        records.push(
+            LifecycleLedgerRecordV1::new(
+                parent.key,
+                prepare_owner,
+                542081,
+                parent.work_class,
+                parent.stage,
+                Some(TerminalOutcome::Advanced),
+                prepare_owner.causal_root().digest(),
+                parent.payload,
+                parent.authority,
+                DurableContinuation::successor(
+                    DurableContinuationEdge::SignPrepareToBroadcast,
+                    542083,
+                ),
+            )
+            .expect("retain the exact Prepare Sign predecessor"),
+        );
+        records.push(
+            LifecycleLedgerRecordV1::new(
+                child.key,
+                prepare_owner,
+                542083,
+                child.work_class,
+                child.stage,
+                None,
+                prepare_owner.causal_root().digest(),
+                child.payload,
+                child.authority,
+                DurableContinuation::None,
+            )
+            .expect("retain the live signed Prepare output"),
+        );
+
+        for (ordinal, owner_ordinal, payload) in [
+            (
+                542123,
+                542123,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(prepare_qc),
+            ),
+            (
+                542126,
+                542123,
+                wire::ConsensusMessageV2Payload::Vote(commit_vote),
+            ),
+            (
+                542138,
+                542138,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(decision),
+            ),
+        ] {
+            let output = pending_kura_incident_output_record(
+                verified,
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload)),
+                owner_ordinal,
+                ordinal,
+            );
+            let authenticated = output
+                .authenticate_recovered_lifecycle_output(context, verified, None, None)
+                .expect("authenticate the exact terminal output fixture");
+            assert_eq!(authenticated.owner(), output.owner());
+            records.push(output.with_terminal_for_test(Some(TerminalOutcome::Advanced)));
+        }
+        assert_eq!(
+            records
+                .iter()
+                .map(|row| (row.ordinal(), row.owner().first_admission_ordinal()))
+                .collect::<Vec<_>>(),
+            vec![
+                (542069, 542069),
+                (542077, 542077),
+                (542080, 542077),
+                (542081, 542081),
+                (542083, 542081),
+                (542123, 542123),
+                (542126, 542123),
+                (542138, 542138),
+            ],
+        );
+        assert_eq!(
+            records
+                .iter()
+                .map(|row| row.owner().causal_root())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            5,
+            "the five distinct incident owners must have distinct causal roots",
+        );
+        let ledger = obsolete_proposal_ledger(verified, records);
+        assert_eq!(ledger.records().len(), 8);
+        let (store, _) = LifecycleLedgerStoreV1::open(root, ledger.context())
+            .expect("open pending Kura Proposal ledger");
+        store
+            .persist(&ledger)
+            .expect("persist the complete incident cut");
+        ledger
+    }
+
+    /// Verify that cancellation changed only the retained Proposal's terminal state.
+    pub(in crate::sumeragi) fn assert_pending_kura_proposal_cancelled_for_test(
+        &self,
+        before: &LifecycleLedgerV1,
+    ) {
+        let after = self
+            .coordinator
+            .ledger_store
+            .as_ref()
+            .expect("pending Kura owner retains its ledger store")
+            .load()
+            .expect("reload durable Proposal cancellation");
+        assert_eq!(after.context(), before.context());
+        assert_eq!(after.high_water(), before.high_water());
+        assert_eq!(after.records().len(), before.records().len());
+        for (original, retained) in before.records().iter().zip(after.records()) {
+            if original.ordinal() != 542080 {
+                assert_eq!(
+                    retained, original,
+                    "cancellation preserves every other incident row"
+                );
+            }
+        }
+        let original = before
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == 542080)
+            .unwrap();
+        let cancelled = after
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == 542080)
+            .unwrap();
+        let expected = |terminal| {
+            LifecycleLedgerRecordV1::new(
+                original.key().unwrap(),
+                original.owner(),
+                original.ordinal(),
+                original.work_class().unwrap(),
+                original.stage().unwrap(),
+                terminal,
+                original.reconstruction_source(),
+                original.durable_payload().unwrap(),
+                self.coordinator.durable_records[&original.ordinal()]
+                    .replay_authority
+                    .clone(),
+                original.continuation().unwrap(),
+            )
+            .expect("reconstruct exact retained Proposal row")
+        };
+        assert_eq!(*original, expected(None));
+        assert_eq!(*cancelled, expected(Some(TerminalOutcome::Cancelled)));
+        assert_eq!(self.recovered_lifecycle_output_count(), 1);
+    }
+
+    /// Compare the retained incident history after actual service acceptance.
+    pub(in crate::sumeragi) fn assert_pending_kura_incident_settled_for_test(
+        before: &LifecycleLedgerV1,
+        root: &Path,
+    ) {
+        let (store, _) = LifecycleLedgerStoreV1::open(root, before.context())
+            .expect("reopen the settled incident ledger");
+        let after = store.load().expect("read the settled incident ledger");
+        for original in before.records() {
+            let retained = after
+                .records()
+                .iter()
+                .find(|row| row.ordinal() == original.ordinal())
+                .expect("every incident row survives pending Kura replay");
+            let terminal = match original.ordinal() {
+                542080 => Some(TerminalOutcome::Cancelled),
+                542083 => Some(TerminalOutcome::Advanced),
+                _ => {
+                    assert_eq!(
+                        retained, original,
+                        "terminal history must remain byte-exact"
+                    );
+                    continue;
+                }
+            };
+            let expected = original.clone().with_terminal_for_test(terminal);
+            assert_eq!(*retained, expected);
+        }
+    }
+}
+
+#[test]
+fn cold_output_cancels_same_view_proposal_after_authenticated_decision_without_timeout() {
+    let (verified, keys) = verified_fixture();
+    let proposal = obsolete_proposal_signed(&verified, &keys, 0, 0xD1);
+    let decision = obsolete_proposal_decision(&verified, &keys, &proposal);
+    let frontier =
+        crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_verified_decision_for_test(
+            &verified, &decision,
+        )
+        .expect("authenticate durable Decision frontier");
+    let ledger = obsolete_proposal_ledger(
+        &verified,
+        obsolete_proposal_pair(&verified, proposal, 3, 7).into(),
+    );
+    let before = ledger.clone();
+    let outputs = PreparedLifecycleOutputRecoveryV1::assemble_with_frontier(
+        &ledger,
+        &verified,
+        RecoveredWalStartupProjectionV1::None,
+        Some(frontier),
+    )
+    .expect("Decision retires its same-view Proposal before PendingKura recovery");
+    assert_eq!(ledger, before);
+    let output = outputs.entries.get(&7).expect("retain exact Proposal row");
+    assert_eq!(output.terminal_outcome(), TerminalOutcome::Cancelled);
+    assert!(!output.requires_output_service());
+    assert!(output.authenticates_settlement(&verified));
+}
+
+#[test]
+fn cold_decision_proposal_cancellation_preserves_authentication_boundaries() {
+    let (verified, keys) = verified_fixture();
+    let proposal = obsolete_proposal_signed(&verified, &keys, 0, 0xD2);
+    let decision = obsolete_proposal_decision(&verified, &keys, &proposal);
+    let frontier =
+        crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_verified_decision_for_test(
+            &verified, &decision,
+        )
+        .expect("authenticate Decision frontier");
+    let ledger = obsolete_proposal_ledger(
+        &verified,
+        obsolete_proposal_pair(&verified, proposal.clone(), 3, 7).into(),
+    );
+    let mut forged_decision = decision;
+    forged_decision.aggregate_signature[0] ^= 1;
+    assert!(
+        crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_verified_decision_for_test(
+            &verified,
+            &forged_decision,
+        )
+        .is_none()
+    );
+    let mut foreign_height = proposal.round;
+    foreign_height.height += 1;
+    assert!(!frontier.proves_obsolete_proposal(foreign_height));
+    let mut foreign_context = proposal.round;
+    foreign_context.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"foreign Decision cancellation context",
+    )));
+    assert!(!frontier.proves_obsolete_proposal(foreign_context));
+    let unqualified = crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_replayed_adapter(
+        verified.context().id(),
+        verified.context().height,
+        [0; 32],
+        0,
+        true,
+    );
+    assert_obsolete_proposal_rejected(&ledger, &verified, Some(unqualified), 7);
+    let mut forged_proposal = proposal.clone();
+    forged_proposal.signature[0] ^= 1;
+    let forged = obsolete_proposal_ledger(
+        &verified,
+        obsolete_proposal_pair(&verified, forged_proposal, 3, 7).into(),
+    );
+    assert_obsolete_proposal_rejected(&forged, &verified, Some(frontier), 7);
+    let unlinked = obsolete_proposal_ledger(
+        &verified,
+        vec![direct_output_record(
+            &verified,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal),
+            )),
+            7,
+        )],
+    );
+    assert_obsolete_proposal_rejected(&unlinked, &verified, Some(frontier), 7);
+}
+
 fn assert_obsolete_proposal_rejected(
     ledger: &LifecycleLedgerV1,
     verified: &VerifiedHeightContext,
@@ -458,7 +881,7 @@ fn obsolete_proposal_reopen_owner(
         adapter_startup: Some(
             crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
         ),
-        timeout_supersession_successor: None,
+        owner_open_successor: None,
     }
 }
 

@@ -1221,6 +1221,113 @@ class PhysicalDeviceEvidenceTest(unittest.TestCase):
                 ):
                     self.verify(document)
 
+    def test_durable_recovery_accepts_independent_resource_measurements(self) -> None:
+        expected = self.verify(self.fresh())
+        for original_kind, recovered_kind in (
+            ("inbox_stage", "inbox_recover"),
+            ("outbox_install", "outbox_recover"),
+        ):
+            for changed_kind in (original_kind, recovered_kind):
+                for fields in (("latency_ms",), ("rss_bytes",), ("latency_ms", "rss_bytes")):
+                    with self.subTest(kind=changed_kind, fields=fields):
+                        document = self.fresh()
+                        by_kind = {event["kind"]: event["data"] for event in document["events"]}
+                        original, recovered = by_kind[original_kind], by_kind[recovered_kind]
+                        for field in fields:
+                            by_kind[changed_kind][field] += 1
+                            self.assertNotEqual(original[field], recovered[field])
+                        self.assertEqual(physical._durable_record(original), physical._durable_record(recovered))
+                        self.rechain_sender(document)
+                        self.assertEqual(self.verify(document), expected)
+
+    def test_durable_recovery_rejects_each_changed_persisted_field(self) -> None:
+        for kind, fields in (
+            ("inbox_recover", ("credit_id", "canonical_bytes_sha256", "receipt_sha256", "inbox_revision", "result")),
+            ("outbox_recover", ("operation_id", "canonical_bytes_sha256", "certificate_sha256", "outbox_revision", "result")),
+        ):
+            for field in fields:
+                with self.subTest(kind=kind, field=field):
+                    document = self.fresh()
+                    recovered = next(event["data"] for event in document["events"] if event["kind"] == kind)
+                    recovered["latency_ms"] += 1
+                    recovered["rss_bytes"] += 1
+                    recovered[field] = (
+                        recovered[field] + 1 if field.endswith("_revision")
+                        else "discarded" if field == "result"
+                        else _digest(f"substituted-{kind}-{field}")
+                    )
+                    self.rechain_sender(document)
+                    error = "result must be durable" if field == "result" else "not byte-identical and durable"
+                    with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, error):
+                        self.verify(document)
+
+    def test_durable_recovery_measurements_still_require_valid_bounded_resources(self) -> None:
+        for kind in ("inbox_stage", "inbox_recover", "outbox_install", "outbox_recover"):
+            for field, value, error in (
+                ("latency_ms", 0, "latency_ms"),
+                ("latency_ms", True, "latency_ms"),
+                ("latency_ms", 1.0, "latency_ms"),
+                ("latency_ms", 1 << 32, "latency_ms"),
+                ("rss_bytes", 0, "rss_bytes"),
+                ("rss_bytes", True, "rss_bytes"),
+                ("rss_bytes", 1.0, "rss_bytes"),
+                ("rss_bytes", 1 << 64, "rss_bytes"),
+                ("rss_bytes", physical.MAX_RSS_BYTES + 1, "RSS exceeds"),
+            ):
+                with self.subTest(kind=kind, field=field, value=value):
+                    document = self.fresh()
+                    recovered = next(event["data"] for event in document["events"] if event["kind"] == kind)
+                    recovered[field] = value
+                    self.rechain_sender(document)
+                    with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, error):
+                        self.verify(document)
+
+    def test_durable_recovery_each_measurement_counts_toward_existing_latency_p95(self) -> None:
+        # The fixed transcript has 1,000 thermal and 36 other samples. Fifty
+        # slow folds preserve thermal p95; with one slow probe, overall p95
+        # lands exactly on the four 30,000-ms durable-record measurements.
+        # Increasing any one of those four measurements must cross overall p95.
+        baseline = self.fresh()
+        thermal = [event for event in baseline["events"] if event["kind"] == "thermal_fold"]
+        kinds = ("inbox_stage", "inbox_recover", "outbox_install", "outbox_recover")
+        self.assertEqual(len(thermal), 1_000)
+        self.assertEqual(sum("latency_ms" in event["data"] for event in baseline["events"]), 1_036)
+        for event in baseline["events"]:
+            if event["kind"] in kinds:
+                event["data"]["latency_ms"] = physical.MAX_LATENCY_MS
+        for event in thermal[-50:]:
+            event["data"]["latency_ms"] = physical.MAX_LATENCY_MS + 1
+        next(event["data"] for event in baseline["events"] if event["kind"] == "operation_probe")["latency_ms"] = physical.MAX_LATENCY_MS + 1
+        self.rechain_sender(baseline)
+        self.verify(baseline)
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                document = copy.deepcopy(baseline)
+                next(event["data"] for event in document["events"] if event["kind"] == kind)["latency_ms"] = physical.MAX_LATENCY_MS + 1
+                self.rechain_sender(document)
+                with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, "operation p95 latency exceeds"):
+                    self.verify(document)
+
+    def test_durable_recovery_measurement_changes_require_fresh_observer_approvals(self) -> None:
+        for kind in ("inbox_recover", "outbox_recover"):
+            with self.subTest(kind=kind):
+                document = self.fresh()
+                approvals = copy.deepcopy(document["approvals"])
+                next(event["data"] for event in document["events"] if event["kind"] == kind)["latency_ms"] += 1
+                self.rechain_sender(document)
+                document["approvals"] = approvals
+                with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, "invalid detached Ed25519 signature"):
+                    self.verify(document)
+
+    def test_durable_recovery_rejects_unknown_record_fields(self) -> None:
+        for kind in ("inbox_recover", "outbox_recover"):
+            with self.subTest(kind=kind):
+                document = self.fresh()
+                next(event["data"] for event in document["events"] if event["kind"] == kind)["unrecognized_durable_field"] = 1
+                self.rechain_sender(document)
+                with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, "unknown fields"):
+                    self.verify(document)
+
     def test_candidate_commit_and_outbox_are_one_durable_envelope(self) -> None:
         cases = (
             "run candidate digest",
@@ -1400,6 +1507,65 @@ class PhysicalDeviceEvidenceTest(unittest.TestCase):
         self.rechain_and_approve(substituted)
         with self.assertRaisesRegex(physical.PhysicalDeviceEvidenceError, "replayed"):
             self.verify(substituted)
+
+    def test_rejects_prior_prefix_boot_replay_in_crash_cycles(self) -> None:
+        baseline = self.fresh()
+        self.verify(baseline)
+        ends = [
+            event for event in baseline["events"]
+            if event["kind"] in {"restart_end", "power_loss_end"}
+        ]
+        self.assertEqual(len(ends), 5)
+        boots = [baseline["events"][0]["data"]["boot_id"]] + [
+            event["data"]["new_boot_id"] for event in ends
+        ]
+        self.assertEqual(len(set(boots)), 6)
+        for cycle, end in enumerate(ends):
+            # The immediate prior boot already has a per-event rejection. Exercise all
+            # older boots, including reuse across the restart/power-loss boundary.
+            for replayed in boots[:cycle]:
+                with self.subTest(kind=end["kind"], cycle=cycle, replayed=replayed):
+                    document = self.fresh()
+                    replaced = end["data"]["new_boot_id"]
+                    for event in document["events"][end["index"]:]:
+                        for field in ("boot_id", "prior_boot_id", "new_boot_id"):
+                            if event["data"].get(field) == replaced:
+                                event["data"][field] = replayed
+                    # Preserve immediate boot continuity and regenerate all test-only
+                    # signatures so rejection must come from the boot-history invariant.
+                    self.rechain_sender(document)
+                    with self.assertRaisesRegex(
+                        physical.PhysicalDeviceEvidenceError, "fresh hardware boot"
+                    ):
+                        self.verify(document)
+
+    def test_accepts_fresh_prefix_boot_replacements_in_crash_cycles(self) -> None:
+        baseline = self.fresh()
+        expected = self.verify(baseline)
+        ends = [
+            event for event in baseline["events"]
+            if event["kind"] in {"restart_end", "power_loss_end"}
+        ]
+        self.assertEqual(len(ends), 5)
+        observed_boots = {
+            event["data"][field]
+            for event in baseline["events"]
+            for field in ("boot_id", "prior_boot_id", "new_boot_id")
+            if field in event["data"]
+        }
+        for cycle, end in enumerate(ends):
+            with self.subTest(kind=end["kind"], cycle=cycle):
+                document = self.fresh()
+                replaced = end["data"]["new_boot_id"]
+                fresh_boot = _digest(f"fresh-prefix-crash-boot-{cycle}")
+                self.assertNotIn(fresh_boot, observed_boots)
+                for event in document["events"][end["index"]:]:
+                    for field in ("boot_id", "prior_boot_id", "new_boot_id"):
+                        if event["data"].get(field) == replaced:
+                            event["data"][field] = fresh_boot
+                # The final power-loss boot also binds the signed sender segment.
+                self.rechain_sender(document)
+                self.assertEqual(self.verify(document), expected)
 
     def test_rejects_software_endpoint(self) -> None:
         document = self.fresh()

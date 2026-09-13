@@ -1,6 +1,6 @@
 # Standalone Touring S1 proof
 
-This module proves Touring's complete staged arithmetic with the existing native Goldilocks/Fp4, Poseidon2, DEEP-ALI and FRI driver. It is not registered with the generic execution registry and cannot authorize a ledger settlement. It has no cryptographic or resource qualification claim.
+This module proves Touring's complete staged arithmetic with the existing native Goldilocks/Fp4, six-lane Goldilocks Poseidon-x7, DEEP-ALI and FRI driver. It is not registered with the generic execution registry and cannot authorize a ledger settlement. It has no cryptographic or resource qualification claim.
 
 `prove_classed_race_v1` accepts public worker inputs and uses the reference simulation to construct the claimed final state. It builds every staged witness row, produces the native STARK, and self-verifies. `verify_classed_race_proof_v1` requires a separate expected `ExecutionPublicInputsV1`, compares it exactly with the envelope, reconstructs canonical public fixed columns, and verifies the complete AIR proof. Verification never calls the driving reference. Ranking is a bounded deterministic projection of the proof-constrained final state; an arbitrary claimed order or winner set is rejected.
 

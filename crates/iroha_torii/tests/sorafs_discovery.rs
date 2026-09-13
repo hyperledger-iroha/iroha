@@ -8,8 +8,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ed25519_dalek::{Signer, SigningKey};
-use hex::ToHex;
-use http::header::{AGE, CACHE_CONTROL, RETRY_AFTER, WARNING};
+use http::header::CACHE_CONTROL;
 use http_body_util::BodyExt;
 use humantime::format_rfc3339;
 use iroha_config::{
@@ -43,7 +42,6 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::Child;
-use iroha_model_base::chain::ChainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_torii::{
@@ -62,9 +60,9 @@ use iroha_torii::{
         },
         unix_now_secs,
     },
-    test_utils::{AuthorityCreds, drain_queue_and_apply_all, random_authority},
+    test_utils::{AuthorityCreds, random_authority},
 };
-use iroha_version::codec::EncodeVersioned;
+use iroha_version::{Version as _, codec::EncodeVersioned};
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, to_bytes};
 use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
@@ -157,27 +155,6 @@ fn soranet_pq_capability() -> CapabilityTlv {
 struct ProviderFixture {
     advert: ProviderAdvertV1,
     envelope: ProviderAdmissionEnvelopeV1,
-}
-fn find_alias_entry<'a>(
-    aliases: &'a [json::Value],
-    namespace: &str,
-    name: &str,
-) -> Option<&'a json::Value> {
-    aliases.iter().find(|entry| {
-        entry
-            .get("alias")
-            .and_then(json::Value::as_object)
-            .is_some_and(|alias| {
-                alias.get("namespace").and_then(json::Value::as_str) == Some(namespace)
-                    && alias.get("name").and_then(json::Value::as_str) == Some(name)
-            })
-    })
-}
-fn manifest_entries(response: &json::Value) -> &[json::Value] {
-    response
-        .get("manifests")
-        .and_then(json::Value::as_array)
-        .unwrap_or_else(|| panic!("manifests array present; got {response:?}"))
 }
 #[test]
 fn torii_mesh_propagates_valid_advert() {
@@ -632,16 +609,36 @@ fn provider_cache_rejects_all_zero_signature_material_when_strict() {
         ],
         registry,
     );
+    cache
+        .ingest(fixture.advert.clone(), ISSUED_AT + 29)
+        .expect("valid signed advert must be cached before malformed replacement");
+    let current_fingerprint = *cache
+        .record_by_provider(&fixture.advert.body.provider_id)
+        .expect("current advert cached")
+        .fingerprint();
     let mut advert = fixture.advert.clone();
     advert.signature.signature.fill(0);
+    assert_ne!(
+        advert.signature.signature,
+        fixture.advert.signature.signature
+    );
     let err = cache
         .ingest(advert, ISSUED_AT + 30)
         .expect_err("strict advert must reject all-zero signature material");
     assert!(
-        matches!(err, AdvertError::Signature(ref reason) if reason.contains("all zero")),
+        matches!(
+            err,
+            AdvertError::Validation(AdvertValidationError::InvalidSignatureMaterial)
+        ),
         "expected all-zero signature failure, got: {err:?}"
     );
+    let stored = cache
+        .record_by_provider(&fixture.advert.body.provider_id)
+        .expect("all-zero signature replacement preserves current advert");
+    assert_eq!(stored.fingerprint(), &current_fingerprint);
+    assert_eq!(stored.advert(), &fixture.advert);
 }
+
 #[test]
 fn provider_cache_rejects_invalid_signature_with_relaxed_flag() {
     let signing_key = SigningKey::from_bytes(&[0x93; 32]);
@@ -681,6 +678,20 @@ fn provider_cache_rejects_invalid_signature_with_relaxed_flag() {
     let err = cache
         .ingest(advert.clone(), ISSUED_AT + 32)
         .expect_err("a relaxed remote flag must never bypass signature verification");
+    assert!(
+        matches!(err, AdvertError::SignaturePolicyDisabled),
+        "expected mandatory signature policy failure, got: {err:?}"
+    );
+    // The policy rejection occurs before signature verification. Restore only
+    // the mandatory flag: the same corrupt signature must fail cryptography.
+    advert.signature_strict = true;
+    assert_ne!(
+        advert.signature.signature,
+        fixture.advert.signature.signature
+    );
+    let err = cache
+        .ingest(advert.clone(), ISSUED_AT + 32)
+        .expect_err("restoring strict policy must not authorize a corrupt signature");
     assert!(
         matches!(err, AdvertError::Signature(_)),
         "expected signature verification failure, got: {err:?}"
@@ -901,7 +912,11 @@ fn provider_cache_persists_replay_high_water_across_restart() {
     );
     let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
     let temp = tempdir().expect("temporary replay checkpoint directory");
-    let checkpoint = temp.path().join("provider-advert-replay.to");
+    let checkpoint = temp
+        .path()
+        .canonicalize()
+        .expect("canonical replay checkpoint parent")
+        .join("provider-advert-replay.to");
     let capacity = NonZeroUsize::new(8).unwrap();
     let mut latest = fixture.advert.clone();
     latest.issued_at += 60;
@@ -988,7 +1003,11 @@ fn provider_cache_corrupt_replay_checkpoint_fails_closed_on_restart() {
     );
     let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
     let temp = tempdir().expect("temporary replay checkpoint directory");
-    let checkpoint = temp.path().join("provider-advert-replay.to");
+    let checkpoint = temp
+        .path()
+        .canonicalize()
+        .expect("canonical replay checkpoint parent")
+        .join("provider-advert-replay.to");
     let capacity = NonZeroUsize::new(8).unwrap();
     let mut cache = ProviderAdvertCache::new_persistent(
         [CapabilityType::ToriiGateway],
@@ -1029,7 +1048,11 @@ fn provider_cache_checkpoint_failure_rolls_back_memory_state() {
     );
     let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
     let temp = tempdir().expect("temporary replay checkpoint directory");
-    let checkpoint = temp.path().join("provider-advert-replay.to");
+    let checkpoint = temp
+        .path()
+        .canonicalize()
+        .expect("canonical replay checkpoint parent")
+        .join("provider-advert-replay.to");
     let capacity = NonZeroUsize::new(8).unwrap();
     let mut cache = ProviderAdvertCache::new_persistent(
         [CapabilityType::ToriiGateway],
@@ -1495,7 +1518,6 @@ struct ToriiHarness {
     kiso_child: Child,
     state: Arc<State>,
     queue: Arc<CoreQueue>,
-    chain_id: Arc<ChainId>,
     network_id: NetworkId,
     alias_policy: actual_cfg::SorafsAliasCachePolicy,
     // Keeps Torii persistence (including the exclusive advert replay lock)
@@ -1629,10 +1651,311 @@ fn enable_storage_with_discovery_native_signers(cfg: &mut actual_cfg::Root) {
             .configured_binding(),
     );
 }
+// Exercise the public signing, controller, transport and durable store owners.
+// Deterministic fixture keys authorize one empty catalog; this is not deployment
+// qualification or a provider that claims production identity on a mock transport.
+fn discovery_gateway_compliance_fixture(
+    directory: PathBuf,
+) -> (
+    actual_cfg::SorafsGatewayCompliance,
+    Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
+) {
+    use iroha_torii::sorafs::gateway::*;
+    fs::create_dir_all(&directory).expect("create isolated compliance directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("owner-only compliance directory");
+    }
+    let directory = directory
+        .canonicalize()
+        .expect("canonical compliance directory");
+    let catalog_key = SigningKey::from_bytes(&[0xC1; 32]);
+    let gateway_key = SigningKey::from_bytes(&[0xD2; 32]);
+    // This locally supplied required feed tests governed catalog construction;
+    // the production transport is constructed with its exact pins, but this
+    // readback fixture makes no DNS/HTTPS request or remote provenance claim.
+    let feed = actual_cfg::SorafsGatewayComplianceFeed {
+        feed_id: "discovery-fixture".into(),
+        url: "https://feeds.example.com/discovery.json".into(),
+        required: true,
+        hosts: vec![actual_cfg::SorafsGatewayComplianceFeedHost {
+            hostname: "feeds.example.com".into(),
+            accepted_spki_sha256: vec![[0xA5; 32]],
+        }],
+    };
+    let pins = feed
+        .hosts
+        .iter()
+        .map(|host| {
+            (
+                host.hostname.clone(),
+                host.accepted_spki_sha256.iter().copied().collect(),
+            )
+        })
+        .collect();
+    let transport = Arc::new(
+        ProductionGatewayComplianceFeedTransport::try_new(pins)
+            .expect("actual compliance transport with the exact fixture trust inventory"),
+    );
+    let identity = transport
+        .qualification()
+        .expect("actual transport identity");
+    assert!(!identity.test_marked);
+    let config = actual_cfg::SorafsGatewayCompliance {
+        checkpoint_path: directory.join("compliance.to"),
+        feed_transport_provider: actual_cfg::SorafsGatewayRuntimeProviderBinding {
+            provider_handle: identity.provider_handle,
+            revision: identity.revision,
+            policy_digest: identity.policy_digest,
+        },
+        policy_id: [0xE3; 32],
+        region_id: "test".into(),
+        gateway_id: "gateway-test".into(),
+        catalog_threshold: 1,
+        catalog_signers: vec![actual_cfg::SorafsGatewayComplianceSigner {
+            signer_id: "catalog-test".into(),
+            public_key: catalog_key.verifying_key().to_bytes(),
+        }],
+        revoked_catalog_signer_ids: Vec::new(),
+        gateway_ack_threshold: 1,
+        gateway_signers: vec![actual_cfg::SorafsGatewayComplianceSigner {
+            signer_id: "gateway-test".into(),
+            public_key: gateway_key.verifying_key().to_bytes(),
+        }],
+        revoked_gateway_signer_ids: Vec::new(),
+        feeds: vec![feed],
+        max_encoded_bytes: Bytes(4_096),
+        max_decoded_bytes: Bytes(8_192),
+        max_redirects: 0,
+        max_dns_addresses: 1,
+        connect_timeout: Duration::from_secs(5),
+        total_timeout: Duration::from_secs(10),
+        max_clock_skew: Duration::from_secs(300),
+        max_feed_age: Duration::from_secs(3_600),
+        max_catalog_validity: Duration::from_secs(86_400),
+        max_history_entries: 16,
+    };
+    let signer =
+        |signer: &actual_cfg::SorafsGatewayComplianceSigner| GatewayComplianceTrustedSignerV1 {
+            signer_id: signer.signer_id.clone(),
+            public_key: signer.public_key,
+        };
+    let trust_policy = GatewayComplianceTrustPolicyV1 {
+        policy_id: config.policy_id,
+        catalog_threshold: config.catalog_threshold,
+        catalog_signers: config.catalog_signers.iter().map(signer).collect(),
+        revoked_catalog_signer_ids: config.revoked_catalog_signer_ids.clone(),
+        gateway_ack_threshold: config.gateway_ack_threshold,
+        gateway_signers: config.gateway_signers.iter().map(signer).collect(),
+        revoked_gateway_signer_ids: config.revoked_gateway_signer_ids.clone(),
+    };
+    let controller_config = GatewayComplianceControllerConfig {
+        trust_policy: trust_policy.clone(),
+        region_scope: format!("region:{}", config.region_id),
+        gateway_scope: format!("gateway:{}", config.gateway_id),
+        feeds: config
+            .feeds
+            .iter()
+            .map(|feed| GatewayComplianceFeedPolicy {
+                feed_id: feed.feed_id.clone(),
+                url: feed.url.clone(),
+                required: feed.required,
+                hosts: feed
+                    .hosts
+                    .iter()
+                    .map(|host| GatewayComplianceFeedHostPolicy {
+                        hostname: host.hostname.clone(),
+                        accepted_spki_sha256: host.accepted_spki_sha256.iter().copied().collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        feed_transport_provider: Some(
+            GatewayProviderBindingV1::try_new(
+                config.feed_transport_provider.provider_handle.clone(),
+                config.feed_transport_provider.revision,
+                config.feed_transport_provider.policy_digest,
+            )
+            .expect("exact configured feed transport binding"),
+        ),
+        fetch_limits: GatewayComplianceFetchLimits {
+            max_encoded_bytes: usize::try_from(config.max_encoded_bytes.0).unwrap(),
+            max_decoded_bytes: usize::try_from(config.max_decoded_bytes.0).unwrap(),
+            max_redirects: config.max_redirects,
+            max_dns_addresses: config.max_dns_addresses,
+            connect_timeout: config.connect_timeout,
+            total_timeout: config.total_timeout,
+        },
+        max_clock_skew_secs: config.max_clock_skew.as_secs(),
+        max_feed_age_secs: config.max_feed_age.as_secs(),
+        max_catalog_validity_secs: config.max_catalog_validity.as_secs(),
+        max_history_entries: config.max_history_entries,
+    };
+    let store = Arc::new(
+        FileGatewayComplianceStore::new(config.checkpoint_path.clone())
+            .expect("actual isolated compliance checkpoint store"),
+    );
+    let controller = GatewayComplianceController::new_with_feed_transport(
+        controller_config.clone(),
+        store.clone(),
+        transport.as_ref(),
+    )
+    .expect("governed controller initialization");
+    let now = unix_now_secs();
+    let feed_document = GatewayComplianceFeedDocumentV1 {
+        version: GATEWAY_COMPLIANCE_FEED_VERSION_V1,
+        feed_id: config.feeds[0].feed_id.clone(),
+        generated_at_unix: now,
+        baseline_rules: Vec::new(),
+        appeal_overrides: Vec::new(),
+        legal_safety_holds: Vec::new(),
+        toggles: Vec::new(),
+    }
+    .normalize()
+    .expect("canonical locally supplied fixture feed");
+    let payload = controller
+        .build_catalog_payload(
+            1,
+            None,
+            now,
+            now.checked_add(config.max_catalog_validity.as_secs())
+                .unwrap(),
+            std::slice::from_ref(&feed_document),
+        )
+        .expect("canonical governed catalog with its required source anchor");
+    assert_eq!(payload.source_anchors.len(), 1);
+    assert_eq!(payload.source_anchors[0].feed_id, feed_document.feed_id);
+    assert_eq!(
+        payload.source_anchors[0].feed_digest,
+        feed_document.canonical_digest().unwrap()
+    );
+    let digest = payload.signing_digest().expect("catalog signing digest");
+    let staged = controller
+        .stage_catalog(
+            GatewayComplianceCatalogV1 {
+                payload,
+                approvals: vec![GatewayComplianceCatalogApprovalV1 {
+                    version: GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1,
+                    signer_id: config.catalog_signers[0].signer_id.clone(),
+                    signature: catalog_key.sign(&digest).to_bytes(),
+                }],
+            },
+            now,
+            GatewayComplianceMutationBindingV1 {
+                key_digest: [1; 32],
+                request_digest: [0x81; 32],
+            },
+        )
+        .expect("persist signed staged catalog");
+    let acknowledgement = GatewayComplianceAcknowledgementPayloadV1 {
+        version: GATEWAY_COMPLIANCE_ACK_VERSION_V1,
+        gateway_id: config.gateway_id.clone(),
+        catalog_digest: staged.catalog_digest,
+        observed_at_unix: now,
+        accepted: true,
+        rejection_code: None,
+    };
+    let digest = acknowledgement
+        .signing_digest()
+        .expect("public acknowledgement signing owner");
+    controller
+        .acknowledge(
+            GatewayComplianceAcknowledgementV1 {
+                payload: acknowledgement,
+                signature: gateway_key.sign(&digest).to_bytes(),
+            },
+            now,
+            GatewayComplianceMutationBindingV1 {
+                key_digest: [2; 32],
+                request_digest: [0x82; 32],
+            },
+        )
+        .expect("persist signed gateway acknowledgement");
+    controller
+        .promote(
+            staged.catalog_digest,
+            1,
+            now,
+            GatewayComplianceMutationBindingV1 {
+                key_digest: [3; 32],
+                request_digest: [0x83; 32],
+            },
+        )
+        .expect("promote exact catalog after gateway quorum");
+    let expected = controller.checkpoint().expect("promoted checkpoint");
+    drop(controller);
+    let reopened = GatewayComplianceController::new_with_feed_transport(
+        controller_config,
+        store,
+        transport.as_ref(),
+    )
+    .expect("reopen and validate actual durable compliance state");
+    assert_eq!(reopened.checkpoint().unwrap(), expected);
+    let decision = reopened
+        .evaluate_serving(
+            GatewayComplianceSubjectKindV1::ManifestDigest,
+            &hex::encode([0xA4; 32]),
+            now,
+        )
+        .expect("governed serving decision after reopen");
+    assert_eq!(decision.disposition, GatewayComplianceDisposition::Allow);
+    assert_eq!(decision.source, GatewayComplianceDecisionSource::NoMatch);
+    assert_eq!(decision.catalog_digest, Some(staged.catalog_digest));
+    // Release the same file lease before Torii acquires it during startup.
+    drop(reopened);
+    (config, transport)
+}
+
+#[test]
+fn discovery_compliance_fixture_persists_signed_promoted_catalog() {
+    use iroha_torii::sorafs::gateway::GatewayComplianceCheckpointV1;
+    let directory = tempdir().expect("compliance fixture temp dir");
+    let (config, _transport) = discovery_gateway_compliance_fixture(
+        directory.path().canonicalize().unwrap().join("compliance"),
+    );
+    assert!(
+        config
+            .checkpoint_path
+            .starts_with(directory.path().canonicalize().unwrap())
+    );
+    let bytes = fs::read(&config.checkpoint_path).expect("persisted canonical checkpoint");
+    let checkpoint: GatewayComplianceCheckpointV1 =
+        decode_from_bytes(&bytes).expect("canonical checkpoint frame");
+    assert_eq!(checkpoint.revision, 3);
+    assert_eq!(checkpoint.idempotency_records.len(), 3);
+    assert_eq!(checkpoint.history.len(), 1);
+    assert_eq!(checkpoint.serving.as_ref().unwrap().payload.sequence, 1);
+    assert_eq!(checkpoint.serving, checkpoint.chain_head);
+    assert!(checkpoint.candidate.is_none());
+    assert!(config.feeds[0].required);
+    assert_eq!(
+        checkpoint
+            .chain_head
+            .as_ref()
+            .unwrap()
+            .payload
+            .source_anchors
+            .len(),
+        1
+    );
+    assert_eq!(
+        checkpoint
+            .chain_head
+            .as_ref()
+            .unwrap()
+            .payload
+            .source_anchors[0]
+            .feed_id,
+        config.feeds[0].feed_id
+    );
+}
+
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
-    cfg.torii.data_dir = torii_data_dir.path().join("torii");
+    isolate_discovery_persistence(&mut cfg.torii, &torii_data_dir);
     let native_signers = cfg.torii.sorafs_storage.enabled.then(|| {
         let proof = Arc::new(DiscoveryNativeTransactionSigner::for_role(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
@@ -1666,6 +1989,17 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         }
         (proof, repair, reserve, orderbook)
     });
+    let compliance_transport = cfg.torii.sorafs_storage.enabled.then(|| {
+        assert!(
+            cfg.torii.sorafs_gateway.compliance.is_none(),
+            "discovery fixture owns its governed compliance policy"
+        );
+        let (compliance, transport) = discovery_gateway_compliance_fixture(
+            cfg.torii.sorafs_storage.data_dir.join("gateway-compliance"),
+        );
+        cfg.torii.sorafs_gateway.compliance = Some(compliance);
+        transport
+    });
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -1683,7 +2017,6 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let queue = Arc::new(CoreQueue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-    let chain_id_arc = Arc::new(chain_id.clone());
     let runtime_deps = ToriiRuntimeDeps::new(
         build_identity_test_fixture::build_identity(),
         MaybeTelemetry::disabled(),
@@ -1698,6 +2031,11 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
             .with_sorafs_repair_transaction_signer(repair)
             .with_sorafs_reserve_transaction_signer(reserve)
             .with_sorafs_orderbook_transaction_signer(orderbook)
+    } else {
+        runtime_deps
+    };
+    let runtime_deps = if let Some(transport) = compliance_transport {
+        runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
     } else {
         runtime_deps
     };
@@ -1727,7 +2065,6 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         kiso_child,
         state,
         queue,
-        chain_id: chain_id_arc,
         network_id,
         alias_policy,
         _torii_data_dir: torii_data_dir,
@@ -1746,28 +2083,6 @@ struct ManifestRequestFixture {
     authority: AuthorityCreds,
     manifest_payload: Vec<u8>,
     manifest_digest_hex: String,
-}
-fn submit_transaction(harness: &ToriiHarness, tx: SignedTransaction, next_height: &mut u64) {
-    let accepted_tx = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
-    harness
-        .queue
-        .push_with_lane(accepted_tx, harness.state.view())
-        .expect("push transaction into queue");
-    let applied = drain_queue_and_apply_all(
-        &harness.state,
-        &harness.queue,
-        harness.chain_id.as_ref(),
-        *next_height,
-    );
-    assert!(
-        applied > 0,
-        "expected transaction to apply at height {next_height}"
-    );
-    println!(
-        "APPLIED {} transactions at height {}",
-        applied, *next_height
-    );
-    *next_height += 1;
 }
 fn encode_alias_proof_bytes(
     alias_namespace: &str,
@@ -1900,11 +2215,11 @@ fn assert_sorafs_pin_error(body: &[u8], expected_code: &str, expected_message: &
         "pin registration error message must contain {expected_message:?}; got {message:?}"
     );
 }
-fn create_manifest_setup(harness: &ToriiHarness, next_height: &mut u64) -> ManifestSetup {
-    create_manifest_setup_with_seed(harness, next_height, 0xAB, None, None)
+fn create_manifest_readback_setup(harness: &ToriiHarness, next_height: &mut u64) -> ManifestSetup {
+    create_manifest_readback_setup_with_seed(harness, next_height, 0xAB, None, None)
 }
 #[allow(clippy::too_many_lines)]
-fn create_manifest_setup_with_seed(
+fn create_manifest_readback_setup_with_seed(
     harness: &ToriiHarness,
     next_height: &mut u64,
     seed: u8,
@@ -1939,64 +2254,69 @@ fn create_manifest_setup_with_seed(
     let manifest_digest_bytes = *manifest_digest_value.as_bytes();
     let manifest_digest_hex = hex::encode(manifest_digest_bytes);
     let manifest_digest = RegistryManifestDigest::new(manifest_digest_bytes);
+    // Seed the query owner's typed lifecycle record directly. Registration,
+    // provider selection, fees and council admission have separate transaction tests.
     let authority = random_authority();
-    ensure_authority_registered(harness, &authority, next_height);
-    let submitted_epoch = 12;
-    // RegisterPinManifest auto-approves the manifest at the submitted epoch.
-    let approved_epoch = submitted_epoch;
-    let register = RegisterPinManifest::new(
-        manifest.encode().expect("encode canonical manifest"),
+    let approved_epoch = 12;
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
+    if let Some(timestamp) = status_timestamp_unix {
+        metadata.insert(
+            Name::from_str(STATUS_TIMESTAMP_KEY).expect("timestamp key"),
+            Json::from(json::to_value(&timestamp).expect("timestamp serializes")),
+        );
+    }
+    let mut record = iroha_data_model::sorafs::pin_registry::PinManifestRecord::new(
+        manifest_digest,
+        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .expect("canonical manifest root CID"),
+        iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+            profile_id: manifest.chunking.profile_id.0,
+            namespace: manifest.chunking.namespace.clone(),
+            name: manifest.chunking.name.clone(),
+            semver: manifest.chunking.semver.clone(),
+            multihash_code: manifest.chunking.multihash_code,
+        },
+        manifest.chunk_digest_sha3_256,
+        manifest.por_root,
+        manifest.content_length,
+        manifest_policy_registry,
+        authority.account.clone(),
+        approved_epoch,
         None,
         successor_of,
+        metadata,
     );
-    let register_tx = TransactionBuilder::new(
-        harness.network_id,
-        authority.account.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([dm::InstructionBox::from(register)])
-    .sign(&authority.private_key.0);
-    submit_transaction(harness, register_tx, next_height);
-    if let Some(timestamp) = status_timestamp_unix {
-        let prev_hash = harness
-            .state
-            .view()
-            .latest_block()
-            .map(|block| block.hash());
-        let header = BlockHeader::new(
-            NonZeroU64::new(*next_height).expect("block height fits into NonZeroU64"),
-            prev_hash,
-            None,
-            None,
-            *next_height,
-            0,
-        );
-        let mut block = harness.state.block(header);
-        let mut tx = block.transaction();
-        {
-            let world = tx.world_mut_for_testing();
-            let manifests = world.pin_manifests_mut_for_testing();
-            let record = manifests
-                .get_mut(&manifest_digest)
-                .expect("manifest must exist before metadata update");
-            let name = Name::from_str(STATUS_TIMESTAMP_KEY).expect("timestamp key");
-            record.metadata.insert(
-                name,
-                Json::from(json::to_value(&timestamp).expect("timestamp serializes")),
-            );
-        }
-        tx.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit manifest status timestamp block");
-        *next_height += 1;
-    }
-    let view = harness.state.view();
-    let manifests_store = view.world().pin_manifests();
-    assert!(
-        manifests_store.get(&manifest_digest).is_some(),
-        "manifest must exist in registry after registration"
+    record.approve(approved_epoch, None);
+    let (height, previous) = {
+        let view = harness.state.view();
+        (
+            u64::try_from(view.block_hashes().len()).expect("fixture height fits u64") + 1,
+            view.latest_block_hash(),
+        )
+    };
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).expect("nonzero fixture height"),
+        previous,
+        None,
+        None,
+        height,
+        0,
     );
+    let mut block = harness.state.block(header);
+    let mut tx = block.transaction();
+    let (account_id, account) = dm::Account::new(authority.account.clone())
+        .build(&authority.account)
+        .into_key_value();
+    tx.world_mut_for_testing()
+        .insert_account_for_testing(account_id, account);
+    tx.world_mut_for_testing()
+        .pin_manifests_mut_for_testing()
+        .insert(manifest_digest, record);
+    tx.apply();
+    block
+        .commit_empty_block_for_testing()
+        .expect("commit typed pin readback fixture");
+    *next_height = height + 1;
     ManifestSetup {
         manifest_digest,
         manifest_digest_hex,
@@ -2006,14 +2326,14 @@ fn create_manifest_setup_with_seed(
         manifest_cid,
     }
 }
-fn create_successor_manifest(
+fn create_successor_manifest_readback(
     harness: &ToriiHarness,
     predecessor: &ManifestSetup,
     next_height: &mut u64,
     seed: u8,
     status_timestamp_unix: u64,
 ) -> ManifestSetup {
-    create_manifest_setup_with_seed(
+    create_manifest_readback_setup_with_seed(
         harness,
         next_height,
         seed,
@@ -2245,7 +2565,9 @@ async fn sorafs_routes_disabled_when_cache_off() {
     harness.shutdown().await;
 }
 #[tokio::test]
-#[should_panic(expected = "SoraFS discovery/admission enforcement requires")]
+#[should_panic(
+    expected = "discovery requires envelopes_dir, trusted_council_keys, and signature_threshold"
+)]
 async fn sorafs_discovery_startup_rejects_missing_admission_policy() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
@@ -2253,7 +2575,7 @@ async fn sorafs_discovery_startup_rejects_missing_admission_policy() {
     let _ = build_torii_harness(&cfg);
 }
 #[tokio::test]
-#[should_panic(expected = "invalid SoraFS provider admission council policy")]
+#[should_panic(expected = "provider admission council trust set must not be empty")]
 async fn sorafs_discovery_startup_rejects_empty_trust_set() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let temp = tempdir().expect("temp dir");
@@ -2322,23 +2644,70 @@ async fn sorafs_capacity_route_disabled_when_storage_off() {
     harness.shutdown().await;
 }
 #[tokio::test]
-async fn sorafs_pin_register_route_disabled_when_storage_off() {
+async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.transport.norito_rpc.enabled = true;
+    cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
+    // Registration is a caller-signed ledger submission; local storage service
+    // availability does not remove this canonical transaction endpoint.
     cfg.torii.sorafs_storage.enabled = false;
+    assert!(!cfg.torii.sorafs_storage.enabled);
     let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from("{}"))
-                .unwrap(),
-        )
+    let fixture = manifest_request_fixture(harness.network_id, |_| {});
+    let mut next_height = 1;
+    ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
+    let submitted_hash = fixture.transaction.hash();
+    let body = pin_register_json_body(&fixture.transaction);
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(body, "application/json"))
         .await
         .expect("router responds");
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let status = response.status();
+    let bytes = BodyExt::collect(response.into_body())
+        .await
+        .expect("collect response body")
+        .to_bytes();
+    assert!(
+        status == StatusCode::ACCEPTED,
+        "pin register route failed: {status} body={}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let value: json::Value = json::from_slice(&bytes).expect("decode response");
+    assert_eq!(
+        value
+            .get("manifest_digest_hex")
+            .and_then(json::Value::as_str),
+        Some(fixture.manifest_digest_hex.as_str())
+    );
+    assert_eq!(
+        value.get("tx_hash_hex").and_then(json::Value::as_str),
+        Some(hex::encode(submitted_hash.as_ref()).as_str())
+    );
+    assert_eq!(
+        value.get("status").and_then(json::Value::as_str),
+        Some("submitted")
+    );
+    assert_eq!(
+        value.as_object().map(|object| object.len()),
+        Some(3),
+        "admission response must not claim a fee, custody result, or finalized pin status"
+    );
+    let queued = {
+        let state_view = harness.state.view();
+        harness
+            .queue
+            .all_transactions(&state_view)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        queued
+            .iter()
+            .filter_map(AcceptedTransaction::external)
+            .any(|transaction| transaction.hash() == submitted_hash),
+        "the dedicated route must queue the original caller-signed transaction unchanged"
+    );
     harness.shutdown().await;
 }
 #[test]
@@ -2354,8 +2723,6 @@ fn storage_enabled_discovery_harness_rejects_missing_explicit_native_signers() {
 async fn sorafs_capacity_route_enabled_when_storage_on() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
     let response = app
@@ -2407,8 +2774,6 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
 async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires_authentication() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let response = harness
         .app
@@ -2461,11 +2826,136 @@ async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires
     assert_eq!(fetch_response.status(), StatusCode::NOT_FOUND);
     harness.shutdown().await;
 }
+fn pin_register_json_body(transaction: &SignedTransaction) -> Vec<u8> {
+    // The model serializer owns the inner payload. Torii's versioned ingress
+    // requires this exact numeric-version envelope for JSON and a version byte
+    // for Norito; a bare model object is not a second request representation.
+    let mut envelope = json::Map::new();
+    envelope.insert("version".into(), json::Value::from(transaction.version()));
+    envelope.insert(
+        "content".into(),
+        json::to_value(transaction).expect("serialize signed transaction content"),
+    );
+    json::to_vec(&json::Value::Object(envelope))
+        .expect("serialize canonical versioned pin transaction JSON")
+}
+
+#[tokio::test]
+async fn pin_register_json_fixture_roundtrips_through_the_public_http_route() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.transport.norito_rpc.enabled = true;
+    cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
+    enable_storage_with_discovery_native_signers(&mut cfg);
+    let harness = build_torii_harness(&cfg);
+    let fixture = manifest_request_fixture(harness.network_id, |_| {});
+    let mut next_height = 1;
+    ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
+    let body = pin_register_json_body(&fixture.transaction);
+    let envelope: json::Value = json::from_slice(&body).expect("versioned JSON object");
+    let fields = envelope.as_object().expect("versioned JSON fields");
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields.get("version").and_then(json::Value::as_u64), Some(1));
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(body, "application/json"))
+        .await
+        .expect("public HTTP router responds");
+    let status = response.status();
+    let bytes = BodyExt::collect(response.into_body())
+        .await
+        .expect("collect canonical admission response")
+        .to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "public ingress must decode canonical fixture JSON: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    {
+        let state_view = harness.state.view();
+        let queued = harness
+            .queue
+            .all_transactions(&state_view)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            queued.len(),
+            1,
+            "only the original transaction enters the queue"
+        );
+        let decoded = queued[0].external().expect("caller-signed transaction");
+        assert_eq!(
+            decoded.encode_versioned(),
+            fixture.transaction.encode_versioned()
+        );
+        assert_eq!(decoded.hash(), fixture.transaction.hash());
+        decoded
+            .verify_signature()
+            .expect("HTTP roundtrip preserves the caller's actual signature");
+    }
+    let content = fields
+        .get("content")
+        .expect("signed transaction content")
+        .clone();
+    let mut string_version = fields.clone();
+    string_version.insert("version".into(), json::Value::from("1"));
+    let mut future_version = fields.clone();
+    future_version.insert("version".into(), json::Value::from(2_u8));
+    let mut unknown_field = fields.clone();
+    unknown_field.insert("private_key".into(), json::Value::from("[redacted]"));
+    let mut missing_content = fields.clone();
+    missing_content.remove("content");
+    let rejected = [
+        content,
+        json::Value::Object(string_version),
+        json::Value::Object(future_version),
+        json::Value::Object(unknown_field),
+        json::Value::Object(missing_content),
+    ];
+    for mutant in rejected {
+        let bytes = json::to_vec(&mutant).expect("serialize invalid envelope control");
+        let response = harness
+            .app
+            .clone()
+            .oneshot(pin_register_http_request(bytes, "application/json"))
+            .await
+            .expect("public HTTP router responds to invalid envelope");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "bare, aliased, future, unknown-field or missing-content envelope must fail"
+        );
+        assert_eq!(
+            response.headers().get("x-iroha-reject-code").unwrap(),
+            "invalid_transaction_payload"
+        );
+        let state_view = harness.state.view();
+        let queued = harness
+            .queue
+            .all_transactions(&state_view)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            queued.len(),
+            1,
+            "invalid envelopes must not add a transaction"
+        );
+        let retained = queued[0]
+            .external()
+            .expect("retained caller-signed transaction");
+        assert_eq!(
+            retained.encode_versioned(),
+            fixture.transaction.encode_versioned()
+        );
+    }
+    harness.shutdown().await;
+}
+
 fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
     let mut request = Request::builder()
         .method("POST")
         .uri("/v1/sorafs/pin/register")
         .header("content-type", content_type)
+        .header("accept", "application/json")
         .body(Body::from(body))
         .expect("build pin-register request");
     request
@@ -2482,14 +2972,12 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let submitted_hash = fixture.transaction.hash();
-    let body = norito::json::to_vec(&fixture.transaction).expect("serialize signed transaction");
+    let body = pin_register_json_body(&fixture.transaction);
     let response = harness
         .app
         .clone()
@@ -2548,8 +3036,6 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let mut next_height = 1;
@@ -2579,8 +3065,6 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
 async fn sorafs_pin_register_validates_signed_manifest_bytes() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |manifest| {
         manifest.chunking.name = "bogus".into();
@@ -2589,7 +3073,7 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
         .app
         .clone()
         .oneshot(pin_register_http_request(
-            norito::json::to_vec(&fixture.transaction).expect("serialize signed transaction"),
+            pin_register_json_body(&fixture.transaction),
             "application/json",
         ))
         .await
@@ -2610,8 +3094,6 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
 async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let legacy = norito::json!({
@@ -2640,8 +3122,6 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
 async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let two_instructions = TransactionBuilder::new(
@@ -2658,7 +3138,7 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         .app
         .clone()
         .oneshot(pin_register_http_request(
-            norito::json::to_vec(&two_instructions).expect("serialize two-instruction transaction"),
+            pin_register_json_body(&two_instructions),
             "application/json",
         ))
         .await
@@ -2678,32 +3158,63 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
             b"Sorafs discovery wrong-network fixture",
         )));
     let wrong_network_fixture = manifest_request_fixture(wrong_network, |_| {});
+    wrong_network_fixture
+        .transaction
+        .verify_signature()
+        .expect("wrong-network adversary retains a valid caller signature");
     let response = harness
         .app
         .clone()
         .oneshot(pin_register_http_request(
-            norito::json::to_vec(&wrong_network_fixture.transaction)
-                .expect("serialize wrong-network transaction"),
+            pin_register_json_body(&wrong_network_fixture.transaction),
             "application/json",
         ))
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .expect("collect network error")
+        .to_bytes();
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_transaction_network_mismatch",
+        "signed transaction network does not match",
+    );
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let tamper_key = checked_manifest_request_authority_fixture();
     let tampered = fixture
         .transaction
         .with_authority(dm::AccountId::new(tamper_key.public_key().clone()));
+    assert!(
+        tampered.verify_signature().is_err(),
+        "changing the signed authority must create an effective signature mutant"
+    );
     let response = harness
         .app
         .clone()
         .oneshot(pin_register_http_request(
-            norito::json::to_vec(&tampered).expect("serialize tampered transaction"),
+            pin_register_json_body(&tampered),
             "application/json",
         ))
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .expect("collect signature error")
+        .to_bytes();
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_transaction_signature_invalid",
+        "signed transaction signature verification failed",
+    );
+    let state_view = harness.state.view();
+    assert!(
+        harness.queue.all_transactions(&state_view).next().is_none(),
+        "shape, network and signature adversaries must never enter the queue"
+    );
+    drop(state_view);
     harness.shutdown().await;
 }
 #[tokio::test]
@@ -2712,9 +3223,8 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     enable_storage_with_discovery_native_signers(&mut cfg);
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let app = build_torii_harness(&cfg).app;
+    let harness = build_torii_harness(&cfg);
+    let app = harness.app.clone();
     let invalid_json = app
         .clone()
         .oneshot(pin_register_http_request(b"{".to_vec(), "application/json"))
@@ -2722,7 +3232,6 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
         .expect("router responds");
     assert_eq!(invalid_json.status(), StatusCode::BAD_REQUEST);
     let invalid_norito = app
-        .router()
         .oneshot(pin_register_http_request(
             vec![0xFF, 0x00, 0x01, 0x02],
             "application/x-norito",
@@ -2730,15 +3239,402 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
         .await
         .expect("router responds");
     assert_eq!(invalid_norito.status(), StatusCode::BAD_REQUEST);
-    app.shutdown().await;
+    harness.shutdown().await;
+}
+// These fixtures use an explicit synthetic empty committed block after world-only
+// alias/metadata setup. The helper binds the readback to a real State block index;
+// it does not qualify consensus or sign an alias governance decision.
+fn commit_pin_readback_fixture(harness: &ToriiHarness) {
+    let (height, previous) = {
+        let view = harness.state.view();
+        (
+            u64::try_from(view.block_hashes().len()).expect("fixture height fits u64") + 1,
+            view.latest_block_hash(),
+        )
+    };
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).expect("nonzero fixture height"),
+        previous,
+        None,
+        None,
+        height,
+        0,
+    );
+    harness
+        .state
+        .block(header)
+        .commit_empty_block_for_testing()
+        .expect("commit fixture world at a new finalized readback cursor");
+}
+async fn assert_finalized_pin_readback(
+    harness: &ToriiHarness,
+    setup: &ManifestSetup,
+    query: Option<&str>,
+) -> iroha_data_model::sorafs::pin_registry::PinManifestFinalizedRecordV1 {
+    use iroha_data_model::sorafs::pin_registry::{
+        PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1,
+    };
+    let expected = {
+        let view = harness.state.view();
+        PinManifestFinalizedRecordV1 {
+            finalized_cursor: PinManifestFinalizedCursorV1 {
+                height: u64::try_from(view.block_hashes().len()).expect("fixture height fits u64"),
+                block_hash: *view
+                    .block_hashes()
+                    .last()
+                    .expect("committed fixture block")
+                    .as_ref(),
+            },
+            manifest: view
+                .world()
+                .pin_manifests()
+                .get(&setup.manifest_digest)
+                .expect("registered fixture manifest")
+                .clone(),
+        }
+    };
+    let mut path = format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex);
+    if let Some(query) = query {
+        path.push('?');
+        path.push_str(query);
+    }
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("accept", "application/json")
+        .body(Body::empty())
+        .expect("build finalized pin request");
+    let response = harness
+        .app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("pin response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store, max-age=0")
+    );
+    for header in [
+        "sora-proof",
+        "sora-name",
+        "sora-proof-status",
+        "age",
+        "warning",
+        "retry-after",
+    ] {
+        assert!(
+            response.headers().get(header).is_none(),
+            "pin record must not emit {header}"
+        );
+    }
+    let bytes = BodyExt::collect(response.into_body())
+        .await
+        .expect("pin body")
+        .to_bytes();
+    let value: json::Value = json::from_slice(&bytes).expect("native pin JSON");
+    assert_eq!(
+        value,
+        json::to_value(&expected).expect("expected native record JSON")
+    );
+    let actual: PinManifestFinalizedRecordV1 =
+        json::from_slice(&bytes).expect("native finalized record");
+    assert_eq!(actual, expected);
+    assert_ne!(actual.finalized_cursor.height, 0);
+    assert_ne!(actual.finalized_cursor.block_hash, [0; 32]);
+    actual
+}
+async fn pin_readback_status(harness: &ToriiHarness, path: &str) -> StatusCode {
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("accept", "application/json")
+        .body(Body::empty())
+        .expect("pin request");
+    harness
+        .app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("pin response")
+        .status()
+}
+fn sign_alias_read_request(
+    harness: &ToriiHarness,
+    authority: &AuthorityCreds,
+    mut request: Request<Body>,
+) -> Request<Body> {
+    static NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let timestamp_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_millis(),
+    )
+    .expect("timestamp fits u64");
+    let nonce = format!(
+        "alias-read-{}",
+        NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let message = iroha_torii::canonical_network_request_signature_message(
+        &harness.network_id,
+        request.method(),
+        request.uri(),
+        &[],
+        timestamp_ms,
+        &nonce,
+    )
+    .expect("canonical alias read request");
+    let signature = checked_signature(&authority.private_key.0, &message);
+    let headers = request.headers_mut();
+    headers.insert(
+        iroha_torii::HEADER_ACCOUNT,
+        authority
+            .account
+            .to_canonical_hex()
+            .expect("canonical account")
+            .parse()
+            .expect("account header"),
+    );
+    headers.insert(
+        iroha_torii::HEADER_SIGNATURE,
+        iroha_torii::signature_header_value(&signature)
+            .expect("signature encoding")
+            .parse()
+            .expect("signature header"),
+    );
+    headers.insert(
+        iroha_torii::HEADER_TIMESTAMP_MS,
+        timestamp_ms.to_string().parse().expect("timestamp header"),
+    );
+    headers.insert(
+        iroha_torii::HEADER_NONCE,
+        nonce.parse().expect("nonce header"),
+    );
+    request
+}
+async fn fetch_current_alias_entry(
+    harness: &ToriiHarness,
+    setup: &ManifestSetup,
+    alias_label: &str,
+) -> json::Value {
+    let (namespace, _) = alias_label.split_once('/').expect("alias namespace/name");
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/sorafs/aliases?namespace={namespace}&limit=1"))
+        .header("accept", "application/json")
+        .body(Body::empty())
+        .expect("alias request");
+    let request = sign_alias_read_request(harness, &setup.authority, request);
+    let response = harness
+        .app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("alias response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = BodyExt::collect(response.into_body())
+        .await
+        .expect("alias body")
+        .to_bytes();
+    let page: json::Value = json::from_slice(&bytes).expect("alias JSON");
+    let entries = page
+        .get("aliases")
+        .and_then(json::Value::as_array)
+        .expect("dedicated aliases page");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].get("alias").and_then(json::Value::as_str),
+        Some(alias_label)
+    );
+    entries[0].clone()
+}
+#[test]
+fn alias_proof_native_evaluator_preserves_freshness_and_header_projections() {
+    use iroha_torii::sorafs::{
+        AliasCachePolicyHttpExt, AliasProofEvaluationExt, AliasProofState,
+        decode_alias_proof_untrusted_signers, policy_from_config,
+    };
+    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let policy = policy_from_config(&cfg.torii.sorafs_alias_cache);
+    let positive = policy.positive_ttl().as_secs();
+    let refresh = policy.refresh_window().as_secs();
+    let hard = policy.hard_expiry().as_secs();
+    let now = ISSUED_AT + hard + 120;
+    let cid = sorafs_manifest::canonical_manifest_root_cid([0x56; 32]);
+    let cases = [
+        (
+            (positive - refresh) / 2,
+            now + 600,
+            AliasProofState::Fresh,
+            "fresh",
+            None,
+        ),
+        (
+            positive - refresh / 2,
+            now + 600,
+            AliasProofState::RefreshWindow,
+            "refresh",
+            Some("alias proof refresh in-flight"),
+        ),
+        (
+            positive + 45,
+            now + 300,
+            AliasProofState::Expired,
+            "expired",
+            Some("alias proof stale"),
+        ),
+        (
+            hard + 90,
+            now - 30,
+            AliasProofState::HardExpired,
+            "hard-expired",
+            Some("alias proof expired"),
+        ),
+    ];
+    for (age, expires, state, label, warning) in cases {
+        let bytes = encode_alias_proof_bytes("docs", "native", &cid, 12, 48, now - age, expires);
+        // This owner checks canonical framing, Merkle/signature integrity and age;
+        // fixture signers do not establish a production council trust policy.
+        let bundle = decode_alias_proof_untrusted_signers(&bytes).expect("fixture proof integrity");
+        let evaluation = policy.evaluate(&bundle, now);
+        assert_eq!(evaluation.state, state);
+        assert_eq!(
+            evaluation.state.is_servable(),
+            matches!(
+                state,
+                AliasProofState::Fresh | AliasProofState::RefreshWindow
+            )
+        );
+        assert_eq!(evaluation.age.as_secs(), age);
+        assert_eq!(evaluation.age_header().to_str().unwrap(), age.to_string());
+        assert_eq!(evaluation.proof_status_header().to_str().unwrap(), label);
+        assert_eq!(evaluation.generated_at_unix, now - age);
+        assert_eq!(evaluation.expires_at_unix, expires);
+        assert_eq!(
+            evaluation.expires_in.map(|v| v.as_secs()),
+            (expires > now).then(|| expires - now)
+        );
+        assert_eq!(
+            evaluation.rotation_due,
+            age >= policy.rotation_max_age().as_secs()
+        );
+        match (warning, evaluation.warning_header()) {
+            (None, None) => {}
+            (Some(expected), Some(actual)) => assert!(actual.to_str().unwrap().contains(expected)),
+            other => panic!("unexpected warning projection: {other:?}"),
+        }
+        let mut altered = bundle;
+        altered.council_signatures[0].signature[0] ^= 1;
+        assert!(decode_alias_proof_untrusted_signers(&to_bytes(&altered).unwrap()).is_err());
+    }
+    assert_eq!(
+        policy.cache_control_header().to_str().unwrap(),
+        format!("max-age={positive}, stale-while-revalidate={refresh}")
+    );
+    assert_eq!(
+        policy.revocation_cache_control_header().to_str().unwrap(),
+        format!("max-age={}", policy.revocation_ttl().as_secs())
+    );
+}
+#[tokio::test]
+async fn sorafs_pin_manifest_rejects_noncanonical_digest_and_cursor() {
+    let harness = build_torii_harness(&iroha_torii::test_utils::mk_minimal_root_cfg());
+    let canonical = "ab".repeat(32);
+    for digest in [
+        "00".repeat(32),
+        "AB".repeat(32),
+        "ab".repeat(31),
+        format!("0x{canonical}"),
+        "gg".repeat(32),
+    ] {
+        assert_eq!(
+            pin_readback_status(&harness, &format!("/v1/sorafs/pin/{digest}")).await,
+            StatusCode::BAD_REQUEST,
+            "digest={digest}"
+        );
+    }
+    let hash = "ab".repeat(32);
+    for query in [
+        "limit=1".to_owned(),
+        "expected_finalized_cursor=1".to_owned(),
+        "expected_finalized_height=1".to_owned(),
+        format!("expected_finalized_block_hash_hex={hash}"),
+        format!("expected_finalized_height=0&expected_finalized_block_hash_hex={hash}"),
+        format!("expected_finalized_height=01&expected_finalized_block_hash_hex={hash}"),
+        format!("expected_finalized_height=+1&expected_finalized_block_hash_hex={hash}"),
+        format!(
+            "expected_finalized_height=18446744073709551616&expected_finalized_block_hash_hex={hash}"
+        ),
+        format!(
+            "expected_finalized_height=1&expected_finalized_block_hash_hex={}",
+            "00".repeat(32)
+        ),
+        format!(
+            "expected_finalized_height=1&expected_finalized_block_hash_hex={}",
+            hash.to_uppercase()
+        ),
+        format!(
+            "expected_finalized_height=1&expected_finalized_height=2&expected_finalized_block_hash_hex={hash}"
+        ),
+        format!(
+            "expected_finalized_height=1&expected_finalized_block_hash_hex={hash}&expected_finalized_block_hash_hex={hash}"
+        ),
+    ] {
+        assert_eq!(
+            pin_readback_status(&harness, &format!("/v1/sorafs/pin/{canonical}?{query}")).await,
+            StatusCode::BAD_REQUEST,
+            "query={query}"
+        );
+    }
+    harness.shutdown().await;
+}
+#[tokio::test]
+async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor() {
+    let harness = build_torii_harness(&iroha_torii::test_utils::mk_minimal_root_cfg());
+    let path = format!("/v1/sorafs/pin/{}", "ab".repeat(32));
+    assert_eq!(
+        pin_readback_status(&harness, &path).await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    commit_pin_readback_fixture(&harness);
+    assert_eq!(
+        pin_readback_status(&harness, &path).await,
+        StatusCode::NOT_FOUND
+    );
+    let anchored_missing = {
+        let view = harness.state.view();
+        let hash: &[u8; 32] = view.block_hashes().last().unwrap().as_ref();
+        format!(
+            "{path}?expected_finalized_height=1&expected_finalized_block_hash_hex={}",
+            hex::encode(hash)
+        )
+    };
+    assert_eq!(
+        pin_readback_status(&harness, &anchored_missing).await,
+        StatusCode::NOT_FOUND
+    );
+    let full_width = anchored_missing.replace(
+        "expected_finalized_height=1",
+        "expected_finalized_height=18446744073709551615",
+    );
+    assert_eq!(
+        pin_readback_status(&harness, &full_width).await,
+        StatusCode::CONFLICT
+    );
+    commit_pin_readback_fixture(&harness);
+    assert_eq!(
+        pin_readback_status(&harness, &anchored_missing).await,
+        StatusCode::CONFLICT
+    );
+    harness.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping alias cache headers test (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
+async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
@@ -2748,11 +3644,9 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-    let setup = create_manifest_setup(&harness, &mut next_height);
+    let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
     let refresh_window = harness.alias_policy.refresh_window_secs();
     let freshness_margin = positive_ttl.saturating_sub(refresh_window);
@@ -2774,103 +3668,66 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
         setup.retention_epoch,
         &mut next_height,
     );
-    let request = Request::builder()
-        .method("GET")
-        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
-        .header("x-sorafs-manifest-envelope", "dummy-envelope")
-        .body(Body::empty())
-        .expect("build request");
-    let response = harness
-        .app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("manifest response");
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body_bytes = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let body_text = String::from_utf8_lossy(&body_bytes);
-    assert_eq!(status, StatusCode::OK, "body={body_text}");
-    let cache_control = headers
-        .get(CACHE_CONTROL)
-        .and_then(|value| value.to_str().ok());
-    let expected_cache = format!("max-age={positive_ttl}, stale-while-revalidate={refresh_window}");
-    assert_eq!(cache_control, Some(expected_cache.as_str()));
-    let proof_status = headers
-        .get("sora-proof-status")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(proof_status, Some("fresh"));
-    assert!(
-        headers.get(WARNING).is_none(),
-        "fresh responses must not emit warning headers"
+    commit_pin_readback_fixture(&harness);
+    let record = assert_finalized_pin_readback(&harness, &setup, None).await;
+    let query = format!(
+        "expected_finalized_height={}&expected_finalized_block_hash_hex={}",
+        record.finalized_cursor.height,
+        hex::encode(record.finalized_cursor.block_hash)
     );
-    let age = headers
-        .get(AGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .expect("age header present");
-    assert!(
-        age >= fresh_age.saturating_sub(2),
-        "age should reflect recent proof ({age} vs {fresh_age})"
+    assert_finalized_pin_readback(&harness, &setup, Some(&query)).await;
+    let mut wrong_hash = record.finalized_cursor.block_hash;
+    wrong_hash[0] ^= 0x80;
+    let wrong = format!(
+        "/v1/sorafs/pin/{}?expected_finalized_height={}&expected_finalized_block_hash_hex={}",
+        setup.manifest_digest_hex,
+        record.finalized_cursor.height,
+        hex::encode(wrong_hash)
     );
-    assert!(
-        age <= fresh_age.saturating_add(5),
-        "age should closely match configured fresh proof age ({age} vs {fresh_age})"
-    );
-    let alias_label = headers
-        .get("sora-name")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(alias_label, Some("docs-fresh/sora"));
-    assert!(
-        headers
-            .get("sora-proof")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| !value.is_empty()),
-        "Sora-Proof header must be present for fresh responses"
-    );
-    let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
-    let aliases = body
-        .get("aliases")
-        .and_then(json::Value::as_array)
-        .expect("aliases array present");
-    let alias_entry = aliases.first().expect("alias entry present");
     assert_eq!(
-        alias_entry.get("cache_state").and_then(json::Value::as_str),
+        pin_readback_status(&harness, &wrong).await,
+        StatusCode::CONFLICT
+    );
+    let alias = fetch_current_alias_entry(&harness, &setup, "docs-fresh/sora").await;
+    assert_eq!(
+        alias.get("cache_state").and_then(json::Value::as_str),
         Some("fresh")
     );
     assert_eq!(
-        alias_entry
+        alias.get("cache_decision").and_then(json::Value::as_str),
+        Some("serve")
+    );
+    assert_eq!(
+        alias
             .get("policy_positive_ttl_secs")
             .and_then(json::Value::as_u64),
         Some(positive_ttl)
     );
-    let cache_eval = alias_entry
-        .get("cache_evaluation")
-        .expect("cache evaluation present");
-    let ttl_unix = cache_eval
-        .get("ttl_expires_at_unix")
+    let age = alias
+        .get("cache_age_seconds")
         .and_then(json::Value::as_u64)
-        .expect("ttl_expires_at_unix present");
-    assert_eq!(ttl_unix, expires_at);
-    let ttl_iso = cache_eval
-        .get("ttl_expires_at")
-        .and_then(json::Value::as_str)
-        .expect("ttl_expires_at string present");
-    let expected_ttl_iso = format_rfc3339(UNIX_EPOCH + Duration::from_secs(expires_at)).to_string();
-    assert_eq!(ttl_iso, expected_ttl_iso);
-    assert!(
-        cache_eval
-            .get("serve_until")
-            .is_some_and(json::Value::is_null),
-        "fresh alias without successor should not advertise serve_until"
+        .expect("fresh proof age");
+    assert!(age >= fresh_age.saturating_sub(2));
+    assert!(age <= fresh_age.saturating_add(5));
+    let cache = alias
+        .get("cache_evaluation")
+        .expect("alias cache evaluation");
+    assert_eq!(
+        cache
+            .get("ttl_expires_at_unix")
+            .and_then(json::Value::as_u64),
+        Some(expires_at)
     );
-    let manifest_entry = body.get("manifest").expect("manifest object present");
-    let lineage = manifest_entry
-        .get("lineage")
-        .expect("manifest lineage present");
+    assert_eq!(
+        cache.get("ttl_expires_at").and_then(json::Value::as_str),
+        Some(
+            format_rfc3339(UNIX_EPOCH + Duration::from_secs(expires_at))
+                .to_string()
+                .as_str()
+        )
+    );
+    assert!(cache.get("serve_until").is_some_and(json::Value::is_null));
+    let lineage = alias.get("lineage").expect("alias lineage");
     assert_eq!(
         lineage.get("head_hex").and_then(json::Value::as_str),
         Some(setup.manifest_digest_hex.as_str())
@@ -2885,21 +3742,35 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
             .is_some_and(json::Value::is_null)
     );
     assert!(
-        manifest_entry
-            .get("governance_refs")
-            .and_then(json::Value::as_array)
-            .is_some_and(Vec::is_empty),
-        "fresh manifest should not expose governance references"
+        record
+            .manifest
+            .metadata
+            .get(&Name::from_str(GOVERNANCE_REFS_KEY).unwrap())
+            .is_none()
+    );
+    let proof = BASE64_STANDARD
+        .decode(
+            alias
+                .get("proof_b64")
+                .and_then(json::Value::as_str)
+                .unwrap(),
+        )
+        .unwrap();
+    let bundle = iroha_torii::sorafs::decode_alias_proof_untrusted_signers(&proof)
+        .expect("listed alias proof integrity");
+    assert_eq!(bundle.binding.alias, "docs-fresh/sora");
+    assert_eq!(bundle.binding.manifest_cid, setup.manifest_cid);
+    commit_pin_readback_fixture(&harness);
+    let stale = format!("/v1/sorafs/pin/{}?{query}", setup.manifest_digest_hex);
+    assert_eq!(
+        pin_readback_status(&harness, &stale).await,
+        StatusCode::CONFLICT
     );
     harness.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping alias refresh window test (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
+async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
@@ -2909,11 +3780,9 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-    let setup = create_manifest_setup(&harness, &mut next_height);
+    let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
     let refresh_window = harness.alias_policy.refresh_window_secs();
     let refresh_age = {
@@ -2943,86 +3812,34 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
         setup.retention_epoch,
         &mut next_height,
     );
-    let request = Request::builder()
-        .method("GET")
-        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
-        .header("x-sorafs-manifest-envelope", "dummy-envelope")
-        .body(Body::empty())
-        .expect("build request");
-    let response = harness
-        .app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("manifest response");
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body_bytes = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let body_text = String::from_utf8_lossy(&body_bytes);
-    assert_eq!(status, StatusCode::OK, "body={body_text}");
-    let cache_control = headers
-        .get(CACHE_CONTROL)
-        .and_then(|value| value.to_str().ok());
-    let expected_cache = format!("max-age={positive_ttl}, stale-while-revalidate={refresh_window}");
-    assert_eq!(cache_control, Some(expected_cache.as_str()));
-    let proof_status = headers
-        .get("sora-proof-status")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(proof_status, Some("refresh"));
-    let warning = headers
-        .get(WARNING)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    assert!(
-        warning.contains("alias proof refresh in-flight"),
-        "refresh-window responses must emit refresh warning (got {warning})"
-    );
-    let age = headers
-        .get(AGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .expect("age header present");
-    let refresh_threshold = positive_ttl.saturating_sub(refresh_window);
-    assert!(
-        age >= refresh_threshold,
-        "age should enter refresh window (threshold {refresh_threshold}, age {age})"
-    );
-    assert!(
-        age <= refresh_age.saturating_add(5),
-        "age should remain below positive TTL ({age} vs {refresh_age})"
-    );
-    let alias_label = headers
-        .get("sora-name")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(alias_label, Some("docs-refresh/sora"));
-    let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
-    let aliases = body
-        .get("aliases")
-        .and_then(json::Value::as_array)
-        .expect("aliases array present");
-    let alias_entry = aliases.first().expect("alias entry present");
+    commit_pin_readback_fixture(&harness);
+    assert_finalized_pin_readback(&harness, &setup, None).await;
+    let alias = fetch_current_alias_entry(&harness, &setup, "docs-refresh/sora").await;
     assert_eq!(
-        alias_entry.get("cache_state").and_then(json::Value::as_str),
+        alias.get("cache_state").and_then(json::Value::as_str),
         Some("refresh")
     );
     assert_eq!(
-        alias_entry
+        alias.get("cache_decision").and_then(json::Value::as_str),
+        Some("hold")
+    );
+    assert_eq!(
+        alias
             .get("policy_refresh_window_secs")
             .and_then(json::Value::as_u64),
         Some(refresh_window)
     );
+    let age = alias
+        .get("cache_age_seconds")
+        .and_then(json::Value::as_u64)
+        .expect("proof age");
+    assert!(age >= positive_ttl.saturating_sub(refresh_window));
+    assert!(age <= refresh_age.saturating_add(5));
     harness.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping stale alias test (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
+async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
@@ -3032,13 +3849,10 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-    let setup = create_manifest_setup(&harness, &mut next_height);
+    let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
-    let refresh_window = harness.alias_policy.refresh_window_secs();
     let now = unix_now_secs();
     let generated_at = now.saturating_sub(positive_ttl + 45);
     let expires_at = now + 300;
@@ -3053,98 +3867,43 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
         setup.retention_epoch,
         &mut next_height,
     );
-    let list_request = Request::builder()
-        .method("GET")
-        .uri("/v1/sorafs/pin")
-        .header("accept", "application/json")
-        .body(Body::empty())
-        .expect("build list request");
-    let list_response = harness
-        .app
-        .clone()
-        .oneshot(list_request)
-        .await
-        .expect("list response");
-    println!("LIST STATUS {:?}", list_response.status());
-    let list_body = BodyExt::collect(list_response.into_body())
-        .await
-        .expect("collect list body")
-        .to_bytes();
-    println!("LIST BODY {}", String::from_utf8_lossy(&list_body));
-    let request = Request::builder()
-        .method("GET")
-        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
-        .header("x-sorafs-manifest-envelope", "dummy-envelope")
-        .body(Body::empty())
-        .expect("build request");
-    let response = harness
-        .app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("manifest response");
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body_bytes = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let body_text = String::from_utf8_lossy(&body_bytes);
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body={body_text}");
-    let proof_status = headers
-        .get("sora-proof-status")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(proof_status, Some("expired"));
-    let age = headers
-        .get(AGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .expect("age header present");
-    assert!(
-        age >= positive_ttl,
-        "age header should reflect stale proof (age={age}, ttl={positive_ttl})"
-    );
-    let retry_after_expected = refresh_window.to_string();
-    let retry_after = headers
-        .get(RETRY_AFTER)
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(retry_after, Some(retry_after_expected.as_str()));
-    let warning = headers
-        .get(WARNING)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    assert!(
-        warning.contains("alias proof stale"),
-        "warning header should mention stale proof: {warning}"
-    );
-    let cache_control = headers
-        .get(CACHE_CONTROL)
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(cache_control, Some("no-store"));
-    let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
+    commit_pin_readback_fixture(&harness);
+    assert_finalized_pin_readback(&harness, &setup, None).await;
+    let alias = fetch_current_alias_entry(&harness, &setup, "docs-stale/sora").await;
     assert_eq!(
-        body.get("cache_state").and_then(json::Value::as_str),
-        Some("expired"),
-        "manifest response should report expired alias cache_state"
+        alias.get("cache_state").and_then(json::Value::as_str),
+        Some("expired")
     );
     assert_eq!(
-        body.get("error").and_then(json::Value::as_str),
-        Some("alias proof stale; refresh required")
+        alias.get("cache_decision").and_then(json::Value::as_str),
+        Some("refuse")
     );
     assert!(
-        body.get("proof_expires_in_seconds")
+        alias
+            .get("cache_age_seconds")
             .and_then(json::Value::as_u64)
-            .is_some(),
-        "stale response should report remaining expiry window"
+            .unwrap()
+            >= positive_ttl
+    );
+    assert!(
+        alias
+            .get("proof_expires_in_seconds")
+            .and_then(json::Value::as_u64)
+            .is_some()
+    );
+    assert!(
+        alias
+            .get("cache_reasons")
+            .and_then(json::Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str() == Some("ExpiredTTL"))
     );
     harness.shutdown().await;
 }
 #[tokio::test]
-async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping expired alias test (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
+#[allow(clippy::too_many_lines)]
+async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
@@ -3154,11 +3913,9 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-    let setup = create_manifest_setup(&harness, &mut next_height);
+    let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let hard_expiry = harness.alias_policy.hard_expiry_secs();
     let now = unix_now_secs();
     let generated_at = now.saturating_sub(hard_expiry + 90);
@@ -3174,76 +3931,38 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
         setup.retention_epoch,
         &mut next_height,
     );
-    let request = Request::builder()
-        .method("GET")
-        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
-        .header("x-sorafs-manifest-envelope", "dummy-envelope")
-        .body(Body::empty())
-        .expect("build request");
-    let response = harness
-        .app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("manifest response");
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body_bytes = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let body_text = String::from_utf8_lossy(&body_bytes);
-    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "body={body_text}");
-    assert!(
-        headers.get(RETRY_AFTER).is_none(),
-        "hard-expired responses must not include Retry-After"
-    );
-    let proof_status = headers
-        .get("sora-proof-status")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(proof_status, Some("hard-expired"));
-    let age = headers
-        .get(AGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .expect("age header present");
-    assert!(
-        age >= hard_expiry,
-        "age header should reflect hard-expired proof (age={age}, hard_expiry={hard_expiry})"
-    );
-    let warning = headers
-        .get(WARNING)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    assert!(
-        warning.contains("alias proof expired"),
-        "warning header should mention expired proof: {warning}"
-    );
-    let cache_control = headers
-        .get(CACHE_CONTROL)
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(cache_control, Some("no-store"));
-    let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
+    commit_pin_readback_fixture(&harness);
+    assert_finalized_pin_readback(&harness, &setup, None).await;
+    let alias = fetch_current_alias_entry(&harness, &setup, "docs-expired/sora").await;
     assert_eq!(
-        body.get("cache_state").and_then(json::Value::as_str),
+        alias.get("cache_state").and_then(json::Value::as_str),
         Some("hard-expired")
     );
     assert_eq!(
-        body.get("error").and_then(json::Value::as_str),
-        Some("alias proof expired; refresh required")
+        alias.get("cache_decision").and_then(json::Value::as_str),
+        Some("refuse")
     );
     assert!(
-        body.get("proof_expires_in_seconds").is_none(),
-        "expired response must not contain remaining expiry interval"
+        alias
+            .get("cache_age_seconds")
+            .and_then(json::Value::as_u64)
+            .unwrap()
+            >= hard_expiry
+    );
+    assert!(alias.get("proof_expires_in_seconds").is_none());
+    assert!(
+        alias
+            .get("cache_reasons")
+            .and_then(json::Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str() == Some("HardExpired"))
     );
     harness.shutdown().await;
 }
 #[tokio::test]
-async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping revoked alias test (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
+#[allow(clippy::too_many_lines)]
+async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_projection() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
@@ -3253,13 +3972,11 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-    let setup = create_manifest_setup(&harness, &mut next_height);
+    let setup = create_manifest_readback_setup(&harness, &mut next_height);
     let now = unix_now_secs();
     bind_alias_with_proof(
         &harness,
@@ -3272,7 +3989,6 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         setup.retention_epoch,
         &mut next_height,
     );
-    next_height += 1;
     let alias_label = "docs-revoked/gamma";
     attach_governance_revocation(
         &harness,
@@ -3281,63 +3997,46 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         now.saturating_sub(5),
         &mut next_height,
     );
-    let request = Request::builder()
-        .method("GET")
-        .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
-        .header("x-sorafs-manifest-envelope", "dummy-envelope")
-        .body(Body::empty())
-        .expect("build request");
-    let response = harness
-        .app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("manifest response");
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body_bytes = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let body_text = String::from_utf8_lossy(&body_bytes);
-    assert_eq!(status, StatusCode::GONE, "body={body_text}");
-    let revocation_ttl = harness.alias_policy.revocation_ttl.as_secs();
-    let expected_cache = format!("max-age={revocation_ttl}");
+    commit_pin_readback_fixture(&harness);
+    let record = assert_finalized_pin_readback(&harness, &setup, None).await;
+    let alias = fetch_current_alias_entry(&harness, &setup, alias_label).await;
     assert_eq!(
-        headers
-            .get(CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok()),
-        Some(expected_cache.as_str())
-    );
-    let expected_retry = revocation_ttl.to_string();
-    assert_eq!(
-        headers
-            .get(RETRY_AFTER)
-            .and_then(|value| value.to_str().ok()),
-        Some(expected_retry.as_str())
-    );
-    let proof_status = headers
-        .get("sora-proof-status")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(proof_status, Some("governance-refused"));
-    let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
-    assert_eq!(
-        body.get("cache_state").and_then(json::Value::as_str),
+        alias.get("cache_state").and_then(json::Value::as_str),
         Some("governance-refused")
     );
     assert_eq!(
-        body.get("error").and_then(json::Value::as_str),
-        Some("alias proof revoked by governance")
+        alias.get("cache_decision").and_then(json::Value::as_str),
+        Some("refuse")
+    );
+    assert!(
+        alias
+            .get("cache_reasons")
+            .and_then(json::Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str() == Some("GovernanceRevoked"))
+    );
+    assert_eq!(
+        alias
+            .get("cache_evaluation")
+            .and_then(|v| v.get("governance"))
+            .and_then(|v| v.get("revoked"))
+            .and_then(json::Value::as_bool),
+        Some(true)
+    );
+    // Fixture metadata exercises the projection; it does not authorize a council signer.
+    assert!(
+        record
+            .manifest
+            .metadata
+            .get(&Name::from_str(GOVERNANCE_REFS_KEY).unwrap())
+            .is_some()
     );
     harness.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sorafs_alias_listing_reports_successor_refusal() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping successor refusal test (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
@@ -3347,16 +4046,19 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-    let base = create_manifest_setup(&harness, &mut next_height);
+    let base = create_manifest_readback_setup(&harness, &mut next_height);
     let successor_timestamp = unix_now_secs().saturating_sub(30);
-    let successor =
-        create_successor_manifest(&harness, &base, &mut next_height, 0xBC, successor_timestamp);
+    let successor = create_successor_manifest_readback(
+        &harness,
+        &base,
+        &mut next_height,
+        0xBC,
+        successor_timestamp,
+    );
     let now = unix_now_secs();
     bind_alias_with_proof(
         &harness,
@@ -3369,45 +4071,19 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
         base.retention_epoch,
         &mut next_height,
     );
-    let list_request = Request::builder()
-        .method("GET")
-        .uri("/v1/sorafs/pin")
-        .header("accept", "application/json")
-        .body(Body::empty())
-        .expect("build alias list request");
-    let list_response = harness
-        .app
-        .clone()
-        .oneshot(list_request)
-        .await
-        .expect("alias list response");
-    let status = list_response.status();
-    let list_body = BodyExt::collect(list_response.into_body())
-        .await
-        .expect("collect alias list body")
-        .to_bytes();
-    assert_eq!(status, StatusCode::OK);
-    let list_json: json::Value = json::from_slice(&list_body).expect("parse alias list response");
-    let manifests = manifest_entries(&list_json);
-    let alias_inventory: Vec<_> = harness
-        .state
-        .view()
-        .world()
-        .manifest_aliases()
-        .iter()
-        .map(|(id, record)| {
-            (
-                id.as_label(),
-                record.manifest.as_bytes().encode_hex::<String>(),
-            )
-        })
-        .collect();
-    let alias_entry = find_alias_entry(manifests, "docs-successor", "alpha").unwrap_or_else(|| {
-        panic!("docs-successor/alpha alias present; aliases={alias_inventory:?}")
-    });
-    assert!(
-        alias_entry.get("cache_decision").is_none(),
-        "alias listing no longer surfaces cache_decision",
+    commit_pin_readback_fixture(&harness);
+    let alias_entry = fetch_current_alias_entry(&harness, &base, "docs-successor/alpha").await;
+    assert_eq!(
+        alias_entry
+            .get("cache_decision")
+            .and_then(json::Value::as_str),
+        Some("refuse")
+    );
+    assert_eq!(
+        alias_entry
+            .get("status_label")
+            .and_then(json::Value::as_str),
+        Some("successor-refused")
     );
     let lineage = alias_entry
         .get("lineage")
@@ -3460,39 +4136,8 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     );
     harness.shutdown().await;
 }
-async fn fetch_alias_entry(harness: &ToriiHarness, alias_label: &str) -> json::Value {
-    let list_request = Request::builder()
-        .method("GET")
-        .uri("/v1/sorafs/pin")
-        .header("accept", "application/json")
-        .body(Body::empty())
-        .expect("build alias list request");
-    let list_response = harness
-        .app
-        .clone()
-        .oneshot(list_request)
-        .await
-        .expect("alias list response");
-    assert_eq!(list_response.status(), StatusCode::OK);
-    let list_body = BodyExt::collect(list_response.into_body())
-        .await
-        .expect("collect alias list body")
-        .to_bytes();
-    let list_json: json::Value = json::from_slice(&list_body).expect("parse alias list response");
-    let manifests = manifest_entries(&list_json);
-    let (namespace, name) = alias_label
-        .split_once('/')
-        .expect("alias label contains namespace and name");
-    find_alias_entry(manifests, namespace, name)
-        .expect("alias entry present")
-        .clone()
-}
 #[tokio::test]
 async fn sorafs_alias_listing_reports_governance_revocation() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping governance revocation test (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     let admission_dir = tempdir().expect("admission dir");
@@ -3502,13 +4147,12 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-    let manifest = create_manifest_setup_with_seed(&harness, &mut next_height, 0xC1, None, None);
+    let manifest =
+        create_manifest_readback_setup_with_seed(&harness, &mut next_height, 0xC1, None, None);
     let now = unix_now_secs();
     bind_alias_with_proof(
         &harness,
@@ -3521,7 +4165,6 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
         manifest.retention_epoch,
         &mut next_height,
     );
-    next_height += 1;
     let alias_label = "docs-governance/beta";
     let effective_at = now.saturating_sub(5);
     attach_governance_revocation(
@@ -3531,18 +4174,27 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
         effective_at,
         &mut next_height,
     );
-    let alias_entry = fetch_alias_entry(&harness, alias_label).await;
-    assert!(
-        alias_entry.get("cache_decision").is_none(),
-        "alias list no longer reports cache_decision",
+    commit_pin_readback_fixture(&harness);
+    let alias_entry = fetch_current_alias_entry(&harness, &manifest, alias_label).await;
+    assert_eq!(
+        alias_entry
+            .get("cache_decision")
+            .and_then(json::Value::as_str),
+        Some("refuse")
     );
-    let metadata = alias_entry
-        .get("metadata")
-        .and_then(json::Value::as_object)
-        .expect("metadata present");
+    assert_eq!(
+        alias_entry
+            .get("status_label")
+            .and_then(json::Value::as_str),
+        Some("governance-refused")
+    );
+    let record = assert_finalized_pin_readback(&harness, &manifest, None).await;
     assert!(
-        metadata.contains_key(STATUS_TIMESTAMP_KEY),
-        "revocation metadata should include status timestamp: {metadata:?}"
+        record
+            .manifest
+            .metadata
+            .get(&Name::from_str(STATUS_TIMESTAMP_KEY).unwrap())
+            .is_some()
     );
     let governance_eval = alias_entry
         .get("cache_evaluation")

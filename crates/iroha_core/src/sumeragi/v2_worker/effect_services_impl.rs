@@ -121,11 +121,13 @@ impl V2EffectServices for ProductionV2Services {
             .validate_version()
             .map_err(|error| error.to_string())?;
         let control_targets = match &message.payload {
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => {
+                self.remote_timeout_certificate_targets()
+            }
             wire::ConsensusMessageV2Payload::Proposal(_)
             | wire::ConsensusMessageV2Payload::Vote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
-            | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -820,7 +822,9 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
     fn fail_closed(&mut self, reason: &str) {
-        self.output_guard.activate_restart_required();
+        // The executor may be failing inside an admitted launch/runtime call.
+        // Its outer operation owns the final permit release.
+        self.output_guard.close_admission_for_restart();
         self.fatal_reason = Some(reason.to_owned());
         iroha_logger::error!(reason, "Sumeragi v2 effect services failed closed");
     }

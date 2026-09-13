@@ -29,7 +29,7 @@ test("every instruction codec path passes the caller-selected prefix unchanged",
     noritoDecodeInstructionBoxArchive(_value, prefix) { calls.push(["archive decode", prefix]); return json; },
   }));
   for (const prefix of [369, 753, 0, 65535, 369]) {
-    for (const input of [fixture, json, frame, frame.toString("base64")]) {
+    for (const input of [fixture, json, frame, frame.toString("base64"), `0x${frame.toString("hex")}`]) {
       assert.deepEqual(api.noritoEncodeInstruction(input, prefix), frame);
       assert.deepEqual(api.noritoEncodeInstructionBoxArchive(input, prefix), archive);
     }

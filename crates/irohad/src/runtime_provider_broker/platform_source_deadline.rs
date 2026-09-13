@@ -7,48 +7,9 @@ struct ProviderSourceDeadlineReader<'stream> {
     stream: &'stream UnixStream,
     deadline: std::time::Instant,
 }
-impl ProviderSourceDeadlineReader<'_> {
-    fn remaining(&self) -> std::io::Result<Duration> {
-        self.deadline
-            .checked_duration_since(std::time::Instant::now())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| source_reader_io_error(std::io::ErrorKind::TimedOut))
-    }
-}
 impl std::io::Read for ProviderSourceDeadlineReader<'_> {
     fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        if output.is_empty() {
-            return Ok(0);
-        }
-        loop {
-            self.remaining()?;
-            match rustix::net::recv(self.stream, &mut *output, rustix::net::RecvFlags::DONTWAIT) {
-                Ok((read, _)) => return Ok(read),
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(rustix::io::Errno::AGAIN) => {}
-                Err(error) => return Err(error.into()),
-            }
-            // poll on macOS accepts at most i32::MAX milliseconds. A bounded
-            // slice retains the same absolute deadline even for longer limits.
-            let timeout = rustix::event::Timespec::try_from(
-                self.remaining()?
-                    .min(Duration::from_millis(i32::MAX as u64)),
-            )
-            .map_err(|_| source_reader_io_error(std::io::ErrorKind::InvalidInput))?;
-            let mut fds = [rustix::event::PollFd::new(
-                self.stream,
-                rustix::event::PollFlags::IN,
-            )];
-            match rustix::event::poll(&mut fds, Some(&timeout)) {
-                Ok(_) if fds[0].revents().contains(rustix::event::PollFlags::NVAL) => {
-                    return Err(std::io::Error::from(rustix::io::Errno::BADF));
-                }
-                Ok(_) | Err(rustix::io::Errno::INTR) => {}
-                Err(error) => return Err(error.into()),
-            }
-            // Readiness (including HUP) is not authenticated EOF. Recheck the
-            // deadline and let recv return the remaining bytes or exact EOF.
-        }
+        absolute_deadline::read_unix_before(self.stream, self.deadline, output)
     }
 }
 

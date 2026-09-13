@@ -3574,3 +3574,264 @@ fn current_commit_keeps_exact_owner_until_prepare_qc_publishes_local_lock() {
     assert_eq!(runtime.queued_commands(), 0);
     assert!(!service.output_guard.restart_required());
 }
+
+#[cfg(feature = "bls")]
+fn install_disjoint_timeout_observers_for_test(service: &mut ProductionV2Services) -> Vec<PeerId> {
+    let observers = (0xC0_u8..0xCC)
+        .map(|seed| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic disjoint participant")
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let global = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<BTreeSet<_>>();
+    assert!(observers.iter().all(|peer| !global.contains(peer)));
+    service.timeout_certificate_targets = global
+        .into_iter()
+        .chain(observers.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    service
+        .set_exact_output_shared_unit_capacity_for_test(128)
+        .expect("configure the complete frozen target geometry");
+    observers
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn timeout_certificate_reaches_disjoint_lanes_without_expanding_vote_targets() {
+    let (mut service, keys) = fixture();
+    let observers = install_disjoint_timeout_observers_for_test(&mut service);
+    let observations = install_consensus_route_observer(&mut service);
+    let global = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
+    let expected = global
+        .iter()
+        .cloned()
+        .chain(observers)
+        .collect::<BTreeSet<_>>();
+    let certificate = worker_signed_timeout_certificate(&service.context, &keys, 0, None);
+    service
+        .broadcast_consensus(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate.clone()),
+        ))
+        .expect("deliver exact certified global view to every frozen lane participant");
+    let deliveries = take_consensus_route_observations(&observations);
+    assert_eq!(
+        deliveries.len(),
+        expected.len(),
+        "no self or duplicate delivery"
+    );
+    assert_eq!(
+        deliveries
+            .iter()
+            .map(|(peer, _)| peer.clone())
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    assert!(deliveries.iter().all(|(_, message)| matches!(
+        &message.payload,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(actual) if actual == &certificate
+    )));
+    for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
+        let vote = routing_vote(&service, 0, phase);
+        service
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(vote),
+            ))
+            .expect("ordinary votes retain exact global committee destinations");
+        let deliveries = take_consensus_route_observations(&observations);
+        assert_eq!(deliveries.len(), global.len());
+        assert_eq!(
+            deliveries
+                .into_iter()
+                .map(|(peer, _)| peer)
+                .collect::<BTreeSet<_>>(),
+            global
+        );
+    }
+    let mut timeout_vote = wire::TimeoutVote {
+        round: certificate.round,
+        highest_prepare_qc: None,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    timeout_vote.signature =
+        Signature::new(keys[0].private_key(), &timeout_vote.signature_preimage())
+            .payload()
+            .to_vec();
+    service
+        .broadcast_consensus(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutVote(timeout_vote),
+        ))
+        .expect("timeout votes retain their voting committee");
+    let deliveries = take_consensus_route_observations(&observations);
+    assert_eq!(deliveries.len(), global.len());
+    assert_eq!(
+        deliveries
+            .into_iter()
+            .map(|(peer, _)| peer)
+            .collect::<BTreeSet<_>>(),
+        global
+    );
+    assert!(!service.output_guard.restart_required());
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn late_disjoint_observer_authenticates_retransmitted_timeout_without_voting() {
+    let (mut global_service, keys) = fixture();
+    let observers = install_disjoint_timeout_observers_for_test(&mut global_service);
+    let observations = install_consensus_route_observer(&mut global_service);
+    let global_directory = TempDir::new().expect("global certified view owner");
+    let mut global_wal =
+        worker_wal_authority_fixture(&mut global_service, &global_directory, Some(0));
+    let context = global_service.context.clone();
+    let first = worker_signed_timeout_certificate(&context, &keys, 0, None);
+    enter_worker_view_from_wal(&mut global_service, &mut global_wal.adapter, first.clone());
+
+    // The participant activates after the first TC transmission was missed.
+    // Its global reducer remains an observer even though its independent lane
+    // role permits Native AMX votes after certified global view synchronization.
+    let (mut observer_service, _) = fixture();
+    observer_service.local_peer = observers[0].clone();
+    observer_service.local_validator = None;
+    observer_service.key_pair = KeyPair::try_from_seed(vec![0xC0; 32], Algorithm::BlsNormal)
+        .expect("observer key matches its distinct participant identity");
+    observer_service.timeout_certificate_targets =
+        global_service.timeout_certificate_targets.clone();
+    assert_eq!(
+        observer_service
+            .remote_timeout_certificate_targets()
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>(),
+        "non-global retransmitters do not expand to other lane observers"
+    );
+    let observer_directory = TempDir::new().expect("late participant global observer");
+    let mut observer_wal =
+        worker_wal_authority_fixture(&mut observer_service, &observer_directory, None);
+    let initial = observer_wal.adapter.current_tag();
+    let timeout = observer_wal
+        .adapter
+        .timeout_elapsed(initial)
+        .expect("observer cannot create its own global timeout authority");
+    assert!(timeout.effects().is_empty());
+    assert_eq!(observer_wal.adapter.current_tag(), initial);
+
+    // Jumping directly to the latest certified view is required: a late peer
+    // need not receive all intermediate certificates or stale network queues.
+    for target_view in [1_u64, 4] {
+        if target_view == 4 {
+            let latest = worker_signed_timeout_certificate(&context, &keys, 3, None);
+            enter_worker_view_from_wal(&mut global_service, &mut global_wal.adapter, latest);
+        }
+        let tag = global_wal.adapter.current_tag();
+        let retry = global_wal
+            .adapter
+            .retransmit_elapsed(tag)
+            .expect("actual reducer retries its retained authenticated TC");
+        let certificates = retry
+            .into_effects()
+            .into_iter()
+            .filter_map(|effect| match effect {
+                AdapterEffect::Broadcast(message)
+                    if matches!(
+                        &message.payload,
+                        wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+                    ) =>
+                {
+                    Some(message)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            certificates.len(),
+            1,
+            "retention owns exactly the latest TC"
+        );
+        global_service
+            .broadcast_consensus(certificates[0].clone())
+            .expect("retransmission uses the same complete frozen recipient set");
+        let deliveries = take_consensus_route_observations(&observations);
+        let delivered = deliveries
+            .into_iter()
+            .find_map(|(peer, message)| (peer == observer_service.local_peer).then_some(message))
+            .expect("late disjoint participant receives an actual retained retry");
+        let before = observer_wal.adapter.current_tag();
+        for kind in 0..3 {
+            let mut invalid = delivered.clone();
+            let wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) =
+                &mut invalid.payload
+            else {
+                unreachable!("captured retry is the exact timeout certificate")
+            };
+            match kind {
+                0 => certificate.round.height += 1,
+                1 => {
+                    certificate.round.context_id = wire::HeightContextId(
+                        HashOf::from_untyped_unchecked(Hash::new(b"foreign observer context")),
+                    )
+                }
+                _ => certificate.groups[0].aggregate_signature[0] ^= 1,
+            }
+            assert!(observer_wal.adapter.authenticate(invalid).is_err());
+            assert_eq!(observer_wal.adapter.current_tag(), before);
+        }
+        let authenticated = observer_wal
+            .adapter
+            .authenticate(delivered)
+            .expect("verify real three-of-four global BLS signatures on the observer");
+        let effects = observer_wal
+            .adapter
+            .receive_authenticated(authenticated)
+            .expect("persist the observer's certified global view")
+            .into_effects();
+        assert_eq!(observer_wal.adapter.current_tag().view(), target_view);
+        assert!(effects.iter().any(|effect| matches!(effect,
+            AdapterEffect::EnterView { tag, .. } if tag.view() == target_view)));
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::Sign { .. } | AdapterEffect::Broadcast(_)
+        )));
+        let after = observer_wal.adapter.current_tag();
+        let timeout = observer_wal
+            .adapter
+            .timeout_elapsed(after)
+            .expect("certified view entry never makes the observer a global voter");
+        assert!(timeout.effects().is_empty());
+        assert_eq!(observer_wal.adapter.current_tag(), after);
+    }
+    let current = observer_wal.adapter.current_tag();
+    let stale = observer_wal
+        .adapter
+        .authenticate(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(first),
+        ))
+        .expect("stale certificate signatures remain authentic");
+    let effects = observer_wal
+        .adapter
+        .receive_authenticated(stale)
+        .expect("stale certified input cannot regress the observer")
+        .into_effects();
+    assert_eq!(observer_wal.adapter.current_tag(), current);
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::EnterView { .. } | AdapterEffect::Sign { .. }
+    )));
+    assert!(!observer_service.output_guard.restart_required());
+    assert!(!global_service.output_guard.restart_required());
+}

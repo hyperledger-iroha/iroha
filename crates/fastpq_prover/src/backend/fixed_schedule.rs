@@ -5,19 +5,24 @@
 //! congruent to `r mod B` is
 //! `E_r(X) = h_r * (X^N - 1) / (B * (X^K - h_r))`.
 //! The apparent singularities are removable: evaluation on the subgroup is
-//! exactly one-hot. Each selector has degree `N-K < N`. A selector times a
+//! exactly one-hot in both the base field and its quartic extension.
+//! Evaluation preserves the full point; it never projects extension coordinates.
+//! Each selector has degree `N-K < N`. A selector times a
 //! quadratic relation in trace polynomials of degree below `N` has degree at
 //! most `3N-3`; if it vanishes on the full subgroup, division by `X^N-1`
 //! therefore gives a quotient of degree below `2N`.
 //!
-//! TODO: Bind the period, phase/slot mapping, padding and exceptional-edge masks
-//! into the authenticated compact proof schema. Compile a stable residue ledger
-//! that shares common equations; do not evaluate every phase's complete residue
-//! vector at every LDE point. This helper does not constrain semantic carry across
-//! hash padding/boundaries and does not replace mandatory witness replay.
+//! The compiled 680-slot hash ledger and 243-slot SMT ledger own the equations,
+//! padding and noncyclic carries; the compact profile binds their exact geometry.
+//! This owner evaluates only those fixed public polynomials. Full extension-point
+//! arithmetic supplies neither authenticated openings nor source provenance,
+//! witness masking, or qualification of a different proof profile.
 
+#[cfg(test)]
+use super::GOLDILOCKS_MODULUS;
 use super::{
-    GOLDILOCKS_MODULUS, field_inverse, field_pow, fixed_domain::FixedTraceDomain, mul_mod, sub_mod,
+    field_inverse, field_pow, fixed_domain::FixedTraceDomain, mul_mod,
+    polynomial_field::PolynomialField,
 };
 use crate::{Error, Result};
 use fastpq_isi::StarkParameterSet;
@@ -76,52 +81,46 @@ impl PeriodicSelectors {
         })
     }
 
-    /// Evaluate all fixed selectors in phase order at one canonical base point.
+    /// Evaluate all fixed selectors in phase order at one canonical field point.
     ///
     /// Work and temporary storage are `O(period + log N)` and `O(period)`;
     /// there is no FFT, trace, or allocation proportional to `N`. Off-subgroup
     /// evaluation uses one batch inversion for all denominators. On-subgroup
     /// evaluation returns the exact one-hot vector without any inversion.
-    pub(super) fn evaluate(&self, point: u64) -> Result<Vec<u64>> {
-        validate_base(point, "fixed_schedule_evaluation_point")?;
-        let reduced_point = field_pow(point, self.repetitions);
-        let mut values = vec![0; self.phase_roots.len()];
+    pub(super) fn evaluate<F: PolynomialField>(&self, point: F) -> Result<Vec<F>> {
+        point.validate("fixed_schedule_evaluation_point", &[])?;
+        let reduced_point = point.power(self.repetitions);
+        let mut values = vec![F::ZERO; self.phase_roots.len()];
         if let Some(phase) = self
             .phase_roots
             .iter()
-            .position(|&root| root == reduced_point)
+            .position(|&root| F::embed_base(root) == reduced_point)
         {
-            values[phase] = 1;
+            values[phase] = F::ONE;
             return Ok(values);
         }
-        let zerofier = sub_mod(field_pow(reduced_point, self.phase_roots.len() as u64), 1);
-        let common = mul_mod(zerofier, self.inverse_period);
+        let zerofier = reduced_point
+            .power(self.phase_roots.len() as u64)
+            .sub(F::ONE);
+        let common = zerofier.scale_base(self.inverse_period);
         let mut prefixes = Vec::with_capacity(self.phase_roots.len());
-        let mut product = 1;
+        let mut product = F::ONE;
         for &root in &self.phase_roots {
             prefixes.push(product);
-            product = mul_mod(product, sub_mod(reduced_point, root));
+            product = product.mul(reduced_point.sub(F::embed_base(root)));
         }
-        // The one-hot branch above excludes every zero denominator.
-        let mut inverse_product = field_inverse(product);
+        // The one-hot branch excludes every zero denominator, in either field.
+        let mut inverse_product = product
+            .inverse()
+            .ok_or_else(|| shape_error("fixed selector denominator is not invertible"))?;
         for phase in (0..self.phase_roots.len()).rev() {
             let root = self.phase_roots[phase];
-            let inverse_denominator = mul_mod(inverse_product, prefixes[phase]);
-            inverse_product = mul_mod(inverse_product, sub_mod(reduced_point, root));
-            values[phase] = mul_mod(common, mul_mod(root, inverse_denominator));
+            let inverse_denominator = inverse_product.mul(prefixes[phase]);
+            inverse_product = inverse_product.mul(reduced_point.sub(F::embed_base(root)));
+            values[phase] = common.mul(inverse_denominator).scale_base(root);
         }
         Ok(values)
     }
-}
-
-fn validate_base(value: u64, context: &'static str) -> Result<()> {
-    if value >= GOLDILOCKS_MODULUS {
-        return Err(Error::NonCanonicalGoldilocksElement {
-            context,
-            indices: Vec::new(),
-        });
-    }
-    Ok(())
 }
 
 fn shape_error(details: &'static str) -> Error {
@@ -307,7 +306,7 @@ mod tests {
         }
         let schedule = selectors(1024, MAX_PERIOD);
         assert_eq!(
-            schedule.evaluate(0).unwrap(),
+            schedule.evaluate(0_u64).unwrap(),
             vec![field_inverse(MAX_PERIOD as u64); MAX_PERIOD]
         );
     }
@@ -335,5 +334,63 @@ mod tests {
         assert_eq!(values.len(), MAX_PERIOD);
         assert!(values.iter().all(|&value| value < GOLDILOCKS_MODULUS));
         assert_eq!(values.into_iter().fold(0, add_mod), 1);
+    }
+
+    #[test]
+    fn extension_points_match_independent_coefficients_and_full_period_polynomials() {
+        use super::super::polynomial_reference as reference;
+        use crate::field::GoldilocksFp4V1 as F;
+        for rows in [1, 2, 4, 8, 16] {
+            for period in [1, 2, 4, 8, 16]
+                .into_iter()
+                .filter(|period| *period <= rows)
+            {
+                let schedule = selectors(rows, period);
+                for phase in 0..period {
+                    let row_values: Vec<_> = (0..rows)
+                        .map(|row| u64::from(row % period == phase))
+                        .collect();
+                    let coefficients = reference::interpolate(&row_values);
+                    for point in reference::points() {
+                        let expected = reference::horner(&coefficients, point);
+                        assert_eq!(schedule.evaluate(point).unwrap()[phase], expected);
+                        assert_eq!(reference::periodic(rows, period, phase, point), expected);
+                    }
+                }
+            }
+        }
+        let schedule = selectors(65_536, MAX_PERIOD);
+        for point in reference::points() {
+            let actual = schedule.evaluate(point).unwrap();
+            for (phase, value) in actual.iter().enumerate() {
+                assert_eq!(
+                    *value,
+                    reference::periodic(65_536, MAX_PERIOD, phase, point)
+                );
+            }
+            assert_eq!(actual.into_iter().fold(F::ZERO, F::add), F::ONE);
+        }
+        for row in [0, 407, 408, 511, 512, 32768, 65535] {
+            let point = field_pow(trace_generator(65_536), row);
+            let expected = schedule.evaluate(point).unwrap();
+            assert_eq!(
+                schedule.evaluate(F::embed_base(point)).unwrap(),
+                expected.into_iter().map(F::embed_base).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_extension_points_reject_each_noncanonical_coordinate() {
+        use crate::field::GoldilocksFp4V1 as F;
+        let schedule = selectors(65_536, MAX_PERIOD);
+        for lane in 0..4 {
+            let mut words = [0; 4];
+            words[lane] = GOLDILOCKS_MODULUS;
+            let point = F::from_coefficients_unchecked_for_test(words);
+            assert!(
+                matches!(schedule.evaluate(point), Err(Error::NonCanonicalGoldilocksElement { context: "fixed_schedule_evaluation_point", indices }) if indices == [lane])
+            );
+        }
     }
 }

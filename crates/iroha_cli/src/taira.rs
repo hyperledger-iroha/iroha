@@ -175,6 +175,8 @@ pub enum Command {
     Doctor(Doctor),
     /// Preflight or execute the strictly authorized compiled public reset.
     PublicReset(crate::taira_public_reset::PublicReset),
+    /// Reconcile empty stopped Inrou owners under the active routine updater lock.
+    StoppedOwnerMaintenance(crate::taira_public_reset::StoppedOwnerMaintenance),
     /// Prepare, submit, or recover exactly one authorized public-reset child.
     WriteCanary(WriteCanary),
     /// Generate the canonical deploy-mode Inrou canary workspace from AArch64 guest assets.
@@ -193,6 +195,9 @@ impl Run for Command {
             Self::Doctor(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
+            ),
+            Self::StoppedOwnerMaintenance(_) => eyre::bail!(
+                "`taira stopped-owner-maintenance` must run before client configuration is loaded"
             ),
             Self::WriteCanary(cmd) => cmd.run(context),
             Self::InrouWorkspace(cmd) => cmd.run(context),

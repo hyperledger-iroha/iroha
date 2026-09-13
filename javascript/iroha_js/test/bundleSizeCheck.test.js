@@ -347,7 +347,7 @@ test("browser graph audit derives every explicit browser-conditioned package exp
     { target: "./dist/nft.js", subpaths: ["./nft"] },
     { target: "./dist/public/address.js", subpaths: ["./address"] },
     { target: "./dist/browser.js", subpaths: ["./browser"] },
-    { target: "./dist/kagemusha.js", subpaths: ["./kagemusha"] },
+    { target: "./dist/public/kagemusha.js", subpaths: ["./kagemusha"] },
     {
       target: "./dist/privacyCapabilities.js",
       subpaths: ["./privacy-capabilities"],
@@ -535,7 +535,7 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 100);
+  assert.equal(Object.keys(result.metafile.inputs).length, 101);
   assert.deepEqual(
     {
       eagerBytes: metrics.eagerBytes,
@@ -547,19 +547,19 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
       combinedLimitKb: metrics.combinedLimitKb,
     },
     {
-      eagerBytes: 502_325,
+      eagerBytes: 438_380,
       lazyBytes: [
         { specifier: "./sumeragiTyped.js", bytes: 66_168 },
-        { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_191 },
+        { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_190 },
       ],
-      combinedBytes: 577_684,
+      combinedBytes: 513_738,
       combinedLimitKb: 572,
     },
   );
   assert.equal(
     target.limitKb * 1024 - metrics.eagerBytes,
-    459,
-    "public browser aggregate must retain the measured 459-byte eager headroom",
+    64_404,
+    "public browser aggregate must retain the measured 64,404-byte eager headroom",
   );
   assert.ok(
     metrics.eagerBytes < 517_186,
@@ -618,10 +618,10 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 806_369, modules: 122 }],
-    ["transactionCodec.js (browser)", { bytes: 293_513, modules: 62 }],
-    ["nexusApp.js (browser)", { bytes: 203_271, modules: 71 }],
-    ["canonicalRequest.js (browser)", { bytes: 74_108, modules: 44 }],
+    ["toriiClient.js", { bytes: 813_099, modules: 125 }],
+    ["transactionCodec.js (browser)", { bytes: 217_923, modules: 62 }],
+    ["nexusApp.js (browser)", { bytes: 227_026, modules: 71 }],
+    ["canonicalRequest.js (browser)", { bytes: 94_680, modules: 46 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -661,6 +661,20 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
       );
     }
     if (target.label === "toriiClient.js") {
+      const replicationInput = Object.keys(result.metafile.inputs).filter((input) =>
+        /(?:^|[/\\])sorafsReplicationResponses\.js$/u.test(input),
+      );
+      assert.equal(replicationInput.length, 1, "replication responses retain one owner");
+      const includesReplication = (outputs) => outputs.some((output) =>
+        Object.hasOwn(result.metafile.outputs[output].inputs, replicationInput[0]),
+      );
+      assert.equal(includesReplication(splitMetrics.eagerOutputs), false,
+        "replication response validation must remain outside the eager Torii graph");
+      const optional = splitMetrics.lazyChunks.find(({ specifier }) =>
+        specifier === "./toriiOptional.js");
+      assert.ok(optional, "the existing optional closure must remain audited");
+      assert.equal(includesReplication(optional.outputs), true,
+        "replication responses belong to the existing audited optional closure");
       assert.equal(
         Object.keys(result.metafile.inputs).some(
           (input) =>
@@ -671,17 +685,17 @@ test("remaining bundle targets retain exact current pinned-esbuild measurements"
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        9_759,
-        "Torii hard ceiling must retain the measured 9,759-byte eager headroom",
+        3_029,
+        "Torii hard ceiling must retain the measured 3,029-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
         [
-          { specifier: "./toriiOptional.js", bytes: 308_775 },
+          { specifier: "./toriiOptional.js", bytes: 241_438 },
           { specifier: "./sumeragiTyped.js", bytes: 65_899 },
         ],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_181_043);
+      assert.equal(splitMetrics.combinedBytes, 1_120_436);
       assert.equal(splitMetrics.combinedLimitKb, 1_191);
       assert.equal(target.reviewedEagerBytes, 814_534);
       assert.equal(target.reviewedCombinedBytes, 1_214_544);
