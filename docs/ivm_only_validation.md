@@ -181,10 +181,48 @@ quotient arithmetic, guarded secret buffers and native six-lane benchmark
 owners are now composed for native validation. Benchmark consumers share one
 explicit V1 report contract, reject retired scalar fields and incomplete
 operation inventories, and preserve complete six-lane geometry/parity evidence.
-All 478 private Python consumer/release-isolation tests pass (14 additional
-subtests); 16 shared parser fixtures reproduce byte-for-byte. Their device and
-timing values are synthetic. Rust compilation, full-size arithmetic checks and
-actual GPU measurements remain pending. See [the benchmark contract](../specs/fastpq_benchmark_v1.md).
+The reviewed consumer correction passes 552 Python consumer/release-isolation
+tests on the composed source (14 additional subtests); 16 shared parser fixtures reproduce byte-for-byte.
+Their device and timing values are synthetic. Complete raw/flat report validation
+now precedes rollout policy and geometry classification, including exact staging
+metrics, typed counts, invocation overflow and GPU timing presence.
+
+The preceding native snapshot
+`0d11c6c2caa4e1058866c81a146113a4ddd6ee8f27a9eae3d6c785a4306aa996`
+passes 206 focused arithmetic/benchmark tests, 12 executor/dispatch controls and
+actual Metal six-lane parity across the framing boundaries. Both explicitly
+scheduled full-size tests pass: public Fp4 preparation takes 58.17 seconds with
+484,605,952 bytes maximum resident memory; the complete 65,536-by-342 masked
+numerator and exact quotient take 1,928.90 seconds with 4,181,819,392 bytes maximum
+resident memory. The latter checks full remainder/high padding and independent
+Horner/current/next-row AIR identities. Measurements use macOS `/usr/bin/time -l`.
+Masks are explicit deterministic arithmetic-test inputs; production entropy, PCS,
+bounded-opening admission and complete proof qualification remain unfinished.
+The native results and source/harness hashes are retained under
+`target/ivm-only-validation/fastpq-composed-native/` and
+`target/ivm-only-validation/fastpq-fullsize-native/`.
+
+The subsequent xtask report build exposed two `&&str` indexing errors, corrected
+at the shared Norito JSON consumer. The standalone Rust profile suite then passes
+all 13 tests, including the 16 shared fixture cases. Its separate tooling lock
+was resolved offline and its exact hash is retained with the native result.
+The unsupported Metal entry point passes two actual process checks: exit 1,
+exact prerequisite diagnostic, empty stdout and no report artifact.
+
+On snapshot `e17e5a28649bcb990df0092a4ef07bd9e7c821ec5b69836d9c3206c0033b8320`,
+actual required-GPU Metal captures pass for eight-row `all` and three-row
+trace-column/pair filters, each with one warmup and two timed invocations.
+All three outputs pass the maintained wrapper and complete Python projection;
+the Rust renderer accepts all six raw/wrapped inputs and retains their exact
+complete JSON records. These small debug-build captures qualify primitive
+execution/report consistency, not production performance. Results reside in
+`target/ivm-only-validation/fastpq-metal-capture-native/`,
+`fastpq-metal-rust-readback/` and `fastpq-profile-native/`.
+The same candidate passes the IVM-only guard, its 47 regressions, retired-codec
+guards and exact historical-archive verification. The wider xtask rebuild finds
+a separate merged Core caller of the now-private ledger replay-authority field;
+its owning-API repair and signed-manifest tests remain pending. All failed
+builds remain preserved. See [the benchmark contract](../specs/fastpq_benchmark_v1.md).
 
 The full privacy/ZK, SDK, hardware, audit and four-validator release gates remain
 open. These checks do not establish production qualification.

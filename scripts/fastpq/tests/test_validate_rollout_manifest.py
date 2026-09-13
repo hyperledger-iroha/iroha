@@ -11,35 +11,17 @@ import pytest
 
 from scripts.fastpq import validate_rollout_manifest as validator
 from scripts.fastpq import wrap_benchmark
-from scripts.fastpq.tests.test_digest384_evidence import primitive_report
+from scripts.fastpq.tests.report_fixtures import complete_flat_report, add_synthetic_raw_copy
 
 
 def make_evidence(tmp_path):
     """Build complete synthetic captures solely for exercising the validator."""
     benches = []
     for backend in ("metal", "cuda"):
-        benchmarks = {
-            "rows": 20_000,
-            "padded_rows": 32_768,
-            "iterations": 5,
-            "warmups": 1,
-            "gpu_backend": backend,
-            "gpu_available": True,
-            "execution_mode": "gpu",
-            "column_count": 2,
-            "operation_filter": "all",
-            "operations": [
-                {"operation": operation, "cpu_mean_ms": 100.0,
-                 "gpu_mean_ms": 50.0, "speedup_ratio": 2.0}
-                for operation in sorted(validator.CANONICAL_OPERATIONS)
-            ],
-        }
-        for index, operation in enumerate(benchmarks["operations"]):
-            if operation["operation"].startswith("digest384_"):
-                raw = primitive_report(operation["operation"], backend, rows=20_000, iterations=5, warmups=1)
-                schema = wrap_benchmark.CUDA_NESTED_SCHEMA if backend == "cuda" else wrap_benchmark.METAL_FLAT_SCHEMA
-                projected, _ = wrap_benchmark.summarize_operations(raw, schema)
-                benchmarks["operations"][index] = projected[0]
+        benchmarks = complete_flat_report(backend, rows=20_000, iterations=5, warmups=1)
+        for operation in benchmarks["operations"]:
+            operation.update(cpu_mean_ms=100.0, gpu_mean_ms=50.0,
+                             speedup_ratio=2.0, speedup_delta_ms=50.0)
         if backend == "metal":
             benchmarks["metal_dispatch_queue"] = {
                 "limit": 4, "max_in_flight": 3, "dispatch_count": 32,
@@ -71,8 +53,11 @@ def make_evidence(tmp_path):
     return manifest
 
 
-def write_capture(tmp_path, bench, capture):
-    """Update capture hashes so individual tests exercise deeper validation."""
+def write_capture(tmp_path, bench, capture, *, rebuild_raw=True):
+    """Reseal synthetic metrics in both copies to reach each intended policy guard."""
+    if rebuild_raw:
+        capture.pop("report", None)
+        add_synthetic_raw_copy(capture)
     content = json.dumps(capture).encode()
     (tmp_path / bench["path"]).write_bytes(content)
     bench["hashes"] = {
@@ -114,11 +99,11 @@ def test_manifest_cannot_misrepresent_capture(tmp_path, field, value):
     (lambda b: b.update(rows=100), "padded_rows|disagrees|rows"),
     (lambda b: b.update(iterations=0), "iterations"),
     (lambda b: b.update(gpu_available=False), "available"),
-    (lambda b: b.update(gpu_backend="cuda"), "wrong GPU backend"),
-    (lambda b: b.update(operation_filter="lde"), "every canonical"),
-    (lambda b: b["operations"].pop(), "every canonical"),
-    (lambda b: b["operations"].append(b["operations"][0]), "duplicate operation"),
-    (lambda b: b["operations"][0].update(gpu_mean_ms=-1), "positive"),
+    (lambda b: b.update(gpu_backend="cuda"), "digest384.gpu.backend"),
+    (lambda b: b.update(operation_filter="lde"), "operation_filter disagrees"),
+    (lambda b: b["operations"].pop(), "exact six-operation ordered inventory"),
+    (lambda b: b["operations"].append(b["operations"][0]), "duplicate benchmark operation"),
+    (lambda b: b["operations"][0].update(gpu_mean_ms=-1), "finite valid gpu_mean_ms"),
     (lambda b: b["operations"][0].update(speedup_ratio=3), "disagrees"),
     (lambda b: b["metal_dispatch_queue"].update(dispatch_count=0), "dispatch_count"),
     (lambda b: b["metal_dispatch_queue"].update(max_in_flight=4), "headroom"),
@@ -147,7 +132,7 @@ def test_actual_performance_must_satisfy_claimed_limits(tmp_path, operation, cpu
     bench = manifest["payload"]["benches"][0]
     capture = json.loads((tmp_path / bench["path"]).read_bytes())
     entry = next(item for item in capture["benchmarks"]["operations"] if item["operation"] == operation)
-    entry.update(cpu_mean_ms=cpu, gpu_mean_ms=gpu, speedup_ratio=speedup)
+    entry.update(cpu_mean_ms=cpu, gpu_mean_ms=gpu, speedup_ratio=speedup, speedup_delta_ms=cpu-gpu)
     write_capture(tmp_path, bench, capture)
     with pytest.raises(ValueError, match="violates"):
         validate(tmp_path, manifest)
@@ -183,7 +168,7 @@ def test_rollout_shell_rechecks_captured_performance(tmp_path):
     bench = manifest["payload"]["benches"][0]
     capture = json.loads(Path(bench["path"]).read_bytes())
     entry = next(item for item in capture["benchmarks"]["operations"] if item["operation"] == "lde")
-    entry.update(cpu_mean_ms=2000, gpu_mean_ms=1000, speedup_ratio=2)
+    entry.update(cpu_mean_ms=2000, gpu_mean_ms=1000, speedup_ratio=2, speedup_delta_ms=1000)
     write_capture(tmp_path, bench, capture)
     path = tmp_path / "fastpq_bench_manifest.json"
     path.write_text(json.dumps(manifest))
@@ -255,6 +240,30 @@ def test_rollout_rejects_retired_fields_and_undeclared_producer_even_after_rehas
         capture["benchmarks"]["poseidon_profiles"] = None
     else:
         capture["benchmarks"]["column_staging"] = {"phases": {"fft": {}, "lde": {}, "poseidon": {}}, "samples": {"fft": [], "lde": []}}
-    write_capture(tmp_path, bench, capture)
+    write_capture(tmp_path, bench, capture, rebuild_raw=False)
     with pytest.raises(ValueError):
         validate(tmp_path, manifest)
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_raw", "raw_tag", "raw_count", "missing_delta", "raw_metric",
+    "generic_count", "wrong_all_order", "partial_all", "flat_raw_flag",
+])
+def test_rollout_rehash_cannot_bypass_shared_complete_report_owner(tmp_path, mutation):
+    manifest = make_evidence(tmp_path)
+    bench = manifest["payload"]["benches"][0]
+    capture = json.loads((tmp_path / bench["path"]).read_bytes())
+    if mutation == "missing_raw": capture.pop("report")
+    elif mutation == "raw_tag": capture["report"].pop("producer_schema")
+    elif mutation == "raw_count": capture["report"]["column_count"] += 1
+    elif mutation == "missing_delta": capture["benchmarks"]["operations"][0].pop("speedup_delta_ms")
+    elif mutation == "raw_metric": capture["report"]["operations"][0]["cpu"]["mean_ms"] += 1
+    elif mutation == "generic_count":
+        for report in (capture["report"], capture["benchmarks"]): report["operations"][0].pop("input_len")
+    elif mutation == "wrong_all_order":
+        for report in (capture["report"], capture["benchmarks"]): report["operations"].reverse()
+    elif mutation == "partial_all":
+        for report in (capture["report"], capture["benchmarks"]): report["operations"].pop()
+    else: capture["benchmarks"]["operations"][0]["gpu_recorded"] = True
+    write_capture(tmp_path, bench, capture, rebuild_raw=False)
+    with pytest.raises(ValueError): validate(tmp_path, manifest)

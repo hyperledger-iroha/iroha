@@ -21,9 +21,11 @@ import blake3
 try:
     from .benchmark_operations import CANONICAL_OPERATIONS, reject_retired_fields
     from .digest384_evidence import validate_digest384_operation
+    from .report_projection import project_bundle
 except ImportError:  # Direct script invocation.
     from benchmark_operations import CANONICAL_OPERATIONS, reject_retired_fields
     from digest384_evidence import validate_digest384_operation
+    from report_projection import project_bundle
 
 
 
@@ -135,6 +137,7 @@ def validate_metal_telemetry(benchmarks: dict[str, Any]) -> None:
 def validate_manifest(manifest_path: Path, repo_root: Path) -> None:
     """Reject mismatched captures, CPU fallbacks and unenforced release limits."""
     signed = load_json(manifest_path.read_bytes())
+    reject_retired_fields(signed)
     payload = object_value(signed.get("payload"), "manifest.payload")
     if type(payload.get("version")) is not int or payload["version"] != 1:
         raise ValueError("unexpected manifest version")
@@ -171,7 +174,9 @@ def validate_manifest(manifest_path: Path, repo_root: Path) -> None:
             if hashes.get(name) != digest:
                 raise ValueError(f"{label}.{name} does not match captured benchmark bytes")
         capture = load_json(content)
-        reject_retired_fields(capture)
+        # The release policy consumes the same complete raw/flat contract as
+        # every other report ingress, before evaluating performance limits.
+        project_bundle(capture, require_wrapped=True)
         metadata = object_value(capture.get("metadata"), "metadata")
         device_labels = object_value(metadata.get("labels"), "metadata.labels")
         for key in ("device_class", "gpu_kind"):

@@ -14,6 +14,11 @@ fn real_cold_owner_rejects_future_body_generation_without_retirement() {
     run_durable_recovery_test_on_stack(|| real_timeout_body_recovery_fixture(2));
 }
 
+#[test]
+fn retired_terminal_validate_ledger_join_requires_exact_row_and_verified_context() {
+    run_durable_recovery_test_on_stack(|| real_timeout_body_recovery_fixture(3));
+}
+
 fn real_timeout_body_recovery_fixture(case: u8) {
     use crate::sumeragi::v2::{
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, SumeragiV2Adapter,
@@ -25,7 +30,7 @@ fn real_timeout_body_recovery_fixture(case: u8) {
     let body_directory = TempDir::new().expect("timeout body directory");
     let mut body_store = fixture.open_store(&body_directory);
     let (view, generation) = match case {
-        0 => (0, 0x6a),
+        0 | 3 => (0, 0x6a),
         1 => (1, 0),
         2 => (1, 1),
         _ => unreachable!(),
@@ -108,6 +113,91 @@ fn real_timeout_body_recovery_fixture(case: u8) {
     drop(warm);
     let wal_before = fs::read(&wal_path).expect("read installed timeout WAL");
     let body_store = fixture.open_store(&body_directory);
+    if case == 3 {
+        let (cold, effects) = open_adapter();
+        assert!(effects.is_empty());
+        let frontier = cold
+            .leader_wire_recovery_authority()
+            .expect("actual replayed timeout frontier");
+        let mut terminal = expected_record.clone();
+        terminal.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
+        terminal.continuation =
+            PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
+        let claim = super::super::super::open::TerminalValidateNoSuccessorClaim::from_ledger_record(
+            fixture.lifecycle_context(),
+            &terminal,
+        )
+        .expect("exact completed row claim");
+        let store_before = snapshot_files(body_directory.path());
+        assert!(terminal.authenticates_retired_terminal_validate_source(
+            &claim,
+            &fixture.verified,
+            frontier,
+            &body_store,
+        ));
+        assert!(!expected_record.authenticates_retired_terminal_validate_source(
+            &claim,
+            &fixture.verified,
+            frontier,
+            &body_store,
+        ));
+        let foreign = RecoveryFixture::new("foreign-retired-validate-context", 0x72);
+        let forged_claim =
+            super::super::super::open::TerminalValidateNoSuccessorClaim::from_ledger_record(
+                foreign.lifecycle_context(),
+                &terminal,
+            )
+            .expect("structural claim is not context authentication");
+        assert!(forged_claim.exactly_matches_ledger_record(&terminal));
+        assert!(!terminal.authenticates_retired_terminal_validate_source(
+            &forged_claim,
+            &fixture.verified,
+            frontier,
+            &body_store,
+        ));
+        assert!(!terminal.authenticates_retired_terminal_validate_source(
+            &claim,
+            &foreign.verified,
+            frontier,
+            &body_store,
+        ));
+        let substitute_directory = TempDir::new().expect("substituted source body directory");
+        let mut substitute_store = fixture.open_store(&substitute_directory);
+        let substitute_source = standalone_validate_record(
+            &fixture,
+            &mut substitute_store,
+            0,
+            0x73,
+            10,
+            StandaloneValidateOriginFixture::LocalBody,
+        );
+        let mut substituted = terminal.clone();
+        substituted.replay_authority = substitute_source.replay_authority;
+        let substituted_claim =
+            super::super::super::open::TerminalValidateNoSuccessorClaim::from_ledger_record(
+                fixture.lifecycle_context(),
+                &substituted,
+            )
+            .expect("substituted row still forms only a structural claim");
+        assert!(substituted_claim.exactly_matches_ledger_record(&substituted));
+        assert!(!substituted.authenticates_retired_terminal_validate_source(
+            &substituted_claim,
+            &fixture.verified,
+            frontier,
+            &body_store,
+        ));
+        assert_eq!(snapshot_files(body_directory.path()), store_before);
+        assert_eq!(fs::read(&wal_path).unwrap(), wal_before);
+        assert_eq!(
+            LifecycleLedgerStoreV1::open(ledger_directory.path(), fixture.lifecycle_context())
+                .unwrap()
+                .1
+                .records(),
+            &[expected_record],
+            "historical authentication does not publish or terminalize a row",
+        );
+        return;
+    }
     let bodies_before = body_store
         .recovery_catalog()
         .expect("retained body catalog");

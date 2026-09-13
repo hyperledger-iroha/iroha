@@ -43,6 +43,9 @@ def add_synthetic_raw_copy(bundle):
     report = deepcopy(bundle["benchmarks"])
     report["producer_schema"] = bundle["producer_schema"]
     metal = bundle["producer_schema"] == "metal_flat"
+    # Repeated references in a synthetic Python list still serialize as
+    # independent JSON objects; retain duplicate-row adversaries as such.
+    report["operations"] = [deepcopy(entry) for entry in report["operations"]]
     for entry in report["operations"]:
         cpu = entry.pop("cpu_mean_ms")
         gpu = entry.pop("gpu_mean_ms")

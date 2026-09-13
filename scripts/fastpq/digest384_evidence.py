@@ -8,9 +8,9 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from .benchmark_operations import DIGEST384_OPERATIONS, require_operation
+    from .benchmark_operations import DIGEST384_OPERATIONS, checked_invocations, require_operation
 except ImportError:  # Direct script invocation.
-    from benchmark_operations import DIGEST384_OPERATIONS, require_operation
+    from benchmark_operations import DIGEST384_OPERATIONS, checked_invocations, require_operation
 
 SCHEMA = "fastpq-digest384-primitive-benchmark-v1"
 CATALOG = "iroha-privacy-exact12-v1"
@@ -132,12 +132,12 @@ def validate_digest384_operation(entry: dict, report: dict, *, flattened: bool =
         _equal(entry["gpu_recorded"], has_gpu, "gpu_recorded")
     warmups = _count(report.get("warmups"), "warmups", minimum=0)
     iterations = _count(report.get("iterations"), "iterations")
+    invocations = checked_invocations(warmups, iterations)
     if not has_gpu:
         if "gpu" in evidence:
             raise ValueError("CPU six-lane benchmark must omit device evidence")
         return
     gpu = _closed(evidence.get("gpu"), _GPU_FIELDS, frozenset(), "digest384.gpu")
-    invocations = warmups + iterations
     for field, expected in {
         "backend": backend, "warmup_invocations": warmups, "timed_invocations": iterations,
         "invocations": invocations, "frames": frames * invocations,
