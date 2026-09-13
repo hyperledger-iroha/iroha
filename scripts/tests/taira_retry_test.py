@@ -32,6 +32,7 @@ def artifact_receipts():
     ]
     build = {
         "commit": "a" * 40,
+        "environment_sha256": "e" * 64,
         "tree": "c" * 40,
         "source_unchanged": True,
         "toolchain_unchanged": True,

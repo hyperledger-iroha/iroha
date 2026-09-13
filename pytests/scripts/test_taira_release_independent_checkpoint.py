@@ -156,17 +156,19 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.assertEqual(self.compile.call_count, 1)
         self.assertEqual(self.network.call_count, 1)
 
-    def test_changed_runtime_environment_cannot_reuse_independent_checkpoint(self):
+    def test_changed_session_environment_restores_independent_checkpoint_inputs(self):
         self.fail_network_once()
+        original = self.checkpoint.read_bytes()
         for key in ("HOME", "PATH", "TMPDIR", "TMP", "TEMP", "RUSTUP_HOME", "SCCACHE_DIR", "SCCACHE_CACHE_SIZE"):
             with self.subTest(key=key), patch.dict(os.environ, {key: "changed-fixture-environment-" + key}):
-                with self.assertRaisesRegex(release.PrepareError, "different inputs"):
-                    self.prepare()
-        self.assertEqual(self.compile.call_count, 1)
-        self.assertEqual(self.network.call_count, 1)
-        self.assertFalse((self.fixture.out / "checks.json").exists())
+                self.prepare()
+        self.assertEqual(self.compile.call_count, 2)
+        self.assertEqual(self.network.call_count, 2)
+        self.assertEqual(self.ran(), ["cli_first", "core_first", "network_first", "network_first"])
+        self.assertEqual(self.checkpoint.read_bytes(), original)
+        self.assertTrue((self.fixture.out / "checks.json").exists())
 
-    def test_changed_runtime_environment_cannot_reuse_full_checkpoint_after_linux_failure(self):
+    def test_changed_session_environment_restores_full_checkpoint_after_linux_failure(self):
         def fail_linux(_root, _command, _env, log):
             log.write_text("fixture compiler failed")
             raise release.PrepareError("fixture Linux failure")
@@ -176,25 +178,31 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.assertTrue((self.fixture.out / "checks.json").exists())
         for key in ("HOME", "PATH", "TMPDIR", "TMP", "TEMP"):
             with self.subTest(key=key), patch.dict(os.environ, {key: "changed-fixture-environment-" + key}):
-                with self.assertRaisesRegex(release.PrepareError, "different inputs"):
-                    self.prepare()
-        self.assertEqual(len(list((self.fixture.out / "attempts").iterdir())), 1)
+                self.prepare()
+        self.assertEqual(len(list((self.fixture.out / "attempts").iterdir())), 2)
         self.assertEqual(self.compile.call_count, 1)
 
-    def test_changed_runtime_environment_cannot_reuse_completed_capture(self):
+    def test_changed_session_environment_reuses_completed_capture_with_recorded_inputs(self):
         self.prepare()
         for key in ("HOME", "PATH", "TMPDIR", "TMP", "TEMP"):
             with self.subTest(key=key), patch.dict(os.environ, {key: "changed-fixture-environment-" + key}):
-                with self.assertRaisesRegex(release.PrepareError, "different inputs"):
-                    self.prepare()
+                self.prepare()
         self.assertEqual(len(list((self.fixture.out / "attempts").iterdir())), 1)
         self.assertEqual(self.compile.call_count, 1)
 
-    def test_environment_digest_is_canonical_and_records_never_contain_raw_runtime_values(self):
+    def test_public_records_contain_only_digest_and_private_environment_excludes_runtime_secrets(self):
         values = {key: "private-runtime-value-fixture-" + key for key in ("HOME", "PATH", "TMPDIR", "TMP", "TEMP")}
+        values["ONBOARDING_TOKEN"] = "runtime-secret-fixture-not-recorded"
         with patch.dict(os.environ, values):
             self.prepare()
         request = release.read_record(self.fixture.out / "request.json")
+        environment_path = self.fixture.out / "environment.json"
+        environment = release.read_record(environment_path)
+        self.assertEqual(environment_path.stat().st_nlink, 1)
+        self.assertEqual(stat.S_IMODE(environment_path.stat().st_mode), 0o400)
+        self.assertEqual(hashlib.sha256(environment_path.read_bytes()).hexdigest(), request["environment_sha256"])
+        self.assertNotIn("ONBOARDING_TOKEN", environment["child_environment"])
+        self.assertNotIn(values["ONBOARDING_TOKEN"], environment_path.read_text())
         self.assertRegex(request["native_environment_sha256"], r"^[a-f0-9]{64}$")
         for path in (self.fixture.out / "request.json", self.checkpoint,
                      self.fixture.out / "checks.json", self.fixture.out / "result.json",
@@ -202,6 +210,7 @@ class IndependentCheckpointTests(unittest.TestCase):
             record = release.read_record(path)
             base = record["request"] if "request" in record else record
             self.assertEqual(base["native_environment_sha256"], request["native_environment_sha256"])
+            self.assertEqual(base["environment_sha256"], request["environment_sha256"])
             for value in values.values():
                 self.assertNotIn(value, path.read_text())
 
