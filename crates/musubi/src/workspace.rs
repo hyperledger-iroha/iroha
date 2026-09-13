@@ -815,6 +815,15 @@ fn resolve_dependencies(
                         format!("path dependency `{alias}` points to a virtual workspace"),
                     ));
                 }
+                if dependency_manifest.library.is_none() {
+                    return Err(WorkspaceError::new(
+                        WorkspaceErrorKind::Dependency,
+                        Some(dependency_manifest_path),
+                        format!(
+                            "path dependency `{alias}` is a contract-only package; dependencies must declare a `[lib]` interface"
+                        ),
+                    ));
+                }
                 let local_package = match local_packages.get(&dependency_manifest_path) {
                     Some(member_path) => resolved_packages
                         .get(member_path)
@@ -1481,5 +1490,21 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
                 .members()
                 .contains_key(&PortablePath::new(".").expect("dot"))
         );
+    }
+
+    #[test]
+    fn contract_only_roots_load_but_cannot_be_imported_as_path_libraries() {
+        let temp = TempDir::new().expect("workspace directory");
+        let contract = include_str!("../../../examples/coffee-club/Musubi.toml");
+        write_file(&temp.path().join("app/Musubi.toml"), contract);
+        assert!(load_workspace(&temp.path().join("app")).is_ok());
+        write_file(
+            &temp.path().join("Musubi.toml"),
+            &format!("{STANDALONE}\n[dependencies]\napp = {{ path = \"app\" }}\n"),
+        );
+        let error = load_workspace(temp.path()).expect_err("contract is not an importable library");
+        assert_eq!(error.kind(), WorkspaceErrorKind::Dependency);
+        assert!(error.message().contains("contract-only package"));
+        assert!(error.message().contains("app"));
     }
 }

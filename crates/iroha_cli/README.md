@@ -608,84 +608,15 @@ iroha ledger asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain"
 
 ### Contract Developer Workflow
 
-Use `iroha contract dev` when a repository has an `iroha.contracts.toml`
-manifest. The manifest is the source of truth for contract sources, aliases,
-profiles, Kotodama tests, and smoke declarations.
+Use [Musubi](../musubi/README.md) for Kotodama package projects. `Musubi.toml`
+owns library, contract, test, and dependency declarations. `musubi new`,
+`musubi check`, `musubi build`, and `musubi test` use the native compiler and
+an explicit locked module graph. Named network bindings select the runtime
+client config and exact contract alias for `musubi deploy` and `musubi view`.
 
-A single-file seiyaku uses `source`. A typed-module seiyaku uses
-`kotodama_project`; these fields are mutually exclusive. The referenced
-version-1 Norito JSON manifest declares the exact root imports, locked package
-identities, module paths, exports, and transitive imports used by `dev check`,
-`dev build`, app bundle construction, and deployment:
-
-```toml
-[[contracts]]
-name = "demo.app"
-alias = "app::universal"
-kotodama_project = "kotodama.project.json"
-artifact = "artifacts/app.to"
-```
-
-```json
-{
-  "version": 1,
-  "root": "contracts/app.ko",
-  "imports": [{"alias": "Math", "package": "example/math@1.0.0"}],
-  "packages": [{
-    "identity": "example/math@1.0.0",
-    "modules": ["modules/math.ko"],
-    "exports": ["value"],
-    "imports": []
-  }]
-}
-```
-
-No wildcard, sibling-file, private-export, or source-order inference is used.
-Unknown manifest fields and paths escaping the project directory are rejected.
-Diagnostics report both the locked package identity and the unchanged logical
-source path.
-
-```bash
-iroha contract dev doctor --manifest iroha.contracts.toml --profile local
-iroha contract dev check --manifest iroha.contracts.toml --profile local
-iroha contract dev build --manifest iroha.contracts.toml --profile local
-iroha contract dev test --manifest iroha.contracts.toml --coverage
-iroha contract dev test --manifest iroha.contracts.toml --path-filter payments --filter rejects
-iroha contract dev test --manifest iroha.contracts.toml --filter rejects_invalid_payment --exact
-iroha contract dev schema --manifest iroha.contracts.toml --out docs/interface.md
-```
-
-Test source and function selection are deliberately separate: `--path-filter`
-selects `.ko` test paths, while `--filter` selects test function names and
-`--exact` requires a complete function-name match. A supplied filter that
-matches no source or function fails instead of silently running a broader
-suite.
-
-`build` emits compiled `.to` artifacts plus adjacent `.manifest.json` and
-`.interface.json` files. Source maps and budget reports are content addressed
-under `.sidecars/<artifact-hash>/source-map.json` and `budget.json`; mutating
-any deployable artifact field therefore selects a different diagnostic
-sidecar. An authenticated commit record under `.fingerprints/` binds every
-generated output and lets unchanged builds perform no compilation or output
-rewrite. `check --locked` rejects missing or stale generated files, which lets
-CI fail when checked-in interfaces or payload examples drift from the Kotodama
-source.
-
-`deploy`, `resume`, `call`, and `view` resolve contracts by manifest name and
-reuse the existing contract app/deploy/call machinery with typed payload
-validation from the compiled artifact when it is available.
-
-`dev call` also requires `--draft-intent-file`. A smoke entry whose operation is
-`call` must declare `draft_intent = "path/to/trusted-intent.json"`; the path is
-resolved relative to `iroha.contracts.toml`. This deliberate hard cut prevents
-an app route from substituting executable or metadata bytes that a wallet would
-otherwise sign.
-
-`doctor`, `call`, `view`, and `smoke` honor the selected profile's client
-config, signer, default gas, and fee asset settings. `doctor` probes the live
-Torii endpoint, block-height host surface, signature syscall availability, and
-manifest admission path; `smoke` executes the manifest's declared view/call
-cases against the resolved profile instead of acting as a parse-only check.
+The low-level `iroha contract` commands inspect artifacts, derive addresses,
+manage aliases, perform calls and views, and run local bytecode diagnostics.
+They do not own another project manifest or package build workflow.
 
 ### Execute IVM transaction
 

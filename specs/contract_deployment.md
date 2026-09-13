@@ -184,8 +184,11 @@ native transactions rather than by a separate Torii deployment limiter.
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - `CanRegisterSmartContractCode` authorizes artifact upload, manifest
-  registration, and unreferenced bytecode removal. It does not authorize an
-  address lifecycle takeover. `ActivateContractInstance` and
+  registration, and unreferenced bytecode removal. Granting or revoking that
+  token requires `CanManageSmartContractCodeRegistrars`, which may itself be
+  granted or revoked only in genesis. A registrar cannot delegate its own registrar privilege;
+  account onboarding and fee funding grant neither capability. It does not
+  authorize an address lifecycle takeover. `ActivateContractInstance` and
   `DeactivateContractInstance` require the current account owner and the exact
   lifecycle `expected_revision`; raw activation cannot create an address.
 - Direct `CommitContractDeployment` creates a revisioned lifecycle owned by its
@@ -207,29 +210,32 @@ native transactions rather than by a separate Torii deployment limiter.
   body result and Core executes the bound deployment effect at the exact due
   height. Only an `Enacted` exact-match proposal admits the protected deployment;
   clients cannot submit a finalization or enactment instruction.
-- Transactions must include `gov_contract_address=<contract-address>`. CLI
-  helpers populate the governance metadata automatically when you pass
-  `--contract-address` or `--contract-alias`.
-- If the lane manifest sets a validator quorum above one, include
-  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
-  the additional approvals alongside the transaction authority. Lanes also reject
-  metadata that references namespaces not present in the manifest's
-  `protected_namespaces` set.
+- Native deployment transactions carry `gov_contract_address=<contract-address>`
+  and exact contract attribution. Musubi's service never synthesizes governance
+  approval from a list of account identities: bare `gov_manifest_approvers`
+  are not authenticated approval evidence. Protected deployments require the
+  certified native Parliament workflow described above.
 
 ## CLI helpers
 
-- `ivm_contract_deploy` uses the same native plan in blocking and emit modes.
-  Transactions 1 through N-1 each carry one chunk; the final registration
-  transaction carries chunk N plus finalization. Manifest registration and
-  the atomic deployment commit remain separate transactions. Emit mode names
-  files
-  `register-bytes-chunk-NNNN-of-NNNN`, `register-bytes-finalize`,
-  `register-manifest`, and `commit-deployment` in submission order. Its JSON
-  reports
-  `register_bytes_tx_strategy = "native_chunks"`, chunk size/count,
-  `register_bytes_stage_tx_hashes`, and the finalization hash in
-  `register_bytes_tx_hash`. `--skip-register-bytes` omits the complete
-  upload/finalize sequence.
+- `musubi deploy` owns package deployment through the shared
+  `iroha_contract_deploy` service. It verifies immutable `.to` bytes, checks the
+  registered authority and exact effective registrar/alias permissions, quotes
+  every native transaction, and persists the signed sequence in an owner-only
+  deployment journal. Upload chunks and finalization precede manifest
+  registration and one atomic deployment commit. Recovery polls each previously
+  attempted hash without replay; the finalized receipt binds network, artifact,
+  ABI, alias/address, global state-resolved `Applied` evidence, and byte-for-byte
+  artifact readback. An interrupted attempt remains unresolved until its exact
+  hash is recovered; creating another plan is not a recovery action. `--cancel`
+  durably abandons only a fully unattempted local plan. It cannot cancel an
+  attempted transaction or erase ambiguity. Historical inspection verifies the
+  retained signer and network independently of the current reader; resuming
+  still requires the original authority. Human output shows the complete network,
+  signer, alias, and exact fee review before dispatch, then each numbered submit
+  or exact-hash recovery stage, its durable `Applied` height, and final readback.
+  Progress uses stderr with the same redaction as final output; JSON mode keeps
+  one final document on stdout and leaves stderr empty.
 - `iroha contract manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or

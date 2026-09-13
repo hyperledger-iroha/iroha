@@ -1,26 +1,40 @@
 #[test]
 #[allow(clippy::too_many_lines)]
-fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
+fn manager_sponsored_contract_registration_survives_block_and_committed_replay() {
     for parallel_apply in [false, true] {
-        let chain_id = ChainId::try_from(format!(
-            "contract-deployment-bootstrap-block-{parallel_apply}"
-        ))
-        .expect("canonical contract-deployment test chain id");
+        let chain_id =
+            ChainId::try_from(format!("contract-registrar-manager-block-{parallel_apply}"))
+                .expect("canonical contract-deployment test chain id");
         let network_id = deterministic_test_network_id(0x10);
         let leader = crate::block::checked_keypair();
-        let (authority, authority_keypair) = gen_account_in("bootstrap");
+        let (manager, manager_keypair) = gen_account_in("registrar-manager");
+        let (authority, authority_keypair) = gen_account_in("builder");
         let (adversary, adversary_keypair) = gen_account_in("adversary");
+        let (missing, missing_keypair) = gen_account_in("missing-self-grant");
+        let (malformed, malformed_keypair) = gen_account_in("malformed-self-grant");
+        let manager_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
         let permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                 .into();
-        let accepted_hash = Hash::new(b"accepted native upload bootstrap");
+        let accepted_hash = Hash::new(b"manager-sponsored builder upload");
         let existing_replay_hash = Hash::new(b"existing authority bootstrap replay");
         let decorated_hash = Hash::new(b"decorated authority bootstrap");
+        let missing_hash = Hash::new(b"missing self-grant bootstrap");
+        let malformed_hash = Hash::new(b"malformed self-grant bootstrap");
+        let genesis_world = || {
+            let mut world = World::with([], [Account::new(manager.clone()).build(&manager)], []);
+            world.account_permissions.insert(
+                manager.clone(),
+                std::collections::BTreeSet::from([manager_permission.clone()]),
+            );
+            world
+        };
         let make_bootstrap_transaction =
             |authority: &AccountId,
              keypair: &KeyPair,
              code_hash: Hash,
              decorated: bool,
+             grant: &Permission,
              creation_time_ms: u64| {
                 let mut account = Account::new(authority.clone());
                 if decorated {
@@ -33,7 +47,7 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
                 }
                 let instructions: Vec<InstructionBox> = vec![
                     Register::account(account).into(),
-                    Grant::account_permission(permission.clone(), authority.clone()).into(),
+                    Grant::account_permission(grant.clone(), authority.clone()).into(),
                     iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
                         code_hash,
                         total_size: 1,
@@ -89,9 +103,9 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             state.install_lane_manifests(&registry);
         };
         // This authorization regression uses the configured zero-fee unit-test schedule.
-        // Nonzero-fee onboarding additionally requires a funded signed sponsor intent.
+        // Nonzero-fee registration and upload require funded explicit fee intents for each signer.
         let mut state = State::new_with_chain_and_network_id_for_testing(
-            World::new(),
+            genesis_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id.clone(),
@@ -117,24 +131,95 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .commit()
             .expect("commit empty genesis block");
         let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
-        let accepted = make_bootstrap_transaction(
-            &authority,
-            &authority_keypair,
-            accepted_hash.clone(),
-            false,
-            10,
-        );
-        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(20));
-        let deployment = BlockBuilder::new_with_time_source(
-            vec![AcceptedTransaction::new_unchecked(Cow::Owned(accepted))],
-            block_time_source,
+        let (_registration_handle, registration_time) =
+            TimeSource::new_mock(Duration::from_millis(10));
+        let registration = TransactionBuilder::new_with_time_source(
+            network_id,
+            manager.clone(),
+            &registration_time,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(vec![
+            InstructionBox::from(Register::account(Account::new(authority.clone()))),
+            InstructionBox::from(Grant::account_permission(
+                permission.clone(),
+                authority.clone(),
+            )),
+        ])
+        .sign(manager_keypair.private_key());
+        let (_registration_block_handle, registration_block_time) =
+            TimeSource::new_mock(Duration::from_millis(20));
+        let registration = BlockBuilder::new_with_time_source(
+            vec![AcceptedTransaction::new_unchecked(Cow::Owned(registration))],
+            registration_block_time,
         )
         .chain(1, Some(&genesis_signed))
         .sign(leader.private_key())
         .unpack(|_| {});
+        let mut registration_state_block = state.block(registration.header());
+        let valid_registration = registration
+            .validate_and_record_transactions(&mut registration_state_block)
+            .unpack(|_| {});
+        let registration_errors = valid_registration
+            .as_ref()
+            .errors()
+            .map(|(index, error)| format!("{index}: {error:?}"))
+            .collect::<Vec<_>>();
+        assert!(
+            registration_errors.is_empty(),
+            "genesis-seeded manager must sponsor registration and exact registrar grant with parallel_apply={parallel_apply}: {registration_errors:?}"
+        );
+        registration_state_block
+            .world
+            .account(&authority)
+            .expect("manager registered builder");
+        assert!(
+            registration_state_block
+                .world
+                .account_permissions_iter(&authority)
+                .expect("registered builder permissions")
+                .any(|stored| stored == &permission)
+        );
+        assert!(
+            !registration_state_block
+                .world
+                .account_permissions_iter(&authority)
+                .expect("builder permissions")
+                .any(|stored| stored == &manager_permission)
+        );
+        let registration_signed = valid_registration.as_ref().clone();
+        registration_state_block
+            .commit()
+            .expect("commit manager-sponsored registration");
+        let committed_registration = valid_registration.commit_unchecked().unpack(|_| {});
+        let (_upload_handle, upload_time) = TimeSource::new_mock(Duration::from_millis(30));
+        let accepted = TransactionBuilder::new_with_time_source(
+            network_id,
+            authority.clone(),
+            &upload_time,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk {
+                code_hash: accepted_hash,
+                total_size: 1,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![0xA5],
+            },
+        ])
+        .sign(authority_keypair.private_key());
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(40));
+        let deployment = BlockBuilder::new_with_time_source(
+            vec![AcceptedTransaction::new_unchecked(Cow::Owned(accepted))],
+            block_time_source,
+        )
+        .chain(2, Some(&registration_signed))
+        .sign(leader.private_key())
+        .unpack(|_| {});
         assert!(
             deployment.header().height().get() > 1,
-            "deployment bootstrap must execute after genesis"
+            "builder native upload must execute after genesis"
         );
         let mut deployment_state_block = state.block(deployment.header());
         let valid_deployment = deployment
@@ -147,17 +232,17 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .collect::<Vec<_>>();
         assert!(
             deployment_errors.is_empty(),
-            "exact non-genesis bootstrap must succeed with parallel_apply={parallel_apply}: {deployment_errors:?}"
+            "registered builder native upload must succeed with parallel_apply={parallel_apply}: {deployment_errors:?}"
         );
         deployment_state_block
             .world
             .account(&authority)
-            .expect("bootstrap account exists in validated block");
+            .expect("registered builder exists in validated block");
         assert!(
             deployment_state_block
                 .world
                 .account_permissions_iter(&authority)
-                .expect("bootstrap permissions")
+                .expect("builder registrar permissions")
                 .any(|stored| stored == &permission)
         );
         assert!(
@@ -169,32 +254,56 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
         let deployment_signed: SignedBlock = valid_deployment.as_ref().clone();
         deployment_state_block
             .commit()
-            .expect("commit deployment bootstrap block");
+            .expect("commit builder upload block");
         let committed_deployment = valid_deployment.commit_unchecked().unpack(|_| {});
         let existing_replay = make_bootstrap_transaction(
             &authority,
             &authority_keypair,
             existing_replay_hash.clone(),
             false,
-            30,
+            &permission,
+            50,
         );
         let decorated = make_bootstrap_transaction(
             &adversary,
             &adversary_keypair,
             decorated_hash.clone(),
             true,
-            31,
+            &permission,
+            51,
+        );
+        let missing_self_grant = make_bootstrap_transaction(
+            &missing,
+            &missing_keypair,
+            missing_hash,
+            false,
+            &permission,
+            52,
+        );
+        let malformed_permission = Permission::new(
+            "CanRegisterSmartContractCode".to_owned(),
+            Json::new("not-the-unit-payload"),
+        );
+        let malformed_self_grant = make_bootstrap_transaction(
+            &malformed,
+            &malformed_keypair,
+            malformed_hash,
+            false,
+            &malformed_permission,
+            53,
         );
         let (_rejected_handle, rejected_time_source) =
-            TimeSource::new_mock(Duration::from_millis(40));
+            TimeSource::new_mock(Duration::from_millis(60));
         let rejected = BlockBuilder::new_with_time_source(
             vec![
                 AcceptedTransaction::new_unchecked(Cow::Owned(existing_replay)),
                 AcceptedTransaction::new_unchecked(Cow::Owned(decorated)),
+                AcceptedTransaction::new_unchecked(Cow::Owned(missing_self_grant)),
+                AcceptedTransaction::new_unchecked(Cow::Owned(malformed_self_grant)),
             ],
             rejected_time_source,
         )
-        .chain(2, Some(&deployment_signed))
+        .chain(3, Some(&deployment_signed))
         .sign(leader.private_key())
         .unpack(|_| {});
         assert!(
@@ -207,10 +316,23 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .unpack(|_| {});
         assert_eq!(
             valid_rejected.as_ref().errors().count(),
-            2,
-            "existing-authority replay and decorated bootstrap must both reject"
+            4,
+            "existing-authority replay, decorated, missing, and malformed self-grants must all reject"
         );
         assert!(rejected_state_block.world.account(&adversary).is_err());
+        for (account, hash) in [(&missing, &missing_hash), (&malformed, &malformed_hash)] {
+            assert!(
+                rejected_state_block.world.account(account).is_err(),
+                "rejected self-grant must roll back account registration"
+            );
+            assert!(
+                rejected_state_block
+                    .world
+                    .contract_code_upload_progress(account, hash)
+                    .is_none(),
+                "rejected self-grant must not stage contract bytes"
+            );
+        }
         assert!(
             rejected_state_block
                 .world
@@ -228,7 +350,7 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .expect("commit block containing rejected bootstraps");
         let committed_rejected = valid_rejected.commit_unchecked().unpack(|_| {});
         let mut replay_state = State::new_with_chain_and_network_id_for_testing(
-            World::new(),
+            genesis_world(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain_id.clone(),
@@ -238,6 +360,7 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
         replay_state.set_pipeline(pipeline);
         for committed in [
             &committed_genesis,
+            &committed_registration,
             &committed_deployment,
             &committed_rejected,
         ] {
@@ -245,18 +368,41 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             let _ = replay_block.apply(committed, Vec::new());
             replay_block
                 .commit()
-                .expect("committed bootstrap chain must replay");
+                .expect("committed manager-sponsored registration and upload must replay");
         }
         let replay_view = replay_state.view();
         let replay_world = replay_view.world();
         replay_world
             .account(&authority)
-            .expect("bootstrap account survives committed replay");
+            .expect("registered builder survives committed replay");
         assert!(replay_world.account(&adversary).is_err());
         assert!(
             replay_world
+                .account_permissions_iter(&manager)
+                .expect("replayed manager permissions")
+                .any(|stored| stored == &manager_permission)
+        );
+        assert!(
+            !replay_world
                 .account_permissions_iter(&authority)
-                .expect("replayed bootstrap permissions")
+                .expect("replayed builder permissions")
+                .any(|stored| stored == &manager_permission)
+        );
+        for (account, hash) in [(&missing, &missing_hash), (&malformed, &malformed_hash)] {
+            assert!(
+                replay_world.account(account).is_err(),
+                "replay must preserve rejected self-grant atomicity"
+            );
+            assert!(
+                replay_world
+                    .contract_code_upload_progress(account, hash)
+                    .is_none()
+            );
+        }
+        assert!(
+            replay_world
+                .account_permissions_iter(&authority)
+                .expect("replayed builder registrar permissions")
                 .any(|stored| stored == &permission)
         );
         assert!(

@@ -1650,7 +1650,7 @@ impl TxOverlay {
         state_tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> Result<(), ValidationFail> {
-        self.apply_inner(state_tx, authority, self.instructions.len().max(1), None)
+        self.apply_inner(state_tx, authority, self.instructions.len().max(1))
     }
     /// Apply the overlay with a specific chunk size (number of instructions per chunk).
     ///
@@ -1662,24 +1662,7 @@ impl TxOverlay {
         authority: &AccountId,
         chunk_size: usize,
     ) -> Result<(), ValidationFail> {
-        self.apply_inner(state_tx, authority, chunk_size.max(1), None)
-    }
-    /// Apply the exact signed plain-transaction overlay with a scoped bootstrap authorization.
-    pub(crate) fn apply_signed_transaction_with_chunk(
-        &self,
-        state_tx: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        chunk_size: usize,
-        bootstrap_authorization: Option<
-            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
-        >,
-    ) -> Result<(), ValidationFail> {
-        self.apply_inner(
-            state_tx,
-            authority,
-            chunk_size.max(1),
-            bootstrap_authorization,
-        )
+        self.apply_inner(state_tx, authority, chunk_size.max(1))
     }
     fn validate_execution_context(
         world: &impl WorldReadOnly,
@@ -1763,19 +1746,7 @@ impl TxOverlay {
         state_tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         chunk: usize,
-        bootstrap_authorization: Option<
-            &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
-        >,
     ) -> Result<(), ValidationFail> {
-        if let Some(authorization) = bootstrap_authorization {
-            if self.source != TxOverlaySource::Instructions {
-                return Err(ValidationFail::InternalError(
-                    "contract deployment bootstrap authorization attached to a non-instruction overlay"
-                        .to_owned(),
-                ));
-            }
-            authorization.validate_instruction_sequence(authority, &self.instructions)?;
-        }
         let prior_sccp_ivm_proved_execution_binding =
             state_tx.sccp_ivm_proved_execution_binding.clone();
         state_tx.sccp_ivm_proved_execution_binding = self.sccp_ivm_proved_execution_binding.clone();
@@ -1931,22 +1902,15 @@ impl TxOverlay {
                         )?;
                     }
                     if let Some(execution_context) = execution_context {
-                        executor.execute_borrowed_transaction_overlay_instruction(
+                        executor.execute_borrowed_overlay_instruction(
                             state_tx,
                             &execution_context.authority,
                             instr,
                             execution_context.contract_runtime_context.as_ref(),
-                            instruction_index,
-                            bootstrap_authorization,
                         )?;
                     } else {
-                        executor.execute_borrowed_transaction_overlay_instruction(
-                            state_tx,
-                            authority,
-                            instr,
-                            None,
-                            instruction_index,
-                            bootstrap_authorization,
+                        executor.execute_borrowed_overlay_instruction(
+                            state_tx, authority, instr, None,
                         )?;
                     }
                     // The just-executed leaf may revoke its own permission or mutate its own live

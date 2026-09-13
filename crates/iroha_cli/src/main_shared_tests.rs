@@ -454,19 +454,6 @@ fn effective_output_format_uses_args_for_other_tools() {
     assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
 }
 #[test]
-fn contract_developer_workflow_has_one_canonical_command_path() {
-    Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
-        .expect("parse canonical contract developer command");
-    assert!(
-        Args::try_parse_from(["iroha", "app", "contracts", "dev", "doctor"]).is_err(),
-        "the retired nested contract command must not remain as a compatibility surface"
-    );
-    assert!(
-        Args::try_parse_from(["iroha", "contracts", "dev", "doctor"]).is_err(),
-        "the retired plural alias must not remain as a compatibility surface"
-    );
-}
-#[test]
 fn raw_domain_registration_command_is_not_parseable() {
     assert!(
         Args::try_parse_from([

@@ -24,6 +24,7 @@ clap = { workspace = true, features = ["derive"] }
 eyre = { workspace = true }
 hex = { workspace = true }
 iroha = { workspace = true }
+iroha_contract_deploy = { workspace = true }
 iroha_musubi_service = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }

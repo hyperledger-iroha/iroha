@@ -7,8 +7,11 @@ use std::{
 };
 
 use super::{
-    Client, Hash, HashOf, Response, SignedTransaction, StatusCode, TransactionWaitOptions,
-    evidence_http_tests::{base_url, client_with_base_url, json_response},
+    Client, Hash, HashOf, Response, SignedTransaction, StatusCode, TransactionFinalityFailure,
+    TransactionWaitOptions,
+    evidence_http_tests::{
+        assert_status_scope, base_url, client_with_base_url, json_response, wait_status_case,
+    },
 };
 use crate::{
     http::Method,
@@ -289,6 +292,38 @@ fn transaction_wait_backpressure_preserves_fixed_failure_and_hash_binding() {
     }
 }
 
+#[test]
+fn wait_for_transaction_applied_rejects_fixed_failures() {
+    for (seed, kind) in [(0x33, "Rejected"), (0x35, "Expired")] {
+        let (result, expected_hash, snapshots) =
+            wait_status_case(seed, &norito::json!({ "kind": kind }), "state");
+        let err = result.expect_err("terminal failure must fail the wait");
+        assert!(err.to_string().contains("fixed terminal failure status"));
+        let proof = err
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<TransactionFinalityFailure>())
+            .expect("fixed terminal failure remains typed through the SDK error chain");
+        assert_eq!(proof.response().hash, expected_hash);
+        assert_eq!(proof.response().status.kind, kind);
+        proof
+            .validate_for_hash(expected_hash.parse().expect("exact fixture hash"))
+            .expect("canonical failure proof");
+        let encoded = norito::json::to_vec(proof).expect("serialize exact failure evidence");
+        let retained: TransactionFinalityFailure =
+            norito::json::from_slice(&encoded).expect("decode exact failure evidence");
+        assert_eq!(&retained, proof);
+        let mut cached = proof.response().clone();
+        cached.resolved_from = "cache".to_owned();
+        assert!(
+            TransactionFinalityFailure::from_response(expected_hash.parse().unwrap(), cached)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(snapshots.len(), 1);
+        assert_status_scope(&snapshots[0], "global");
+    }
+}
+
 fn assert_unresolved(error: &eyre::Report, attempts: u64) {
     let final_error = error
         .downcast_ref::<super::TxConfirmationFinalError>()
@@ -356,9 +391,14 @@ fn transaction_wait_expired_context_deadline_cannot_be_extended() {
 }
 
 #[test]
-fn transaction_wait_late_http_applied_is_unresolved_in_both_transports() {
+fn transaction_wait_late_http_status_is_unresolved_in_both_transports() {
     for asynchronous in [false, true] {
-        for response in [status("Applied", "state"), status("Queued", "queue")] {
+        for response in [
+            status("Applied", "state"),
+            status("Queued", "queue"),
+            status("Rejected", "state"),
+            status("Expired", "state"),
+        ] {
             let snapshots = Arc::new(Mutex::new(Vec::new()));
             let observed = Arc::clone(&snapshots);
             let budget = Duration::from_millis(50);
@@ -366,13 +406,19 @@ fn transaction_wait_late_http_applied_is_unresolved_in_both_transports() {
                 observed.lock().expect("snapshots").push(snapshot);
                 // This synchronous responder returns a ready async future after expiry.
                 // The blocking transport rejects it at completion; PollState must also
-                // reject the late-ready async result, including state-resolved Applied.
+                // reject every late-ready async result, including terminal evidence.
                 std::thread::sleep(budget + Duration::from_millis(1));
                 Ok(response.clone())
             }));
             let client = client_with_base_url(base_url()).with_test_http_transport(transport);
             let error = wait(&client, asynchronous, budget).expect_err("late response");
             assert_unresolved(&error, 1);
+            assert!(
+                error
+                    .chain()
+                    .all(|cause| cause.downcast_ref::<TransactionFinalityFailure>().is_none()),
+                "late terminal statuses must not produce finality evidence"
+            );
             let snapshots = snapshots.lock().expect("snapshots");
             assert_eq!(snapshots.len(), 1);
             assert_only_exact_status_reads(&snapshots);

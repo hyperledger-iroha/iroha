@@ -1422,13 +1422,9 @@ impl Builtin {
             Self::DebugLog | Self::Info => &[s::SYSCALL_DEBUG_LOG],
             Self::Assert | Self::AssertEq => &[s::SYSCALL_ABORT],
             Self::Require => &[s::SYSCALL_CONTRACT_ABORT],
-            Self::TestInvokeEntrypoint => &[
-                s::SYSCALL_STATE_GET,
-                s::SYSCALL_JSON_ENCODE,
-                s::SYSCALL_STATE_SET,
-                s::SYSCALL_STATE_DEL,
-            ],
-            Self::TestInvokeEntrypointAs => &[s::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS],
+            Self::TestInvokeEntrypoint | Self::TestInvokeEntrypointAs => {
+                &[s::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS]
+            }
             Self::TestExpectRejectAs | Self::TestExpectAnyRejectAs => {
                 &[s::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS]
             }

@@ -16,8 +16,6 @@ use super::{
 use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
 use iroha_model_base::state_path::StatePath;
 use std::collections::{BTreeSet, HashMap};
-pub const TEST_TRIGGER_EVENT_OVERRIDE_KEY: &str = "__koto_test_trigger_event_json";
-const INVOKE_ENTRYPOINT_PREFIX: &str = "__invoke_entrypoint__";
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {
     if let semantic::ExprKind::Ident(name) = expr.kind() {
         Some(name.clone())
@@ -823,7 +821,7 @@ pub enum Instr {
         dest: Temp,
         alias: Temp,
     },
-    /// Load trigger event payload (`Json*`) into `dest` (host-provided).
+    /// Load the host-provided canonical public argument record (`NoritoBytes*`).
     GetTriggerEvent {
         dest: Temp,
     },
@@ -832,19 +830,18 @@ pub enum Instr {
         dest: Temp,
         key: Temp,
     },
-    /// Test-only nested runtime entrypoint call as a named fixture actor.
+    /// Test-only runtime call; no actor selects the current caller.
     InvokeEntrypointAs {
         dest: Option<Temp>,
-        actor: Temp,
+        actor: Option<Temp>,
         entrypoint: Temp,
         payload: Temp,
         returns_pointer: bool,
     },
-    /// Test-only nested runtime entrypoint call as a named fixture actor with
-    /// multiple return values.
+    /// Test-only runtime call with multiple return values and an optional fixture actor.
     InvokeEntrypointAsMulti {
         dests: Vec<Temp>,
-        actor: Temp,
+        actor: Option<Temp>,
         entrypoint: Temp,
         payload: Temp,
         return_pointer_mask: u64,
@@ -2968,24 +2965,14 @@ pub fn lower(program: &TypedProgram) -> Result<Program, String> {
 }
 /// Lower with the first-release dynamic-iteration cap.
 pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Program, String> {
-    lower_with_cap_and_test_mode(program, dyn_iter_cap, false)
-}
-/// Lower with a specific dynamic-iteration cap and optional local-test semantics.
-pub fn lower_with_cap_and_test_mode(
-    program: &TypedProgram,
-    dyn_iter_cap: usize,
-    test_mode: bool,
-) -> Result<Program, String> {
     crate::session::run_with_compiler_stack(move || {
-        lower_with_cap_and_test_mode_diagnostics(program, dyn_iter_cap, test_mode).map_err(
-            |failures| {
-                failures
-                    .into_iter()
-                    .map(|failure| failure.message)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            },
-        )
+        lower_with_cap_diagnostics(program, dyn_iter_cap).map_err(|failures| {
+            failures
+                .into_iter()
+                .map(|failure| failure.message)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
     })
     .unwrap_or_else(|_| {
         Err("compiler could not allocate the bounded stack required to lower source nesting".into())
@@ -2996,10 +2983,9 @@ pub(crate) struct LoweringFailure {
     pub(crate) message: String,
     pub(crate) location: super::ast::SourceLocation,
 }
-pub(crate) fn lower_with_cap_and_test_mode_diagnostics(
+pub(crate) fn lower_with_cap_diagnostics(
     program: &TypedProgram,
     dyn_iter_cap: usize,
-    test_mode: bool,
 ) -> Result<Program, Vec<LoweringFailure>> {
     let call_renames = build_entrypoint_call_renames(program);
     let function_param_specs = build_function_param_specs(program);
@@ -3029,7 +3015,6 @@ pub(crate) fn lower_with_cap_and_test_mode_diagnostics(
                 dyn_iter_cap,
                 &call_renames,
                 &function_param_specs,
-                test_mode,
             ) {
                 Ok(function) => functions.push(function),
                 Err(message) => failures.push(LoweringFailure {
@@ -3221,7 +3206,6 @@ fn lower_entrypoint_wrapper(
     dyn_iter_cap: usize,
     call_renames: &HashMap<String, String>,
     function_param_specs: &HashMap<String, Vec<TypedParam>>,
-    test_mode: bool,
 ) -> Result<Function, String> {
     let mut ctx = LowerCtx::new(
         func.ret_ty.clone().unwrap_or(Type::Unit),
@@ -3234,7 +3218,7 @@ fn lower_entrypoint_wrapper(
     let payload = if func.param_types.is_empty() {
         None
     } else {
-        Some(load_entrypoint_payload(&mut ctx, test_mode))
+        Some(load_entrypoint_payload(&mut ctx))
     };
     for param in &func.param_types {
         if param.is_state {
@@ -3355,114 +3339,10 @@ fn lower_entrypoint_wrapper(
         Ok(function)
     }
 }
-fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
-    if !test_mode {
-        let payload = ctx.new_temp();
-        ctx.current_instr(Instr::GetTriggerEvent { dest: payload });
-        return payload;
-    }
-    let override_path = build_state_path_literal(ctx, TEST_TRIGGER_EVENT_OVERRIDE_KEY);
-    let override_payload = emit_state_get(ctx, override_path);
-    let zero = emit_i64_const(ctx, 0);
-    let has_override = emit_binary(ctx, BinaryOp::Ne, override_payload, zero);
-    let override_bb = ctx.new_label();
-    let host_bb = ctx.new_label();
-    let join_bb = ctx.new_label();
+fn load_entrypoint_payload(ctx: &mut LowerCtx) -> Temp {
     let payload = ctx.new_temp();
-    ctx.finish_current(Terminator::Branch {
-        cond: has_override,
-        then_bb: override_bb,
-        else_bb: host_bb,
-    });
-    ctx.start_block(override_bb);
-    let decoded_override = ctx.new_temp();
-    ctx.current_instr(Instr::JsonDecode {
-        dest: decoded_override,
-        blob: override_payload,
-    });
-    emit_copy(ctx, payload, decoded_override);
-    ctx.finish_current(Terminator::Jump(join_bb));
-    ctx.start_block(host_bb);
-    let host_payload = ctx.new_temp();
-    ctx.current_instr(Instr::GetTriggerEvent { dest: host_payload });
-    emit_copy(ctx, payload, host_payload);
-    ctx.finish_current(Terminator::Jump(join_bb));
-    ctx.start_block(join_bb);
+    ctx.current_instr(Instr::GetTriggerEvent { dest: payload });
     payload
-}
-fn lower_invoke_entrypoint_call(
-    ctx: &mut LowerCtx,
-    entrypoint: &str,
-    payload_expr: &semantic::TypedExpr,
-    result_ty: &semantic::Type,
-    vars: &mut HashMap<String, Temp>,
-) -> Temp {
-    let override_path = build_state_path_literal(ctx, TEST_TRIGGER_EVENT_OVERRIDE_KEY);
-    let previous_payload = emit_state_get(ctx, override_path);
-    let payload = lower_expr(ctx, payload_expr, vars);
-    let encoded_payload = ctx.new_temp();
-    ctx.current_instr(Instr::JsonEncode {
-        dest: encoded_payload,
-        json: payload,
-    });
-    ctx.current_instr(Instr::StateSet {
-        path: override_path,
-        value: encoded_payload,
-    });
-    let result = if *result_ty == semantic::Type::Unit {
-        ctx.current_instr(Instr::Call {
-            callee: entrypoint.to_string(),
-            args: Vec::new(),
-            dest: None,
-        });
-        emit_i64_const(ctx, 0)
-    } else if let Some(word_types) = function_value_word_types(result_ty) {
-        let mut dests = Vec::with_capacity(word_types.len());
-        for _ in word_types {
-            dests.push(ctx.new_temp());
-        }
-        ctx.current_instr(Instr::CallMulti {
-            callee: entrypoint.to_string(),
-            args: Vec::new(),
-            dests: dests.clone(),
-        });
-        let mut index = 0_usize;
-        let value = rebuild_function_value_from_words(ctx, result_ty, &dests, &mut index)
-            .expect("validated aggregate return type must rebuild from ABI words");
-        debug_assert_eq!(index, dests.len());
-        value
-    } else {
-        let dest = ctx.new_temp();
-        ctx.current_instr(Instr::Call {
-            callee: entrypoint.to_string(),
-            args: Vec::new(),
-            dest: Some(dest),
-        });
-        dest
-    };
-    let zero = emit_i64_const(ctx, 0);
-    let has_previous = emit_binary(ctx, BinaryOp::Ne, previous_payload, zero);
-    let restore_bb = ctx.new_label();
-    let clear_bb = ctx.new_label();
-    let join_bb = ctx.new_label();
-    ctx.finish_current(Terminator::Branch {
-        cond: has_previous,
-        then_bb: restore_bb,
-        else_bb: clear_bb,
-    });
-    ctx.start_block(restore_bb);
-    ctx.current_instr(Instr::StateSet {
-        path: override_path,
-        value: previous_payload,
-    });
-    ctx.finish_current(Terminator::Jump(join_bb));
-    ctx.start_block(clear_bb);
-    ctx.current_instr(Instr::StateDel {
-        path: override_path,
-    });
-    ctx.finish_current(Terminator::Jump(join_bb));
-    ctx.start_block(join_bb);
-    result
 }
 fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
     emit_data_ref(ctx, DataRefKind::Blob, value.to_owned())
@@ -6915,9 +6795,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             if let Some(value) = lower_list_intrinsic(ctx, name, args, &expr.ty, vars) {
                 return value;
             }
-            if let Some(entrypoint) = name.strip_prefix(INVOKE_ENTRYPOINT_PREFIX) {
-                return lower_invoke_entrypoint_call(ctx, entrypoint, &args[0], &expr.ty, vars);
-            }
             if let Some(value) = lower_sum_type_call(ctx, name, args, vars) {
                 return value;
             }
@@ -6941,16 +6818,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::MapNew { dest: t });
                     t
                 }
-                "invoke_entrypoint_as" => {
-                    let actor = match args[0].kind() {
-                        semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
-                        _ => panic!("invoke_entrypoint_as actor must be a literal string"),
+                "invoke_entrypoint" | "invoke_entrypoint_as" => {
+                    let (actor, target_index) = if name == "invoke_entrypoint_as" {
+                        let actor = match args[0].kind() {
+                            semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
+                            _ => panic!("invoke_entrypoint_as actor must be a literal string"),
+                        };
+                        (Some(actor), 1)
+                    } else {
+                        (None, 0)
                     };
-                    let entrypoint = match args[1].kind() {
+                    let entrypoint = match args[target_index].kind() {
                         semantic::ExprKind::String(value) => lower_blob_literal(ctx, value),
-                        _ => panic!("invoke_entrypoint_as entrypoint must be a literal string"),
+                        _ => panic!("runtime entrypoint must be a literal string"),
                     };
-                    let payload = lower_expr(ctx, &args[2], vars);
+                    let payload = lower_expr(ctx, &args[target_index + 1], vars);
                     match &expr.ty {
                         semantic::Type::Unit => {
                             ctx.current_instr(Instr::InvokeEntrypointAs {
@@ -7769,14 +7651,6 @@ mod tests {
                         .expect("capped lowering must use the bounded compiler worker");
                 assert_eq!(lowered.functions.len(), 1);
                 drop(lowered);
-                let lowered = lower_with_cap_and_test_mode(
-                    &typed,
-                    crate::semantic::COLLECTION_ITERATION_LIMIT as usize,
-                    false,
-                )
-                .expect("explicit-mode lowering must use the bounded compiler worker");
-                assert_eq!(lowered.functions.len(), 1);
-                drop(lowered);
                 drop(typed);
                 drop(program);
             })
@@ -8033,50 +7907,34 @@ mod tests {
         assert_eq!(constants.get(&abort_code), Some(&1001));
     }
     #[test]
-    fn test_mode_entrypoint_wrapper_checks_override_state_first() {
-        let src = include_str!("ir/fixtures/v1/i005.ko");
-        let prog = parse(src).expect("parse wrapper test");
-        let typed = analyze(&prog).expect("analyze wrapper test");
-        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower wrapper test");
-        let wrapper = ir
+    fn entrypoint_wrapper_uses_only_the_host_argument_record() {
+        let program = parse(include_str!("ir/fixtures/v1/i005.ko")).unwrap();
+        let typed = analyze(&program).unwrap();
+        let lowered = lower_with_cap(&typed, 2).unwrap();
+        let wrapper = lowered
             .functions
             .iter()
             .find(|function| function.name == "run")
-            .expect("wrapper function");
-        let mut saw_override_key = false;
-        let mut saw_state_get = false;
-        let mut saw_get_trigger = false;
-        for block in &wrapper.blocks {
-            for instr in &block.instrs {
-                match instr {
-                    Instr::DataRef {
-                        kind: DataRefKind::NoritoBytes,
-                        value,
-                        ..
-                    } => {
-                        if let Some(encoded) = value
-                            .strip_prefix("0x")
-                            .and_then(|raw| hex::decode(raw).ok())
-                            && let Ok(decoded) =
-                                ivm_abi::codec::decode_canonical_norito::<StatePath>(&encoded)
-                        {
-                            saw_override_key |= decoded.as_ref() == TEST_TRIGGER_EVENT_OVERRIDE_KEY;
-                        }
-                    }
-                    Instr::StateGet { .. } => saw_state_get = true,
-                    Instr::GetTriggerEvent { .. } => saw_get_trigger = true,
-                    _ => {}
-                }
-            }
-        }
+            .unwrap();
+        let instructions = wrapper
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
         assert!(
-            saw_override_key,
-            "wrapper should materialize the override key"
+            instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instr::GetTriggerEvent { .. }))
         );
-        assert!(saw_state_get, "wrapper should read the test override slot");
         assert!(
-            saw_get_trigger,
-            "wrapper should still fall back to host trigger input"
+            !instructions.iter().any(|instruction| matches!(
+                instruction,
+                Instr::StateGet { .. }
+                    | Instr::StateSet { .. }
+                    | Instr::StateDel { .. }
+                    | Instr::JsonDecode { .. }
+            )),
+            "public wrappers must not have an alternative test-state decoding path"
         );
     }
     #[test]
@@ -8084,8 +7942,7 @@ mod tests {
         let src = include_str!("ir/fixtures/v1/i006.ko");
         let prog = parse(src).expect("parse single json entrypoint");
         let typed = analyze(&prog).expect("analyze single json entrypoint");
-        let ir =
-            lower_with_cap_and_test_mode(&typed, 2, false).expect("lower single json entrypoint");
+        let ir = lower_with_cap(&typed, 2).expect("lower single json entrypoint");
         let wrapper = ir
             .functions
             .iter()
@@ -9173,105 +9030,72 @@ mod tests {
         );
     }
     #[test]
-    fn invoke_entrypoint_lowers_to_wrapper_call_with_override_restore() {
-        let src = include_str!("ir/fixtures/v1/i026.ko");
-        let prog = parse(src).expect("parse invoke_entrypoint");
+    fn invoke_entrypoint_lowers_to_current_caller_host_intrinsic() {
+        let program = parse(include_str!("ir/fixtures/v1/i026.ko")).unwrap();
         let typed = semantic::SemanticContext::with_capabilities(false, true)
-            .analyze(&prog)
-            .expect("analyze invoke_entrypoint");
-        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower invoke_entrypoint");
-        let test_fn = ir
+            .analyze(&program)
+            .unwrap();
+        let ir = lower_with_cap(&typed, 2).unwrap();
+        let test = ir
             .functions
             .iter()
             .find(|function| function.name == "drive_run")
-            .expect("test function");
-        let mut saw_wrapper_call = false;
-        let mut saw_impl_call = false;
-        let mut saw_override_get = false;
-        let mut saw_override_set = false;
-        let mut saw_override_clear = false;
-        let mut saw_numeric_assertion = false;
-        for block in &test_fn.blocks {
-            for instr in &block.instrs {
-                match instr {
-                    Instr::Call { callee, .. } if callee == "run" => saw_wrapper_call = true,
-                    Instr::Call { callee, .. } if callee == "__entrypoint_impl__run" => {
-                        saw_impl_call = true
-                    }
-                    Instr::StateGet { .. } => saw_override_get = true,
-                    Instr::StateSet { .. } => saw_override_set = true,
-                    Instr::StateDel { .. } => saw_override_clear = true,
-                    Instr::NumericCompare {
-                        op: BinaryOp::Eq,
-                        kind: WideNumericKind::Int,
-                        ..
-                    } => saw_numeric_assertion = true,
-                    Instr::AssertEq { .. } => {
-                        panic!("adaptive int assertions must not compare pointer addresses")
-                    }
-                    _ => {}
-                }
+            .unwrap();
+        let instructions = test
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        assert!(instructions.iter().any(|instruction| matches!(
+            instruction,
+            Instr::InvokeEntrypointAs {
+                actor: None,
+                returns_pointer: true,
+                ..
             }
-        }
+        )));
         assert!(
-            saw_wrapper_call,
-            "invoke_entrypoint should call the public wrapper"
+            !instructions.iter().any(|instruction| matches!(
+                instruction,
+                Instr::StateGet { .. }
+                    | Instr::StateSet { .. }
+                    | Instr::StateDel { .. }
+                    | Instr::Call { .. }
+            )),
+            "public test calls must use canonical host dispatch, with no private state override"
         );
         assert!(
-            !saw_impl_call,
-            "invoke_entrypoint must not bypass the entrypoint wrapper"
-        );
-        assert!(
-            saw_override_get,
-            "invoke_entrypoint should snapshot any previous override"
-        );
-        assert!(
-            saw_override_set,
-            "invoke_entrypoint should install a trigger override"
-        );
-        assert!(
-            saw_override_clear,
-            "invoke_entrypoint should clear the override when none existed"
-        );
-        assert!(
-            saw_numeric_assertion,
-            "test::assert_eq must use canonical numeric equality"
+            instructions.iter().any(|instruction| matches!(
+                instruction,
+                Instr::NumericCompare {
+                    op: BinaryOp::Eq,
+                    kind: WideNumericKind::Int,
+                    ..
+                }
+            )),
+            "numeric assertions compare values, not pointer addresses"
         );
     }
     #[test]
-    fn invoke_entrypoint_tuple_return_uses_wrapper_callmulti() {
-        let src = include_str!("ir/fixtures/v1/i027.ko");
-        let prog = parse(src).expect("parse tuple invoke_entrypoint");
+    fn invoke_entrypoint_tuple_return_uses_current_caller_host_intrinsic() {
+        let program = parse(include_str!("ir/fixtures/v1/i027.ko")).unwrap();
         let typed = semantic::SemanticContext::with_capabilities(false, true)
-            .analyze(&prog)
-            .expect("analyze tuple invoke_entrypoint");
-        let ir =
-            lower_with_cap_and_test_mode(&typed, 2, true).expect("lower tuple invoke_entrypoint");
-        let test_fn = ir
+            .analyze(&program)
+            .unwrap();
+        let ir = lower_with_cap(&typed, 2).unwrap();
+        let test = ir
             .functions
             .iter()
             .find(|function| function.name == "drive_run")
-            .expect("test function");
-        let mut saw_wrapper_callmulti = false;
-        let mut saw_tuple_pack = false;
-        for block in &test_fn.blocks {
-            for instr in &block.instrs {
-                match instr {
-                    Instr::CallMulti { callee, .. } if callee == "run" => {
-                        saw_wrapper_callmulti = true
-                    }
-                    Instr::TuplePack { .. } => saw_tuple_pack = true,
-                    _ => {}
-                }
-            }
-        }
+            .unwrap();
         assert!(
-            saw_wrapper_callmulti,
-            "tuple invoke_entrypoint should call the public wrapper via CallMulti"
-        );
-        assert!(
-            saw_tuple_pack,
-            "tuple invoke_entrypoint should pack multi-return values"
+            test.blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .any(|instruction| matches!(
+                    instruction,
+                    Instr::InvokeEntrypointAsMulti { actor: None, .. }
+                ))
         );
     }
     #[test]
@@ -9281,7 +9105,7 @@ mod tests {
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
             .expect("analyze invoke_entrypoint_as");
-        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower invoke_entrypoint_as");
+        let ir = lower_with_cap(&typed, 2).expect("lower invoke_entrypoint_as");
         let test_fn = ir
             .functions
             .iter()
@@ -9318,8 +9142,7 @@ mod tests {
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
             .expect("analyze tuple invoke_entrypoint_as");
-        let ir = lower_with_cap_and_test_mode(&typed, 2, true)
-            .expect("lower tuple invoke_entrypoint_as");
+        let ir = lower_with_cap(&typed, 2).expect("lower tuple invoke_entrypoint_as");
         let test_fn = ir
             .functions
             .iter()
@@ -9355,7 +9178,7 @@ mod tests {
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
             .expect("analyze actor helpers");
-        let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower actor helpers");
+        let ir = lower_with_cap(&typed, 2).expect("lower actor helpers");
         let test_fn = ir
             .functions
             .iter()

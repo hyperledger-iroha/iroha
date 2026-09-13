@@ -35,7 +35,9 @@ fn validate_initial_permission_payload_constraints(
         }};
     }
     match permission.name().as_ref() {
-        "CanManageSoracloud"
+        "CanRegisterSmartContractCode"
+        | "CanManageSmartContractCodeRegistrars"
+        | "CanManageSoracloud"
         | "CanBindSorafsAlias"
         | "CanDeclareSorafsCapacity"
         | "CanSubmitSorafsTelemetry"
@@ -539,6 +541,12 @@ fn initial_permission_capability_root_authority(
             let token = decode!(executor_permission::trigger::CanModifyTriggerMetadata);
             initial_trigger_authority(state_transaction, authority, &token.trigger)?
         }
+        "CanRegisterSmartContractCode" => {
+            let _ = decode!(executor_permission::smart_contract::CanRegisterSmartContractCode);
+            let manager: Permission =
+                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
+            authority_has_permission(&state_transaction.world, authority, &manager)?
+        }
         "CanInvokeContractEntrypoint" => {
             let token = decode!(executor_permission::smart_contract::CanInvokeContractEntrypoint);
             if token.entrypoint.is_empty() || token.entrypoint.trim() != token.entrypoint {
@@ -686,7 +694,8 @@ fn initial_permission_delegation_allowed(
     } else {
         !matches!(
             permission.name().as_ref(),
-            "CanReadAccountData"
+            "CanRegisterSmartContractCode"
+                | "CanReadAccountData"
                 | "CanResolveAccountAlias"
                 | "CanIssueSoranetVpnQuote"
                 | "CanExecuteSettlement"
@@ -2518,6 +2527,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageRoles",
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
+    "CanManageSmartContractCodeRegistrars",
     "CanInvokeContractEntrypoint",
     "CanExecuteSettlement",
     "CanManageFxCorridors",

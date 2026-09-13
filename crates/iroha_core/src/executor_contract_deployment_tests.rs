@@ -1,3 +1,4 @@
+use iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk;
 fn contract_deployment_permission() -> Permission {
     executor_permission::smart_contract::CanRegisterSmartContractCode.into()
 }
@@ -32,357 +33,206 @@ fn contract_deployment_bootstrap_instructions(
     ]
 }
 #[test]
-#[allow(clippy::too_many_lines)]
-fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
-    let keypair = checked_keypair();
-    let authority = AccountId::new(keypair.public_key().clone());
-    let network_id = executor_test_network_id(b"contract-deployment-bootstrap-shape");
-    let code_hash = Hash::new(b"contract deployment bootstrap shape");
-    let world = World::new();
-    let sign = |instructions: Vec<InstructionBox>| {
-        TransactionBuilder::new(
-            network_id,
-            authority.clone(),
+fn contract_registrar_manager_sponsors_registration_and_meters_every_instruction() {
+    for executor in [
+        super::Executor::Initial,
+        bundled_default_user_provided_executor(),
+    ] {
+        let keypair = checked_keypair();
+        let manager = AccountId::new(keypair.public_key().clone());
+        let builder = checked_account_id();
+        let mut world = World::with([], [Account::new(manager.clone()).build(&manager)], []);
+        world.account_permissions.insert(
+            manager.clone(),
+            BTreeSet::from([
+                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into(),
+            ]),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let instructions: Vec<InstructionBox> = vec![
+            Register::account(Account::new(builder.clone())).into(),
+            Grant::account_permission(contract_deployment_permission(), builder.clone()).into(),
+        ];
+        let expected_gas = crate::gas::meter_instructions(&instructions);
+        let transaction = TransactionBuilder::new(
+            state.network_id,
+            manager.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_executable(Executable::Instructions(instructions.into()))
-        .sign(keypair.private_key())
-    };
-    let exact = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(authority.clone()),
-        contract_deployment_permission(),
-        contract_upload_instruction(code_hash, 0),
-    );
-    let exact_transaction = sign(exact.clone());
-    assert!(allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &exact_transaction
-    ));
-    let authorization = ContractDeploymentSelfBootstrapAuthorization::derive(
-        &world.view(),
-        &authority,
-        &exact_transaction,
-    )
-    .expect("exact signed prefix derives scoped authorization");
-    authorization
-        .validate_instruction_sequence(&authority, &exact)
-        .expect("exact signed sequence remains authorized");
-    let mut divergent_overlay = exact.clone();
-    divergent_overlay.push(Log::new(Level::INFO, "unsigned divergence".to_owned()).into());
-    assert!(
-        authorization
-            .validate_instruction_sequence(&authority, &divergent_overlay)
-            .is_err(),
-        "authorization must bind the complete signed instruction sequence"
-    );
-    let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-        seiyaku_name: None,
-        code_hash: Some(code_hash),
-        abi_hash: Some(Hash::new(b"contract deployment bootstrap manifest ABI")),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        error_types: None,
-        kotoba: None,
-        provenance: None,
-    };
-    let manifest_bootstrap = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(authority.clone()),
-        contract_deployment_permission(),
-        RegisterSmartContractCode { manifest }.into(),
-    );
-    assert!(allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &sign(manifest_bootstrap)
-    ));
-    let other = checked_account_id();
-    assert!(
-        ContractDeploymentSelfBootstrapAuthorization::derive(
-            &world.view(),
-            &other,
-            &exact_transaction,
-        )
-        .is_none(),
-        "derivation must bind the signed transaction authority"
-    );
-    let wrong_account = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(other.clone()),
-        contract_deployment_permission(),
-        contract_upload_instruction(code_hash, 0),
-    );
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &sign(wrong_account)
-    ));
-    let wrong_destination = vec![
-        Register::account(Account::new(authority.clone())).into(),
-        Grant::account_permission(contract_deployment_permission(), other).into(),
-        contract_upload_instruction(code_hash, 0),
-    ];
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &sign(wrong_destination)
-    ));
-    let mut metadata = Metadata::default();
-    metadata.insert(
-        "bootstrap-note".parse().expect("metadata key"),
-        Json::new("x"),
-    );
-    let decorated = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(authority.clone()).with_metadata(metadata),
-        contract_deployment_permission(),
-        contract_upload_instruction(code_hash, 0),
-    );
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &sign(decorated)
-    ));
-    let malformed_permission = Permission::new(
-        "CanRegisterSmartContractCode".to_owned(),
-        Json::from(norito::json!({ "unexpected": true })),
-    );
-    let malformed = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(authority.clone()),
-        malformed_permission,
-        contract_upload_instruction(code_hash, 0),
-    );
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &sign(malformed)
-    ));
-    let non_initial_chunk = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(authority.clone()),
-        contract_deployment_permission(),
-        contract_upload_instruction(code_hash, 1),
-    );
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &sign(non_initial_chunk)
-    ));
-    let mut shifted = exact.clone();
-    shifted.insert(
-        0,
-        Log::new(Level::INFO, "shifted bootstrap".to_owned()).into(),
-    );
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &sign(shifted)
-    ));
-    let mut atomic_deployment = exact.clone();
-    atomic_deployment.push(
-        iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
-            expected_deploy_nonce: 0,
-            contract_address: ContractAddress::derive(
-                &network_id,
-                &authority,
-                0,
-                DataSpaceId::UNIVERSAL,
+        .with_instructions(instructions)
+        .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        executor
+            .execute_transaction(
+                &mut state_transaction,
+                &manager,
+                transaction,
+                &mut IvmCache::new(),
             )
-            .expect("atomic deployment address"),
-            code_hash,
-            contract_alias: "payments::universal".parse().expect("contract alias"),
-            lease_expiry_ms: None,
-            expected_previous_contract_address: None,
+            .expect("an admitted registrar manager may register and authorize a builder");
+        assert_eq!(state_transaction.last_tx_gas_used, expected_gas);
+        assert!(
+            authority_has_permission(
+                &state_transaction.world,
+                &builder,
+                &contract_deployment_permission()
+            )
+            .expect("builder permissions")
+        );
+        assert!(
+            !authority_has_permission(
+                &state_transaction.world,
+                &manager,
+                &contract_deployment_permission()
+            )
+            .expect("manager permissions")
+        );
+        let code_hash = Hash::new(b"authorized builder upload");
+        executor
+            .execute_instruction(
+                &mut state_transaction,
+                &builder,
+                contract_upload_instruction(code_hash, 0),
+            )
+            .expect("the newly authorized builder may upload code");
+        assert!(
+            state_transaction
+                .world
+                .contract_code_upload_progress(&builder, &code_hash)
+                .is_some()
+        );
+        state_transaction.apply();
+        assert!(block.world.account(&builder).is_ok());
+        assert!(
+            block
+                .world
+                .contract_code_upload_progress(&builder, &code_hash)
+                .is_some()
+        );
+    }
+}
+#[test]
+fn contract_registrar_management_uses_exact_effective_role_and_borrowed_gate() {
+    for executor in [
+        super::Executor::Initial,
+        bundled_default_user_provided_executor(),
+    ] {
+        for assigned in [false, true] {
+            let manager = checked_account_id();
+            let builder = checked_account_id();
+            let mut world = World::with(
+                [],
+                [
+                    Account::new(manager.clone()).build(&manager),
+                    Account::new(builder.clone()).build(&manager),
+                ],
+                [],
+            );
+            let role_id: RoleId = "contract_registrar_managers".parse().expect("role id");
+            let manager_permission: Permission =
+                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
+            let role = Role::new(role_id.clone(), manager.clone())
+                .add_permission(manager_permission.clone())
+                .build(&manager);
+            world.roles.insert(role_id.clone(), role);
+            if assigned {
+                world.account_roles.insert(
+                    crate::role::RoleIdWithOwner::new(manager.clone(), role_id.clone()),
+                    (),
+                );
+            }
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+            );
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut state_transaction = block.transaction();
+            let grant: InstructionBox =
+                Grant::account_permission(contract_deployment_permission(), builder.clone()).into();
+            let result = executor.execute_borrowed_overlay_instruction(
+                &mut state_transaction,
+                &manager,
+                &grant,
+                None,
+            );
+            assert_eq!(
+                result.is_ok(),
+                assigned,
+                "manager role assignment is required: {result:?}"
+            );
+            if assigned {
+                assert!(
+                    authority_has_permission(
+                        &state_transaction.world,
+                        &builder,
+                        &contract_deployment_permission()
+                    )
+                    .expect("granted permission")
+                );
+                let revoke: InstructionBox =
+                    Revoke::account_permission(contract_deployment_permission(), builder.clone())
+                        .into();
+                executor
+                    .execute_borrowed_overlay_instruction(
+                        &mut state_transaction,
+                        &manager,
+                        &revoke,
+                        None,
+                    )
+                    .expect("manager may revoke a registrar");
+                assert!(
+                    !authority_has_permission(
+                        &state_transaction.world,
+                        &builder,
+                        &contract_deployment_permission()
+                    )
+                    .expect("revoked permission")
+                );
+            }
+            for instruction in [
+                Grant::account_permission(manager_permission.clone(), builder.clone()).into(),
+                Revoke::account_permission(manager_permission.clone(), manager.clone()).into(),
+                Grant::account_role(role_id.clone(), builder.clone()).into(),
+                Revoke::account_role(role_id.clone(), manager.clone()).into(),
+                Grant::role_permission(manager_permission.clone(), role_id.clone()).into(),
+                Unregister::role(role_id.clone()).into(),
+                Register::role(
+                    Role::new("new_managers".parse().expect("role id"), builder.clone())
+                        .add_permission(manager_permission.clone()),
+                )
+                .into(),
+            ] {
+                let error = executor
+                    .execute_instruction(&mut state_transaction, &manager, instruction)
+                    .expect_err("manager roots cannot be propagated or removed after genesis");
+                assert!(
+                    matches!(error, ValidationFail::NotPermitted(message) if message.contains("CanManageSmartContractCodeRegistrars") && message.contains("genesis"))
+                );
+            }
+            for permission in [contract_deployment_permission(), manager_permission] {
+                let malformed = Permission::new(permission.name().to_owned(), Json::new(true));
+                let grant: InstructionBox =
+                    Grant::account_permission(malformed, builder.clone()).into();
+                let error = executor
+                    .execute_borrowed_overlay_instruction(
+                        &mut state_transaction,
+                        &manager,
+                        &grant,
+                        None,
+                    )
+                    .expect_err("non-unit registrar capabilities always reject");
+                assert!(
+                    matches!(error, ValidationFail::NotPermitted(message) if message.contains("Invalid permission payload"))
+                );
+            }
         }
-        .into(),
-    );
-    assert!(
-        !allows_contract_deployment_self_bootstrap(
-            &world.view(),
-            &authority,
-            &sign(atomic_deployment)
-        ),
-        "atomic deployment must require an authority that existed before the transaction"
-    );
-    let proved_transaction = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_executable(Executable::IvmProved(
-        iroha_data_model::transaction::IvmProved {
-            bytecode: IvmBytecode::from_compiled(vec![0x00]),
-            overlay: exact.into(),
-            events_commitment: Hash::new(b"bootstrap proved events"),
-            gas_policy_commitment: Hash::new(b"bootstrap proved gas"),
-        },
-    ))
-    .sign(keypair.private_key());
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &world.view(),
-        &authority,
-        &proved_transaction
-    ));
-    let existing_world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &existing_world.view(),
-        &authority,
-        &exact_transaction
-    ));
-}
-#[test]
-fn initial_executor_bootstraps_missing_deployment_authority_and_meters_grant() {
-    let keypair = checked_keypair();
-    let authority = AccountId::new(keypair.public_key().clone());
-    let chain = ChainId::from("contract-deployment-bootstrap-missing");
-    let code_hash = Hash::new(b"contract deployment bootstrap missing authority");
-    let instructions = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(authority.clone()),
-        contract_deployment_permission(),
-        contract_upload_instruction(code_hash, 0),
-    );
-    let expected_gas = crate::gas::meter_instructions(&instructions);
-    let state = State::new_with_chain(
-        World::new(),
-        Kura::blank_kura_for_testing(),
-        query::store::LiveQueryStore::start_test(),
-        chain,
-    );
-    let transaction = TransactionBuilder::new(
-        state.network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_executable(Executable::Instructions(instructions.into()))
-    .sign(keypair.private_key());
-    assert!(allows_contract_deployment_self_bootstrap(
-        state.view().world(),
-        &authority,
-        &transaction
-    ));
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-    let mut state_transaction = block.transaction();
-    let mut ivm_cache = IvmCache::new();
-    assert!(
-        !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),
-        "bootstrap exception must be exercised outside genesis"
-    );
-    super::Executor::Initial
-        .execute_transaction(
-            &mut state_transaction,
-            &authority,
-            transaction,
-            &mut ivm_cache,
-        )
-        .expect("exact missing-authority bootstrap must execute");
-    assert_eq!(state_transaction.last_tx_gas_used, expected_gas);
-    state_transaction.apply();
-    block
-        .world
-        .account(&authority)
-        .expect("bootstrap account must be registered");
-    assert!(
-        block
-            .world
-            .account_permissions_iter(&authority)
-            .expect("bootstrap account permissions")
-            .any(|permission| permission == &contract_deployment_permission())
-    );
-    let progress = block
-        .world
-        .contract_code_upload_progress(&authority, &code_hash)
-        .expect("first upload chunk must be staged");
-    assert_eq!(progress.descriptor.total_size, 1);
-    assert_eq!(progress.descriptor.chunk_count, 1);
-    assert_eq!(progress.received_chunks, 1);
-}
-#[test]
-fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
-    let keypair = checked_keypair();
-    let authority = AccountId::new(keypair.public_key().clone());
-    let chain = ChainId::from("contract-deployment-bootstrap-user-provided");
-    let code_hash = Hash::new(b"default user-provided deployment bootstrap");
-    let instructions = contract_deployment_bootstrap_instructions(
-        &authority,
-        Account::new(authority.clone()),
-        contract_deployment_permission(),
-        contract_upload_instruction(code_hash, 0),
-    );
-    let state = State::new_with_chain(
-        World::new(),
-        Kura::blank_kura_for_testing(),
-        query::store::LiveQueryStore::start_test(),
-        chain,
-    );
-    let transaction = TransactionBuilder::new(
-        state.network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_executable(Executable::Instructions(instructions.into()))
-    .sign(keypair.private_key());
-    assert!(allows_contract_deployment_self_bootstrap(
-        state.view().world(),
-        &authority,
-        &transaction
-    ));
-    let executor = bundled_default_user_provided_executor();
-    let super::Executor::UserProvided(loaded_executor) = &executor else {
-        unreachable!("test constructs a user-provided executor")
-    };
-    let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-    let mut state_transaction = block.transaction();
-    let mut ivm_cache = IvmCache::new();
-    assert!(
-        !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),
-        "user-provided bootstrap must be exercised outside genesis"
-    );
-    executor
-        .execute_transaction(
-            &mut state_transaction,
-            &authority,
-            transaction,
-            &mut ivm_cache,
-        )
-        .expect("bundled default executor must admit exact missing-authority bootstrap");
-    let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
-    assert_eq!(
-        runtime_stats_after.hits + runtime_stats_after.misses,
-        runtime_stats_before.hits + runtime_stats_before.misses + 2,
-        "only register and upload may enter the user-provided runtime; the exact grant is applied directly by Core"
-    );
-    assert_eq!(
-        runtime_stats_after.dirty_resets,
-        runtime_stats_before.dirty_resets + 2
-    );
-    state_transaction.apply();
-    block
-        .world
-        .account(&authority)
-        .expect("bootstrap account must be registered");
-    let expected_permission = contract_deployment_permission();
-    assert!(
-        block
-            .world
-            .account_permissions_iter(&authority)
-            .expect("bootstrap account permissions")
-            .any(|permission| permission == &expected_permission)
-    );
-    let progress = block
-        .world
-        .contract_code_upload_progress(&authority, &code_hash)
-        .expect("first upload chunk must be staged");
-    assert_eq!(progress.descriptor.total_size, 1);
-    assert_eq!(progress.descriptor.chunk_count, 1);
-    assert_eq!(progress.received_chunks, 1);
+    }
 }
 #[test]
 fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispatch() {
@@ -413,11 +263,6 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
     ))
     .sign(keypair.private_key());
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &block.world,
-        &authority,
-        &transaction
-    ));
     let executor = bundled_default_user_provided_executor();
     let super::Executor::UserProvided(loaded_executor) = &executor else {
         unreachable!("test constructs a user-provided executor")
@@ -478,6 +323,12 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         "bootstrap-note".parse().expect("metadata key"),
         Json::new("decorated"),
     );
+    let plain = contract_deployment_bootstrap_instructions(
+        &authority,
+        Account::new(authority.clone()),
+        contract_deployment_permission(),
+        contract_upload_instruction(code_hash, 0),
+    );
     let decorated = contract_deployment_bootstrap_instructions(
         &authority,
         Account::new(authority.clone()).with_metadata(metadata),
@@ -499,6 +350,7 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         Grant::account_permission(contract_deployment_permission(), authority.clone()).into(),
     ];
     for (label, instructions, expected_runtime_checkouts) in [
+        ("plain self-grant", plain, 1),
         ("decorated registration", decorated, 1),
         ("malformed same-name grant", malformed, 1),
         ("reordered prefix", reordered, 2),
@@ -517,10 +369,6 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         .with_executable(Executable::Instructions(instructions.into()))
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-        assert!(
-            !allows_contract_deployment_self_bootstrap(&block.world, &authority, &transaction),
-            "{label} must not qualify for the bootstrap exception"
-        );
         let executor = bundled_default_user_provided_executor();
         let super::Executor::UserProvided(loaded_executor) = &executor else {
             unreachable!("test constructs a user-provided executor")
@@ -595,7 +443,7 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
     assert!(
         matches!(&error, ValidationFail::NotPermitted(message) if
         message.contains("CanRegisterSmartContractCode")
-            && message.contains("genesis block")),
+            && message.contains("CanManageSmartContractCodeRegistrars")),
         "unexpected bootstrap rejection: {error:?}"
     );
     let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
@@ -637,11 +485,6 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
     ))
     .sign(keypair.private_key());
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-    assert!(!allows_contract_deployment_self_bootstrap(
-        &block.world,
-        &authority,
-        &transaction
-    ));
     let mut state_transaction = block.transaction();
     let mut ivm_cache = IvmCache::new();
     assert!(
@@ -719,9 +562,9 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
     ] {
         let error = super::Executor::Initial
             .execute_instruction(&mut state_transaction, &authority, instruction)
-            .expect_err("deployment permission mutation must remain genesis-only");
+            .expect_err("deployment permission mutation requires registrar management");
         assert!(matches!(error, ValidationFail::NotPermitted(message) if
-            message.contains("only allowed inside the genesis block")));
+            message.contains("CanRegisterSmartContractCode")));
     }
     let stored: BTreeSet<_> = state_transaction
         .world

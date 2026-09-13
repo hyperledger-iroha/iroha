@@ -2400,7 +2400,9 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             payload,
             ..
         } => {
-            f(actor);
+            if let Some(actor) = actor {
+                f(actor);
+            }
             f(entrypoint);
             f(payload);
         }

@@ -1,9 +1,9 @@
 //! Cargo-style Musubi V1 command parsing and exact-network authenticated workflows.
 //!
 //! This module owns the public command grammar and returns logical output. Purely local commands
-//! never construct a signer; network reads and mutations load one only at their explicit registry
-//! boundary. Resolution, authenticated fetch,
-//! compiler, test, cache, and publication work stays in dedicated V1 modules.
+//! use only public configuration projections. Authenticated registry, deployment and view
+//! operations load signer custody at their network boundary. Resolution, fetch, compiler,
+//! tests, cache, publication and native deployment remain in their dedicated owners.
 use crate::{
     archive_fetch::{
         ArchiveFetchErrorV1, ArchiveFetchFailureClassV1, ArchiveTransportErrorV1,
@@ -83,7 +83,23 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
+#[path = "scaffold.rs"]
+mod scaffold;
+use scaffold::{InitArgs, NewArgs, run_init, run_new};
+#[path = "command_build.rs"]
+mod build;
+use build::run_build;
+#[path = "command_network.rs"]
+mod network;
+use network::{NetworkCommandArgs, run_network};
+#[path = "command_deploy.rs"]
+mod deploy;
+use deploy::{DeployArgs, ViewArgs, run_deploy, run_view};
+#[cfg(test)]
+use scaffold::{PackageLibrarySource, initialize_package_files, prepare_existing_package_library};
+
 const LOCK_FILE_NAME: &str = "Musubi.lock";
+const PUBLICATION_LOCK_PATH: &str = "target/package/Musubi.publish.lock";
 /// Parsed presentation mode and logical command result.
 pub struct Invocation {
     pub format: OutputFormat,
@@ -122,6 +138,12 @@ struct Cli {
 }
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Build and deploy one contract through a recoverable native transaction plan.
+    Deploy(DeployArgs),
+    /// Query a deployed contract view using the selected package network binding.
+    View(ViewArgs),
+    /// Configure a named deployment network using a native client configuration.
+    Network(NetworkCommandArgs),
     /// Create a new package directory.
     New(NewArgs),
     /// Initialize an existing directory as a package.
@@ -168,6 +190,9 @@ enum Command {
 impl Command {
     const fn name(&self) -> &'static str {
         match self {
+            Self::Deploy(_) => "deploy",
+            Self::View(_) => "view",
+            Self::Network(_) => "network",
             Self::New(_) => "new",
             Self::Init(_) => "init",
             Self::Add(_) => "add",
@@ -191,65 +216,6 @@ impl Command {
             Self::Cache(_) => "cache",
         }
     }
-}
-#[derive(Args, Clone, Debug)]
-struct PackageTemplateArgs {
-    /// Canonical public namespace.
-    #[arg(long)]
-    namespace: MusubiNamespaceV1,
-    /// Override the package name inferred from the directory.
-    #[arg(long)]
-    name: Option<MusubiPackageNameV1>,
-    /// Initial exact version.
-    #[arg(long, default_value = "0.1.0")]
-    version: MusubiVersionV1,
-    /// Library source directory relative to the package root.
-    #[arg(long, default_value = "src")]
-    source_dir: PortablePath,
-    /// Exported interface name; new source starts with a no-op TODO function.
-    /// Repeat as needed, then replace placeholders with the intended functions or types.
-    #[arg(long = "export", value_name = "NAME")]
-    exports: Vec<Name>,
-    /// Bounded package description.
-    #[arg(long)]
-    description: Option<String>,
-    /// Readme file relative to the package root.
-    #[arg(long)]
-    readme: Option<PortablePath>,
-    /// SPDX-like license metadata.
-    #[arg(long)]
-    license: Option<String>,
-    /// License file relative to the package root.
-    #[arg(long)]
-    license_file: Option<PortablePath>,
-    /// Canonical HTTP(S) repository URL.
-    #[arg(long)]
-    repository: Option<String>,
-    /// Canonical lowercase keyword; repeat as needed.
-    #[arg(long = "keyword")]
-    keywords: Vec<String>,
-    /// Positive package include addition; repeat as needed.
-    #[arg(long = "include", value_name = "PATH")]
-    includes: Vec<PortablePath>,
-}
-#[derive(Args, Debug)]
-struct NewArgs {
-    /// New package directory. Its parent must already exist.
-    #[arg(value_name = "PATH")]
-    path: PathBuf,
-    #[command(flatten)]
-    package: PackageTemplateArgs,
-}
-#[derive(Args, Debug)]
-struct InitArgs {
-    /// Existing directory to initialize.
-    #[arg(default_value = ".", value_name = "PATH")]
-    path: PathBuf,
-    #[command(flatten)]
-    package: PackageTemplateArgs,
-    /// Replace an existing regular `Musubi.toml` atomically.
-    #[arg(long)]
-    force: bool,
 }
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Args, Debug)]
@@ -352,9 +318,9 @@ struct BuildArgs {
     mode: GraphModeArgs,
     #[command(flatten)]
     registry: RegistryReadArgs,
-    /// Select release compiler settings.
+    /// Named deployment network; defaults to the workspace selection or Taira.
     #[arg(long)]
-    release: bool,
+    network: Option<String>,
     /// Account-address chain discriminant for local compilation. Must match the registry when used.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     chain_discriminant: Option<u16>,
@@ -373,7 +339,7 @@ struct PackageArgs {
 }
 #[derive(Args, Clone, Debug, Default)]
 struct RegistryReadArgs {
-    /// Explicit platform Iroha client configuration path for authenticated registry reads.
+    /// Native client configuration for network identity, address profile and authenticated reads.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 }
@@ -651,8 +617,29 @@ struct Success {
     data: Value,
 }
 type CommandResult = Result<Success, Diagnostic>;
+
+fn quote_cli_argument(value: &str) -> String {
+    if !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':')
+        })
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
 /// Parse and execute an argv sequence without writing process streams.
+#[cfg(test)]
 pub fn invoke<I, T>(args: I) -> Invocation
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    invoke_with_progress(args, &mut |_| {})
+}
+/// Execute with an explicit human-progress sink while preserving one-document JSON output.
+pub(crate) fn invoke_with_progress<I, T>(args: I, progress: &mut dyn FnMut(&str)) -> Invocation
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -663,7 +650,9 @@ where
         Ok(cli) => {
             let format = cli.format.into();
             let command_name = cli.command.name();
-            let result = dispatch(cli.manifest_path.as_deref(), &cli.command);
+            let result = dispatch(cli.manifest_path.as_deref(), &cli.command, &mut |message| {
+                report_progress(format, message, progress);
+            });
             let output = match result {
                 Ok(success) => CommandOutput::success(command_name, success.message, success.data),
                 Err(diagnostic) => CommandOutput::failure(command_name, diagnostic),
@@ -691,6 +680,11 @@ where
         },
     }
 }
+fn report_progress(format: OutputFormat, message: &str, progress: &mut dyn FnMut(&str)) {
+    if format == OutputFormat::Human {
+        progress(&crate::output::sanitize_diagnostic_text(message));
+    }
+}
 fn detect_output_format(argv: &[OsString]) -> OutputFormat {
     for (index, argument) in argv.iter().enumerate() {
         let argument = argument.to_string_lossy();
@@ -702,8 +696,15 @@ fn detect_output_format(argv: &[OsString]) -> OutputFormat {
     }
     OutputFormat::Human
 }
-fn dispatch(manifest_path: Option<&Path>, command: &Command) -> CommandResult {
+fn dispatch(
+    manifest_path: Option<&Path>,
+    command: &Command,
+    progress: &mut dyn FnMut(&str),
+) -> CommandResult {
     match command {
+        Command::Deploy(args) => run_deploy(manifest_path, args, progress),
+        Command::View(args) => run_view(manifest_path, args),
+        Command::Network(args) => run_network(manifest_path, args),
         Command::New(args) => run_new(args),
         Command::Init(args) => run_init(args),
         Command::Add(args) => run_add(manifest_path, args),
@@ -726,315 +727,6 @@ fn dispatch(manifest_path: Option<&Path>, command: &Command) -> CommandResult {
         Command::Update(args) => run_update(manifest_path, args),
         Command::Cache(args) => run_cache(manifest_path, args),
     }
-}
-fn run_new(args: &NewArgs) -> CommandResult {
-    match fs::symlink_metadata(&args.path) {
-        Ok(_) => {
-            return Err(
-                Diagnostic::new(ErrorCode::Io, "new package destination already exists")
-                    .with_context("path", args.path.display().to_string()),
-            );
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(io_diagnostic(
-                "inspect new package destination",
-                &args.path,
-                &error,
-            ));
-        }
-    }
-    let name = package_name_for_root(&args.path, args.package.name.as_ref())?;
-    let manifest = render_package_manifest(&args.package, &name)?;
-    let library_source =
-        PackageLibrarySource::Scaffold(render_package_library(&args.package.exports)?);
-    fs::create_dir(&args.path)
-        .map_err(|error| io_diagnostic("create package directory", &args.path, &error))?;
-    initialize_package_files(
-        &args.path,
-        &args.package.source_dir,
-        &manifest,
-        &library_source,
-    )?;
-    Ok(Success {
-        message: format!("created {}", args.path.display()),
-        data: object([
-            (
-                "manifest",
-                Value::from(args.path.join(MANIFEST_FILE_NAME).display().to_string()),
-            ),
-            (
-                "package",
-                Value::from(format!("{}/{}", args.package.namespace, name)),
-            ),
-        ]),
-    })
-}
-fn run_init(args: &InitArgs) -> CommandResult {
-    let metadata = fs::symlink_metadata(&args.path)
-        .map_err(|error| io_diagnostic("inspect package directory", &args.path, &error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(Diagnostic::new(
-            ErrorCode::Io,
-            "init target must be an existing non-symlink directory",
-        )
-        .with_context("path", args.path.display().to_string()));
-    }
-    let manifest_path = args.path.join(MANIFEST_FILE_NAME);
-    if !args.force && fs::symlink_metadata(&manifest_path).is_ok() {
-        return Err(Diagnostic::new(
-            ErrorCode::ManifestInvalid,
-            "package manifest already exists",
-        )
-        .with_context("path", manifest_path.display().to_string())
-        .with_help("pass `--force` to atomically replace a regular manifest"));
-    }
-    let name = package_name_for_root(&args.path, args.package.name.as_ref())?;
-    let manifest = render_package_manifest(&args.package, &name)?;
-    let library_source = prepare_existing_package_library(
-        &args.path,
-        &args.package.source_dir,
-        &args.package.exports,
-    )?;
-    initialize_package_files(
-        &args.path,
-        &args.package.source_dir,
-        &manifest,
-        &library_source,
-    )?;
-    Ok(Success {
-        message: format!("initialized {}", args.path.display()),
-        data: object([
-            ("manifest", Value::from(manifest_path.display().to_string())),
-            (
-                "package",
-                Value::from(format!("{}/{}", args.package.namespace, name)),
-            ),
-        ]),
-    })
-}
-fn package_name_for_root(
-    root: &Path,
-    explicit: Option<&MusubiPackageNameV1>,
-) -> Result<MusubiPackageNameV1, Diagnostic> {
-    if let Some(name) = explicit {
-        return Ok(name.clone());
-    }
-    let raw = root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::Usage,
-                "cannot infer a package name from this directory",
-            )
-            .with_context("path", root.display().to_string())
-            .with_help("pass `--name LOWERCASE-KEBAB` explicitly")
-        })?;
-    raw.parse::<MusubiPackageNameV1>().map_err(|error| {
-        Diagnostic::new(ErrorCode::Usage, error.to_string())
-            .with_context("inferred_name", raw)
-            .with_help("pass `--name LOWERCASE-KEBAB` explicitly")
-    })
-}
-fn render_package_manifest(
-    package: &PackageTemplateArgs,
-    name: &MusubiPackageNameV1,
-) -> Result<String, Diagnostic> {
-    let mut output = String::from("manifest-version = 1\n\n[package]\n");
-    push_toml_string(&mut output, "namespace", &package.namespace.to_string());
-    push_toml_string(&mut output, "name", &name.to_string());
-    push_toml_string(&mut output, "version", &package.version.to_string());
-    push_toml_string(&mut output, "edition", "1");
-    output.push_str("abi-version = 1\n");
-    if let Some(value) = &package.description {
-        push_toml_string(&mut output, "description", value);
-    }
-    if let Some(value) = &package.readme {
-        push_toml_string(&mut output, "readme", value.as_str());
-    }
-    if let Some(value) = &package.license {
-        push_toml_string(&mut output, "license", value);
-    }
-    if let Some(value) = &package.license_file {
-        push_toml_string(&mut output, "license-file", value.as_str());
-    }
-    if let Some(value) = &package.repository {
-        push_toml_string(&mut output, "repository", value);
-    }
-    push_toml_array(
-        &mut output,
-        "keywords",
-        package.keywords.iter().map(String::as_str),
-    );
-    push_toml_array(
-        &mut output,
-        "include",
-        package.includes.iter().map(PortablePath::as_str),
-    );
-    output.push_str("\n[lib]\n");
-    push_toml_string(&mut output, "source-dir", package.source_dir.as_str());
-    let mut exports = package
-        .exports
-        .iter()
-        .map(AsRef::as_ref)
-        .collect::<Vec<_>>();
-    exports.sort_unstable();
-    exports.dedup();
-    push_toml_array(&mut output, "exports", exports);
-    parse_manifest(&output)
-        .map_err(|error| manifest_diagnostic(Path::new(MANIFEST_FILE_NAME), &error))?;
-    Ok(output)
-}
-fn push_toml_string(output: &mut String, key: &str, value: &str) {
-    output.push_str(key);
-    output.push_str(" = ");
-    output.push_str(&toml_quote(value));
-    output.push('\n');
-}
-fn push_toml_array<I, S>(output: &mut String, key: &str, values: I)
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let values = values
-        .into_iter()
-        .map(|value| toml_quote(value.as_ref()))
-        .collect::<Vec<_>>();
-    if values.is_empty() && !matches!(key, "exports") {
-        return;
-    }
-    output.push_str(key);
-    output.push_str(" = [");
-    output.push_str(&values.join(", "));
-    output.push_str("]\n");
-}
-fn toml_quote(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('"');
-    for character in value.chars() {
-        match character {
-            '\\' => quoted.push_str("\\\\"),
-            '"' => quoted.push_str("\\\""),
-            '\n' => quoted.push_str("\\n"),
-            '\r' => quoted.push_str("\\r"),
-            '\t' => quoted.push_str("\\t"),
-            character => quoted.push(character),
-        }
-    }
-    quoted.push('"');
-    quoted
-}
-enum PackageLibrarySource {
-    Existing,
-    Scaffold(String),
-}
-
-fn package_export_names(
-    exports: &[Name],
-    for_function: bool,
-) -> Result<BTreeSet<&str>, Diagnostic> {
-    let mut names = BTreeSet::new();
-    for name in exports {
-        let name = name.as_ref();
-        if !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name)
-            || ivm::kotodama::semantic::is_reserved_source_declaration(name, for_function)
-        {
-            return Err(Diagnostic::new(
-                ErrorCode::Usage,
-                "export name cannot declare the requested Kotodama interface",
-            )
-            .with_context("export", name)
-            .with_help("use a canonical, non-reserved Kotodama identifier"));
-        }
-        names.insert(name);
-    }
-    Ok(names)
-}
-
-fn render_package_library(exports: &[Name]) -> Result<String, Diagnostic> {
-    let names = package_export_names(exports, true)?;
-    let mut source = String::from(
-        "// Musubi V1 library source.\n\
-         // TODO: Define the library interface and implement its behavior.\n\
-         module Library {\n",
-    );
-    for name in names {
-        source.push_str(
-            "    // TODO: Replace this no-op function with the intended function or type.\n",
-        );
-        source.push_str("    fn ");
-        source.push_str(name);
-        source.push_str("() {}\n");
-    }
-    source.push_str("}\n");
-    Ok(source)
-}
-
-fn prepare_existing_package_library(
-    root: &Path,
-    source_dir: &PortablePath,
-    exports: &[Name],
-) -> Result<PackageLibrarySource, Diagnostic> {
-    let library = root.join(source_dir.to_path_buf()).join("lib.ko");
-    match fs::symlink_metadata(&library) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-            // Existing exports can be functions or types. Only newly generated function
-            // placeholders must avoid names reserved exclusively for functions.
-            package_export_names(exports, false)?;
-            Ok(PackageLibrarySource::Existing)
-        }
-        Ok(_) => Err(Diagnostic::new(
-            ErrorCode::Io,
-            "existing library target is not a regular non-symlink file",
-        )
-        .with_context("path", library.display().to_string())),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            render_package_library(exports).map(PackageLibrarySource::Scaffold)
-        }
-        Err(error) => Err(io_diagnostic("inspect library source", &library, &error)),
-    }
-}
-
-fn initialize_package_files(
-    root: &Path,
-    source_dir: &PortablePath,
-    manifest: &str,
-    library_source: &PackageLibrarySource,
-) -> Result<(), Diagnostic> {
-    let source_path = root.join(source_dir.to_path_buf());
-    fs::create_dir_all(&source_path)
-        .map_err(|error| io_diagnostic("create library source directory", &source_path, &error))?;
-    let writer = AtomicWriteRoot::new(root).map_err(atomic_diagnostic)?;
-    let library = source_dir.to_path_buf().join("lib.ko");
-    let library_path = root.join(&library);
-    match library_source {
-        PackageLibrarySource::Existing => match fs::symlink_metadata(&library_path) {
-            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(Diagnostic::new(
-                    ErrorCode::Io,
-                    "existing library target is not a regular non-symlink file",
-                )
-                .with_context("path", library_path.display().to_string()));
-            }
-            Err(error) => {
-                return Err(io_diagnostic(
-                    "inspect library source",
-                    &library_path,
-                    &error,
-                ));
-            }
-        },
-        PackageLibrarySource::Scaffold(source) => {
-            writer
-                .install_immutable(&library, source.as_bytes())
-                .map_err(atomic_diagnostic)?;
-        }
-    }
-    writer
-        .replace(Path::new(MANIFEST_FILE_NAME), manifest.as_bytes())
-        .map_err(atomic_diagnostic)
 }
 fn run_add(explicit_manifest: Option<&Path>, args: &AddArgs) -> CommandResult {
     let initial_manifest = project_manifest_path(explicit_manifest)?;
@@ -1656,7 +1348,46 @@ fn io_diagnostic(operation: &str, path: &Path, error: &io::Error) -> Diagnostic 
         .with_context("path", path.display().to_string())
 }
 fn read_optional_workspace_lock(workspace: &Workspace) -> Result<Option<LockfileV1>, Diagnostic> {
-    let path = workspace.root().join(LOCK_FILE_NAME);
+    read_optional_lock(&workspace.root().join(LOCK_FILE_NAME))
+}
+fn read_optional_publication_lock(workspace: &Workspace) -> Result<Option<LockfileV1>, Diagnostic> {
+    let mut parent = workspace.root().to_path_buf();
+    for component in ["target", "package"] {
+        parent.push(component);
+        match fs::symlink_metadata(&parent) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(Diagnostic::new(
+                    ErrorCode::LockfileInvalid,
+                    "publication evidence directory must be a real directory",
+                )
+                .with_context("path", parent.display().to_string()));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(io_diagnostic(
+                    "inspect publication evidence directory",
+                    &parent,
+                    &error,
+                ));
+            }
+        }
+    }
+    let path = workspace.root().join(PUBLICATION_LOCK_PATH);
+    let lock = read_optional_lock(&path)?;
+    if lock
+        .as_ref()
+        .is_some_and(|lock| matches!(lock.context, LockContextV1::Local { .. }))
+    {
+        return Err(Diagnostic::new(
+            ErrorCode::LockfileInvalid,
+            "publication evidence requires an authenticated registry context",
+        )
+        .with_context("path", path.display().to_string()));
+    }
+    Ok(lock)
+}
+fn read_optional_lock(path: &Path) -> Result<Option<LockfileV1>, Diagnostic> {
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -1665,7 +1396,7 @@ fn read_optional_workspace_lock(workspace: &Workspace) -> Result<Option<Lockfile
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(Diagnostic::new(
             ErrorCode::LockfileInvalid,
-            "Musubi.lock must be a regular non-symlink file",
+            "lock evidence must be a regular non-symlink file",
         )
         .with_context("path", path.display().to_string()));
     }
@@ -1806,13 +1537,27 @@ fn load_selected_workspace(
         .collect();
     Ok((workspace, selected_packages))
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct WorkspaceResolutionOptionsV1<'a> {
     mode: GraphModeArgs,
     config: Option<&'a Path>,
+    config_image: Option<std::sync::Arc<RegistryPublicConfigImageV1>>,
+    expected_network_id: Option<iroha_data_model::NetworkId>,
     fresh_only: bool,
     purpose: GraphPurposeV1,
     requested_chain_discriminant: Option<u16>,
+}
+fn ensure_network_identity(
+    expected: iroha_data_model::NetworkId,
+    actual: iroha_data_model::NetworkId,
+) -> Result<(), Diagnostic> {
+    if expected != actual {
+        return Err(Diagnostic::new(
+            ErrorCode::Usage,
+            "the client configuration changed to a different genesis network identity",
+        ));
+    }
+    Ok(())
 }
 fn select_compiler_chain_discriminant(
     configured: u16,
@@ -1822,7 +1567,7 @@ fn select_compiler_chain_discriminant(
     match requested {
         Some(value) if bound_to_configuration && value != configured => Err(Diagnostic::new(
             ErrorCode::Usage,
-            "--chain-discriminant must match the selected client configuration",
+            "the requested address profile must match the selected client configuration",
         )),
         Some(value) => Ok(value),
         None => Ok(configured),
@@ -1885,7 +1630,7 @@ impl ResolvedWorkspaceGraphV1 {
     clippy::too_many_lines,
     reason = "preserves resolver transaction ordering"
 )]
-fn resolve_and_update_workspace_lock(
+fn resolve_and_persist_graph(
     workspace: &Workspace,
     selected_packages: &[MusubiPackageSelectorV1],
     previous: Option<LockfileV1>,
@@ -1895,15 +1640,48 @@ fn resolve_and_update_workspace_lock(
     let WorkspaceResolutionOptionsV1 {
         mode,
         config,
+        config_image,
+        expected_network_id,
         fresh_only,
         purpose,
         requested_chain_discriminant,
     } = options;
-    let public_config = config
-        .map(|path| RegistryPublicConfigImageV1::load(Some(path)))
-        .transpose()
-        .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?;
-    let lock_path = workspace.root().join(LOCK_FILE_NAME);
+    let public_config = match config_image {
+        Some(image) => Some(image),
+        None => config
+            .map(|path| RegistryPublicConfigImageV1::load(Some(path)))
+            .transpose()
+            .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?
+            .map(std::sync::Arc::new),
+    };
+    if let Some(expected) = expected_network_id {
+        let (actual, _) = public_config
+            .as_ref()
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::Usage,
+                    "the pinned network requires its exact client configuration",
+                )
+            })?
+            .registry_binding()
+            .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?;
+        ensure_network_identity(expected, actual)?;
+    }
+    let lock_path = workspace.root().join(match purpose {
+        GraphPurposeV1::Workspace => LOCK_FILE_NAME,
+        GraphPurposeV1::Publication => PUBLICATION_LOCK_PATH,
+    });
+    if purpose == GraphPurposeV1::Publication
+        && previous
+            .as_ref()
+            .is_some_and(|lock| matches!(lock.context, LockContextV1::Local { .. }))
+    {
+        return Err(Diagnostic::new(
+            ErrorCode::LockfileInvalid,
+            "local workspace locks cannot be used as publication evidence",
+        )
+        .with_context("path", lock_path.display().to_string()));
+    }
     let resolve_mode = if mode.effective_locked() {
         ResolveModeV1::Locked
     } else {
@@ -1945,7 +1723,7 @@ fn resolve_and_update_workspace_lock(
     }
     let explicit_binding = public_config
         .as_ref()
-        .map(RegistryPublicConfigImageV1::registry_binding)
+        .map(|image| image.registry_binding())
         .transpose()
         .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?;
     if let Some((_, profile)) = explicit_binding {
@@ -2018,9 +1796,15 @@ fn resolve_and_update_workspace_lock(
                         .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
                 (reader, image)
             }
-            None => RegistryReadClientV1::load_with_config_image(None)
-                .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?,
+            None => {
+                let (reader, image) = RegistryReadClientV1::load_with_config_image(None)
+                    .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
+                (reader, std::sync::Arc::new(image))
+            }
         };
+        if let Some(expected) = expected_network_id {
+            ensure_network_identity(expected, registry.network_id())?;
+        }
         let prepared_archive_fetch =
             prepare_production_archive_transport_v1(config_image.path(), config_image.bytes());
         let platform_config_provenance = config_image.provenance();
@@ -2072,11 +1856,7 @@ fn resolve_and_update_workspace_lock(
         )
     };
     if outcome.changed {
-        let writer = AtomicWriteRoot::new(workspace.root()).map_err(atomic_diagnostic)?;
-        outcome
-            .lockfile
-            .write_atomic(&writer, Path::new(LOCK_FILE_NAME))
-            .map_err(|error| lockfile_diagnostic(&lock_path, &error))?;
+        write_resolved_lock(workspace, purpose, &outcome.lockfile)?;
     }
     Ok(ResolvedWorkspaceGraphV1 {
         lock: outcome.lockfile,
@@ -2086,6 +1866,29 @@ fn resolve_and_update_workspace_lock(
         platform_config_provenance,
         account_chain_discriminant,
     })
+}
+fn write_resolved_lock(
+    workspace: &Workspace,
+    purpose: GraphPurposeV1,
+    lock: &LockfileV1,
+) -> Result<(), Diagnostic> {
+    let relative = match purpose {
+        GraphPurposeV1::Workspace => LOCK_FILE_NAME,
+        GraphPurposeV1::Publication => {
+            lock.registry_context().map_err(|error| {
+                lockfile_diagnostic(&workspace.root().join(PUBLICATION_LOCK_PATH), &error)
+            })?;
+            PUBLICATION_LOCK_PATH
+        }
+    };
+    let writer = match purpose {
+        GraphPurposeV1::Workspace => {
+            AtomicWriteRoot::new(workspace.root()).map_err(atomic_diagnostic)?
+        }
+        GraphPurposeV1::Publication => package_output_writer(workspace)?,
+    };
+    lock.write_atomic(&writer, Path::new(relative))
+        .map_err(|error| lockfile_diagnostic(&workspace.root().join(relative), &error))
 }
 fn graph_diagnostic(error: GraphErrorV1) -> Diagnostic {
     match error {
@@ -2170,12 +1973,14 @@ fn run_fetch(explicit_manifest: Option<&Path>, args: &FetchArgs) -> CommandResul
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
     let lock_path = workspace.root().join(LOCK_FILE_NAME);
     let previous = read_optional_workspace_lock(&workspace)?;
-    let graph = resolve_and_update_workspace_lock(
+    let graph = resolve_and_persist_graph(
         &workspace,
         &selected_names,
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
+            config_image: None,
+            expected_network_id: None,
             mode: args.mode,
             config: args.registry.config.as_deref(),
             fresh_only: false,
@@ -2314,192 +2119,6 @@ fn archive_fetch_diagnostic(error: ArchiveFetchErrorV1) -> Diagnostic {
     Diagnostic::new(code, "authenticated SoraFS archive fetch failed")
         .with_context("archive_code", error.code())
 }
-#[allow(
-    clippy::too_many_lines,
-    reason = "the CLI handler keeps one auditable build/test orchestration sequence"
-)]
-fn run_build(
-    explicit_manifest: Option<&Path>,
-    command: &'static str,
-    args: &BuildArgs,
-) -> CommandResult {
-    let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
-    let previous = read_optional_workspace_lock(&workspace)?;
-    let graph = resolve_and_update_workspace_lock(
-        &workspace,
-        &selected_names,
-        previous,
-        None,
-        WorkspaceResolutionOptionsV1 {
-            mode: args.mode,
-            config: args.registry.config.as_deref(),
-            fresh_only: false,
-            purpose: GraphPurposeV1::Workspace,
-            requested_chain_discriminant: args.chain_discriminant,
-        },
-    )?;
-    let cache = if graph.lock.nodes.is_empty() {
-        None
-    } else {
-        Some(open_user_cache()?)
-    };
-    let archives = match &cache {
-        Some(cache) => ensure_graph_archives(cache, &graph, args.mode)?,
-        None => Vec::new(),
-    };
-    let chain_discriminant = graph.account_chain_discriminant();
-    let action = if command == "build" {
-        CompilerActionV1::Build
-    } else {
-        CompilerActionV1::Check
-    };
-    let execution = execute_compiler_graph(
-        cache.as_ref(),
-        &workspace,
-        &selected_names,
-        &graph.lock,
-        action,
-        args.release,
-        chain_discriminant,
-    )
-    .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
-    if command == "test" {
-        let report = execute_workspace_tests_v1(
-            cache.as_ref(),
-            &workspace,
-            &selected_names,
-            &graph.lock,
-            &WorkspaceTestOptionsV1::new(chain_discriminant),
-        )
-        .map_err(|error| graph_mode_test_diagnostic(&error, args.mode))?;
-        if !report.is_success() {
-            let first_failure = report
-                .targets
-                .iter()
-                .flat_map(|target| {
-                    target
-                        .report
-                        .cases
-                        .iter()
-                        .filter(|case| !case.passed)
-                        .map(move |case| {
-                            format!(
-                                "{}::{}::{} at line {}",
-                                target.package, target.target, case.name, case.line
-                            )
-                        })
-                })
-                .next()
-                .unwrap_or_else(|| "unknown failing test".to_owned());
-            return Err(
-                Diagnostic::new(ErrorCode::Compiler, "one or more Kotodama tests failed")
-                    .with_context("passed", report.passed().to_string())
-                    .with_context("failed", report.failed().to_string())
-                    .with_context("first_failure", first_failure),
-            );
-        }
-        let passed = report.passed();
-        let targets = report
-            .targets
-            .into_iter()
-            .map(|target| {
-                let cases = target
-                    .report
-                    .cases
-                    .into_iter()
-                    .map(|case| {
-                        object([
-                            ("name", Value::from(case.name)),
-                            ("line", Value::from(u64::from(case.line))),
-                            ("passed", Value::from(case.passed)),
-                        ])
-                    })
-                    .collect();
-                object([
-                    ("package", Value::from(target.package.to_string())),
-                    ("target", Value::from(target.target)),
-                    ("source", Value::from(target.source)),
-                    ("cases", Value::Array(cases)),
-                ])
-            })
-            .collect();
-        return Ok(Success {
-            message: format!("test completed: {passed} passed; 0 failed"),
-            data: object([
-                (
-                    "passed",
-                    Value::from(u64::try_from(passed).expect("test count fits u64")),
-                ),
-                ("failed", Value::from(0_u64)),
-                (
-                    "validated_packages",
-                    Value::from(
-                        u64::try_from(execution.validated_packages)
-                            .expect("validated package count fits u64"),
-                    ),
-                ),
-                (
-                    "compiler_warnings",
-                    Value::from(u64::try_from(execution.warnings).expect("warning count fits u64")),
-                ),
-                ("targets", Value::Array(targets)),
-                ("archives", Value::Array(archives)),
-                ("lock", lockfile_json(&graph.lock)),
-            ]),
-        });
-    }
-    let artifacts = execution
-        .artifacts
-        .iter()
-        .map(|artifact| {
-            object([
-                ("package", Value::from(artifact.package.to_string())),
-                ("target", Value::from(artifact.target.clone())),
-                ("source", Value::from(artifact.source.clone())),
-                (
-                    "artifact",
-                    Value::from(artifact.artifact.display().to_string()),
-                ),
-                ("artifact_hash", Value::from(artifact.artifact_hash.clone())),
-                ("fresh", Value::from(artifact.fresh)),
-            ])
-        })
-        .collect();
-    let interfaces = execution
-        .package_interfaces
-        .iter()
-        .map(|interface| {
-            object([
-                ("package", Value::from(interface.package.to_string())),
-                (
-                    "digest",
-                    Value::from(hex::encode(interface.digest.as_bytes())),
-                ),
-            ])
-        })
-        .collect();
-    Ok(Success {
-        message: format!(
-            "{command} completed for {} package(s) and {} contract target(s)",
-            execution.validated_packages, execution.contract_targets
-        ),
-        data: object([
-            (
-                "validated_packages",
-                Value::from(execution.validated_packages as u64),
-            ),
-            (
-                "contract_targets",
-                Value::from(execution.contract_targets as u64),
-            ),
-            ("warnings", Value::from(execution.warnings as u64)),
-            ("artifacts", Value::Array(artifacts)),
-            ("interfaces", Value::Array(interfaces)),
-            ("archives", Value::Array(archives)),
-            ("lock", lockfile_json(&graph.lock)),
-        ]),
-    })
-}
 fn open_user_cache() -> Result<MusubiCache, Diagnostic> {
     let root = platform_cache_root_v1().map_err(|error| {
         Diagnostic::new(ErrorCode::Io, "platform Musubi cache root is unavailable")
@@ -2571,14 +2190,19 @@ fn graph_mode_test_diagnostic(error: &WorkspaceTestErrorV1, mode: GraphModeArgs)
 )]
 fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandResult {
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
-    let lock_path = workspace.root().join(LOCK_FILE_NAME);
-    let previous = read_optional_workspace_lock(&workspace)?;
-    let graph = resolve_and_update_workspace_lock(
+    if args.list {
+        return package_inventory_result(&workspace, &selected_names);
+    }
+    let lock_path = workspace.root().join(PUBLICATION_LOCK_PATH);
+    let previous = read_optional_publication_lock(&workspace)?;
+    let graph = resolve_and_persist_graph(
         &workspace,
         &selected_names,
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
+            config_image: None,
+            expected_network_id: None,
             mode: args.mode,
             config: args.registry.config.as_deref(),
             fresh_only: false,
@@ -2586,14 +2210,8 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             requested_chain_discriminant: None,
         },
     )?;
-    let (cache, archives) = if args.list {
-        (None, Vec::new())
-    } else {
-        let cache = open_user_cache()?;
-        let archives = ensure_graph_archives(&cache, &graph, args.mode)?;
-        (Some(cache), archives)
-    };
-    let mut listed = Vec::new();
+    let cache = open_user_cache()?;
+    let archives = ensure_graph_archives(&cache, &graph, args.mode)?;
     let mut packaged = Vec::new();
     let mut output_writer = None;
     for selector in &selected_names {
@@ -2624,18 +2242,8 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             .iter()
             .map(|file| Value::from(file.path().to_owned()))
             .collect::<Vec<_>>();
-        if args.list {
-            listed.push(object([
-                ("package", Value::from(selector.to_string())),
-                ("release", Value::from(release.to_string())),
-                ("files", Value::Array(file_paths)),
-                ("source_bytes", Value::from(plan.source_bytes())),
-            ]));
-            continue;
-        }
-        let cache = cache.as_ref().expect("non-list package opens the cache");
         let interface_digest = validate_packaged_plan(
-            cache,
+            &cache,
             &plan,
             &verification_lock,
             graph.account_chain_discriminant(),
@@ -2719,15 +2327,6 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             ),
         ]));
     }
-    if args.list {
-        return Ok(Success {
-            message: format!("listed {} clean package(s)", listed.len()),
-            data: object([
-                ("packages", Value::Array(listed)),
-                ("lockfile", Value::from(lock_path.display().to_string())),
-            ]),
-        });
-    }
     Ok(Success {
         message: format!("packaged {} clean archive(s)", packaged.len()),
         data: object([
@@ -2735,6 +2334,54 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             ("archives", Value::Array(archives)),
             ("lockfile", Value::from(lock_path.display().to_string())),
         ]),
+    })
+}
+fn package_inventory_result(
+    workspace: &Workspace,
+    selected: &[MusubiPackageSelectorV1],
+) -> CommandResult {
+    let mut human = String::new();
+    let mut packages = Vec::new();
+    for selector in selected {
+        let member = workspace
+            .members()
+            .values()
+            .find(|member| &member.package.selector == selector)
+            .ok_or_else(|| {
+                Diagnostic::new(ErrorCode::WorkspaceInvalid, "selected package disappeared")
+            })?;
+        let manifest = read_manifest_source(&member.manifest_path)?;
+        let layout = package_layout_for_member(workspace.root(), member);
+        let inventory = crate::package::inventory_package(&layout, &manifest)
+            .map_err(|error| package_diagnostic(&error))?;
+        writeln!(
+            human,
+            "{selector} ({} source files, {} bytes)",
+            inventory.files().len(),
+            inventory.source_bytes()
+        )
+        .expect("String write");
+        for file in inventory.files() {
+            writeln!(human, "  {}", file.path()).expect("String write");
+        }
+        packages.push(object([
+            ("package", Value::from(selector.to_string())),
+            (
+                "files",
+                Value::Array(
+                    inventory
+                        .files()
+                        .iter()
+                        .map(|file| Value::from(file.path().to_owned()))
+                        .collect(),
+                ),
+            ),
+            ("source_bytes", Value::from(inventory.source_bytes())),
+        ]));
+    }
+    Ok(Success {
+        message: human.trim_end().to_owned(),
+        data: object([("packages", Value::Array(packages))]),
     })
 }
 fn package_output_writer(workspace: &Workspace) -> Result<AtomicWriteRoot, Diagnostic> {
@@ -2826,14 +2473,16 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
         .with_context("selected_packages", selected_names.len().to_string())
         .with_help("select one package with `-p namespace/package`"));
     };
-    let lock_path = workspace.root().join(LOCK_FILE_NAME);
-    let previous = read_optional_workspace_lock(&workspace)?;
-    let graph = resolve_and_update_workspace_lock(
+    let lock_path = workspace.root().join(PUBLICATION_LOCK_PATH);
+    let previous = read_optional_publication_lock(&workspace)?;
+    let graph = resolve_and_persist_graph(
         &workspace,
         &selected_names,
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
+            config_image: None,
+            expected_network_id: None,
             mode: args.mode,
             config: args.network.config.as_deref(),
             fresh_only: true,
@@ -4158,12 +3807,14 @@ fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandRes
     } else {
         None
     };
-    let updated = resolve_and_update_workspace_lock(
+    let updated = resolve_and_persist_graph(
         &workspace,
         &selected,
         previous_for_resolution,
         graph_update,
         WorkspaceResolutionOptionsV1 {
+            config_image: None,
+            expected_network_id: None,
             mode: args.mode,
             config: args.registry.config.as_deref(),
             fresh_only: false,

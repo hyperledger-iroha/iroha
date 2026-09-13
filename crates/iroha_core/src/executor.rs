@@ -38,10 +38,7 @@ use iroha_data_model::{
     isi::{
         CustomInstruction, Grant, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
         RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
-        error::InstructionExecutionError,
-        mint_burn::MintBox,
-        register::RegisterBox,
-        smart_contract_code::{RegisterSmartContractCode, UploadSmartContractCodeChunk},
+        error::InstructionExecutionError, mint_burn::MintBox, register::RegisterBox,
     },
     nexus::{
         FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
@@ -1360,129 +1357,6 @@ fn fee_exempt_transaction(
     nexus_fee_exempt_transaction(transaction)
         || successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms)
 }
-/// Transaction-scoped authorization for the sole deployment self-bootstrap exception.
-///
-/// The private fields bind the authorization to the exact signed instruction sequence and
-/// authority that were checked against the pre-transaction world. Callers must validate the
-/// complete sequence before executing index zero; the indexed predicate below then confines the
-/// bypass to the canonical grant at index one.
-#[derive(Debug)]
-pub(crate) struct ContractDeploymentSelfBootstrapAuthorization {
-    authority: AccountId,
-    instructions: Box<[InstructionBox]>,
-}
-impl ContractDeploymentSelfBootstrapAuthorization {
-    /// Derive an authorization from an exact signed plain transaction and pre-transaction world.
-    pub(crate) fn derive(
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        transaction: &SignedTransaction,
-    ) -> Option<Self> {
-        if transaction.authority() != authority {
-            return None;
-        }
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            return None;
-        };
-        if world.account(authority).is_ok() {
-            return None;
-        }
-        if instructions.iter().any(|instruction| {
-            instruction
-                .as_any()
-                .is::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>()
-        }) {
-            // Atomic deployment consumes a nonce owned by an account that existed before the
-            // transaction. Never extend the upload-only bootstrap exception to this instruction.
-            return None;
-        }
-        let Some([register, grant, deployment]) = instructions.get(..3) else {
-            return None;
-        };
-        let Some(RegisterBox::Account(register)) = register.as_any().downcast_ref::<RegisterBox>()
-        else {
-            return None;
-        };
-        let account = register.object();
-        if account.id() != authority
-            || !account.metadata.is_empty()
-            || account.label.is_some()
-            || account.uaid.is_some()
-            || !account.opaque_ids.is_empty()
-        {
-            return None;
-        }
-        if !is_exact_contract_deployment_self_grant(authority, grant) {
-            return None;
-        }
-        let deployment_is_allowed = deployment
-            .as_any()
-            .downcast_ref::<UploadSmartContractCodeChunk>()
-            .is_some_and(|upload| *upload.chunk_index() == 0)
-            || deployment.as_any().is::<RegisterSmartContractCode>();
-        if !deployment_is_allowed {
-            return None;
-        }
-        Some(Self {
-            authority: authority.clone(),
-            instructions: instructions.iter().cloned().collect(),
-        })
-    }
-    /// Verify that the executable about to run is the exact signed sequence that was authorized.
-    pub(crate) fn validate_instruction_sequence(
-        &self,
-        authority: &AccountId,
-        instructions: &[InstructionBox],
-    ) -> Result<(), ValidationFail> {
-        if authority != &self.authority || instructions != self.instructions.as_ref() {
-            return Err(ValidationFail::InternalError(
-                "contract deployment bootstrap executable diverged from its signed authorization"
-                    .to_owned(),
-            ));
-        }
-        Ok(())
-    }
-    fn allows_indexed_grant(
-        &self,
-        authority: &AccountId,
-        instruction_index: usize,
-        instruction: &InstructionBox,
-    ) -> bool {
-        instruction_index == 1
-            && authority == &self.authority
-            && self.instructions.get(instruction_index) == Some(instruction)
-            && is_exact_contract_deployment_self_grant(authority, instruction)
-    }
-}
-/// Recognize the sole plain-transaction prefix that may bootstrap deployment authority.
-///
-/// The account lookup is deliberately performed before the first instruction executes. This
-/// keeps the exception unavailable to existing accounts and to IVM-produced instruction
-/// overlays, while allowing Torii to atomically create a previously unknown transaction
-/// authority and stage the first native code-upload chunk.
-#[cfg(test)]
-fn allows_contract_deployment_self_bootstrap(
-    world: &impl WorldReadOnly,
-    authority: &AccountId,
-    transaction: &SignedTransaction,
-) -> bool {
-    ContractDeploymentSelfBootstrapAuthorization::derive(world, authority, transaction).is_some()
-}
-fn is_exact_contract_deployment_self_grant(
-    authority: &AccountId,
-    instruction: &InstructionBox,
-) -> bool {
-    let expected_permission: Permission =
-        executor_permission::smart_contract::CanRegisterSmartContractCode.into();
-    matches!(
-        extract_permission_or_role_mutation(instruction),
-        Some(PermissionOrRoleMutation::AccountPermission {
-            permission,
-            destination,
-            is_revoke: false,
-        }) if destination == authority && permission == &expected_permission
-    )
-}
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
     AccountPermission {
@@ -1592,19 +1466,77 @@ fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool 
         Some(
             PermissionOrRoleMutation::AccountPermission { permission, .. }
                 | PermissionOrRoleMutation::RolePermission { permission, .. }
-        ) if permission.name() == "CanRegisterSmartContractCode"
+        ) if matches!(permission.name().as_ref(), "CanRegisterSmartContractCode" | "CanManageSmartContractCodeRegistrars")
     )
+}
+fn ensure_contract_registrar_permission_lifecycle(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+) -> Result<(), ValidationFail> {
+    let is_genesis = is_initial_genesis_context(state_transaction);
+    match permission.name().as_ref() {
+        "CanManageSmartContractCodeRegistrars" => {
+            executor_permission::smart_contract::CanManageSmartContractCodeRegistrars::try_from(
+                permission,
+            )
+            .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if is_genesis {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "CanManageSmartContractCodeRegistrars is only granted or revoked in genesis"
+                        .to_owned(),
+                ))
+            }
+        }
+        "CanRegisterSmartContractCode" => {
+            executor_permission::smart_contract::CanRegisterSmartContractCode::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            let manager: Permission =
+                executor_permission::smart_contract::CanManageSmartContractCodeRegistrars.into();
+            if is_genesis
+                || authority_has_permission(&state_transaction.world, authority, &manager)?
+            {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "granting or revoking CanRegisterSmartContractCode requires CanManageSmartContractCodeRegistrars".to_owned(),
+                ))
+            }
+        }
+        _ => Ok(()),
+    }
 }
 fn ensure_contract_deployment_permission_mutation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
     instruction: &InstructionBox,
 ) -> Result<(), ValidationFail> {
-    let is_genesis = is_initial_genesis_context(state_transaction);
-    if !is_genesis && mutates_contract_deployment_permission(instruction) {
-        return Err(ValidationFail::NotPermitted(
-            "granting or revoking CanRegisterSmartContractCode is only allowed inside the genesis block or the exact missing-authority deployment bootstrap"
-                .to_owned(),
-        ));
+    let validate = |permission: &Permission| {
+        ensure_contract_registrar_permission_lifecycle(state_transaction, authority, permission)
+    };
+    if let Some(register) = extract_register_role(instruction) {
+        for permission in register.object().inner().permissions() {
+            validate(permission)?;
+        }
+    }
+    let role_id = match extract_permission_or_role_mutation(instruction) {
+        Some(
+            PermissionOrRoleMutation::AccountPermission { permission, .. }
+            | PermissionOrRoleMutation::RolePermission { permission, .. },
+        ) => {
+            return validate(permission);
+        }
+        Some(PermissionOrRoleMutation::AccountRole { role, .. }) => Some(role.clone()),
+        None => extract_unregister_role(instruction).map(|unregister| unregister.object().clone()),
+    };
+    if let Some(role_id) = role_id
+        && let Some(role) = state_transaction.world.roles().get(&role_id)
+    {
+        for permission in role.permissions() {
+            validate(permission)?;
+        }
     }
     Ok(())
 }
@@ -1656,24 +1588,6 @@ fn ensure_contract_runtime_permission_mutation_allowed(
         ));
     }
     Ok(())
-}
-fn execute_contract_deployment_self_bootstrap_grant(
-    authorization: &ContractDeploymentSelfBootstrapAuthorization,
-    instruction_index: usize,
-    authority: &AccountId,
-    instruction: &InstructionBox,
-    state_transaction: &mut StateTransaction<'_, '_>,
-) -> Result<bool, ValidationFail> {
-    if !authorization.allows_indexed_grant(authority, instruction_index, instruction) {
-        return Ok(false);
-    }
-    crate::smartcontracts::isi::execute_borrowed_instruction(
-        instruction,
-        authority,
-        state_transaction,
-    )
-    .map_err(ValidationFail::from)?;
-    Ok(true)
 }
 fn parse_account_id_literal(
     world: &impl WorldReadOnly,
@@ -5556,22 +5470,6 @@ impl Executor {
                 state_transaction,
             )?;
         }
-        // Capture this against the pre-instruction world. The executable-shape check inside the
-        // helper also keeps the exception unavailable to proved IVM and contract overlays.
-        let contract_deployment_self_bootstrap = (ivm_proved_replay.is_none()
-            && contract_runtime_context.is_none()
-            && entrypoint_authorization.is_none())
-        .then(|| {
-            ContractDeploymentSelfBootstrapAuthorization::derive(
-                &state_transaction.world,
-                authority,
-                transaction,
-            )
-        })
-        .flatten();
-        if let Some(authorization) = contract_deployment_self_bootstrap.as_ref() {
-            authorization.validate_instruction_sequence(authority, &instructions)?;
-        }
         // 1) Deterministically meter the instruction batch. Proved IVM transactions retain the
         // verified replay gas because the plain overlay does not account for VM execution cost.
         let used = ivm_proved_replay.as_ref().map_or_else(
@@ -5769,34 +5667,17 @@ impl Executor {
                     }
                 }
             } else {
-                for (index, isi) in instructions.into_iter().enumerate() {
+                for isi in instructions {
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
                             .validate_for_authority(&state_transaction.world, authority)?;
                     }
-                    let executed_bootstrap_grant =
-                        if let Some(authorization) = contract_deployment_self_bootstrap.as_ref() {
-                            // The authorization is bound to the complete signed sequence and the
-                            // pre-transaction world. Metering still covers the grant because the whole
-                            // batch was metered before execution.
-                            execute_contract_deployment_self_bootstrap_grant(
-                                authorization,
-                                index,
-                                authority,
-                                &isi,
-                                state_transaction,
-                            )?
-                        } else {
-                            false
-                        };
-                    if !executed_bootstrap_grant {
-                        self.execute_instruction_with_contract_runtime_context(
-                            state_transaction,
-                            authority,
-                            isi,
-                            contract_runtime_context,
-                        )?;
-                    }
+                    self.execute_instruction_with_contract_runtime_context(
+                        state_transaction,
+                        authority,
+                        isi,
+                        contract_runtime_context,
+                    )?;
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
                             .validate_for_authority(&state_transaction.world, authority)?;
@@ -7159,28 +7040,6 @@ impl Executor {
             None,
         )
     }
-    /// Execute one instruction from an exact signed deployment-bootstrap transaction.
-    pub(crate) fn execute_transaction_instruction(
-        &self,
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        instruction: InstructionBox,
-        instruction_index: usize,
-        bootstrap_authorization: Option<&ContractDeploymentSelfBootstrapAuthorization>,
-    ) -> Result<(), ValidationFail> {
-        if let Some(authorization) = bootstrap_authorization
-            && execute_contract_deployment_self_bootstrap_grant(
-                authorization,
-                instruction_index,
-                authority,
-                &instruction,
-                state_transaction,
-            )?
-        {
-            return Ok(());
-        }
-        self.execute_instruction(state_transaction, authority, instruction)
-    }
     /// Execute [`InstructionBox`] using the runtime profile and an optional
     /// contract execution context for nested contract-originated instructions.
     pub(crate) fn execute_instruction_with_contract_runtime_context(
@@ -7234,35 +7093,6 @@ impl Executor {
             }
         }
     }
-    /// Execute one borrowed overlay instruction with an exact signed-bootstrap authorization.
-    pub(crate) fn execute_borrowed_transaction_overlay_instruction(
-        &self,
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        instruction: &InstructionBox,
-        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-        instruction_index: usize,
-        bootstrap_authorization: Option<&ContractDeploymentSelfBootstrapAuthorization>,
-    ) -> Result<(), ValidationFail> {
-        if contract_runtime_context.is_none()
-            && let Some(authorization) = bootstrap_authorization
-            && execute_contract_deployment_self_bootstrap_grant(
-                authorization,
-                instruction_index,
-                authority,
-                instruction,
-                state_transaction,
-            )?
-        {
-            return Ok(());
-        }
-        self.execute_borrowed_overlay_instruction(
-            state_transaction,
-            authority,
-            instruction,
-            contract_runtime_context,
-        )
-    }
     /// Execute [`InstructionBox`] using a specific execution profile.
     ///
     /// `InstructionExecutionProfile::Runtime` mirrors production behaviour.
@@ -7296,7 +7126,11 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
-        ensure_contract_deployment_permission_mutation_allowed(state_transaction, &instruction)?;
+        ensure_contract_deployment_permission_mutation_allowed(
+            state_transaction,
+            authority,
+            &instruction,
+        )?;
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
             &instruction,
@@ -7341,7 +7175,11 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
-        ensure_contract_deployment_permission_mutation_allowed(state_transaction, instruction)?;
+        ensure_contract_deployment_permission_mutation_allowed(
+            state_transaction,
+            authority,
+            instruction,
+        )?;
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
             instruction,
@@ -8390,7 +8228,7 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanRegisterDomain",
     "CanManageRoles",
     "CanUpgradeExecutor",
-    "CanRegisterSmartContractCode",
+    "CanManageSmartContractCodeRegistrars",
     "CanReadAllLedgerData",
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",

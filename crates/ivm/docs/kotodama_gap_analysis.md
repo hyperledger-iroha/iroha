@@ -219,8 +219,7 @@ and resets only dirty memory instead of cloning the full VM memory and Merkle
 tree.
 
 `koto check|build|test|fmt|doc|explain|lsp` is the single command surface. The
-Rust compiler library is canonical for `koto`, `iroha contract dev`,
-Musubi, and the Node native bridge. Browsers use a compiler service; there is
+Rust compiler library is canonical for `koto`, Musubi, and the Node native bridge. Browsers use a compiler service; there is
 no independent JavaScript or offline browser compiler.
 
 `crates/kotodama_lang/grammar/v1.lex` is the machine-readable lexical source for

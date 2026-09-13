@@ -1,9 +1,0 @@
-
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"

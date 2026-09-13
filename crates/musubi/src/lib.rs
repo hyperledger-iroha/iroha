@@ -1,4 +1,4 @@
-//! Musubi package-manager library entrypoint.
+//! Kotodama package build, test, publication and native deployment command runtime.
 pub mod archive_fetch;
 mod atomic_io;
 pub mod cache;
