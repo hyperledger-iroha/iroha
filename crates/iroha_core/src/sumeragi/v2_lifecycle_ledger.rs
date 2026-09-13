@@ -1041,6 +1041,31 @@ impl AuthenticatedRecoveredWalValidateLedgerParent {
     }
 }
 impl LifecycleLedgerRecordV1 {
+    /// Authenticate this completed row's original source against the closed
+    /// WAL frontier without exposing its persisted replay authority.
+    pub(super) fn authenticates_retired_terminal_validate_source(
+        &self,
+        verified: &VerifiedHeightContext,
+        frontier: crate::sumeragi::v2::LeaderWireRecoveryAuthority,
+        store: &crate::sumeragi::v2_body_store::V2BodyStore,
+    ) -> bool {
+        if self.work_class() != Some(LifecycleWorkClass::Validate)
+            || self.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || self.continuation() != Some(DurableContinuation::AdvancedNoSuccessor)
+        {
+            return false;
+        }
+        let (Some(key), Some(stage), Some(payload)) =
+            (self.key(), self.stage(), self.durable_payload())
+        else {
+            return false;
+        };
+        self.replay_authority
+            .authenticates_retired_terminal_validate_source(
+                verified, key, stage, payload, frontier, store,
+            )
+    }
+
     /// Decode one live signed Broadcast only as an inert recovered-WAL child.
     ///
     /// This keeps the replay envelope inside its checksummed LedgerV1 row.
