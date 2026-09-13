@@ -1670,6 +1670,7 @@ mod tests {
         assert!(store.take_recovered_terminal_results().is_empty());
         assert_eq!(store.retired_revalidation, markers);
         assert_eq!(durable_files_snapshot(directory.path()), files);
+        drop(store);
         let mut protected = V2BodyStore::open(directory.path(), context.clone()).unwrap();
         let later_round = wire::ConsensusRound {
             view: success.round().view + 1,
@@ -1685,6 +1686,7 @@ mod tests {
             !protected.retired_terminal_claim_matches(&success_claim),
             "a first replay effect protects the entire immutable subject across proposal rounds"
         );
+        drop(protected);
         let mut deferred = V2BodyStore::open(directory.path(), context.clone()).unwrap();
         deferred
             .retain_recovered_markers_for_authority(RecoveredValidationAuthority::for_test(
@@ -1709,6 +1711,14 @@ mod tests {
             !deferred.retired_terminal_claim_matches(&success_claim),
             "semantic sidecar deferral cannot manufacture closed-frontier retirement"
         );
+        drop(deferred);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+        store
+            .retain_recovered_markers_for_authority(RecoveredValidationAuthority::for_test(
+                &context,
+                [],
+            ))
+            .unwrap();
         store
             .retired_revalidation
             .get_mut(&(rejection.round(), rejection.subject()))
