@@ -21,8 +21,8 @@ use crate::privacy_engines::{
         verify_proof_managed_note_stark_v1,
     },
     transparent_stark::{
-        GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkDigestContextV1,
-        TransparentTranscriptV1, goldilocks_digest384_frame_v1,
+        GoldilocksFieldV1 as F, PrivacyOuterDigestV1, TransparentStarkDigestContextV1,
+        TransparentTranscriptV1, privacy_outer_digest_frame_v1,
     },
 };
 use iroha_data_model::{
@@ -32,7 +32,7 @@ use iroha_data_model::{
 use rand::TryRngCore;
 
 /// Exact settlement proof relation and transcript descriptor.
-pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-virtual-zero-inputs-and-audited-input-openings:public-input=poseidon-x7-goldilocks-6x64(canonical-manifest-intent-proof-binding,canonical-leg-statement-including-successor-root+epoch,canonical-internal-statement,canonical-genesis):successor-correctness=validator-derived-frontier:post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms+success-fee-carriers-2:transparent-amx=separate:governed-disabled-by-default";
+pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-virtual-zero-inputs-and-audited-input-openings:public-input=sha3-384-opaque48(canonical-manifest-intent-proof-binding,canonical-leg-statement-including-successor-root+epoch,canonical-internal-statement,canonical-genesis):successor-correctness=validator-derived-frontier:post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms+success-fee-carriers-2:transparent-amx=separate:governed-disabled-by-default";
 
 const SETTLEMENT_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
@@ -133,9 +133,7 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
         settlement_protocol_v1()
     }
 
-    fn public_input_digest_v1(
-        &self,
-    ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+    fn public_input_digest_v1(&self) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
         validate_public_binding_v1(
             self.manifest,
             self.statement,
@@ -157,7 +155,7 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
         let internal = norito::encode_canonical(self.internal_statement)
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
-        goldilocks_digest384_frame_v1(
+        privacy_outer_digest_frame_v1(
             SETTLEMENT_DOMAINS_V1.digest_context,
             b"atomic-private-settlement-stark-public-input-v1",
             b"statement-binding",
@@ -243,7 +241,6 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
 }
 
 pub(crate) fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRngCore>(
-    options: super::facade::AtomicPrivateSettlementProverOptionsV1,
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -254,8 +251,6 @@ pub(crate) fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRngCore>(
     let relation = PrivateNoteStarkRelationV1::new(&compiled.internal_statement, compiled.profile);
     let base_columns = relation.compile_prover_columns_v1(&compiled.witness)?;
     prove_proof_managed_note_stark_v1_with_rng(
-        options.commitment_digest_execution,
-        options.nonce_digest_execution,
         &AtomicPrivateSettlementStarkAdapterV1::new(
             manifest,
             statement,

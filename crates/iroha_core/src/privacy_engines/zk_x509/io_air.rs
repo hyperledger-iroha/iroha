@@ -698,7 +698,7 @@ pub(crate) fn byte_memory_capacity_v1() -> Result<usize, ZkX509IoAirErrorV1> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
+    use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
     fn endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
         ZkX509IoEndpointV1 { role, instance }
     }
@@ -943,14 +943,10 @@ mod tests {
         for (index, label) in labels.iter().enumerate() {
             assert!(!labels[..index].contains(label));
         }
-        let profile = GoldilocksDigest384V1::new([0x10; 6]).expect("profile digest");
-        let public = GoldilocksDigest384V1::new([0x20; 6]).expect("public digest");
-        let execution_root = GoldilocksDigest384V1::new([0x30; 6])
-            .expect("execution root")
-            .to_le_bytes();
-        let sorted_root = GoldilocksDigest384V1::new([0x40; 6])
-            .expect("sorted root")
-            .to_le_bytes();
+        let profile = PrivacyOuterDigestV1::from_bytes([0x10; 48]);
+        let public = PrivacyOuterDigestV1::from_bytes([0x20; 48]);
+        let execution_root = PrivacyOuterDigestV1::from_bytes([0x30; 48]).to_bytes();
+        let sorted_root = PrivacyOuterDigestV1::from_bytes([0x40; 48]).to_bytes();
         let mut transcript = TransparentTranscriptV1::new(
             super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-io-test",

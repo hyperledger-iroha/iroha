@@ -459,11 +459,11 @@ fn compiled_profile_schedule_digests_v1()
             disclosed_attributes,
         })?
         .descriptor_digest_v1()
-        .to_le_bytes();
+        .to_bytes();
     }
     let p256 = zk_x509_p256_fixed_algebraic_schedule_v1()?
         .descriptor_digest_v1()
-        .to_le_bytes();
+        .to_bytes();
     Ok((sha, p256))
 }
 /// Recompute the sole exact 29-field compiled-profile digest.

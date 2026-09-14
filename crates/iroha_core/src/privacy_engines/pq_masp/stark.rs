@@ -35,8 +35,8 @@ use crate::privacy_engines::{
         prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
     },
     transparent_stark::{
-        GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkDigestContextV1,
-        TransparentTranscriptV1, goldilocks_digest384_frame_v1,
+        GoldilocksFieldV1 as F, PrivacyOuterDigestV1, TransparentStarkDigestContextV1,
+        TransparentTranscriptV1, privacy_outer_digest_frame_v1,
     },
 };
 use iroha_data_model::privacy::{
@@ -87,7 +87,7 @@ pub(super) const PQ_MASP_PROFILE_CONSTRAINT_DEGREE_V1: u8 =
     PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
 const PROFILE_AUX_VM_CARRY_BRIDGE: usize = 0;
 /// Relation-local descriptor combined with the shared proof-driver geometry.
-pub(crate) const PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"pq-masp-stark-v1:relation=proof-managed-note:wire=PQA1-outer+PQS1-inner-v1:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-inner-proof=9431915:sha256-wide-air:public-digest=poseidon-x7-goldilocks-6x64(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:authorization=ML-DSA-65(statement-digest+native-consensus-binding-digest-v1+inner-proof-digest):encryption=ML-KEM-768+XChaCha20Poly1305:value=u128-checked:fee=separate:legacy=unrepresentable:governance=typed-lifecycle";
+pub(crate) const PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"pq-masp-stark-v1:relation=proof-managed-note:wire=PQA1-outer+PQS1-inner-v1:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-inner-proof=9431915:sha256-wide-air:public-digest=sha3-384-opaque48(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:authorization=ML-DSA-65(statement-digest+native-consensus-binding-digest-v1+inner-proof-digest):encryption=ML-KEM-768+XChaCha20Poly1305:value=u128-checked:fee=separate:legacy=unrepresentable:governance=typed-lifecycle";
 const PQ_MASP_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
         proof_magic: *b"PQS1",
@@ -634,9 +634,7 @@ impl ProofManagedNoteStarkAdapterV1 for PqMaspStarkAdapterV1<'_> {
     fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
         pq_masp_protocol_v1()
     }
-    fn public_input_digest_v1(
-        &self,
-    ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+    fn public_input_digest_v1(&self) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
         self.consensus_binding
             .validate_against_context(&self.statement.context, self.consensus_limits)
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
@@ -646,7 +644,7 @@ impl ProofManagedNoteStarkAdapterV1 for PqMaspStarkAdapterV1<'_> {
             .consensus_binding
             .digest()
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
-        goldilocks_digest384_frame_v1(
+        privacy_outer_digest_frame_v1(
             PQ_MASP_DOMAINS_V1.digest_context,
             b"pq-masp-stark-public-input-with-consensus-binding-v1",
             b"statement-binding",
@@ -737,8 +735,6 @@ pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
 ) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
     let base_columns = compile_pq_masp_prover_columns_v1(statement, witness)?;
     prove_proof_managed_note_stark_v1_with_rng(
-        fastpq_prover::DigestExecutionV1::Cpu,
-        fastpq_prover::DigestExecutionV1::Cpu,
         &PqMaspStarkAdapterV1::new(statement, consensus_binding, consensus_limits),
         &base_columns,
         rng,
@@ -907,8 +903,8 @@ mod tests {
         let (binding, limits) = consensus_material(statement);
         let adapter = PqMaspStarkAdapterV1::new(statement, &binding, &limits);
         let copy_schedule = adapter.copy_schedule_v1().expect("copy schedule");
-        let profile = GoldilocksDigest384V1::new([1; 6]).expect("profile digest");
-        let public = GoldilocksDigest384V1::new([2; 6]).expect("public digest");
+        let profile = PrivacyOuterDigestV1::from_bytes([1; 48]);
+        let public = PrivacyOuterDigestV1::from_bytes([2; 48]);
         let mut transcript = TransparentTranscriptV1::new(
             PQ_MASP_DOMAINS_V1.digest_context,
             transcript_domain,
@@ -959,9 +955,9 @@ mod tests {
             PQ_MASP_STARK_PROFILE_DESCRIPTOR_V1,
         )
         .expect("profile digest");
-        assert_ne!(profile_digest, GoldilocksDigest384V1::default());
+        assert_ne!(profile_digest, PrivacyOuterDigestV1::default());
         let expected_descriptor = format!(
-            "pq-masp-stark-v1:relation=proof-managed-note:wire=PQA1-outer+PQS1-inner-v1:trace=2^{}:base={}:profile-aux={}:profile-fixed={}:profile-constraints={}:constraint-degree={}:max-inner-proof={}:sha256-wide-air:public-digest=poseidon-x7-goldilocks-6x64(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:authorization=ML-DSA-65(statement-digest+native-consensus-binding-digest-v1+inner-proof-digest):encryption=ML-KEM-768+XChaCha20Poly1305:value=u128-checked:fee=separate:legacy=unrepresentable:governance=typed-lifecycle",
+            "pq-masp-stark-v1:relation=proof-managed-note:wire=PQA1-outer+PQS1-inner-v1:trace=2^{}:base={}:profile-aux={}:profile-fixed={}:profile-constraints={}:constraint-degree={}:max-inner-proof={}:sha256-wide-air:public-digest=sha3-384-opaque48(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:authorization=ML-DSA-65(statement-digest+native-consensus-binding-digest-v1+inner-proof-digest):encryption=ML-KEM-768+XChaCha20Poly1305:value=u128-checked:fee=separate:legacy=unrepresentable:governance=typed-lifecycle",
             PQ_MASP_TRACE_LOG2_V1,
             PQ_MASP_BASE_WIDTH_V1,
             PQ_MASP_PROFILE_AUX_WIDTH_V1,
@@ -1077,7 +1073,7 @@ mod tests {
         let proof = decoded.stark_proof.to_vec();
         assert!(!proof.is_empty());
         assert!(proof.len() <= super::super::wire::PQ_MASP_MAX_STARK_PROOF_BYTES_V1);
-        let proof_digest = goldilocks_digest384_frame_v1(
+        let proof_digest = privacy_outer_digest_frame_v1(
             PQ_MASP_DOMAINS_V1.digest_context,
             b"pq-masp-stark-kat-proof-v1",
             b"inner-proof",
@@ -1087,7 +1083,7 @@ mod tests {
             &[&proof],
         )
         .expect("inner proof digest");
-        let authorized_proof_digest = goldilocks_digest384_frame_v1(
+        let authorized_proof_digest = privacy_outer_digest_frame_v1(
             PQ_MASP_DOMAINS_V1.digest_context,
             b"pq-masp-stark-kat-proof-v1",
             b"authorized-proof",
@@ -1383,8 +1379,8 @@ mod tests {
         let mut transcript = TransparentTranscriptV1::new(
             PQ_MASP_DOMAINS_V1.digest_context,
             b"pq-masp-hostile-prover-v1",
-            &GoldilocksDigest384V1::new([5; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([6; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([5; 48]),
+            &PrivacyOuterDigestV1::from_bytes([6; 48]),
         )
         .expect("transcript");
         let copy_challenges =
@@ -1444,8 +1440,8 @@ mod tests {
         let mut transcript = TransparentTranscriptV1::new(
             PQ_MASP_DOMAINS_V1.digest_context,
             b"pq-masp-fixed-copy-hostile-v1",
-            &GoldilocksDigest384V1::new([7; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([8; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([7; 48]),
+            &PrivacyOuterDigestV1::from_bytes([8; 48]),
         )
         .expect("transcript");
         let challenges = derive_note_copy_challenges_v1(&mut transcript).expect("copy challenges");

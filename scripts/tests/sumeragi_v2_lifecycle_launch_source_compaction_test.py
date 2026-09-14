@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs"
 PROVIDER_PATHS = (
+    ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_source_test_helpers.rs",
     ROOT
     / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs",
     ROOT
@@ -29,17 +30,26 @@ PROVIDER_PATHS = (
 ROOT_SOURCE = SOURCE_PATH.read_text(encoding="utf-8")
 PROVIDER_SOURCES = tuple(path.read_text(encoding="utf-8") for path in PROVIDER_PATHS)
 PROVIDER_INCLUDES = tuple(f'include!("{path.name}");\n' for path in PROVIDER_PATHS)
-SOURCE = ROOT_SOURCE
-for provider_include, provider_source in zip(PROVIDER_INCLUDES, PROVIDER_SOURCES):
-    if SOURCE.count(provider_include) != 1:
-        raise AssertionError("lifecycle-launch tests lost an exact recovered-Fetch provider")
-    SOURCE = SOURCE.replace(provider_include, provider_source, 1)
+
+
+def expand_source_providers(root_source: str) -> str:
+    """Expand each explicitly reviewed helper/provider include exactly once."""
+
+    source = root_source
+    for provider_include, provider_source in zip(PROVIDER_INCLUDES, PROVIDER_SOURCES):
+        if source.count(provider_include) != 1:
+            raise AssertionError("lifecycle-launch tests lost an exact reviewed source provider")
+        source = source.replace(provider_include, provider_source, 1)
+    return source
+
+
+SOURCE = expand_source_providers(ROOT_SOURCE)
 GUARD_START = "#[test]\nfn launch_source_keeps_status_sealed_and_orders_store_transfer()"
 GUARD_END = (
     "#[test]\n"
     "fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit"
 )
-EXPECTED_FINGERPRINT = "1f13be2b2e6623c3b1efe13fc91701d065e956943d6eef3975aad3961d21f03a"
+EXPECTED_FINGERPRINT = "62e93216c5fc1a36f21cb18abf0e0101af5ad32d4356eb5c2ce428443019dc2b"
 
 
 def guarded_source(source: str = SOURCE) -> str:
@@ -163,6 +173,39 @@ def string_literals(body: str) -> tuple[str, ...]:
     return tuple(ast.literal_eval(match.group()) for match in RUST_STRING.finditer(body))
 
 
+
+def count_guard_arguments(body: str, source: str) -> tuple[str, int]:
+    """Read one exact count and its inline or consistently bound literal token.
+
+    This is a bounded reader for the sealed source assertions, not a Rust
+    expression evaluator. Computed, mutable, absent, or conflicting named
+    bindings fail closed; identical immutable bindings in separate guards agree.
+    """
+
+    identifier = r"[A-Za-z_][A-Za-z_0-9]*"
+    arguments = re.fullmatch(
+        rf"\s*{identifier}\s*,\s*({RUST_STRING.pattern}|{identifier})"
+        r"\s*,\s*(0|[1-9][0-9]*)\s*,?\s*",
+        body,
+    )
+    if arguments is None:
+        raise AssertionError("count guard must have one source, token, and exact integer")
+    token, count = arguments.groups()
+    if token.startswith('"'):
+        return ast.literal_eval(token), int(count)
+    declarations = re.findall(
+        rf"\blet\s+{re.escape(token)}\s*=\s*({RUST_STRING.pattern})\s*;",
+        source,
+    )
+    definitions = re.findall(rf"\blet\s+(?:mut\s+)?{re.escape(token)}\b", source)
+    if not declarations or len(declarations) != len(definitions):
+        raise AssertionError("named count token must have only immutable literal definitions")
+    values = {ast.literal_eval(value) for value in declarations}
+    if len(values) != 1:
+        raise AssertionError("named count token has conflicting literal definitions")
+    return values.pop(), int(count)
+
+
 def assert_region(source: str, start: str, end: str) -> str:
     """Reference the Rust helper's first-boundary region behavior."""
 
@@ -284,11 +327,7 @@ class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
     def test_exact_count_guards_are_preserved(self) -> None:
         actual: set[tuple[str, int]] = set()
         for body in call_bodies("assert_source_token_count"):
-            literals = string_literals(body)
-            count = re.search(r",\s*(\d+)\s*,?\s*$", body)
-            self.assertEqual(len(literals), 1)
-            self.assertIsNotNone(count)
-            actual.add((literals[0], int(count.group(1))))
+            actual.add(count_guard_arguments(body, guarded_source()))
         expected = {
             ("owner.launch(inputs)?", 1),
             ("set_v2_effect_completion_observer(", 1),
@@ -304,6 +343,59 @@ class LifecycleLaunchSourceCompactionTest(unittest.TestCase):
             ("output.abort_before_publication()", 2),
         }
         self.assertTrue(expected <= actual)
+
+    def test_shared_helper_provider_is_exact_and_cannot_be_omitted(self) -> None:
+        helper_include = PROVIDER_INCLUDES[0]
+        self.assertEqual(SOURCE.count("fn source_region<'a>"), 1)
+        self.assertNotIn(helper_include, SOURCE)
+        for changed in (
+            ROOT_SOURCE.replace(helper_include, "", 1),
+            ROOT_SOURCE.replace(helper_include, helper_include * 2, 1),
+        ):
+            with self.assertRaises(AssertionError):
+                expand_source_providers(changed)
+
+    def test_count_guard_arguments_reject_unresolved_or_computed_tokens(self) -> None:
+        self.assertEqual(count_guard_arguments('source, "fixed token", 2', ""), ("fixed token", 2))
+        self.assertEqual(
+            count_guard_arguments("source, token, 1", 'let token = "fixed token";'),
+            ("fixed token", 1),
+        )
+        self.assertEqual(
+            count_guard_arguments(
+                "source, token, 1",
+                'let token = "fixed token"; let token = "fixed token";',
+            ),
+            ("fixed token", 1),
+        )
+        for body, source in (
+            ("source, token, 1", ""),
+            ("source, token, 1", 'let token = "first"; let token = "second";'),
+            ("source, token, 1", 'let mut token = "fixed token";'),
+            ("source, token, 1", 'let token = "fixed token"; let token = make_token();'),
+            ("source, make_token(), 1", ""),
+            ('source, "fixed token", 01', ""),
+            ('source, "fixed token", 1 + 1', ""),
+            ('source, "fixed token", 1, extra', ""),
+        ):
+            with self.assertRaises(AssertionError):
+                count_guard_arguments(body, source)
+
+    def test_named_rollover_count_guards_keep_both_exact_source_owners(self) -> None:
+        source = guarded_source()
+        bodies = [body for body in call_bodies("assert_source_token_count") if "fenced_rollover" in body]
+        self.assertEqual(
+            {compact_rust(body) for body in bodies},
+            {"terminal_tail,fenced_rollover,1", "source,fenced_rollover,1"},
+        )
+        self.assertEqual(len(bodies), 2)
+        self.assertEqual(len(re.findall(r"\blet\s+fenced_rollover\s*=", source)), 2)
+        expected = (
+            "if rollover_ready {\n            let Some(cut) = terminal_finalization_cut.as_ref() else {",
+            1,
+        )
+        for body in bodies:
+            self.assertEqual(count_guard_arguments(body, source), expected)
 
     def test_reference_helpers_reject_source_mutations(self) -> None:
         fixture = "start required first middle second end"

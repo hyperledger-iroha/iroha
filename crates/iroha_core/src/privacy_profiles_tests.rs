@@ -252,16 +252,16 @@ mod tests {
     fn semantic_parameter_labels_and_framed_note_profiles_cannot_drift() {
         assert_eq!(
             IVM_PRIVATE_NOTE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-poseidon-x7-digest384-proof-managed-note-stark+private-note-vm16x8-tree32-v1"
+            b"goldilocks-sha3-384-proof-managed-note-stark+private-note-vm16x8-tree32-v1"
         );
         assert_eq!(
             PQ_MASP_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-poseidon-x7-digest384-proof-managed-note-stark+pq-masp+mldsa65+mlkem768-v1"
+            b"goldilocks-sha3-384-proof-managed-note-stark+pq-masp+mldsa65+mlkem768-v1"
         );
         #[cfg(feature = "zk-stark")]
         assert_eq!(
             ZK_ACE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-poseidon-x7-digest384-fp4-binary-fri8-q136-zk-ace-v1"
+            b"goldilocks-sha3-384-fp4-binary-fri8-q136+poseidon-x7-identity-zk-ace-v1"
         );
         for stale_geometry in [
             b"mask255".as_slice(),
@@ -555,11 +555,11 @@ mod tests {
             assert_eq!(first, second);
             assert_eq!(
                 first.proof_system_id,
-                PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64
+                PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks
             );
             assert_eq!(
                 first.engine_id,
-                PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64
+                PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri
             );
             assert_eq!(first.protocol_limits, expected_limits);
             for digest in [
@@ -1215,7 +1215,7 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "zk-stark")]
-    fn zk_ace_final_digest384_profile_stays_unavailable_without_qrom_certification() {
+    fn zk_ace_sha3_outer_profile_stays_unavailable_without_qrom_certification() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
@@ -1553,15 +1553,12 @@ mod tests {
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| {
-                    record.proof_system_id =
-                        PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64
+                    record.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks
                 },
             ),
             (
                 CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
-                |record| {
-                    record.engine_id = PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64
-                },
+                |record| record.engine_id = PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
             ),
             (
                 CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
@@ -1785,11 +1782,11 @@ mod tests {
         }
         assert_eq!(
             profile.proof_system_id,
-            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64
+            PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks
         );
         assert_eq!(
             profile.engine_id,
-            PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64
+            PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri
         );
         assert_eq!(
             profile.protocol_limits,

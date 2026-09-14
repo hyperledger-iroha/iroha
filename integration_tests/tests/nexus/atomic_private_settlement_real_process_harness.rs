@@ -5391,13 +5391,7 @@ fn prepare_fault_bundle(
         .zip(committees)
         .enumerate()
         .map(|(ordinal, (leg, committee))| {
-            prepare_leg(
-                AtomicPrivateSettlementProverOptionsV1::CPU,
-                ordinal,
-                leg,
-                &manifest,
-                committee.authority.digest()?,
-            )
+            prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)
         })
         .collect::<Result<Vec<_>>>()?;
     let materials = provisional_materials(manifest.clone(), &prepared, committees)?;
@@ -8752,7 +8746,6 @@ fn run_real_process_leakage_campaign(
             let mut capsule_rng = rand::rngs::OsRng;
             if ordinal == 0 {
                 prepare_leg_with_private_data_and_rngs(
-                    AtomicPrivateSettlementProverOptionsV1::CPU,
                     ordinal,
                     leg,
                     &manifest,
@@ -8764,7 +8757,6 @@ fn run_real_process_leakage_campaign(
             } else {
                 let private_data = default_private_settlement_leg_data(ordinal);
                 prepare_leg_with_private_data_and_rngs(
-                    AtomicPrivateSettlementProverOptionsV1::CPU,
                     ordinal,
                     leg,
                     &manifest,
@@ -9372,7 +9364,6 @@ fn run_real_process_private_benchmark(
         .enumerate()
         .map(|(ordinal, (leg, committee))| {
             prepare_leg_with_private_data(
-                AtomicPrivateSettlementProverOptionsV1::CPU,
                 ordinal,
                 leg,
                 &manifest,

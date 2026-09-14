@@ -1,7 +1,7 @@
 //! Exact DER STARK arithmetic, schedule and boundary regression tests.
 
 use super::*;
-use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
+use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use sha2::{Digest as _, Sha256};
 fn challenges() -> ZkX509DerStarkChallengesV1 {
     ZkX509DerStarkChallengesV1 {
@@ -35,11 +35,16 @@ fn low_degree_aux(
     try_low_degree_aux(base, fixed).expect("low-degree auxiliaries")
 }
 fn transcript_with_base_root(root_word: u64) -> TransparentTranscriptV1 {
-    let profile = GoldilocksDigest384V1::new([0x41; 6]).expect("profile digest");
-    let public = GoldilocksDigest384V1::new([0x83; 6]).expect("public digest");
-    let root = GoldilocksDigest384V1::new([root_word; 6])
-        .expect("base root")
-        .to_le_bytes();
+    let profile = PrivacyOuterDigestV1::from_bytes([0x41; 48]);
+    let public = PrivacyOuterDigestV1::from_bytes([0x83; 48]);
+    let root = PrivacyOuterDigestV1::from_bytes(
+        root_word
+            .to_be_bytes()
+            .repeat(6)
+            .try_into()
+            .expect("48 fixture bytes"),
+    )
+    .to_bytes();
     let mut transcript = TransparentTranscriptV1::new(
         super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-challenge-test-suite-v1",

@@ -45,7 +45,7 @@ const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U32 = 0xffff_ffff;
 const POLICY_DELAY_BLOCKS_V1 = 300n;
 const PROTOCOL_BINDINGS = Object.freeze({
-  "zk-ace-pq-authorization-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "zk-ace-pq-authorization-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   "anonymous-pgc-k-out-of-n-v1": ["anonymous-pgc-p256", "native-anonymous-pgc-p256"],
   "verange-transparent-range-v1": ["iroha-verange-p256", "native-verange-p256"],
   "iroha-zk-ams-v1": [
@@ -53,13 +53,13 @@ const PROTOCOL_BINDINGS = Object.freeze({
     "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
   ],
   "vega-existing-credential-zk-v1": ["vega-neutron-nova-spartan-hyrax-t256", "native-vega"],
-  "iroha-zk-x509-stark-p256-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "iroha-zk-x509-stark-p256-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   "iroha-jindo-polynomial-commitment-v1": ["jindo-polynomial-commitment", "native-jindo"],
   "iroha-bootle-lantern-anoncred-v1": ["lantern-lnp22-module-linear-norm", "native-lantern-lnp22"],
   "orchard-halo2-actions-v1": ["halo2-ipa-pasta", "native-halo2-orchard"],
   "monero-fcmp-plus-plus-v1": ["fcmp-plus-plus-curve-tree-bulletproofs", "native-fcmp-plus-plus"],
-  "iroha-ivm-private-note-stark-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
-  "pq-masp-stark-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "iroha-ivm-private-note-stark-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
+  "pq-masp-stark-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
 });
 const CONSENSUS_LIMIT_KEYS = Object.freeze([
   "max_actions_per_transaction",

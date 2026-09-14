@@ -105,18 +105,18 @@ const OPERATION_TUPLES = Object.freeze([
   ["pq_masp_note_action_v1", "note_action", 31],
 ]);
 const BINDING_TUPLES = Object.freeze([
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   ["anonymous-pgc-p256", "native-anonymous-pgc-p256"],
   ["iroha-verange-p256", "native-verange-p256"],
   ["zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512", "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"],
   ["vega-neutron-nova-spartan-hyrax-t256", "native-vega"],
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   ["jindo-polynomial-commitment", "native-jindo"],
   ["lantern-lnp22-module-linear-norm", "native-lantern-lnp22"],
   ["halo2-ipa-pasta", "native-halo2-orchard"],
   ["fcmp-plus-plus-curve-tree-bulletproofs", "native-fcmp-plus-plus"],
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
 ]);
 
 function tagged(protocol) {
@@ -812,4 +812,18 @@ test("Exact12 transport ignores mutable client and static normalization override
       ToriiClient._normalizePrivateKey = originalKey;
     }
   });
+});
+
+
+test("privacy STARK capability bindings reject a different outer suite", async () => {
+  for (const [key, field, label] of [
+    ["proof_system_id", "proof_system", "stark-fri-poseidon-x7-goldilocks-6x64-v1"],
+    ["engine_id", "engine", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ]) {
+    const payload = qualifiedManifestPayload();
+    payload.qualification.release_manifest.protocols[0][key][field] = label;
+    await withNative(fakeNative(payload), async () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+    });
+  }
 });

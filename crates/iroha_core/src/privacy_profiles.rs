@@ -287,24 +287,24 @@ const FCMP_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-diges
 const FCMP_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"IFCE|nonce24|xchacha20poly1305[IFN1+output-id32+O32+I32+C32+amount-u64le+commitment-mask32+spend-x32+output-y32]|x25519|sha256-domain-kdf|aad:pool-id+recipient-id+ephemeral-key+output-id+O+I+C";
 const IVM_PRIVATE_NOTE_PROTOCOL_LABEL_V1: &[u8] = b"iroha-ivm-private-note-stark-v1";
 const IVM_PRIVATE_NOTE_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"goldilocks-poseidon-x7-digest384-proof-managed-note-stark+private-note-vm16x8-tree32-v1";
+    b"goldilocks-sha3-384-proof-managed-note-stark+private-note-vm16x8-tree32-v1";
 const IVM_PRIVATE_NOTE_PROOF_WIRE_LABEL_V1: &[u8] =
-    b"IPS1:u16-version:poseidon-x7-goldilocks-digest384-merkle+fri:strict-exact:v1";
+    b"IPS1:u16-version:sha3-384-opaque48-merkle+fri:strict-exact:v1";
 const IVM_PRIVATE_NOTE_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
-    b"iroha-native-rust:first-release:private-note-vm+poseidon-x7-digest384-aggregate-stark:v1";
+    b"iroha-native-rust:first-release:private-note-vm+sha3-384-aggregate-stark:v1";
 const PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1: &[u8] = b"norito:iroha.privacy.native-consensus-binding.v1|fields:chain-id+genesis-hash32+action-index-u32+transaction-intent-digest32+parameter-id32+parameter-digest32+verifier-digest32+statement-schema-digest32+engine-manifest-digest32|digest:blake3(iroha:privacy:native-consensus-binding:v1+canonical-length-u64le+canonical-norito)";
-const IVM_PRIVATE_NOTE_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:poseidon-x7-goldilocks-digest384-frame(ivm-private-note-stark-public-input-with-consensus-binding-v1+canonical-statement+native-consensus-binding-digest32)";
+const IVM_PRIVATE_NOTE_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:privacy-sha3-384-be-v1-frame(ivm-private-note-stark-public-input-with-consensus-binding-v1+canonical-statement+native-consensus-binding-digest32)";
 const IVM_PRIVATE_NOTE_FRONTIER_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|root-role:program-state|program-id:32|epoch:u64|root:sha256-depth32|tree-size:u64|frontier[ordered-option<node32>]";
 const IVM_PRIVATE_NOTE_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|reserve-account:norito|program-id:32|anchor:32|anchor-epoch:u64|current-root:32|current-epoch:u64|validator-derived-successor-frontier|ordered-nullifiers[32]|ordered-output-commitments[32]|value-balance:direction+u128|expiry-height:u64";
 const IVM_PRIVATE_NOTE_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"IPNE|nonce24|xchacha20poly1305[IPW1+authority32+value-u128le+rho32+rseed32+program-state32+memo32]|x25519|sha256-domain-kdf|aad:pool-id+recipient-id+output-commitment";
 const PQ_MASP_PROTOCOL_LABEL_V1: &[u8] = b"pq-masp-stark-v1";
 const PQ_MASP_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"goldilocks-poseidon-x7-digest384-proof-managed-note-stark+pq-masp+mldsa65+mlkem768-v1";
+    b"goldilocks-sha3-384-proof-managed-note-stark+pq-masp+mldsa65+mlkem768-v1";
 const PQ_MASP_PROOF_WIRE_LABEL_V1: &[u8] =
     b"PQA1:u32be-inner-len:mldsa65-pk1952+signature3309+PQS1-inner-stark:strict-exact:v1";
 const PQ_MASP_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
-    b"iroha-native-rust:first-release:pq-masp+mldsa65+mlkem768+xchacha20poly1305+poseidon-x7-digest384-aggregate-stark:v1";
-const PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:poseidon-x7-goldilocks-digest384-frame(pq-masp-stark-public-input-with-consensus-binding-v1+canonical-statement+native-consensus-binding-digest32)";
+    b"iroha-native-rust:first-release:pq-masp+mldsa65+mlkem768+xchacha20poly1305+sha3-384-aggregate-stark:v1";
+const PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:privacy-sha3-384-be-v1-frame(pq-masp-stark-public-input-with-consensus-binding-v1+canonical-statement+native-consensus-binding-digest32)";
 const PQ_MASP_FRONTIER_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|root-role:note-commitment-anchor|epoch:u64|root:sha256-depth32|tree-size:u64|frontier[ordered-option<node32>]";
 const PQ_MASP_AUTHORIZATION_SCHEMA_V1: &[u8] = b"authorization-context:pq-masp-stark-v1|message:sha256-domain+statement-digest32+native-consensus-binding-digest32+inner-length-u64be+inner-sha256|authorization-key-digest:statement-bound+derived-from-canonical-pk1952|mldsa65:canonical-pk1952+canonical-signature3309|outer-wire:PQA1+u32be-inner-len+pk+signature+PQS1";
 const PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|current-root:32|current-epoch:u64|next-root:32|next-epoch:u64|transition:pq-masp{ordered-nullifiers[32]+ordered-output-commitments[32]+validator-derived-successor-frontier}|value-balance:none";
@@ -323,13 +323,13 @@ const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|c
 const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v1";
 #[cfg(feature = "zk-stark")]
 const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"goldilocks-poseidon-x7-digest384-fp4-binary-fri8-q136-zk-ace-v1";
+    b"goldilocks-sha3-384-fp4-binary-fri8-q136+poseidon-x7-identity-zk-ace-v1";
 const ZK_X509_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"goldilocks-fp4-sha256-p256-rfc5280-fixed-capacity-v1";
+    b"goldilocks-fp4-outer-sha3-384-sha256-p256-rfc5280-fixed-capacity-v1";
 const ZK_X509_PROOF_WIRE_LABEL_V1: &[u8] =
     b"X5S1:exact-one-X5M1-main+exact-one-X5C1-compact-ca:strict-exact:no-legacy:v1";
 const ZK_X509_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
-    b"iroha-native-rust:original-transparent-x509-p256-sha256-stark:first-release:no-trusted-setup:no-legacy:v1";
+    b"iroha-native-rust:original-transparent-x509-p256-sha256-stark:outer-sha3-384:first-release:no-trusted-setup:no-legacy:v1";
 const ZK_X509_RUNTIME_STATE_SCHEMA_V1: &[u8] =
     b"trusted-state:active-self-digested-trust-anchor-revision+active-self-digested-certificate-policy-revision+active-current-complete-signed-crl-revision+current-retained-ca-membership-root-head+certificate-nullifier-replay-set|trusted-block-time+taira-consensus-limits|verifier-owned-rfc-public-input";
 const ANONYMOUS_PGC_ACCOUNT_ROOT_SCHEMA_V1: &[u8] = b"namespace_len:u64le|namespace:norito|epoch:u64le|total_supply:u32le|account_count:u32le|accounts[public_key:33,cipher_left:33,cipher_right:33]";
@@ -650,8 +650,8 @@ fn zk_x509_profile_material_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
         &[
             ZK_X509_SUITE_V1,
             ZK_X509_IMPLEMENTATION_PROVENANCE_V1,
-            b"proof-system:stark-fri-poseidon-x7-goldilocks-6x64-v1",
-            b"engine:native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+            b"proof-system:stark-fri-sha3-384-goldilocks-v1",
+            b"engine:native-goldilocks-sha3-384-stark-fri-v1",
             ZK_X509_PARAMETER_SET_LABEL_V1,
             ZK_X509_SOURCE_PROFILE_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
@@ -673,8 +673,8 @@ fn zk_x509_profile_material_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
     );
     Ok(CompiledPrivacyProfileV1 {
         protocol_id,
-        proof_system_id: PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-        engine_id: PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
+        proof_system_id: PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+        engine_id: PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
         parameter_id: PrivacyParameterIdV1::new(parameter_id),
         parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
@@ -702,8 +702,8 @@ fn compiled_ivm_private_note_profile_v1_with_randomness_policies(
     .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
     let geometry_digest = proof_managed_note_stark_geometry_digest_v1(PRIVATE_NOTE_DOMAINS_V1)
         .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
-    let profile_digest_bytes = profile_digest.to_le_bytes();
-    let geometry_digest_bytes = geometry_digest.to_le_bytes();
+    let profile_digest_bytes = profile_digest.to_bytes();
+    let geometry_digest_bytes = geometry_digest.to_bytes();
     if PRIVATE_NOTE_MAX_INPUTS_V1 != IVM_PRIVATE_NOTE_MAX_INPUTS_V1 as usize
         || PRIVATE_NOTE_MAX_OUTPUTS_V1 != IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1 as usize
         || IVM_PRIVATE_NOTE_MAX_INPUTS_V1 == 0
@@ -828,8 +828,8 @@ fn compiled_ivm_private_note_profile_v1_with_randomness_policies(
         &[
             IVM_PRIVATE_NOTE_PROTOCOL_LABEL_V1,
             IVM_PRIVATE_NOTE_IMPLEMENTATION_PROVENANCE_V1,
-            b"proof-system:stark-fri-poseidon-x7-goldilocks-6x64-v1",
-            b"engine:native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+            b"proof-system:stark-fri-sha3-384-goldilocks-v1",
+            b"engine:native-goldilocks-sha3-384-stark-fri-v1",
             IVM_PRIVATE_NOTE_PARAMETER_SET_LABEL_V1,
             IVM_PRIVATE_NOTE_PROOF_WIRE_LABEL_V1,
             PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
@@ -864,8 +864,8 @@ fn compiled_ivm_private_note_profile_v1_with_randomness_policies(
     );
     Ok(CompiledPrivacyProfileV1 {
         protocol_id,
-        proof_system_id: PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-        engine_id: PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
+        proof_system_id: PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+        engine_id: PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
         parameter_id: PrivacyParameterIdV1::new(parameter_id),
         parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
@@ -898,8 +898,8 @@ fn compiled_pq_masp_profile_v1_with_schemas(
     .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
     let geometry_digest = proof_managed_note_stark_geometry_digest_v1(PQ_MASP_DOMAINS_V1)
         .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
-    let profile_digest_bytes = profile_digest.to_le_bytes();
-    let geometry_digest_bytes = geometry_digest.to_le_bytes();
+    let profile_digest_bytes = profile_digest.to_bytes();
+    let geometry_digest_bytes = geometry_digest.to_bytes();
     if PQ_MASP_INPUT_BOUND_V1 != PQ_MASP_MAX_INPUTS_V1 as usize
         || PQ_MASP_OUTPUT_BOUND_V1 != PQ_MASP_MAX_OUTPUTS_V1 as usize
         || PQ_MASP_MAX_INPUTS_V1 == 0
@@ -1039,8 +1039,8 @@ fn compiled_pq_masp_profile_v1_with_schemas(
         &[
             PQ_MASP_PROTOCOL_LABEL_V1,
             PQ_MASP_IMPLEMENTATION_PROVENANCE_V1,
-            b"proof-system:stark-fri-poseidon-x7-goldilocks-6x64-v1",
-            b"engine:native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+            b"proof-system:stark-fri-sha3-384-goldilocks-v1",
+            b"engine:native-goldilocks-sha3-384-stark-fri-v1",
             PQ_MASP_PARAMETER_SET_LABEL_V1,
             PQ_MASP_PROOF_WIRE_LABEL_V1,
             PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
@@ -1081,8 +1081,8 @@ fn compiled_pq_masp_profile_v1_with_schemas(
     );
     Ok(CompiledPrivacyProfileV1 {
         protocol_id,
-        proof_system_id: PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-        engine_id: PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
+        proof_system_id: PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+        engine_id: PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
         parameter_id: PrivacyParameterIdV1::new(parameter_id),
         parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
@@ -1592,8 +1592,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_PROTOCOL_LABEL_V1,
             ZK_ACE_SOURCE_PROFILE_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
-            b"proof-system:stark-fri-poseidon-x7-goldilocks-6x64-v1",
-            b"engine:native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+            b"proof-system:stark-fri-sha3-384-goldilocks-v1",
+            b"engine:native-goldilocks-sha3-384-stark-fri-v1",
             ZK_ACE_PARAMETER_SET_LABEL_V1,
             ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes(),
             ZK_ACE_PROOF_WIRE_V1,
@@ -1614,8 +1614,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
     );
     Ok(CompiledPrivacyProfileV1 {
         protocol_id,
-        proof_system_id: PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-        engine_id: PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
+        proof_system_id: PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+        engine_id: PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
         parameter_id: PrivacyParameterIdV1::new(parameter_id),
         parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),

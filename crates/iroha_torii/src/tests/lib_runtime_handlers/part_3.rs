@@ -3670,7 +3670,10 @@ fn queue_plan_synced_catch_up_hint_requires_bounded_unambiguous_response() {
         }],
         body: Vec::new(),
     };
-    assert!(super::queue_plan_synced_authority_needs_catch_up(&valid));
+    assert_eq!(
+        super::queue_plan_synced_authority_retry_reason(&valid),
+        Some(super::QueuePlanSyncedAuthorityRetryReason::ContextCatchUp)
+    );
     for variant in 0..7 {
         let mut invalid = valid.clone();
         match variant {
@@ -3693,7 +3696,7 @@ fn queue_plan_synced_catch_up_hint_requires_bounded_unambiguous_response() {
             _ => unreachable!(),
         }
         assert!(
-            !super::queue_plan_synced_authority_needs_catch_up(&invalid),
+            super::queue_plan_synced_authority_retry_reason(&invalid).is_none(),
             "variant {variant}"
         );
     }
@@ -4229,4 +4232,316 @@ async fn late_physical_admission_preserves_durability_and_reports_reconciliation
         Some(exact)
     );
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
+}
+
+#[cfg(feature = "connect")]
+fn queue_plan_capacity_retry_fixture() -> (
+    ToriiProxyRequestV1,
+    Vec<PeerId>,
+    Vec<ToriiProxyHttpResponseV1>,
+    super::QueuePlanSyncedAcceptanceExpectation,
+) {
+    let (_app, mut request) =
+        incoming_proxy_submit_fixture(0xe1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    let signers = (0_u8..4)
+        .map(|index| checked_torii_test_ed25519_keypair(0xe2 + index, "capacity retry authority"))
+        .collect::<Vec<_>>();
+    let authorities = bind_queue_plan_synced_test_authorities(&mut request, &signers);
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(expected.durability_threshold, 2);
+    let snapshots = (0..2)
+        .map(|index| {
+            queue_plan_synced_test_certificate_snapshot(
+                &request,
+                vec![exact_queue_plan_synced_test_receipt(
+                    &request,
+                    &signers[index],
+                    47_000 + index as u64,
+                )],
+            )
+        })
+        .collect();
+    (request, authorities[..2].to_vec(), snapshots, expected)
+}
+
+#[cfg(feature = "connect")]
+fn queue_plan_capacity_retry_snapshot() -> ToriiProxyHttpResponseV1 {
+    ToriiProxyHttpResponseV1 {
+        status_code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+        headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+            name: "x-iroha-reject-code".to_owned(),
+            value: b"proxy_capacity_exceeded".to_vec(),
+        }],
+        body: Vec::new(),
+    }
+}
+
+#[cfg(feature = "connect")]
+#[test]
+fn queue_plan_synced_capacity_retry_requires_exact_bounded_rejection() {
+    let valid = queue_plan_capacity_retry_snapshot();
+    assert_eq!(
+        super::queue_plan_synced_authority_retry_reason(&valid),
+        Some(super::QueuePlanSyncedAuthorityRetryReason::ProxyCapacity)
+    );
+    for variant in 0..9 {
+        let mut invalid = valid.clone();
+        match variant {
+            0 => invalid.status_code = 202,
+            1 => invalid.status_code = 503,
+            2 => invalid.headers.clear(),
+            3 => invalid.headers[0].value = b"rate_limited".to_vec(),
+            4 => invalid.headers[0].value = b"proxy_capacity_exceeded ".to_vec(),
+            5 => invalid
+                .headers
+                .push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                    name: "X-Iroha-Reject-Code".to_owned(),
+                    value: valid.headers[0].value.clone(),
+                }),
+            6 => invalid.body = vec![0; QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1 + 1],
+            7 => invalid
+                .headers
+                .push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                    name: "content-encoding".to_owned(),
+                    value: b"gzip".to_vec(),
+                }),
+            8 => invalid
+                .headers
+                .push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                    name: "content-length".to_owned(),
+                    value: b"10".to_vec(),
+                }),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            super::queue_plan_synced_authority_retry_reason(&invalid),
+            None,
+            "variant {variant} must not authorize a retry"
+        );
+    }
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(start_paused = true)]
+async fn queue_plan_synced_capacity_recovery_retains_distinct_claim_and_physical_permit() {
+    let (mut request, authorities, snapshots, expected) = queue_plan_capacity_retry_fixture();
+    request.deadline_unix_ms = super::torii_proxy_now_unix_ms().unwrap() + 30_000;
+    let request_id = request.request_id;
+    let deadline = request.deadline_unix_ms;
+    let binding = expected.admission_binding.clone();
+    let attempts = Arc::new(Mutex::new([0_usize; 2]));
+    let counts = Arc::clone(&attempts);
+    let capacity = Arc::new(tokio::sync::Semaphore::new(1));
+    let physical_owner = Arc::new(Mutex::new(Some(
+        Arc::clone(&capacity).try_acquire_owned().unwrap(),
+    )));
+    let owned_capacity = Arc::clone(&capacity);
+    let held_owner = Arc::clone(&physical_owner);
+    let response = super::execute_torii_proxy_request_across_candidates(
+        authorities
+            .iter()
+            .cloned()
+            .map(ToriiProxyCandidate::P2p)
+            .collect(),
+        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::from_millis(50),
+        move |candidate, request| {
+            assert_eq!(request.request_id, request_id);
+            assert_eq!(request.deadline_unix_ms, deadline);
+            assert_eq!(
+                super::queue_plan_synced_acceptance_expectation(&request)
+                    .unwrap()
+                    .unwrap()
+                    .admission_binding,
+                binding
+            );
+            let index = authorities
+                .iter()
+                .position(|peer| peer == candidate.peer_id())
+                .unwrap();
+            let mut counts = counts.lock().unwrap();
+            counts[index] += 1;
+            let mut permit = None;
+            let snapshot = if index == 0 {
+                snapshots[0].clone()
+            } else {
+                match Arc::clone(&owned_capacity).try_acquire_owned() {
+                    Ok(acquired) => {
+                        assert_eq!(
+                            counts[1], 3,
+                            "physical capacity must release before recovery"
+                        );
+                        permit = Some(acquired);
+                        snapshots[1].clone()
+                    }
+                    Err(_) => {
+                        assert!(counts[1] <= 2);
+                        if counts[1] == 2 {
+                            // Deterministic physical completion, independent of timer scheduling.
+                            drop(held_owner.lock().unwrap().take().unwrap());
+                        }
+                        queue_plan_capacity_retry_snapshot()
+                    }
+                }
+            };
+            async move {
+                let _response_owner = permit;
+                Ok::<_, ToriiProxyAttemptError>(snapshot)
+            }
+        },
+        |_request_id| async {},
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        [1, 3],
+        "retain the first distinct attestation"
+    );
+    assert!(physical_owner.lock().unwrap().is_none());
+    assert_eq!(capacity.available_permits(), 1);
+    let bytes = torii_body_bytes(response, "capacity recovery quorum").await;
+    let certificate: QueuePlanAdmissionCertificateV1 = norito::decode_from_bytes(&bytes).unwrap();
+    assert_eq!(certificate.binding, expected.admission_binding);
+    assert_eq!(certificate.attestations.len(), 2);
+    assert!(
+        certificate.attestations[0].validator_index < certificate.attestations[1].validator_index
+    );
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(start_paused = true)]
+async fn queue_plan_synced_capacity_exhaustion_preserves_original_deadline_and_partial_claim() {
+    let (mut request, authorities, snapshots, expected) = queue_plan_capacity_retry_fixture();
+    request.deadline_unix_ms = super::torii_proxy_now_unix_ms().unwrap() + 5_000;
+    let request_id = request.request_id;
+    let deadline = request.deadline_unix_ms;
+    let attempts = Arc::new(Mutex::new([0_usize; 2]));
+    let counts = Arc::clone(&attempts);
+    let completed = Arc::new(Mutex::new(0_usize));
+    let completion_count = Arc::clone(&completed);
+    let started = tokio::time::Instant::now();
+    let response = tokio::time::timeout(
+        Duration::from_secs(6),
+        super::execute_torii_proxy_request_across_candidates(
+            authorities
+                .iter()
+                .cloned()
+                .map(ToriiProxyCandidate::P2p)
+                .collect(),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            request,
+            TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+            Duration::from_millis(50),
+            move |candidate, request| {
+                assert_eq!(request.request_id, request_id);
+                assert_eq!(request.deadline_unix_ms, deadline);
+                let index = authorities
+                    .iter()
+                    .position(|peer| peer == candidate.peer_id())
+                    .unwrap();
+                counts.lock().unwrap()[index] += 1;
+                let snapshot = if index == 0 {
+                    snapshots[0].clone()
+                } else {
+                    queue_plan_capacity_retry_snapshot()
+                };
+                async move { Ok::<_, ToriiProxyAttemptError>(snapshot) }
+            },
+            move |completed_id| {
+                assert_eq!(completed_id, request_id);
+                *completion_count.lock().unwrap() += 1;
+                async {}
+            },
+        ),
+    )
+    .await
+    .expect("persistent capacity cannot renew the original deadline");
+    assert!(started.elapsed() <= Duration::from_secs(5));
+    let counts = *attempts.lock().unwrap();
+    assert_eq!(counts[0], 1);
+    assert!(
+        (2..=101).contains(&counts[1]),
+        "bounded backoff, retained partial claim: {counts:?}"
+    );
+    assert_eq!(*completed.lock().unwrap(), 1);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers()["x-iroha-reject-code"],
+        super::QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE
+    );
+    assert_eq!(
+        response.headers()["x-iroha-entrypoint-hash"],
+        expected.entrypoint_hash.to_string()
+    );
+    assert_eq!(
+        response.headers()["x-iroha-signed-transaction-hash"],
+        expected.signed_transaction_hash.unwrap().to_string()
+    );
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(start_paused = true)]
+async fn queue_plan_synced_other_rejections_do_not_rearm_partial_admission() {
+    let (request, authorities, snapshots, _expected) = queue_plan_capacity_retry_fixture();
+    for variant in 0..5 {
+        let mut request = request.clone();
+        request.deadline_unix_ms = super::torii_proxy_now_unix_ms().unwrap() + 30_000;
+        let mut rejected = queue_plan_capacity_retry_snapshot();
+        match variant {
+            0 => rejected.headers[0].value = b"rate_limited".to_vec(),
+            1 => rejected.headers.clear(),
+            2 => rejected.headers.push(rejected.headers[0].clone()),
+            3 => rejected.status_code = StatusCode::FORBIDDEN.as_u16(),
+            4 => {
+                rejected.status_code = StatusCode::SERVICE_UNAVAILABLE.as_u16();
+                rejected.headers[0].value = b"route_unavailable".to_vec();
+            }
+            _ => unreachable!(),
+        }
+        let attempts = Arc::new(Mutex::new([0_usize; 2]));
+        let counts = Arc::clone(&attempts);
+        let selected = authorities.clone();
+        let receipt = snapshots[0].clone();
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            super::execute_torii_proxy_request_across_candidates(
+                authorities
+                    .iter()
+                    .cloned()
+                    .map(ToriiProxyCandidate::P2p)
+                    .collect(),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                request,
+                TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+                Duration::from_millis(50),
+                move |candidate, _request| {
+                    let index = selected
+                        .iter()
+                        .position(|peer| peer == candidate.peer_id())
+                        .unwrap();
+                    counts.lock().unwrap()[index] += 1;
+                    let snapshot = if index == 0 {
+                        receipt.clone()
+                    } else {
+                        rejected.clone()
+                    };
+                    async move { Ok::<_, ToriiProxyAttemptError>(snapshot) }
+                },
+                |_request_id| async {},
+            ),
+        )
+        .await
+        .expect("non-transient rejection must not restart the retry loop");
+        assert_eq!(*attempts.lock().unwrap(), [1, 1], "variant {variant}");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers()["x-iroha-reject-code"],
+            super::QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE
+        );
+    }
 }

@@ -31,7 +31,7 @@ fn canonical_multiproof_matches_small_trees_and_rejects_every_frontier_mutation(
     let leaves = (0_u8..16)
         .enumerate()
         .map(|(index, value)| {
-            goldilocks_digest384_frame_v1(
+            privacy_outer_digest_frame_v1(
                 ZK_X509_DIGEST_CONTEXT_V1,
                 b"iroha:privacy:zk-x509:test:multiproof-leaf:v1",
                 b"leaf",
@@ -43,8 +43,7 @@ fn canonical_multiproof_matches_small_trees_and_rejects_every_frontier_mutation(
             .expect("leaf")
         })
         .collect::<Vec<_>>();
-    let tree = GoldilocksMerkleTreeV1::from_leaves(
-        fastpq_prover::DigestExecutionV1::Cpu,
+    let tree = PrivacyOuterMerkleTreeV1::from_leaves(
         leaves.clone(),
         ZK_X509_DIGEST_CONTEXT_V1,
         b"iroha:privacy:zk-x509:test:multiproof-node:v1",
@@ -72,13 +71,9 @@ fn canonical_multiproof_matches_small_trees_and_rejects_every_frontier_mutation(
         .expect("valid multiproof");
         for position in 0..frontier.len() {
             let mut changed = frontier.clone();
-            let mut words = changed[position].words();
-            words[0] = F::canonical(words[0])
-                .expect("digest lane is canonical")
-                .add(F::ONE)
-                .value();
-            changed[position] =
-                GoldilocksDigest384V1::new(words).expect("mutated digest remains canonical");
+            let mut words = changed[position].to_bytes();
+            words[0] ^= 1;
+            changed[position] = PrivacyOuterDigestV1::from_bytes(words);
             assert!(
                 verify_canonical_multiproof_v1(
                     b"iroha:privacy:zk-x509:test:multiproof-node:v1",
@@ -1116,7 +1111,7 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let shape = ZkX509DerStarkShapeV1;
     let digest = der_public_digest_v1(&shape).expect("DER public digest");
     assert_eq!(
-        hex::encode(digest.to_le_bytes()),
+        hex::encode(digest.to_bytes()),
         "5ac7929bc9b9b195eb567627116decf7459916debe2a4288ba3fe3b04123808029552fe943045462caca0e4743546093"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {

@@ -4,6 +4,7 @@
 //! of the private module grouping used to maintain these DTOs.
 mod common;
 mod consensus;
+mod failure;
 mod gossip;
 mod governance;
 mod nexus;
@@ -11,6 +12,7 @@ mod taikai;
 
 pub use common::{BuildStatus, CryptoStatus, Halo2Status, StackStatus, Status, Uptime};
 pub use consensus::SumeragiConsensusStatus;
+pub use failure::StatusFailureReason;
 pub use gossip::{DaReceiptCursorStatus, TxGossipCaps, TxGossipSnapshot, TxGossipStatus};
 pub use governance::{
     GovernanceManifestActivation, GovernanceManifestAdmissionCounters,

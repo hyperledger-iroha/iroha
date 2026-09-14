@@ -2600,6 +2600,18 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
             "tokio::time::timeout(remaining, state.wait_for_committed_height(required_height))",
         ),
     ),
+    (
+        "crates/iroha_core/src/state.rs",
+        "fn",
+        "validate_authenticated_queue_plan_admission_for_carrier_in_view",
+        (
+            "state_view: &impl StateReadOnly",
+            "state_view.block_hashes().get(index).copied()",
+            "exact_predecessor != context.predecessor_block_hash",
+            "queue_plan_authoritative_peers_in_view_at_height(",
+            "authority.as_ref().ok() != Some(&route.validator_set)",
+        ),
+    ),
 )
 QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
     (

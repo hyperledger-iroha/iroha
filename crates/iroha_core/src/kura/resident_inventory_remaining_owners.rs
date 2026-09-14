@@ -20,7 +20,7 @@ flat_resident_owner!(VecDeque<VerifiedV2FinalityCacheEntry>, ResidentVerificatio
 flat_resident_owner!(VecDeque<PipelineRecoverySidecar>, ResidentQueue);
 flat_resident_owner!(VecDeque<QueuedFastpqProofSnapshot>, ResidentQueue);
 flat_resident_owner!(BTreeMap<LaneId,LaneConfigEntry>, ResidentFrontier);
-flat_resident_owner!(BTreeMap<LaneId,CertifiedFrontierPairDurabilityAttestation>, ResidentFrontier);
+flat_resident_owner!(BTreeMap<LaneId,CertifiedPairDurabilityAttestation>, ResidentFrontier);
 flat_resident_owner!(BTreeMap<LaneId,CertifiedFrontierArtifactValidationAttestation>, ResidentFrontier);
 
 impl resident_nested_map::AssociationValue for BTreeMap<PeerId, BlockReplicaAdvert> {

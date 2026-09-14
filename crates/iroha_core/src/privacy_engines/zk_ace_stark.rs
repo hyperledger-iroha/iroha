@@ -32,18 +32,17 @@ use super::transparent_stark::goldilocks_fft_v1;
 use super::{
     prover_randomness::{HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1},
     transparent_stark::{
-        ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-        GoldilocksFp4V1 as E, GoldilocksMerkleTreeV1, ReplayableTraceMaskV1,
+        ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
+        PrivacyOuterDigestV1, PrivacyOuterMerkleTreeV1, ReplayableTraceMaskV1,
         TransparentStarkDigestContextV1, TransparentStarkErrorV1, TransparentTranscriptV1,
         append_goldilocks_fp4_v1, append_u16_v1 as append_u16, append_u32_v1 as append_u32,
         append_u64_v1 as append_u64, checked_transparent_stark_work_security_v1,
         derive_unique_query_indices_v1, ensure_fri_terminal_degree_fp4_v1, fri_fold_pair_fp4_v1,
         fri_fold_pair_with_inverse_x_fp4_v1, goldilocks_batch_invert_v1,
-        goldilocks_digest384_frame_v1, goldilocks_evaluate_coset_v1,
-        goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_ifft_v1,
-        goldilocks_merkle_node_v1, goldilocks_primitive_root_v1,
-        masked_trace_lde_column_with_mask_v1, random_goldilocks_fp4_v1, sample_trace_mask_v1,
-        transparent_stark_zk_mask_geometry_v1,
+        goldilocks_evaluate_coset_v1, goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1,
+        goldilocks_ifft_v1, goldilocks_primitive_root_v1, masked_trace_lde_column_with_mask_v1,
+        privacy_outer_digest_frame_v1, privacy_outer_merkle_node_v1, random_goldilocks_fp4_v1,
+        sample_trace_mask_v1, transparent_stark_zk_mask_geometry_v1,
     },
     zk_ace::ZkAcePrivacyWitnessV1,
 };
@@ -125,9 +124,9 @@ impl ZkAceAirRelationInputsV1 {
 /// Exact, type-name-independent public transcript schema.
 ///
 /// The schema descriptor is itself the first framed part. Every following part is ordered and
-/// independently length-framed by the shared `GoldilocksDigest384V1` builder,
+/// independently length-framed by the shared `PrivacyOuterDigestV1` builder,
 /// whose byte packing is fixed to seven-byte little-endian Goldilocks limbs.
-pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=goldilocks-digest384-v1:typed-domain+ordered-length-delimited-7byte-le-fields|field0=this-schema|field1=version:u16be|field2=identity-commitment:bytes48|field3=transfer-digest:bytes48|field4=authorization-digest:bytes48|field5=network-id:bytes32|field6=fixed-domain:utf8|field7=fixed-action:utf8|field8=replay-nullifier:bytes48|field9=policy-digest:bytes32|field10=source:account-canonical-hex-v1-utf8|field11=destination:account-canonical-hex-v1-utf8|field12=asset-definition-id:uuid-bytes16|field13=amount:u128be|field14=fixed-verifier-backend:utf8|field15=fixed-verifier-circuit:utf8";
+pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=privacy-sha3-384-be-v1:typed-domain+ordered-u64be-length-delimited-byte-fields|field0=this-schema|field1=version:u16be|field2=identity-commitment:bytes48|field3=transfer-digest:bytes48|field4=authorization-digest:bytes48|field5=network-id:bytes32|field6=fixed-domain:utf8|field7=fixed-action:utf8|field8=replay-nullifier:bytes48|field9=policy-digest:bytes32|field10=source:account-canonical-hex-v1-utf8|field11=destination:account-canonical-hex-v1-utf8|field12=asset-definition-id:uuid-bytes16|field13=amount:u128be|field14=fixed-verifier-backend:utf8|field15=fixed-verifier-circuit:utf8";
 fn air_public_transcript_parts_v1(
     public_inputs: &ZkAceAirRelationInputsV1,
 ) -> Result<Vec<Vec<u8>>, ZkAceStarkError> {
@@ -167,9 +166,9 @@ fn air_public_transcript_parts_v1(
 }
 fn hash_air_public_transcript_parts_v1(
     parts: &[Vec<u8>],
-) -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
+) -> Result<PrivacyOuterDigestV1, ZkAceStarkError> {
     let parts = parts.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         DIGEST_CONTEXT_V1,
         b"air-public-transcript",
         b"public-input-binding",
@@ -182,7 +181,7 @@ fn hash_air_public_transcript_parts_v1(
 }
 fn derive_zk_ace_air_public_digest(
     public_inputs: &ZkAceAirRelationInputsV1,
-) -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
+) -> Result<PrivacyOuterDigestV1, ZkAceStarkError> {
     let parts = air_public_transcript_parts_v1(public_inputs)?;
     hash_air_public_transcript_parts_v1(&parts)
 }
@@ -227,7 +226,7 @@ pub(crate) const QUERY_COUNT: usize = 136;
 /// One genuine quartic-extension composition/FRI instance.
 pub(crate) const SECURITY_LANES: usize = 1;
 const PROOF_WIRE_MAGIC_V1: [u8; 4] = *b"ZKA1";
-const HASH_BYTES: usize = fastpq_prover::fastpq_isi_v1::GOLDILOCKS_DIGEST384_BYTES_V1;
+const HASH_BYTES: usize = super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
 const FIELD_BYTES: usize = 8;
 const EXTENSION_FIELD_BYTES: usize = 4 * FIELD_BYTES;
 const QUERY_INDEX_BYTES: usize = 4;
@@ -268,7 +267,7 @@ pub(crate) const AIR_TOTAL_DEGREE_V1: usize = maximum_air_constraint_degree_v1()
 pub(crate) const REDUCED_AIR_DEGREE_V1: usize = AIR_TOTAL_DEGREE_V1 - 1;
 const _: () = assert!(AIR_TOTAL_DEGREE_V1 == 2);
 /// Complete consensus-relevant algebraic and commitment profile.
-pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|digest=poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6:canonical=6xu64le|digest-domain=typed:catalog+protocol+profile+tree-role+phase+level+index+lane+counter|air-public-transcript=digest384:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri136:formula=2d(e*n-deep+n-fri)+n-fri:required416:provided512|lde_rows=32768|blowup=8|next-row-stride=8|constraint-lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded36865:sampling-cardinality=p^4-36865:trace-z-gz:composition-z:multi-point-trace-quotients|queries=136|query-schedule=digest384-fisher-yates:canonical-rejection:unique-without-replacement:hypergeometric<=independent-power|merkle=poseidon-x7-goldilocks-digest384:binary:typed-leaf-and-node-domains|fri=fp4-fold2:rounds11:terminal16:degree2:code-degree-exclusive6144:domain32768:rho=3/16:m=3:alpha-squared=49/192:unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=11x2:sum-a=22|fri-mask=fp4:coefficients6143:degree-exclusive6143:protocol3-optimized-k5120:actual-code-k6144:max-structured-batch-degree5117:root-before-batch-challenges|soundness=exact-integer-rational:haboeck-theorem2+theorem8:field-size=p^4:fri-query=(49/192)^68<2^-133:deep-k-plus6146:deep-constraint-count172:deep-identity-degree-bound18433:deep-denominator=p^4-36865:rbr-certified-bits=129:classical-rom-bcs-work-normalized-bits128:random-oracle-bits384:max-query-work-log2=252|qrom-qualification=unavailable-pending-independent-fiat-shamir-reduction+six-lane-collision-and-multi-target-accounting+review|wire=ZKA1:fixed-shape:scalars-big-endian:digest384-six-u64-little-endian:2131222|max-proof-bytes=2131222|activation=unavailable|domains=all-stark-commitments-and-transcript-phases-use-typed-goldilocks-digest384-v1";
+pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|outer-digest=sha3-384-opaque48|inner-air-hash=poseidon-x7-goldilocks-digest384:lanes6-independent:width3:rate2:capacity1:full8:partial57:parameter-generator=shake256-rejection-sampling-u64le-below-goldilocks-v1:parameters-sha3-256=84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6:canonical=6xu64le|outer-digest-domain=privacy-sha3-384-be-v1:catalog+protocol+profile+tree-role+phase+level+index+counter|air-public-transcript=sha3-384-opaque48:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri136:formula=2d(e*n-deep+n-fri)+n-fri:required416:provided512|lde_rows=32768|blowup=8|next-row-stride=8|constraint-lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded36865:sampling-cardinality=p^4-36865:trace-z-gz:composition-z:multi-point-trace-quotients|queries=136|query-schedule=sha3-384-fisher-yates:full-u64-be-rejection:unique-without-replacement:hypergeometric<=independent-power|merkle=sha3-384-opaque48:binary:typed-leaf-and-node-domains|fri=fp4-fold2:rounds11:terminal16:degree2:code-degree-exclusive6144:domain32768:rho=3/16:m=3:alpha-squared=49/192:unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=11x2:sum-a=22|fri-mask=fp4:coefficients6143:degree-exclusive6143:protocol3-optimized-k5120:actual-code-k6144:max-structured-batch-degree5117:root-before-batch-challenges|soundness=exact-integer-rational:haboeck-theorem2+theorem8:field-size=p^4:fri-query=(49/192)^68<2^-133:deep-k-plus6146:deep-constraint-count172:deep-identity-degree-bound18433:deep-denominator=p^4-36865:rbr-certified-bits=129:classical-rom-bcs-work-normalized-bits128:random-oracle-bits384:max-query-work-log2=252|qrom-qualification=unavailable-pending-independent-fiat-shamir-reduction+sha3-384-outer-and-constrained-poseidon-collision-and-multi-target-accounting+review|wire=ZKA1:fixed-shape:scalars-big-endian:outer-digest48-opaque-bytes:2131222|max-proof-bytes=2131222|activation=unavailable|domains=all-stark-commitments-and-transcript-phases-use-privacy-sha3-384-be-v1";
 /// Degree of the random trace masking polynomial.
 const MASK_DEGREE: usize = 511;
 const TRACE_MASK_COEFFICIENTS: usize = MASK_DEGREE + 1;
@@ -344,7 +343,7 @@ const FIX_RC_OFFSET: usize = FIX_MESSAGE_WITNESS_OFFSET + PRIVATE_LIMBS;
 const FIX_OUTPUT_OFFSET: usize = FIX_RC_OFFSET + 3;
 const FIXED_WIDTH: usize = FIX_OUTPUT_OFFSET + PUBLIC_OUTPUTS;
 const STARK_PROFILE_V1: &[u8] = b"zk-ace-poseidon-x7-goldilocks-fp4-fri-v1";
-const STARK_SUITE_V1: &[u8] = b"StarkFriPoseidonX7Goldilocks6x64";
+const STARK_SUITE_V1: &[u8] = b"StarkFriSha3_384Goldilocks";
 const DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 = TransparentStarkDigestContextV1::new(
     PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
     STARK_PROFILE_V1,
@@ -394,26 +393,21 @@ struct MaskedTraceMaterial {
 }
 #[derive(Clone, Debug)]
 struct MerkleTree {
-    inner: GoldilocksMerkleTreeV1,
+    inner: PrivacyOuterMerkleTreeV1,
 }
 impl MerkleTree {
     fn from_leaves(
-        leaves: Vec<GoldilocksDigest384V1>,
+        leaves: Vec<PrivacyOuterDigestV1>,
         node_role: &'static [u8],
     ) -> Result<Self, ZkAceStarkError> {
-        GoldilocksMerkleTreeV1::from_leaves(
-            fastpq_prover::DigestExecutionV1::Cpu,
-            leaves,
-            DIGEST_CONTEXT_V1,
-            node_role,
-        )
-        .map(|inner| Self { inner })
-        .map_err(map_merkle_error_v1)
+        PrivacyOuterMerkleTreeV1::from_leaves(leaves, DIGEST_CONTEXT_V1, node_role)
+            .map(|inner| Self { inner })
+            .map_err(map_merkle_error_v1)
     }
-    fn root(&self) -> GoldilocksDigest384V1 {
+    fn root(&self) -> PrivacyOuterDigestV1 {
         self.inner.root()
     }
-    fn path(&self, index: usize) -> Result<Vec<GoldilocksDigest384V1>, ZkAceStarkError> {
+    fn path(&self, index: usize) -> Result<Vec<PrivacyOuterDigestV1>, ZkAceStarkError> {
         self.inner.path(index).map_err(map_merkle_error_v1)
     }
 }
@@ -421,7 +415,7 @@ impl MerkleTree {
 struct FriLaneMaterial {
     layers: Vec<Vec<E>>,
     trees: Vec<MerkleTree>,
-    roots: Vec<GoldilocksDigest384V1>,
+    roots: Vec<PrivacyOuterDigestV1>,
     terminal_values: Vec<E>,
 }
 struct FriMaskMaterial {
@@ -431,9 +425,9 @@ struct FriMaskMaterial {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ZkAceStarkProofV1 {
     version: u16,
-    trace_root: GoldilocksDigest384V1,
-    composition_roots: Vec<GoldilocksDigest384V1>,
-    fri_mask_roots: Vec<GoldilocksDigest384V1>,
+    trace_root: PrivacyOuterDigestV1,
+    composition_roots: Vec<PrivacyOuterDigestV1>,
+    fri_mask_roots: Vec<PrivacyOuterDigestV1>,
     deep_trace_current: Vec<E>,
     deep_trace_next: Vec<E>,
     deep_composition_values: Vec<E>,
@@ -442,7 +436,7 @@ pub(crate) struct ZkAceStarkProofV1 {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ZkAceFriLaneProofV1 {
-    roots: Vec<GoldilocksDigest384V1>,
+    roots: Vec<PrivacyOuterDigestV1>,
     terminal_values: Vec<E>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,12 +444,12 @@ struct ZkAceQueryProofV1 {
     index: u32,
     current_row: Vec<u64>,
     next_row: Vec<u64>,
-    current_row_path: Vec<GoldilocksDigest384V1>,
-    next_row_path: Vec<GoldilocksDigest384V1>,
+    current_row_path: Vec<PrivacyOuterDigestV1>,
+    next_row_path: Vec<PrivacyOuterDigestV1>,
     composition_values: Vec<E>,
-    composition_paths: Vec<Vec<GoldilocksDigest384V1>>,
+    composition_paths: Vec<Vec<PrivacyOuterDigestV1>>,
     fri_mask_values: Vec<E>,
-    fri_mask_paths: Vec<Vec<GoldilocksDigest384V1>>,
+    fri_mask_paths: Vec<Vec<PrivacyOuterDigestV1>>,
     fri_lanes: Vec<ZkAceFriLaneQueryV1>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -466,8 +460,8 @@ struct ZkAceFriLaneQueryV1 {
 struct ZkAceFriRoundOpeningV1 {
     low: E,
     high: E,
-    low_path: Vec<GoldilocksDigest384V1>,
-    high_path: Vec<GoldilocksDigest384V1>,
+    low_path: Vec<PrivacyOuterDigestV1>,
+    high_path: Vec<PrivacyOuterDigestV1>,
 }
 /// Failure returned by the dedicated ZK-ACE STARK.
 #[derive(Debug, Error)]
@@ -822,14 +816,11 @@ impl<'a> ProofReaderV1<'a> {
             .u64()
             .map_err(|_| ZkAceStarkError::MalformedProof)
     }
-    fn hashes(&mut self, count: usize) -> Result<Vec<GoldilocksDigest384V1>, ZkAceStarkError> {
+    fn hashes(&mut self, count: usize) -> Result<Vec<PrivacyOuterDigestV1>, ZkAceStarkError> {
         let mut hashes = exact_vec(count)?;
         for _ in 0..count {
             let encoded = self.take::<HASH_BYTES>()?;
-            hashes.push(
-                GoldilocksDigest384V1::from_le_bytes(encoded)
-                    .ok_or(ZkAceStarkError::NonCanonicalField)?,
-            );
+            hashes.push(PrivacyOuterDigestV1::from_bytes(encoded));
         }
         Ok(hashes)
     }
@@ -856,9 +847,9 @@ impl<'a> ProofReaderV1<'a> {
             .map_err(|_| ZkAceStarkError::MalformedProof)
     }
 }
-fn append_hashes(bytes: &mut Vec<u8>, hashes: &[GoldilocksDigest384V1]) {
+fn append_hashes(bytes: &mut Vec<u8>, hashes: &[PrivacyOuterDigestV1]) {
     for hash in hashes {
-        bytes.extend_from_slice(&hash.to_le_bytes());
+        bytes.extend_from_slice(&hash.to_bytes());
     }
 }
 fn append_fields(bytes: &mut Vec<u8>, fields: &[u64]) {
@@ -876,7 +867,7 @@ fn encode_zk_ace_stark_proof_v1(proof: &ZkAceStarkProofV1) -> Result<Vec<u8>, Zk
     let mut bytes = exact_vec(CANONICAL_PROOF_BYTES_V1)?;
     bytes.extend_from_slice(&PROOF_WIRE_MAGIC_V1);
     append_u16(&mut bytes, proof.version);
-    bytes.extend_from_slice(&proof.trace_root.to_le_bytes());
+    bytes.extend_from_slice(&proof.trace_root.to_bytes());
     append_hashes(&mut bytes, &proof.composition_roots);
     append_hashes(&mut bytes, &proof.fri_mask_roots);
     append_fp4s(&mut bytes, &proof.deep_trace_current);
@@ -928,8 +919,7 @@ fn decode_zk_ace_stark_proof_v1(proof_bytes: &[u8]) -> Result<ZkAceStarkProofV1,
     if version != PROOF_VERSION {
         return Err(ZkAceStarkError::ProfileMismatch);
     }
-    let trace_root = GoldilocksDigest384V1::from_le_bytes(reader.take::<HASH_BYTES>()?)
-        .ok_or(ZkAceStarkError::NonCanonicalField)?;
+    let trace_root = PrivacyOuterDigestV1::from_bytes(reader.take::<HASH_BYTES>()?);
     let composition_roots = reader.hashes(SECURITY_LANES)?;
     let fri_mask_roots = reader.hashes(SECURITY_LANES)?;
     let deep_trace_current = reader.fp4s(TRACE_WIDTH)?;
@@ -1011,12 +1001,12 @@ fn decode_zk_ace_stark_proof_v1(proof_bytes: &[u8]) -> Result<ZkAceStarkProofV1,
     validate_proof_shape(&proof)?;
     Ok(proof)
 }
-fn trace_leaf_hash(index: usize, row: &[F]) -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
+fn trace_leaf_hash(index: usize, row: &[F]) -> Result<PrivacyOuterDigestV1, ZkAceStarkError> {
     let mut encoded = exact_vec(row.len().saturating_mul(FIELD_BYTES))?;
     for value in row {
         encoded.extend_from_slice(&value.0.to_be_bytes());
     }
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         DIGEST_CONTEXT_V1,
         TRACE_LEAF_ROLE_V1,
         b"masked-trace-row",
@@ -1031,8 +1021,8 @@ fn composition_leaf_hash(
     lane: usize,
     index: usize,
     value: E,
-) -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
-    goldilocks_digest384_frame_v1(
+) -> Result<PrivacyOuterDigestV1, ZkAceStarkError> {
+    privacy_outer_digest_frame_v1(
         DIGEST_CONTEXT_V1,
         COMPOSITION_LEAF_ROLE_V1,
         b"composition-value",
@@ -1047,8 +1037,8 @@ fn fri_mask_leaf_hash(
     lane: usize,
     index: usize,
     value: E,
-) -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
-    goldilocks_digest384_frame_v1(
+) -> Result<PrivacyOuterDigestV1, ZkAceStarkError> {
+    privacy_outer_digest_frame_v1(
         DIGEST_CONTEXT_V1,
         FRI_MASK_LEAF_ROLE_V1,
         b"fri-mask-value",
@@ -1064,8 +1054,8 @@ fn fri_leaf_hash(
     round: usize,
     index: usize,
     value: E,
-) -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
-    goldilocks_digest384_frame_v1(
+) -> Result<PrivacyOuterDigestV1, ZkAceStarkError> {
+    privacy_outer_digest_frame_v1(
         DIGEST_CONTEXT_V1,
         FRI_LEAF_ROLE_V1,
         b"fri-layer-value",
@@ -1078,10 +1068,10 @@ fn fri_leaf_hash(
 }
 fn verify_merkle_path(
     node_role: &[u8],
-    root: GoldilocksDigest384V1,
-    mut leaf: GoldilocksDigest384V1,
+    root: PrivacyOuterDigestV1,
+    mut leaf: PrivacyOuterDigestV1,
     mut index: usize,
-    path: &[GoldilocksDigest384V1],
+    path: &[PrivacyOuterDigestV1],
     expected_depth: usize,
 ) -> Result<(), ZkAceStarkError> {
     if path.len() != expected_depth {
@@ -1090,7 +1080,7 @@ fn verify_merkle_path(
     for (level, sibling) in path.iter().copied().enumerate() {
         let parent_index = index >> 1;
         leaf = if index & 1 == 0 {
-            goldilocks_merkle_node_v1(
+            privacy_outer_merkle_node_v1(
                 DIGEST_CONTEXT_V1,
                 node_role,
                 u64::try_from(level + 1).map_err(|_| ZkAceStarkError::ProfileMismatch)?,
@@ -1099,7 +1089,7 @@ fn verify_merkle_path(
                 sibling,
             )
         } else {
-            goldilocks_merkle_node_v1(
+            privacy_outer_merkle_node_v1(
                 DIGEST_CONTEXT_V1,
                 node_role,
                 u64::try_from(level + 1).map_err(|_| ZkAceStarkError::ProfileMismatch)?,
@@ -1857,8 +1847,8 @@ fn map_transcript_error_v1(error: TransparentStarkErrorV1) -> ZkAceStarkError {
         _ => ZkAceStarkError::ProfileMismatch,
     }
 }
-fn compiled_profile_digest_v1() -> Result<GoldilocksDigest384V1, ZkAceStarkError> {
-    goldilocks_digest384_frame_v1(
+fn compiled_profile_digest_v1() -> Result<PrivacyOuterDigestV1, ZkAceStarkError> {
+    privacy_outer_digest_frame_v1(
         DIGEST_CONTEXT_V1,
         PROFILE_DIGEST_ROLE_V1,
         b"zk-ace-stark-profile",
@@ -1870,8 +1860,8 @@ fn compiled_profile_digest_v1() -> Result<GoldilocksDigest384V1, ZkAceStarkError
     .map_err(map_transcript_error_v1)
 }
 fn new_stark_transcript_v1(
-    public_digest: &GoldilocksDigest384V1,
-    trace_root: GoldilocksDigest384V1,
+    public_digest: &PrivacyOuterDigestV1,
+    trace_root: PrivacyOuterDigestV1,
 ) -> Result<TransparentTranscriptV1, ZkAceStarkError> {
     let profile_digest = compiled_profile_digest_v1()?;
     let mut transcript = TransparentTranscriptV1::new(
@@ -1904,7 +1894,7 @@ fn new_stark_transcript_v1(
         )
         .map_err(map_transcript_error_v1)?;
     transcript
-        .absorb(TRANSCRIPT_TRACE_ROOT_LABEL_V1, &[&trace_root.to_le_bytes()])
+        .absorb(TRANSCRIPT_TRACE_ROOT_LABEL_V1, &[&trace_root.to_bytes()])
         .map_err(map_transcript_error_v1)?;
     Ok(transcript)
 }
@@ -1944,11 +1934,11 @@ fn challenge_vector(
 }
 fn absorb_composition_roots_v1(
     transcript: &mut TransparentTranscriptV1,
-    composition_roots: &[GoldilocksDigest384V1],
+    composition_roots: &[PrivacyOuterDigestV1],
 ) -> Result<(), ZkAceStarkError> {
     let mut encoded_roots = exact_vec(composition_roots.len().saturating_mul(HASH_BYTES))?;
     for root in composition_roots {
-        encoded_roots.extend_from_slice(&root.to_le_bytes());
+        encoded_roots.extend_from_slice(&root.to_bytes());
     }
     transcript
         .absorb(TRANSCRIPT_COMPOSITION_ROOTS_LABEL_V1, &[&encoded_roots])
@@ -1959,7 +1949,7 @@ fn absorb_deep_openings_and_masks_v1(
     deep_trace_current: &[E],
     deep_trace_next: &[E],
     deep_composition_values: &[E],
-    fri_mask_roots: &[GoldilocksDigest384V1],
+    fri_mask_roots: &[PrivacyOuterDigestV1],
 ) -> Result<(), ZkAceStarkError> {
     if deep_trace_current.len() != TRACE_WIDTH
         || deep_trace_next.len() != TRACE_WIDTH
@@ -1981,7 +1971,7 @@ fn absorb_deep_openings_and_masks_v1(
     }
     let mut encoded_roots = Vec::with_capacity(fri_mask_roots.len() * HASH_BYTES);
     for root in fri_mask_roots {
-        encoded_roots.extend_from_slice(&root.to_le_bytes());
+        encoded_roots.extend_from_slice(&root.to_bytes());
     }
     transcript
         .absorb(
@@ -1994,7 +1984,7 @@ fn fri_beta(
     transcript: &mut TransparentTranscriptV1,
     lane: usize,
     round: usize,
-    layer_root: GoldilocksDigest384V1,
+    layer_root: PrivacyOuterDigestV1,
 ) -> Result<E, ZkAceStarkError> {
     transcript
         .absorb(
@@ -2006,7 +1996,7 @@ fn fri_beta(
                 &u64::try_from(round)
                     .map_err(|_| ZkAceStarkError::ProfileMismatch)?
                     .to_be_bytes(),
-                &layer_root.to_le_bytes(),
+                &layer_root.to_bytes(),
             ],
         )
         .map_err(map_transcript_error_v1)?;
@@ -2042,12 +2032,12 @@ fn challenge_deep_point(transcript: &mut TransparentTranscriptV1) -> Result<E, Z
 }
 fn absorb_terminal_roots_v1(
     transcript: &mut TransparentTranscriptV1,
-    lane_roots: &[Vec<GoldilocksDigest384V1>],
+    lane_roots: &[Vec<PrivacyOuterDigestV1>],
 ) -> Result<(), ZkAceStarkError> {
     let mut encoded_roots = Vec::new();
     for roots in lane_roots {
         for root in roots {
-            encoded_roots.extend_from_slice(&root.to_le_bytes());
+            encoded_roots.extend_from_slice(&root.to_bytes());
         }
     }
     transcript
@@ -3345,14 +3335,10 @@ mod tests {
     fn decode_fixture() -> ZkAceStarkProofV1 {
         decode_zk_ace_stark_proof_v1(&fixture().1).expect("decode canonical fixture")
     }
-    fn mutate_digest_v1(digest: &mut GoldilocksDigest384V1) {
-        let mut words = digest.words();
-        words[0] = if words[0] + 1 < FIELD_MODULUS {
-            words[0] + 1
-        } else {
-            0
-        };
-        *digest = GoldilocksDigest384V1::new(words).expect("mutation remains canonical");
+    fn mutate_digest_v1(digest: &mut PrivacyOuterDigestV1) {
+        let mut words = digest.to_bytes();
+        words[0] ^= 1;
+        *digest = PrivacyOuterDigestV1::from_bytes(words);
     }
     fn assert_rejected(proof: &ZkAceStarkProofV1) {
         match encode_zk_ace_stark_proof_v1(proof) {
@@ -3388,11 +3374,11 @@ mod tests {
         ];
         let expected = hash_air_public_transcript_parts_v1(&parts).expect("canonical digest");
         assert_eq!(
-            GoldilocksDigest384V1::from_le_bytes(expected.to_le_bytes()),
-            Some(expected),
-            "the public transcript must use six canonical field elements"
+            PrivacyOuterDigestV1::from_bytes(expected.to_bytes()),
+            expected,
+            "the public transcript is an opaque 48-byte digest"
         );
-        assert_ne!(expected, GoldilocksDigest384V1::default());
+        assert_ne!(expected, PrivacyOuterDigestV1::default());
         let mut permuted = parts.clone();
         permuted.swap(2, 3);
         assert_ne!(
@@ -3423,10 +3409,10 @@ mod tests {
         );
     }
     #[test]
-    fn digest384_domains_bind_protocol_profile_role_phase_coordinates_lane_and_round() {
+    fn outer_digest_domains_bind_protocol_profile_role_phase_coordinates_and_round() {
         let fields: [&[u8]; 1] = [b"same-payload"];
         let frame = |context, role, phase, level, index, counter| {
-            goldilocks_digest384_frame_v1(context, role, phase, level, index, counter, &fields)
+            privacy_outer_digest_frame_v1(context, role, phase, level, index, counter, &fields)
                 .expect("bounded test frame")
         };
         let base = frame(DIGEST_CONTEXT_V1, b"role-a", b"phase-a", 1, 2, 3);
@@ -3923,8 +3909,8 @@ mod tests {
     }
     #[test]
     fn unique_query_schedule_preserves_theorem_two_power_bound() {
-        let public_digest = GoldilocksDigest384V1::new([0x6d; 6]).expect("canonical public digest");
-        let trace_root = GoldilocksDigest384V1::new([0x71; 6]).expect("canonical trace root");
+        let public_digest = PrivacyOuterDigestV1::from_bytes([0x6d; 48]);
+        let trace_root = PrivacyOuterDigestV1::from_bytes([0x71; 48]);
         let transcript =
             new_stark_transcript_v1(&public_digest, trace_root).expect("typed transcript");
         let indices = derive_query_indices(&transcript).expect("bounded deterministic schedule");
@@ -3935,7 +3921,7 @@ mod tests {
             indices.iter().copied().collect::<BTreeSet<_>>().len(),
             QUERY_COUNT
         );
-        let changed_root = GoldilocksDigest384V1::new([0x72; 6]).expect("canonical changed root");
+        let changed_root = PrivacyOuterDigestV1::from_bytes([0x72; 48]);
         let changed_transcript = new_stark_transcript_v1(&public_digest, changed_root)
             .expect("changed typed transcript");
         assert_ne!(
@@ -4034,8 +4020,8 @@ mod tests {
     fn typed_fp4_challenges_are_canonical_domain_separated_and_replayable() {
         assert_eq!(CONSTRAINT_COUNT, 172);
         assert_eq!(DISTINCT_FIELD_CHALLENGE_COUNT, 273);
-        let public_digest = GoldilocksDigest384V1::new([0xa5; 6]).expect("canonical public digest");
-        let trace_root = GoldilocksDigest384V1::new([0x5a; 6]).expect("canonical trace root");
+        let public_digest = PrivacyOuterDigestV1::from_bytes([0xa5; 48]);
+        let trace_root = PrivacyOuterDigestV1::from_bytes([0x5a; 48]);
         let mut first_transcript =
             new_stark_transcript_v1(&public_digest, trace_root).expect("typed transcript");
         let mut replay_transcript = first_transcript;
@@ -4216,10 +4202,9 @@ mod tests {
         let trace_root_offset = PROOF_WIRE_MAGIC_V1.len() + PROOF_VERSION_BYTES;
         noncanonical_digest[trace_root_offset..trace_root_offset + FIELD_BYTES]
             .copy_from_slice(&FIELD_MODULUS.to_le_bytes());
-        assert!(matches!(
-            verify_zk_ace_stark_v1(&fixture().0, &noncanonical_digest),
-            Err(ZkAceStarkError::NonCanonicalField)
-        ));
+        decode_zk_ace_stark_proof_v1(&noncanonical_digest)
+            .expect("outer digest bytes have no field restriction");
+        assert!(verify_zk_ace_stark_v1(&fixture().0, &noncanonical_digest).is_err());
         changed = decode_fixture();
         mutate_digest_v1(&mut changed.trace_root);
         assert_rejected(&changed);
@@ -4261,10 +4246,9 @@ mod tests {
     }
     #[test]
     fn fri_mask_commitment_precedes_and_changes_every_batch_challenge() {
-        let public_digest = GoldilocksDigest384V1::new([0x11; 6]).expect("public digest");
-        let trace_root = GoldilocksDigest384V1::new([0x22; 6]).expect("trace root");
-        let first_roots =
-            [GoldilocksDigest384V1::new([0x33; 6]).expect("first mask root"); SECURITY_LANES];
+        let public_digest = PrivacyOuterDigestV1::from_bytes([0x11; 48]);
+        let trace_root = PrivacyOuterDigestV1::from_bytes([0x22; 48]);
+        let first_roots = [PrivacyOuterDigestV1::from_bytes([0x33; 48]); SECURITY_LANES];
         let mut second_roots = first_roots;
         mutate_digest_v1(&mut second_roots[0]);
         let deep_trace_current = vec![E::ONE; TRACE_WIDTH];
@@ -4311,11 +4295,11 @@ mod tests {
         let mut changed = decode_fixture();
         changed
             .composition_roots
-            .fill(GoldilocksDigest384V1::default());
+            .fill(PrivacyOuterDigestV1::default());
         for query in &mut changed.queries {
             query.composition_values.fill(E::ZERO);
             for path in &mut query.composition_paths {
-                path.fill(GoldilocksDigest384V1::default());
+                path.fill(PrivacyOuterDigestV1::default());
             }
         }
         assert_rejected(&changed);

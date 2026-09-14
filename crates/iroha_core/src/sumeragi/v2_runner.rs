@@ -737,8 +737,8 @@ impl LocalProposalState {
         self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
     }
-    /// Recheck a moving merge frontier without changing ordinary retry or proposal ownership.
-    fn defer_merge_frontier(&mut self, owner: LocalProposalOwner, now: Instant) {
+    /// Recheck a deferred candidate snapshot without changing ordinary retry or proposal ownership.
+    fn defer_candidate_snapshot(&mut self, owner: LocalProposalOwner, now: Instant) {
         let started_at = self
             .candidate_work_wait
             .filter(|wait| wait.owner == owner)
@@ -1531,7 +1531,7 @@ fn schedule_local_proposal(
         if lane_work.refresh_merge_candidates(directive.tag().view())?
             == super::v2_lane_work::MergeRefreshOutcome::Deferred
         {
-            proposal_state.defer_merge_frontier(owner, Instant::now());
+            proposal_state.defer_candidate_snapshot(owner, Instant::now());
             return Ok(());
         }
         let queue_plan_admissions =
@@ -1559,6 +1559,17 @@ fn schedule_local_proposal(
         })?;
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
+            CandidateAssemblyOutcome::WorkDeferred { report, reason } => {
+                proposal_state.defer_candidate_snapshot(owner, Instant::now());
+                iroha_logger::debug!(
+                    height = owner.tag.height(),
+                    view = owner.tag.view(),
+                    ?reason,
+                    ?report,
+                    "deferred Sumeragi v2 proposal because its complete work snapshot is unavailable"
+                );
+                return Ok(());
+            }
             CandidateAssemblyOutcome::NoProposalWork(report) => {
                 let now = Instant::now();
                 proposal_state.retire_unsubmitted_non_empty_retry(owner);

@@ -396,7 +396,7 @@ impl PrivacyProtocolIdV1 {
             Self::ZkAcePqAuthorizationV1
             | Self::IrohaZkX509StarkP256V1
             | Self::IrohaIvmPrivateNoteStarkV1
-            | Self::PqMaspStarkV1 => PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
+            | Self::PqMaspStarkV1 => PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
             Self::IrohaBootleLanternAnoncredV1 => {
                 PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm
             }
@@ -422,7 +422,7 @@ impl PrivacyProtocolIdV1 {
             Self::ZkAcePqAuthorizationV1
             | Self::IrohaZkX509StarkP256V1
             | Self::IrohaIvmPrivateNoteStarkV1
-            | Self::PqMaspStarkV1 => PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
+            | Self::PqMaspStarkV1 => PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
             Self::IrohaBootleLanternAnoncredV1 => PrivacyEngineIdV1::NativeLanternLnp22,
             Self::IrohaZkAmsV1 => {
                 PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
@@ -476,9 +476,9 @@ pub fn privacy_protocol_label_is_exact12_v1(label: &str) -> bool {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProofSystemIdV1")]
 pub enum PrivacyProofSystemIdV1 {
-    /// Six-lane Poseidon-x7 STARK/FRI over the Goldilocks field.
-    #[norito(rename = "stark-fri-poseidon-x7-goldilocks-6x64-v1")]
-    StarkFriPoseidonX7Goldilocks6x64,
+    /// SHA3-384 outer commitments and transcript with STARK/FRI over Goldilocks.
+    #[norito(rename = "stark-fri-sha3-384-goldilocks-v1")]
+    StarkFriSha3_384Goldilocks,
     /// ZK-AMS masked relaxed-R1CS admission plus Ristretto255 possession and LSAG.
     ///
     /// Batch admission uses Poseidon2/Goldilocks commitment digests and a
@@ -533,9 +533,9 @@ pub enum PrivacyProofSystemIdV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyEngineIdV1")]
 pub enum PrivacyEngineIdV1 {
-    /// Native Goldilocks STARK/FRI verifier.
-    #[norito(rename = "native-goldilocks-poseidon-x7-stark-fri-6x64-v1")]
-    NativeGoldilocksPoseidonX7StarkFri6x64,
+    /// Native Goldilocks STARK/FRI verifier with the SHA3-384 outer byte suite.
+    #[norito(rename = "native-goldilocks-sha3-384-stark-fri-v1")]
+    NativeGoldilocksSha3_384StarkFri,
     /// Native ZK-AMS masked relaxed-R1CS and Ristretto255 verifier suite.
     #[norito(rename = "native-zk-ams-masked-relaxed-spartan-t256-ristretto255")]
     NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,

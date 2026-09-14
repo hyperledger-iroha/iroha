@@ -19868,7 +19868,7 @@ mod tests {
                     proposal_round: None,
                     subject: None,
                     execution_commitment: None,
-                    stage: SumeragiV2OutboundIntentStage::Sent,
+                    stage: SumeragiV2OutboundIntentStage::Retained,
                 }],
                 queues: vec![SumeragiV2QueueStatus {
                     queue: SumeragiV2QueueKind::RuntimeProgress,

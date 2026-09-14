@@ -711,9 +711,8 @@ pub struct Kura {
     /// Fail-stop latch for an ambiguous latest-certified frontier publication boundary.
     latest_certified_frontier_storage_unknown: AtomicBool,
     /// Restart-empty proof that the exact pair completed its strict barriers;
-    /// artifact plus pair metadata and namespace identity gate fsync reuse.
-    certified_frontier_pair_durability:
-        ResidentMutex<BTreeMap<LaneId, CertifiedFrontierPairDurabilityAttestation>>,
+    /// artifact, pair metadata and every directory generation gate fsync reuse.
+    certified_pair_durability: ResidentMutex<BTreeMap<LaneId, CertifiedPairDurabilityAttestation>>,
     /// Bounded restart-empty proof that exact stable frontier bytes completed
     /// full certificate validation and subsequent pair repair/readback.
     certified_frontier_artifact_validation:
@@ -3264,10 +3263,7 @@ impl Kura {
             latest_certified_frontier_storage_unknown: AtomicBool::new(
                 config.init_mode == InitMode::Fast && !provisional_open,
             ),
-            certified_frontier_pair_durability: ResidentMutex::new(
-                BTreeMap::new(),
-                &resource_inventory,
-            ),
+            certified_pair_durability: ResidentMutex::new(BTreeMap::new(), &resource_inventory),
             certified_frontier_artifact_validation: ResidentMutex::new(
                 BTreeMap::new(),
                 &resource_inventory,
@@ -3663,10 +3659,7 @@ impl Kura {
             ),
             committed_lane_status_revision: AtomicU64::new(0),
             latest_certified_frontier_storage_unknown: AtomicBool::new(false),
-            certified_frontier_pair_durability: ResidentMutex::new(
-                BTreeMap::new(),
-                &resource_inventory,
-            ),
+            certified_pair_durability: ResidentMutex::new(BTreeMap::new(), &resource_inventory),
             certified_frontier_artifact_validation: ResidentMutex::new(
                 BTreeMap::new(),
                 &resource_inventory,
@@ -25863,11 +25856,7 @@ impl Kura {
             )?
         {
             if existing == *artifact {
-                if self.certified_frontier_pair_durability_is_attested(
-                    lane_id,
-                    artifact,
-                    existing_bound,
-                ) {
+                if self.certified_pair_durability_is_attested(lane_id, artifact, existing_bound) {
                     if artifact.prepare_qc.payload_availability_qc.is_some() {
                         self.consume_certified_bundle_pair_capacity(artifact)?;
                     }
@@ -25885,7 +25874,7 @@ impl Kura {
                         data_path,
                     ));
                 }
-                self.note_certified_frontier_pair_durability(lane_id, artifact, existing_bound);
+                self.note_certified_pair_durability(lane_id, artifact, existing_bound);
                 if artifact.prepare_qc.payload_availability_qc.is_some() {
                     self.consume_certified_bundle_pair_capacity(artifact)?;
                 }
@@ -25953,7 +25942,7 @@ impl Kura {
                         "certified lane block frontier recovery",
                     )
                 {
-                    self.note_certified_frontier_pair_durability(lane_id, artifact, bound);
+                    self.note_certified_pair_durability(lane_id, artifact, bound);
                     true
                 } else {
                     false
@@ -25979,7 +25968,7 @@ impl Kura {
         }
         Ok(())
     }
-    fn certified_frontier_pair_durability_is_attested(
+    fn certified_pair_durability_is_attested(
         &self,
         lane_id: LaneId,
         artifact: &CertifiedLaneBlockArtifact,
@@ -25987,7 +25976,7 @@ impl Kura {
     ) -> bool {
         let artifact_hash = HashOf::new(artifact);
         let metadata_matches = self
-            .certified_frontier_pair_durability
+            .certified_pair_durability
             .lock()
             .get(&lane_id)
             .is_some_and(|attestation| {
@@ -26000,8 +25989,37 @@ impl Kura {
                         &attestation.index_metadata,
                         &bound.index_metadata,
                     )
+                    && attestation.directories.len() == bound.namespace.directories.len()
+                    && attestation
+                        .directories
+                        .iter()
+                        .zip(&bound.namespace.directories)
+                        .all(|(attested, directory)| {
+                            attested.expected_path == directory.expected_path
+                                && attested.canonical_path == directory.canonical_path
+                                && attested.entry_name == directory.entry_name
+                                && Self::sidecar_directory_metadata_unchanged(
+                                    &attested.metadata,
+                                    &directory.metadata,
+                                )
+                        })
             });
-        metadata_matches && self.bound_progress_sidecar_unchanged(bound)
+        // Namespace binding deliberately permits sibling publication. Reusing an old
+        // durability barrier instead requires every ancestor generation to remain
+        // unchanged, including mutations after the current handles were opened.
+        // Read descriptor metadata after releasing the bounded cache mutex.
+        let directory_generations_unchanged = || {
+            bound.namespace.directories.iter().all(|directory| {
+                secure_file_metadata::from_file(&directory.file).is_ok_and(|current| {
+                    current.is_dir()
+                        && Self::sidecar_directory_metadata_unchanged(&directory.metadata, &current)
+                })
+            })
+        };
+        metadata_matches
+            && directory_generations_unchanged()
+            && self.bound_progress_sidecar_unchanged(bound)
+            && directory_generations_unchanged()
     }
     fn certified_frontier_artifact_validation_is_attested(
         &self,
@@ -26022,24 +26040,37 @@ impl Kura {
                     )
             })
     }
-    fn note_certified_frontier_pair_durability(
+    fn note_certified_pair_durability(
         &self,
         lane_id: LaneId,
         artifact: &CertifiedLaneBlockArtifact,
         bound: &BoundProgressSidecar,
     ) {
-        let mut attestations = self.certified_frontier_pair_durability.lock();
+        let mut attestations = self.certified_pair_durability.lock();
         if !attestations.contains_key(&lane_id)
-            && attestations.len() >= CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY
+            && attestations.len() >= CERTIFIED_ARTIFACT_ATTESTATION_CACHE_CAPACITY
         {
             attestations.pop_first();
         }
         attestations.insert(
             lane_id,
-            CertifiedFrontierPairDurabilityAttestation {
+            CertifiedPairDurabilityAttestation {
                 artifact_hash: HashOf::new(artifact),
                 data_metadata: bound.data_metadata.clone(),
                 index_metadata: bound.index_metadata.clone(),
+                // Keep the snapshots taken before the successful barrier. A fresh
+                // post-barrier snapshot could incorrectly bless a later mutation.
+                directories: bound
+                    .namespace
+                    .directories
+                    .iter()
+                    .map(|directory| ProgressDirectoryDurabilityMetadata {
+                        expected_path: directory.expected_path.clone(),
+                        canonical_path: directory.canonical_path.clone(),
+                        entry_name: directory.entry_name.clone(),
+                        metadata: directory.metadata.clone(),
+                    })
+                    .collect(),
             },
         );
     }
@@ -26051,7 +26082,7 @@ impl Kura {
     ) {
         let mut attestations = self.certified_frontier_artifact_validation.lock();
         if !attestations.contains_key(&lane_id)
-            && attestations.len() >= CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY
+            && attestations.len() >= CERTIFIED_ARTIFACT_ATTESTATION_CACHE_CAPACITY
         {
             attestations.pop_first();
         }
@@ -26848,14 +26879,19 @@ impl Kura {
             )?,
         };
         if attest_durability
-            && artifact.is_some()
-            && let BoundProgressPair::Present(bound) = &pair
-            && !self.sync_bound_progress_sidecar(bound, "certified lane block")
+            && let (Some(artifact), BoundProgressPair::Present(bound)) = (&artifact, &pair)
+            && !self.certified_pair_durability_is_attested(lane_id, artifact, bound)
         {
-            return Err(Self::invalid_lane_artifact_error(
-                index_path,
-                "certified lane completion durability barrier failed",
-            ));
+            // Reuse only this process's exact artifact, file and complete namespace
+            // attestation. Decoding, certificate validation, active geometry and
+            // unresolved-writer checks above still run on every read.
+            if !self.sync_bound_progress_sidecar(bound, "certified lane block") {
+                return Err(Self::invalid_lane_artifact_error(
+                    index_path,
+                    "certified lane completion durability barrier failed",
+                ));
+            }
+            self.note_certified_pair_durability(lane_id, artifact, bound);
         }
         if let BoundProgressPair::Present(bound) = &pair
             && !self.bound_progress_sidecar_unchanged(bound)

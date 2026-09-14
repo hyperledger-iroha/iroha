@@ -42,9 +42,9 @@ python3 scripts/private_settlement_smoke_campaign.py validate \
 ```
 
 The driver builds `iroha3d` with `test-network-message-control` and the grouped
-integration test with `atomic-private-settlement-metal-smoke` once. This explicit
-capability enables the common release harness and Core GPU dependency required
-by its Metal proof policy. The driver discovers the exact ignored smoke test,
+integration test with `atomic-private-settlement-smoke` once. This explicit
+capability enables the common release harness and its CPU SHA3-384 privacy proof.
+The driver discovers the exact ignored smoke test,
 then executes ten serial fresh requests. It requires
 one executed passing test, zero failures and zero ignored tests from every
 invocation. `IROHA_TEST_REQUIRE_NETWORK=1` and

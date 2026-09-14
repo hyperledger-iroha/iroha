@@ -901,8 +901,9 @@ impl Reducer {
             })
             .collect()
     }
-    /// Iterate over signed or certified control intents retained for retransmission.
-    pub fn outbound_messages(&self) -> impl Iterator<Item = &ConsensusMessageV2> {
+    /// Iterate over signed or certified controls retained for recovery.
+    /// Only a roster-local reducer may emit these retained controls.
+    pub fn retained_control_messages(&self) -> impl Iterator<Item = &ConsensusMessageV2> {
         self.outbound_control.values()
     }
     /// Return the durable record currently fenced behind a WAL append.
@@ -3172,6 +3173,9 @@ impl Reducer {
                     key
                 })
             }),
+            // Certificate evidence is also retained by observers for recovery.
+            // Possession never grants a non-roster node productive wire authority.
+            Effect::Broadcast(_) if after.local_validator.is_none() => None,
             Effect::Broadcast(message) => match message {
                 ConsensusMessageV2::Proposal(signed) => after
                     .durable
@@ -3910,12 +3914,17 @@ impl Reducer {
         {
             self.fallback_active = true;
         }
-        let mut effects: Vec<_> = self
-            .outbound_control
-            .values()
-            .cloned()
-            .map(Effect::Broadcast)
-            .collect();
+        // Observers retain exact certificate controls as recovery witnesses, but
+        // only this height's frozen roster may originate productive envelopes.
+        let mut effects: Vec<_> = if self.local_validator.is_some() {
+            self.outbound_control
+                .values()
+                .cloned()
+                .map(Effect::Broadcast)
+                .collect()
+        } else {
+            Vec::new()
+        };
         if let Some(decision) = self.durable.decision().cloned() {
             let body_round = self.decision_body_round(&decision);
             match self.body_state(body_round, decision.subject()) {
@@ -4403,7 +4412,7 @@ impl Reducer {
                 // protected body's Fetch immediately behind EnterView, then
                 // publish a locally formed TC as the first ordinary control
                 // effect. Remote TC installation has no one-shot broadcast.
-                if broadcast {
+                if broadcast && self.local_validator.is_some() {
                     install_effects.push(Effect::Broadcast(message));
                 }
                 install_effects
@@ -4431,7 +4440,7 @@ impl Reducer {
                 let mut decision_effects = Vec::new();
                 let message = ConsensusMessageV2::QuorumCertificate(certificate.clone());
                 self.remember_control(message.clone());
-                if broadcast {
+                if broadcast && self.local_validator.is_some() {
                     decision_effects.push(Effect::Broadcast(message));
                 }
                 decision_effects.extend(self.decision_effects(certificate));

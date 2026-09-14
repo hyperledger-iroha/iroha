@@ -11,15 +11,9 @@ mod relation;
 mod stark;
 mod wallet;
 
-// Keep the public execution policy reachable through the owning proof API.
-#[cfg(feature = "fastpq-gpu")]
-pub use fastpq_prover::Digest384GpuBackendV1;
-pub use fastpq_prover::DigestExecutionV1;
-
 pub use facade::{
-    AtomicPrivateSettlementProofErrorV1, AtomicPrivateSettlementProverOptionsV1,
-    prove_atomic_private_settlement_v1, prove_atomic_private_settlement_v1_with_rng,
-    verify_atomic_private_settlement_v1,
+    AtomicPrivateSettlementProofErrorV1, prove_atomic_private_settlement_v1,
+    prove_atomic_private_settlement_v1_with_rng, verify_atomic_private_settlement_v1,
 };
 pub(crate) use relation::validate_audit_openings_v1;
 pub use relation::{

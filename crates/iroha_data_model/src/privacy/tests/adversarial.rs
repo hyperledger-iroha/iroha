@@ -1405,7 +1405,7 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     invalid.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
-    invalid.proof_system_id = PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
+    invalid.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
     invalid.engine_id = PrivacyEngineIdV1::NativeJindo;

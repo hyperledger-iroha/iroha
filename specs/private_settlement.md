@@ -193,7 +193,39 @@ addressed by an opaque one-shot handle; Python supplies only the public
 successor root and receives the statement, proof, derived delta, and encrypted
 capsule. No witness enters Python.
 
-Digest preparation uses one always-compiled resource policy: at most 65,536 frames and 4,194,304 canonical words per batch. Private row preparation additionally retains its independent 32 MiB serialized-payload limit and chooses the minimum of these three bounds using the framing owner's exact length-only geometry. Device admission still validates the actual complete frames. Pair preparation uses fallible allocations, preserves absolute node indices and ordered digests, and never changes transcript bytes. These are local resource limits, not proof-profile or consensus parameters; readiness/KAT, quarantine and private-buffer zeroization remain enforced.
+Privacy STARK outer commitments, transcript derivation, query sampling and
+nonce grinding use SHA3-384 through `privacy_engines/privacy_outer_hash.rs`.
+Every digest is an opaque 48-byte string; canonical Goldilocks decoding applies
+to actual field openings only. The frame binds the exact catalog, protocol,
+compiled profile, role, phase, level, index, counter and ordered length-prefixed
+fields with checked big-endian widths. The compiled proof-system and engine
+labels are `stark-fri-sha3-384-goldilocks-v1` and
+`native-goldilocks-sha3-384-stark-fri-v1`. The note relation's SHA-256 constraints
+and ZK-ACE's inner identity/replay Poseidon constraints retain their own owners.
+
+The scalar challenge accepts a nonzero canonical first big-endian 64-bit word.
+The Fp4 challenge accepts the first four words only when every coefficient is
+canonical; zero is allowed unless the caller states a deterministic public
+predicate. Both reject at most sixteen candidates without changing transcript
+state, then absorb the complete accepted digest and advance a checked counter.
+Queries use sparse Fisher--Yates sampling with rejection from the full `2^64`
+source space and at most 256 attempts per draw. Ordered nonce intervals choose
+the smallest satisfying nonce independently of Rayon scheduling.
+
+Private row preparation retains at most 4,096 frames and 32 MiB of complete
+framed bytes per batch. Exact length admission precedes allocation; payload
+buffers, cloned hash cores and partial block buffers are wiped on drop. Ordered
+CPU/Rayon hashing uses the existing Core `simd` feature for the SHA3 dependency's
+runtime-detected ARM acceleration, with the deterministic software path on
+other supported hardware. The prover has one outer suite and no digest-device
+option. Local batch limits do not change the proof profile. The ignored N=3
+smoke is selected with `atomic-private-settlement-smoke`.
+
+The aggregate descriptor's 197-bit minimum is an interactive FRI algebraic
+error bound. It does not account for Merkle binding, Fiat--Shamir composition
+or quantum queries. SHA3-specific protocol soundness and independent review,
+current compiled profile/SDK fixtures, native proofs and network qualification
+remain required before activation.
 
 Global timeout certificates are delivered to the immutable union of the global roster and usable current-height participant committees resolved from one preceding-State view. Only global-roster senders expand this delivery audience; ordinary votes keep their original global destinations. An unpopulated optional lane or an oversubscribed lane awaiting its first beacon pulse contributes no guessed committee. Other authority inconsistencies remain errors. Existing certificate authentication, exact-view admission and retained retransmission govern observer progress.
 

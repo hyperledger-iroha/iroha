@@ -76,11 +76,6 @@ use iroha::{
         },
     },
 };
-use iroha_core::privacy_engines::atomic_private_settlement::AtomicPrivateSettlementProverOptionsV1;
-#[cfg(feature = "atomic-private-settlement-metal-smoke")]
-use iroha_core::privacy_engines::atomic_private_settlement::{
-    Digest384GpuBackendV1, DigestExecutionV1,
-};
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_engines::{
@@ -645,7 +640,12 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                 TomlValue::String("universal".to_owned()),
             );
             routing.insert("rules".into(), TomlValue::Array(Vec::new()));
+            // The writer holds its borrow across the chain; keep the filter in that chain.
             layer
+                .write(
+                    ["logger", "filter"],
+                    "iroha_torii::queue_plan_admission=debug",
+                )
                 .write(
                     ["concurrency", "scheduler_min_threads"],
                     validator_worker_threads,
@@ -785,6 +785,16 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         })
 }
 
+// EnvFilter matches target prefixes. Keep unselected v2_* siblings at INFO,
+// then enable the exact body-progress adapter and selected runner/worker owners.
+const N3_DIAGNOSTIC_LOG_FILTER: &str = concat!(
+    "iroha_torii::queue_plan_admission=debug,",
+    "iroha_core::sumeragi::v2=debug,",
+    "iroha_core::sumeragi::v2_=info,",
+    "iroha_core::sumeragi::v2_runner=debug,",
+    "iroha_core::sumeragi::v2_worker=debug",
+);
+
 fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
     // Keep the production-like four-second cadence so a release host running
     // sixteen independent validators has enough time to validate and relay the
@@ -794,7 +804,12 @@ fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
     // The authenticated test controller exposes the same financial-state
     // observation route used by the release fault campaign. No fault rule is
     // installed by the positive smoke test.
-    localnet_builder(shape).with_consensus_message_control()
+    localnet_builder(shape)
+        .with_consensus_message_control()
+        .with_config_layer(|layer| {
+            // This diagnostic-only smoke retains the shared admission filter.
+            layer.write(["logger", "filter"], N3_DIAGNOSTIC_LOG_FILTER);
+        })
 }
 
 fn routes_from_network(
@@ -1580,25 +1595,16 @@ fn proof_manifest(
 }
 
 fn prepare_leg(
-    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
     authority_digest: Hash,
 ) -> Result<PreparedLeg> {
     let private_data = default_private_settlement_leg_data(ordinal);
-    prepare_leg_with_private_data(
-        prover_options,
-        ordinal,
-        governed,
-        manifest,
-        authority_digest,
-        &private_data,
-    )
+    prepare_leg_with_private_data(ordinal, governed, manifest, authority_digest, &private_data)
 }
 
 fn prepare_leg_with_private_data(
-    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
@@ -1622,7 +1628,6 @@ fn prepare_leg_with_private_data(
     let mut output_rng = iroha_crypto::rng_from_seed_slice(&output_rng_seed);
     let mut capsule_rng = iroha_crypto::rng_from_seed_slice(&capsule_rng_seed);
     prepare_leg_with_private_data_and_rngs(
-        prover_options,
         ordinal,
         governed,
         manifest,
@@ -1634,7 +1639,6 @@ fn prepare_leg_with_private_data(
 }
 
 fn prepare_leg_with_private_data_and_rngs(
-    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
@@ -1985,7 +1989,6 @@ fn prepare_leg_with_private_data_and_rngs(
         Some(ordinal),
     );
     let prepared = consume_atomic_private_settlement_wallet_bundle_v1(
-        prover_options,
         &mut owner_material,
         &wallet_id,
         manifest,
@@ -2569,7 +2572,7 @@ fn smoke_diagnostic_partial_and_interrupted_sinks_preserve_complete_record() {
     assert_eq!(partial.bytes, expected);
 }
 
-#[cfg(feature = "atomic-private-settlement-metal-smoke")]
+#[cfg(feature = "atomic-private-settlement-smoke")]
 fn run_n3_real_process_smoke() -> Result<()> {
     let _diagnostics = SmokeDiagnosticScopeV1::start();
     let (bound, request_sha) = read_bound_real_process_request()?;
@@ -2660,18 +2663,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
                 SmokeDiagnosticPhaseV1::ClientLegConstruction,
                 Some(ordinal),
             );
-            let prepared = prepare_leg(
-                AtomicPrivateSettlementProverOptionsV1 {
-                    commitment_digest_execution: DigestExecutionV1::Device(
-                        Digest384GpuBackendV1::Metal,
-                    ),
-                    nonce_digest_execution: DigestExecutionV1::Device(Digest384GpuBackendV1::Metal),
-                },
-                ordinal,
-                leg,
-                &manifest,
-                committee.authority.digest()?,
-            )?;
+            let prepared = prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)?;
             leg_timing.complete();
             Ok(prepared)
         })
@@ -3144,7 +3136,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "atomic-private-settlement-metal-smoke")]
+#[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "release-only: starts 16 real validators and generates three native STARK proofs"]
 fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
@@ -3740,6 +3732,32 @@ fn repeat_bundle_private_material_is_reproducible_and_disjoint() {
         2 * PARTICIPANT_COUNT * expected_materials_per_leg
     );
     assert_eq!(recipient_ids.len(), 2 * PARTICIPANT_COUNT * 3);
+}
+
+#[test]
+fn n3_diagnostic_logger_filter_parses_and_preserves_info_and_admission() {
+    let logger = iroha_config::parameters::user::Logger {
+        level: Level::INFO,
+        filter: Some(
+            N3_DIAGNOSTIC_LOG_FILTER
+                .parse()
+                .expect("valid diagnostic directives"),
+        ),
+        ..Default::default()
+    };
+    let resolved = logger.resolve_filter().to_string();
+    let directives = resolved.split(',').collect::<Vec<_>>();
+    assert_eq!(
+        directives.len(),
+        6,
+        "one default and five target directives"
+    );
+    assert_eq!(directives[0], "info", "ordinary node logging stays at INFO");
+    assert!(directives.contains(&"iroha_torii::queue_plan_admission=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2_=info"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2_runner=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2_worker=debug"));
 }
 
 #[test]

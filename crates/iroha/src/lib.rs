@@ -21,7 +21,8 @@ pub mod sns;
 pub mod stream;
 pub mod subscriptions;
 pub use error::{
-    Error, Result, TransactionPreparationError, TransactionSigningError, TransportErrorKind,
+    Error, Result, StatusFailureReason, TransactionPreparationError, TransactionSigningError,
+    TransportErrorKind,
 };
 pub use iroha_crypto as crypto;
 pub use iroha_data_model as data_model;

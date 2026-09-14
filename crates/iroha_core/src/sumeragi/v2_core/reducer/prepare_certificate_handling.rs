@@ -71,7 +71,7 @@ impl Reducer {
             .or_insert_with(|| certificate.clone());
         self.remember_control(ConsensusMessageV2::QuorumCertificate(certificate.clone()));
         let mut effects = Vec::new();
-        if formed_locally {
+        if formed_locally && self.local_validator.is_some() {
             let message = ConsensusMessageV2::QuorumCertificate(certificate.clone());
             self.remember_control(message.clone());
             effects.push(Effect::Broadcast(message));

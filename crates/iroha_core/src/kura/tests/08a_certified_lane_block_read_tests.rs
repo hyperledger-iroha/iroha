@@ -1042,6 +1042,154 @@ fn latest_lane_block_artifact_returns_highest_valid_height() {
 }
 
 #[test]
+fn live_certificate_completion_reuses_exact_durability_attestation() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    let expected = CertifiedLaneBlockArtifact::new(session.clone(), pops.clone());
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("persist certificate");
+    kura.certified_pair_durability.lock().clear();
+    assert_eq!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("first completion read performs its durability barriers"),
+        Some(expected.clone())
+    );
+    fail_next_indexed_sidecar_data_sync_for_tests();
+    assert_eq!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("unchanged exact completion reuses durability"),
+        Some(expected)
+    );
+    let (data_path, _) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
+    let data = fs::File::open(data_path).expect("open unchanged data");
+    assert!(
+        sync_indexed_sidecar_data(&data).is_err(),
+        "the repeated completion read must leave the injected sync failure unconsumed"
+    );
+}
+
+#[test]
+fn live_certificate_completion_attests_every_uncached_barrier() {
+    for (label, barrier) in strict_progress_sidecar_failure_modes() {
+        let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
+        let lane_id = LaneId::from(1);
+        let lane = lane_config.entry(lane_id).expect("configured lane");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        let (session, pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+        let expected = CertifiedLaneBlockArtifact::new(session.clone(), pops.clone());
+        kura.persist_committed_lane_block_session(&session, &pops)
+            .expect("persist certificate");
+        kura.certified_pair_durability.lock().clear();
+        barrier.inject();
+        assert!(
+            kura.read_lane_completion_certificate(lane_id, 1).is_err(),
+            "cold completion read must fail at the {label} durability boundary"
+        );
+        assert!(
+            !kura.certified_pair_durability.lock().contains_key(&lane_id),
+            "failed {label} durability must not publish an attestation"
+        );
+        assert_eq!(
+            kura.read_lane_completion_certificate(lane_id, 1)
+                .expect("retry after the one-shot durability failure"),
+            Some(expected),
+            "{label} failure must leave the original certificate recoverable"
+        );
+    }
+}
+
+#[test]
+fn live_certificate_completion_changed_data_requires_new_attestation() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    let expected = CertifiedLaneBlockArtifact::new(session.clone(), pops.clone());
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("persist certificate");
+    assert_eq!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("prime durability"),
+        Some(expected.clone())
+    );
+    let (data_path, _) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
+    let data = fs::File::options()
+        .write(true)
+        .open(data_path)
+        .expect("open exact data");
+    data.set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        .expect("change data metadata while preserving every proof byte");
+    fail_next_indexed_sidecar_data_sync_for_tests();
+    assert!(
+        kura.read_lane_completion_certificate(lane_id, 1).is_err(),
+        "changed data metadata must invalidate the earlier durability attestation"
+    );
+    assert_eq!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("reattest changed metadata through the actual barriers"),
+        Some(expected)
+    );
+}
+
+#[test]
+fn live_certificate_completion_revalidates_proof_after_durability_cache_hit() {
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("persist certificate");
+    assert!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("prime durability")
+            .is_some()
+    );
+    fail_next_certified_lane_block_artifact_validation_for_tests();
+    assert!(
+        kura.read_lane_completion_certificate(lane_id, 1).is_err(),
+        "a durability attestation must never replace the current read's proof validation"
+    );
+    assert!(
+        kura.read_lane_completion_certificate(lane_id, 1)
+            .expect("retry after the one-shot certificate validation failure")
+            .is_some()
+    );
+}
+
+#[test]
+fn passive_certificate_read_does_not_mint_durability_attestation() {
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("persist certificate");
+    kura.certified_pair_durability.lock().clear();
+    assert!(
+        kura.read_certified_lane_block_artifact_read_only(lane_id, 1)
+            .expect("read without durability publication")
+            .is_some()
+    );
+    assert!(!kura.certified_pair_durability.lock().contains_key(&lane_id));
+    fail_next_indexed_sidecar_data_sync_for_tests();
+    assert!(
+        kura.read_lane_completion_certificate(lane_id, 1).is_err(),
+        "the passive read cannot authorize skipping a completion durability barrier"
+    );
+}
+
+#[test]
 fn consensus_certificate_read_rejects_occupied_corruption_without_repair() {
     let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
@@ -1267,4 +1415,331 @@ fn certified_latest_scan_exhaustion_cannot_prove_absence() {
         .is_err(),
         "a bounded miss must not authorize an apparently empty lane"
     );
+}
+
+/// Exercise the cache against an actual, durably persisted certified pair.
+#[cfg(unix)]
+fn with_certified_pair_ancestor_attestation_fixture(
+    check: impl FnOnce(&Kura, LaneId, &CertifiedLaneBlockArtifact, BoundProgressSidecar),
+) {
+    let temp = TempDir::new().expect("create certified pair fixture");
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let lanes = two_lane_runtime_config();
+    let lane_id = LaneId::from(1);
+    let entry = lanes.entry(lane_id).expect("lane entry");
+    let (session, signer_pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, entry.dataspace_id, 1);
+    let artifact = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lanes);
+    kura.persist_committed_lane_block_session(&session, &signer_pops)
+        .expect("persist certified pair");
+    assert_eq!(
+        kura.latest_certified_lane_block_frontier(lane_id),
+        Some(artifact.clone()),
+        "prime the real durability cache through frontier recovery"
+    );
+    assert_eq!(
+        fs::canonicalize(temp.path()).expect("resolve configured fixture root"),
+        kura.store_root,
+        "private sidecar binding must use Kura's resolved storage root"
+    );
+    let (data, index) = Kura::certified_lane_block_paths_for_entry(entry, &kura.store_root);
+    let bound = kura
+        .open_bound_progress_sidecar(&data, &index)
+        .expect("bind the actual certified pair");
+    assert_eq!(bound.namespace.directories.len(), 4);
+    assert!(kura.certified_pair_durability_is_attested(lane_id, &artifact, &bound));
+    check(&kura, lane_id, &artifact, bound);
+}
+
+/// Force a directory generation change without sleeps or filesystem clock-resolution assumptions.
+#[cfg(unix)]
+fn change_certified_pair_directory_generation(directory: &BoundProgressDirectory) {
+    let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(123_456_789);
+    assert_ne!(directory.metadata.modified().unwrap(), time);
+    directory
+        .file
+        .set_times(std::fs::FileTimes::new().set_modified(time))
+        .expect("change exact bound directory timestamp");
+    let current = secure_file_metadata::from_file(&directory.file).unwrap();
+    assert!(!Kura::sidecar_directory_metadata_unchanged(
+        &directory.metadata,
+        &current,
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn certified_pair_attestation_rejects_every_changed_ancestor_generation() {
+    for ordinal in 0..4 {
+        with_certified_pair_ancestor_attestation_fixture(|kura, lane_id, artifact, bound| {
+            change_certified_pair_directory_generation(&bound.namespace.directories[ordinal]);
+            let reopened = kura
+                .open_bound_progress_sidecar(
+                    &bound.namespace.data_path,
+                    &bound.namespace.index_path,
+                )
+                .expect("reopen unchanged pair through current namespace");
+            assert!(kura.bound_progress_sidecar_unchanged(&reopened));
+            assert!(
+                !kura.certified_pair_durability_is_attested(lane_id, artifact, &reopened),
+                "old barrier must not cover changed directory {ordinal}"
+            );
+            assert!(kura.sync_bound_progress_sidecar(&reopened, "ancestor generation test"));
+            kura.note_certified_pair_durability(lane_id, artifact, &reopened);
+            assert!(kura.certified_pair_durability_is_attested(lane_id, artifact, &reopened));
+        });
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn certified_pair_attestation_rejects_ancestor_mutation_after_binding() {
+    for ordinal in 1..4 {
+        with_certified_pair_ancestor_attestation_fixture(|kura, lane_id, artifact, bound| {
+            // The cache and this handle hold identical old snapshots. A comparison
+            // against only those snapshots would miss this later mutation.
+            change_certified_pair_directory_generation(&bound.namespace.directories[ordinal]);
+            assert!(kura.bound_progress_sidecar_unchanged(&bound));
+            assert!(
+                !kura.certified_pair_durability_is_attested(lane_id, artifact, &bound),
+                "fresh descriptor metadata must reject changed ancestor {ordinal}"
+            );
+            // Even a successful barrier must not promote fresh post-barrier metadata:
+            // the retained pre-barrier chain remains stale until a fresh bind/sync.
+            assert!(kura.sync_bound_progress_sidecar(&bound, "stale snapshot test"));
+            kura.note_certified_pair_durability(lane_id, artifact, &bound);
+            assert!(!kura.certified_pair_durability_is_attested(lane_id, artifact, &bound));
+        });
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn certified_pair_attestation_rejects_replaced_higher_ancestor() {
+    with_certified_pair_ancestor_attestation_fixture(|kura, lane_id, artifact, bound| {
+        let blocks = &bound.namespace.directories[2].expected_path;
+        let lane = &bound.namespace.directories[1].expected_path;
+        let displaced = blocks.with_file_name("displaced-certified-blocks");
+        fs::rename(blocks, &displaced).expect("displace blocks ancestor");
+        fs::create_dir(blocks).expect("install a different blocks ancestor");
+        fs::rename(
+            displaced.join(lane.file_name().expect("lane segment name")),
+            lane,
+        )
+        .expect("restore the same lane subtree under the replaced ancestor");
+        let reopened = kura
+            .open_bound_progress_sidecar(&bound.namespace.data_path, &bound.namespace.index_path)
+            .expect("bind current direct namespace");
+        assert!(Kura::stable_sidecar_metadata_unchanged(
+            &bound.data_metadata,
+            &reopened.data_metadata,
+        ));
+        assert!(Kura::stable_sidecar_metadata_unchanged(
+            &bound.index_metadata,
+            &reopened.index_metadata,
+        ));
+        assert!(kura.bound_progress_sidecar_unchanged(&reopened));
+        assert!(!kura.bound_progress_sidecar_unchanged(&bound));
+        assert!(
+            !kura.certified_pair_durability_is_attested(lane_id, artifact, &reopened),
+            "exact file/immediate-parent metadata cannot attest a replaced higher ancestor"
+        );
+        assert!(kura.sync_bound_progress_sidecar(&reopened, "replaced ancestor test"));
+        kura.note_certified_pair_durability(lane_id, artifact, &reopened);
+        assert!(kura.certified_pair_durability_is_attested(lane_id, artifact, &reopened));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn certified_pair_attestation_requires_exact_chain_shape_and_artifact() {
+    with_certified_pair_ancestor_attestation_fixture(|kura, lane_id, artifact, bound| {
+        let original = kura.certified_pair_durability.lock()[&lane_id].clone();
+        #[derive(Debug)]
+        enum ChainMutation {
+            Missing,
+            Order,
+            ExpectedPath,
+            CanonicalPath,
+            EntryName,
+        }
+        for kind in [
+            ChainMutation::Missing,
+            ChainMutation::Order,
+            ChainMutation::ExpectedPath,
+            ChainMutation::CanonicalPath,
+            ChainMutation::EntryName,
+        ] {
+            let mut changed = original.clone();
+            match kind {
+                ChainMutation::Missing => {
+                    changed.directories.pop();
+                }
+                ChainMutation::Order => changed.directories.swap(1, 2),
+                ChainMutation::ExpectedPath => {
+                    changed.directories[1].expected_path.push("different")
+                }
+                ChainMutation::CanonicalPath => {
+                    changed.directories[1].canonical_path.push("different")
+                }
+                ChainMutation::EntryName => {
+                    changed.directories[1].entry_name = Some("different".into())
+                }
+            }
+            kura.certified_pair_durability
+                .lock()
+                .insert(lane_id, changed);
+            assert!(
+                !kura.certified_pair_durability_is_attested(lane_id, artifact, &bound),
+                "malformed cache chain {kind:?} must not be accepted"
+            );
+        }
+        kura.certified_pair_durability
+            .lock()
+            .insert(lane_id, original);
+        assert!(kura.certified_pair_durability_is_attested(lane_id, artifact, &bound));
+        assert!(!kura.certified_pair_durability_is_attested(LaneId::from(99), artifact, &bound));
+        let mut different_artifact = artifact.clone();
+        *different_artifact
+            .commit_qc
+            .bls_aggregate_signature
+            .first_mut()
+            .unwrap() ^= 1;
+        assert!(!kura.certified_pair_durability_is_attested(lane_id, &different_artifact, &bound));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn certified_pair_changed_ancestor_reissues_every_durability_barrier() {
+    for (label, failure) in strict_progress_sidecar_failure_modes() {
+        with_certified_pair_ancestor_attestation_fixture(|kura, lane_id, artifact, bound| {
+            change_certified_pair_directory_generation(&bound.namespace.directories[2]);
+            failure.inject();
+            assert_eq!(
+                kura.latest_certified_lane_block_frontier(lane_id),
+                None,
+                "changed ancestor must reissue and observe {label} barrier failure"
+            );
+            let reopened = kura
+                .open_bound_progress_sidecar(
+                    &bound.namespace.data_path,
+                    &bound.namespace.index_path,
+                )
+                .expect("reopen pair after failed barrier");
+            assert!(!kura.certified_pair_durability_is_attested(lane_id, artifact, &reopened));
+            assert_eq!(
+                kura.latest_certified_lane_block_frontier(lane_id),
+                Some(artifact.clone()),
+                "retry after {label} failure must complete the whole barrier"
+            );
+            let reattested = kura
+                .open_bound_progress_sidecar(
+                    &bound.namespace.data_path,
+                    &bound.namespace.index_path,
+                )
+                .expect("reopen reattested pair");
+            assert!(kura.certified_pair_durability_is_attested(lane_id, artifact, &reattested));
+        });
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "owned optimized completion-read measurement; requires explicit execution"]
+fn certified_pair_durability_reuse_measurement() {
+    const PAIRS: usize = 8;
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("configured lane");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let (session, pops) =
+        sample_committed_lane_block_session_for_kura(lane_id, lane.dataspace_id, 1);
+    let expected = CertifiedLaneBlockArtifact::new(session.clone(), pops.clone());
+    let artifact_hash = HashOf::new(&expected).to_string();
+    kura.persist_committed_lane_block_session(&session, &pops)
+        .expect("persist the actual certificate before measurement");
+    assert_eq!(
+        fs::canonicalize(temp_dir.path()).expect("resolve configured measurement root"),
+        kura.store_root,
+        "the measured attestation probe must use Kura's resolved storage root"
+    );
+    let (data_path, index_path) =
+        Kura::certified_lane_block_paths_for_entry(lane, &kura.store_root);
+    let attestation_is_current = || {
+        let Ok(bound) = kura.open_bound_progress_sidecar(&data_path, &index_path) else {
+            return false;
+        };
+        kura.certified_pair_durability_is_attested(lane_id, &expected, &bound)
+    };
+    let mut total_read_calls = 0usize;
+    let mut priming_calls = 0usize;
+    let mut measured_call_ordinal = 0usize;
+    let mut measure = |pair: usize, order: usize, attested: bool, initial: bool| {
+        // Each paired arm starts with the same explicitly reported untimed read.
+        // Removing only this lane's entry then selects the forced-miss arm.
+        if !initial {
+            kura.certified_pair_durability.lock().remove(&lane_id);
+            total_read_calls += 1;
+            priming_calls += 1;
+            assert_eq!(
+                kura.read_lane_completion_certificate(lane_id, 1)
+                    .expect("prime this arm outside its measurement clock"),
+                Some(expected.clone())
+            );
+        }
+        if !attested {
+            kura.certified_pair_durability.lock().remove(&lane_id);
+        }
+        let cache_before = attestation_is_current();
+        assert_eq!(cache_before, attested, "exact cache precondition");
+        total_read_calls += 1;
+        let started = std::time::Instant::now();
+        let result = kura.read_lane_completion_certificate(lane_id, 1);
+        let elapsed_ns = started.elapsed().as_nanos();
+        // Result comparison, additional attestation inspection and output are untimed.
+        let (outcome, artifact_matches) = match &result {
+            Ok(Some(artifact)) if artifact == &expected => ("ok", true),
+            Ok(Some(_)) => ("mismatched_artifact", false),
+            Ok(None) => ("absent", false),
+            Err(_) => ("error", false),
+        };
+        let cache_after = attestation_is_current();
+        let condition = if attested {
+            "attested"
+        } else {
+            "forced_attestation_miss"
+        };
+        let phase = if initial { "initial" } else { "paired" };
+        eprintln!(
+            "BCK26_CERTIFICATE_READ_V1 {{\"schema\":1,\"pid\":{},\"phase\":\"{}\",\"pair\":{},\"order\":{},\"condition\":\"{}\",\"elapsed_ns\":{},\"outcome\":\"{}\",\"artifact_matches\":{},\"lane_id\":1,\"height\":1,\"artifact_hash\":\"{}\",\"cache_before\":{},\"cache_after\":{},\"measured_call_ordinal\":{},\"total_read_calls\":{},\"priming_calls\":{}}}",
+            std::process::id(),
+            phase,
+            pair,
+            order,
+            condition,
+            elapsed_ns,
+            outcome,
+            artifact_matches,
+            artifact_hash,
+            cache_before,
+            cache_after,
+            measured_call_ordinal,
+            total_read_calls,
+            priming_calls,
+        );
+        measured_call_ordinal += 1;
+        assert!(artifact_matches, "measured completion failed: {result:?}");
+        assert!(
+            cache_after,
+            "measured read did not leave an exact current attestation"
+        );
+    };
+    measure(0, 0, false, true);
+    for pair in 1..=PAIRS {
+        let first_attested = pair % 2 == 0;
+        measure(pair, 1, first_attested, false);
+        measure(pair, 2, !first_attested, false);
+    }
 }

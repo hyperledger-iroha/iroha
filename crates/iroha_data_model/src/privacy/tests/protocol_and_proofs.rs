@@ -615,8 +615,8 @@ fn assert_protocol_json_labels_roundtrip() {
 fn assert_proof_system_json_labels_roundtrip() {
     let proof_systems = [
         (
-            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-            "stark-fri-poseidon-x7-goldilocks-6x64-v1",
+            PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+            "stark-fri-sha3-384-goldilocks-v1",
         ),
         (
             PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
@@ -664,8 +664,8 @@ fn assert_proof_system_json_labels_roundtrip() {
 fn assert_engine_json_labels_roundtrip() {
     let engines = [
         (
-            PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
-            "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+            PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
+            "native-goldilocks-sha3-384-stark-fri-v1",
         ),
         (
             PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,
@@ -1268,8 +1268,8 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
     ] {
         assert_eq!(
             protocol.expected_proof_system(),
-            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-            "{protocol:?} must identify the SHA-256 transcript/Merkle STARK"
+            PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+            "{protocol:?} must identify the SHA3-384 transcript/Merkle STARK"
         );
     }
 }
@@ -2799,4 +2799,35 @@ fn goldilocks_digest384_json_rejects_noncanonical_words() {
     bytes[..8].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
     let invalid_json = norito::json::to_json(&bytes.to_vec()).expect("serialize invalid bytes");
     assert!(norito::json::from_str::<GoldilocksDigest384V1>(&invalid_json).is_err());
+}
+
+#[test]
+fn privacy_stark_ids_require_the_single_sha3_outer_suite() {
+    for protocol in [
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyProtocolIdV1::PqMaspStarkV1,
+    ] {
+        assert_eq!(
+            protocol.expected_proof_system(),
+            PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks
+        );
+        assert_eq!(
+            protocol.expected_engine(),
+            PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri
+        );
+    }
+    assert!(
+        norito::json::from_json::<PrivacyProofSystemIdV1>(
+            r#"{"proof_system":"stark-fri-poseidon-x7-goldilocks-6x64-v1","value":null}"#,
+        )
+        .is_err()
+    );
+    assert!(
+        norito::json::from_json::<PrivacyEngineIdV1>(
+            r#"{"engine":"native-goldilocks-poseidon-x7-stark-fri-6x64-v1","value":null}"#,
+        )
+        .is_err()
+    );
 }

@@ -1,15 +1,12 @@
 // Lexically included by `zk_x509::stark::tests` to preserve the existing libtest paths.
-fn test_stark_digest_v1(seed: u8) -> GoldilocksDigest384V1 {
-    GoldilocksDigest384V1::new([u64::from(seed); 6]).expect("test digest is canonical")
+fn test_stark_digest_v1(seed: u8) -> PrivacyOuterDigestV1 {
+    PrivacyOuterDigestV1::from_bytes([seed; 48])
 }
 
-fn mutate_stark_digest_v1(digest: &mut GoldilocksDigest384V1) {
-    let mut words = digest.words();
-    words[0] = F::canonical(words[0])
-        .expect("digest lane is canonical")
-        .add(F::ONE)
-        .value();
-    *digest = GoldilocksDigest384V1::new(words).expect("mutated test digest is canonical");
+fn mutate_stark_digest_v1(digest: &mut PrivacyOuterDigestV1) {
+    let mut words = digest.to_bytes();
+    words[0] ^= 1;
+    *digest = PrivacyOuterDigestV1::from_bytes(words);
 }
 
 #[test]
@@ -66,8 +63,8 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     verify_zk_x509_io_segmented_stark_v1(statement, proof).expect("valid proof");
     assert!(
         ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1
-            .windows(b"goldilocks-poseidon-x7-six-lane-vector-row-merkle".len())
-            .any(|window| window == b"goldilocks-poseidon-x7-six-lane-vector-row-merkle")
+            .windows(b"sha3-384-opaque48-vector-row-merkle".len())
+            .any(|window| window == b"sha3-384-opaque48-vector-row-merkle")
     );
     assert!(
         !ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1
@@ -1891,7 +1888,7 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
 }
 #[test]
 fn main_base_commitment_session_mints_pre_aux_only_after_canonical_six_group_chronology() {
-    fn root(group: usize) -> GoldilocksDigest384V1 {
+    fn root(group: usize) -> PrivacyOuterDigestV1 {
         test_stark_digest_v1(u8::try_from(0x41 + group).expect("six groups"))
     }
     let mut session = main_base_commitment_session_fixture_v1();
@@ -1937,7 +1934,7 @@ fn main_base_commitment_session_mints_pre_aux_only_after_canonical_six_group_chr
 }
 #[test]
 fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zero_and_excess() {
-    fn root(group: usize) -> GoldilocksDigest384V1 {
+    fn root(group: usize) -> PrivacyOuterDigestV1 {
         test_stark_digest_v1(u8::try_from(group + 1).expect("six groups"))
     }
     for omitted_after in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
@@ -1958,13 +1955,13 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
     }
     let mut zero = main_base_commitment_session_fixture_v1();
     assert!(matches!(
-        zero.accept_base_root_v1(0, 5, GoldilocksDigest384V1::default()),
+        zero.accept_base_root_v1(0, 5, PrivacyOuterDigestV1::default()),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     assert_eq!(zero.next_group, 0);
     assert_eq!(
         zero.roots,
-        [GoldilocksDigest384V1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1]
+        [PrivacyOuterDigestV1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1]
     );
     assert_eq!(
         zero.recorded,
@@ -1972,7 +1969,7 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
     );
     let zero_streamed = aggregate::StreamingRowCommitmentResultV1 {
         commitment: aggregate::StreamingMerkleCommitmentV1 {
-            root: GoldilocksDigest384V1::default(),
+            root: PrivacyOuterDigestV1::default(),
             frontier: Vec::new(),
         },
         opened_rows: std::collections::BTreeMap::new(),
@@ -2024,10 +2021,10 @@ fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zer
 }
 #[test]
 fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_state_tampering() {
-    fn group(root: GoldilocksDigest384V1) -> TraceGroupProofV1 {
+    fn group(root: PrivacyOuterDigestV1) -> TraceGroupProofV1 {
         TraceGroupProofV1 {
             base_root: root,
-            aux_root: GoldilocksDigest384V1::default(),
+            aux_root: PrivacyOuterDigestV1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }
@@ -2097,7 +2094,7 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
     }
     for zero_at in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
         let mut groups = canonical_groups.clone();
-        groups[zero_at].base_root = GoldilocksDigest384V1::default();
+        groups[zero_at].base_root = PrivacyOuterDigestV1::default();
         let mut session = main_base_commitment_session_fixture_v1();
         assert!(matches!(
             session.accept_decoded_base_groups_v1(&groups),
@@ -2106,7 +2103,7 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         assert_eq!(session.next_group, 0);
         assert_eq!(
             session.roots,
-            [GoldilocksDigest384V1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
+            [PrivacyOuterDigestV1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
             "decoded zero sentinel at group {zero_at} must fail transactionally"
         );
     }
@@ -2175,7 +2172,7 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         aggregate::StreamingRowCommitmentResultV1 {
             commitment: aggregate::StreamingMerkleCommitmentV1 {
                 root: if seed == 0 {
-                    GoldilocksDigest384V1::default()
+                    PrivacyOuterDigestV1::default()
                 } else {
                     test_stark_digest_v1(seed)
                 },
@@ -2232,7 +2229,7 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
     assert_eq!(groups.len(), 1, "aux cannot start before all six bases");
-    assert_eq!(groups[0].aux_root, GoldilocksDigest384V1::default());
+    assert_eq!(groups[0].aux_root, PrivacyOuterDigestV1::default());
     for group in 1..FULL_PROFILE_TRACE_GROUPS_V1 {
         record_main_group_commitment_v1(
             group,
@@ -2272,12 +2269,12 @@ fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_
         assert!(
             groups[..=group]
                 .iter()
-                .all(|recorded| recorded.aux_root != GoldilocksDigest384V1::default())
+                .all(|recorded| recorded.aux_root != PrivacyOuterDigestV1::default())
         );
         assert!(
             groups[group + 1..]
                 .iter()
-                .all(|pending| pending.aux_root == GoldilocksDigest384V1::default())
+                .all(|pending| pending.aux_root == PrivacyOuterDigestV1::default())
         );
     }
     let complete = groups.clone();

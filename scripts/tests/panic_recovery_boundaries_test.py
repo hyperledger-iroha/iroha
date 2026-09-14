@@ -45,6 +45,59 @@ def test_pr_workflow_runs_panic_recovery_guard_and_regressions() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "relative",
+    (
+        "crates/iroha_core/src/executor_initial_permission_authority.rs",
+        "crates/iroha_core/src/executor_stream_token_custody_permission_tests.rs",
+    ),
+)
+def test_core_recovery_support_seals_exact_permission_include(
+    tmp_path: Path, relative: str,
+) -> None:
+    module = load_guard_module()
+    included = tmp_path / relative
+    included.parent.mkdir(parents=True)
+    executor = included.parent / "executor.rs"
+    executor.write_text(f'include!("{included.name}");\n', encoding="utf-8")
+    included.write_text("fn reviewed_permission() {}\n", encoding="utf-8")
+
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert included.resolve() in sources
+    records, _, counts = module.torii_boundary_inventory(tmp_path)
+    assert any(record.startswith(relative + "\t") for record in records)
+
+    included.write_text(
+        "fn reviewed_permission() { changed_authority(); }\n", encoding="utf-8"
+    )
+    observed = module.torii_boundary_inventory(tmp_path)
+    assert observed[2] == counts, "the control changes context without adding a boundary"
+    errors = module.closed_torii_boundary_inventory_failures(
+        tmp_path, records, observed_inventory=observed,
+    )
+    assert any("source inventory drifted" in error for error in errors), errors
+
+
+def test_core_recovery_support_rejects_undeclared_permission_sibling(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    source_root = tmp_path / "crates/iroha_core/src"
+    source_root.mkdir(parents=True)
+    executor = source_root / "executor.rs"
+    sibling = source_root / "executor_unreviewed_permission.rs"
+    executor.write_text(f'include!("{sibling.name}");\n', encoding="utf-8")
+    sibling.write_text("fn unreviewed_permission() {}\n", encoding="utf-8")
+
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert sibling.resolve() not in sources
+    assert failures == [
+        "crates/iroha_core/src/executor.rs:1: include! source path escapes "
+        "the audited source roots: executor_unreviewed_permission.rs"
+    ]
+
+
 def test_stable_inventory_read_rejects_hardlinks_and_shared_writes(
     tmp_path: Path,
 ) -> None:

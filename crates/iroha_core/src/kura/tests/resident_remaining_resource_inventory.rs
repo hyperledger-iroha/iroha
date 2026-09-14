@@ -16,7 +16,7 @@ fn observed_remaining_resident(kura: &Kura, family: super::resource_inventory::F
 }
 fn recount_frontier_resident(kura: &Kura) -> u64 {
     let mut count = kura.lane_storage_entries.lock().len()
-        + kura.certified_frontier_pair_durability.lock().len()
+        + kura.certified_pair_durability.lock().len()
         + kura.certified_frontier_artifact_validation.lock().len();
     for reservation in kura
         .post_wsv_lane_artifact_budget_reservations

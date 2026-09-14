@@ -600,6 +600,39 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         )
     }
 
+    func testOutboundIntentRetainedStageDecodesAndRejectsSent() throws {
+        var payload: [String: Any] = [
+            "kind": ["kind": "timeout_certificate", "details": NSNull()],
+            "round": [
+                "context_id": [nativeAmxTestHash(0x14)],
+                "height": 10,
+                "view": 1,
+            ],
+            "proposal_round": NSNull(),
+            "subject": NSNull(),
+            "execution_commitment": NSNull(),
+            "stage": ["stage": "retained", "details": NSNull()],
+        ]
+        let retainedJSON = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try JSONDecoder().decode(
+            ToriiSumeragiV2OutboundIntentStatus.self, from: retainedJSON
+        )
+        XCTAssertEqual(decoded.stage, "retained")
+        XCTAssertEqual(decoded.kind, "timeout_certificate")
+        XCTAssertEqual(decoded.round.view, 1)
+
+        payload["stage"] = ["stage": "sent", "details": NSNull()]
+        let rejectedJSON = try JSONSerialization.data(withJSONObject: payload)
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            ToriiSumeragiV2OutboundIntentStatus.self, from: rejectedJSON
+        )) { error in
+            guard case DecodingError.dataCorrupted(let context) = error else {
+                return XCTFail("expected unsupported outbound stage, got \(error)")
+            }
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["stage", "stage"])
+        }
+    }
+
     func testRustCanonicalCompactStatusFixtureRoundtrips() throws {
         let row = try XCTUnwrap(
             fixtureRows().first { $0.kind == "status" && $0.name == "compact" }
@@ -635,6 +668,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.liveness.commitQuorums.first?.round.view, 3)
         XCTAssertEqual(decoded.liveness.commitQuorums.first?.proposalRound.view, 3)
         XCTAssertEqual(decoded.liveness.timeoutQuorums.count, 1)
+        XCTAssertEqual(SumeragiV2OutboundIntentStage.retained.rawValue, 3)
+        XCTAssertEqual(decoded.liveness.outboundIntents.first?.stage, .retained)
         XCTAssertEqual(decoded.liveness.outboundIntents.first?.kind, .commitVote)
         XCTAssertEqual(decoded.liveness.outboundIntents.first?.round.view, 3)
         XCTAssertEqual(decoded.liveness.outboundIntents.first?.proposalRound?.view, 3)
