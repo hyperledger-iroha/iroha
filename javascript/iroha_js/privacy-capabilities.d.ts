@@ -117,7 +117,6 @@ export type PrivacyProtocolLifecycleV1 =
       state: "proposed";
       record: Readonly<{
         proposed_at_height: PrivacyU64V1;
-        activate_at_height: PrivacyU64V1;
       }>;
     }>
   | Readonly<{

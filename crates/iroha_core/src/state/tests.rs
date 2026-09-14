@@ -687,7 +687,7 @@ fn world_with_privacy_tightenings(
             next_limits,
         }),
     });
-    let_row! { mut activation = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) .expect("compiled VeRange profile") .activation_record(PrivacyProtocolLifecycleV1::Proposed( PrivacyProposedLifecycleV1 { proposed_at_height: 100, activate_at_height: 400, }, )) };
+    let_row! { mut activation = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) .expect("compiled VeRange profile") .activation_record(PrivacyProtocolLifecycleV1::Proposed( PrivacyProposedLifecycleV1 { proposed_at_height: 100, }, )) };
     let mut next_protocol_limits = activation.protocol_limits;
     let_row! { iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
     limits.max_aggregation_count -= 1;
@@ -719,13 +719,13 @@ state_test! { sync privacy_policy_and_protocol_tightenings_apply_atomically_at_b
     assert_eq!(block.privacy_budget_in_block.actions(), 0);
     assert_eq!(block.privacy_budget_in_block.bytes(), 0);
     let_row! { key = crate::privacy_state::PrivacyActivationKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
-    let_row! { activation = *block .world .privacy_activations .get(&key) .expect("promoted activation") };
+    let_row! { activation = *block .world .privacy_activations .get(&key) .expect("activation with updated limits") };
     assert_eq!(activation.protocol_limits, next_protocol_limits);
     assert_eq!(activation.pending_protocol_limits_tightening, None);
     assert!(matches!(
         activation.lifecycle,
-        PrivacyProtocolLifecycleV1::Active(_)
-    ));
+        PrivacyProtocolLifecycleV1::Proposed(_)
+    ), "a protocol-limit schedule must not activate a pending proposal");
     assert!(matches!(
         activation.protocol_limits,
         PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(_)
@@ -3558,8 +3558,8 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
         profile.activation_record(PrivacyProtocolLifecycleV1::Active(
             PrivacyActiveLifecycleV1 {
                 proposed_at_height: 1,
-                activated_at_height: 1 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-                state_since_height: 1 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+                activated_at_height: 1,
+                state_since_height: 1,
             },
         )),
     );
@@ -3584,10 +3584,7 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    seed_committed_height_for_state_test(
-        &state,
-        1 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-    );
+    seed_committed_height_for_state_test(&state, 1);
     seed_autoscale_sample_history_for_snapshot_test(&state);
     (state, reserve_account, asset_definition_id)
 }

@@ -926,7 +926,7 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
             else -> throw IllegalArgumentException("$path.state is not a closed lifecycle state")
         }
         val keys = if (state == PrivacyProtocolLifecycleStateV1.PROPOSED) {
-            setOf("proposed_at_height", "activate_at_height")
+            setOf("proposed_at_height")
         } else {
             setOf("proposed_at_height", "activated_at_height", "state_since_height")
         }
@@ -937,14 +937,7 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         )
         require(proposed <= committedHeight) { "$path proposal is after committed height" }
         if (state == PrivacyProtocolLifecycleStateV1.PROPOSED) {
-            val activate = positiveUint64(
-                record["activate_at_height"],
-                "$path.record.activate_at_height",
-            )
-            require(activate > proposed && activate > committedHeight) {
-                "$path proposed lifecycle heights are invalid"
-            }
-            return PrivacyProtocolLifecycleV1(state, proposed, activate, null, null)
+            return PrivacyProtocolLifecycleV1(state, proposed, null, null)
         }
         val activated = if (
             state == PrivacyProtocolLifecycleStateV1.RETIRED &&
@@ -964,7 +957,7 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         require(stateSince <= committedHeight && (activated == null || activated <= committedHeight)) {
             "$path lifecycle state is after committed height"
         }
-        return PrivacyProtocolLifecycleV1(state, proposed, null, activated, stateSince)
+        return PrivacyProtocolLifecycleV1(state, proposed, activated, stateSince)
     }
 
     private fun parseProtocolTightening(

@@ -1174,12 +1174,7 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
 
         if (tag == 0)
         {
-            var activate = ReadUInt64Field(ref fields, $"row[{index}].lifecycle.activate_at_height");
             fields.RequireEnd($"row[{index}].lifecycle");
-            if (activate <= proposed || activate <= committedHeight)
-            {
-                throw Invalid($"Exact12 row {index} proposed activation height is invalid.");
-            }
             return new LifecycleProjection(ProtocolLifecycle.Proposed, null);
         }
 
@@ -1204,7 +1199,7 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         }
         if (activated.HasValue)
         {
-            if (activated.Value <= proposed || activated.Value > committedHeight)
+            if (activated.Value < proposed || activated.Value > committedHeight)
             {
                 throw Invalid($"Exact12 row {index} activation height is invalid.");
             }

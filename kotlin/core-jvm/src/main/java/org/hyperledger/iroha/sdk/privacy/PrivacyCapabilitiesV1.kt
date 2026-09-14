@@ -412,7 +412,6 @@ enum class PrivacyProtocolLifecycleStateV1 {
 class PrivacyProtocolLifecycleV1(
     @JvmField val state: PrivacyProtocolLifecycleStateV1,
     @JvmField val proposedAtHeight: BigInteger,
-    @JvmField val activateAtHeight: BigInteger?,
     @JvmField val activatedAtHeight: BigInteger?,
     @JvmField val stateSinceHeight: BigInteger?,
 ) {
@@ -420,21 +419,11 @@ class PrivacyProtocolLifecycleV1(
         requirePositivePrivacyHeightV1(proposedAtHeight, "privacy proposal height")
         when (state) {
             PrivacyProtocolLifecycleStateV1.PROPOSED -> {
-                val activate = requireNotNull(activateAtHeight) {
-                    "proposed privacy lifecycle must carry activate-at height"
-                }
                 require(activatedAtHeight == null && stateSinceHeight == null) {
                     "proposed privacy lifecycle must not carry activated-at or state-since heights"
                 }
-                requirePositivePrivacyHeightV1(activate, "privacy activate-at height")
-                require(activate > proposedAtHeight) {
-                    "privacy activate-at height must be later than proposal height"
-                }
             }
             PrivacyProtocolLifecycleStateV1.ACTIVE -> {
-                require(activateAtHeight == null) {
-                    "active privacy lifecycle must not carry activate-at height"
-                }
                 val activated = requireNotNull(activatedAtHeight) {
                     "active privacy lifecycle must carry activated-at height"
                 }
@@ -443,14 +432,11 @@ class PrivacyProtocolLifecycleV1(
                 }
                 requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
                 requirePositivePrivacyHeightV1(since, "privacy state-since height")
-                require(activated > proposedAtHeight && since >= activated) {
+                require(activated >= proposedAtHeight && since >= activated) {
                     "active privacy lifecycle heights are out of order"
                 }
             }
             PrivacyProtocolLifecycleStateV1.SUSPENDED -> {
-                require(activateAtHeight == null) {
-                    "suspended privacy lifecycle must not carry activate-at height"
-                }
                 val activated = requireNotNull(activatedAtHeight) {
                     "suspended privacy lifecycle must carry activated-at height"
                 }
@@ -459,21 +445,18 @@ class PrivacyProtocolLifecycleV1(
                 }
                 requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
                 requirePositivePrivacyHeightV1(since, "privacy state-since height")
-                require(activated > proposedAtHeight && since > activated) {
+                require(activated >= proposedAtHeight && since > activated) {
                     "suspended privacy lifecycle heights are out of order"
                 }
             }
             PrivacyProtocolLifecycleStateV1.RETIRED -> {
-                require(activateAtHeight == null) {
-                    "retired privacy lifecycle must not carry activate-at height"
-                }
                 val since = requireNotNull(stateSinceHeight) {
                     "retired privacy lifecycle must carry state-since height"
                 }
                 requirePositivePrivacyHeightV1(since, "privacy state-since height")
                 activatedAtHeight?.let { activated ->
                     requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
-                    require(activated > proposedAtHeight && since > activated) {
+                    require(activated >= proposedAtHeight && since > activated) {
                         "retired privacy lifecycle heights are out of order"
                     }
                 } ?: require(since > proposedAtHeight) {
@@ -487,14 +470,12 @@ class PrivacyProtocolLifecycleV1(
         other is PrivacyProtocolLifecycleV1 &&
             state == other.state &&
             proposedAtHeight == other.proposedAtHeight &&
-            activateAtHeight == other.activateAtHeight &&
             activatedAtHeight == other.activatedAtHeight &&
             stateSinceHeight == other.stateSinceHeight
 
     override fun hashCode(): Int {
         var result = state.hashCode()
         result = 31 * result + proposedAtHeight.hashCode()
-        result = 31 * result + (activateAtHeight?.hashCode() ?: 0)
         result = 31 * result + (activatedAtHeight?.hashCode() ?: 0)
         return 31 * result + (stateSinceHeight?.hashCode() ?: 0)
     }

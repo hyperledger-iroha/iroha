@@ -18,7 +18,7 @@ use crate::privacy::{
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 isi! {
-    /// Register one immutable, future privacy-protocol activation.
+    /// Register one immutable proposal for explicit governed activation.
     #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1")]
     pub struct RegisterPrivacyProtocolActivationV1 {
@@ -960,7 +960,6 @@ mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(digest(5)),
             lifecycle: PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                 proposed_at_height: 100,
-                activate_at_height: 400,
             }),
             protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoActivationLimitsV1 {

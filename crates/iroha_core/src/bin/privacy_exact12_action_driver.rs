@@ -11,8 +11,7 @@
 //! remain absent until their native release paths are genuinely available, so
 //! receipt issuance remains closed.
 use iroha_core::{
-    privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-    privacy_profiles::compiled_privacy_profile_v1,
+    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
     privacy_release_evidence::{
         PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
         build_privacy_release_bootle_lantern_network_action_v1,
@@ -28,11 +27,15 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
     block::BlockHeader,
+    isi::{
+        InstructionBox,
+        privacy::{RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1},
+    },
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
-        PrivacyCompiledProfileSnapshotV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
+        PrivacyActiveLifecycleV1, PrivacyCompiledProfileSnapshotV1, PrivacyPolicyIdV1,
+        PrivacyPoolIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
@@ -97,9 +100,8 @@ const VERANGE_SETUP_REQUIREMENTS_SCHEMA: &str =
 const VERANGE_SETUP_REQUIREMENTS_SCHEMA_VERSION: u8 = 1;
 const VERANGE_QUALIFICATION_DOMAIN_ID: &str = "privacy.universal";
 const VERANGE_ACTIVATION_HEIGHT_RULE: &str =
-    "activate_at_height=proposed_at_height+minimum_delay_blocks";
-const VERANGE_ACTIVATION_INSTRUCTION: &str = "register-privacy-protocol-activation-v1";
-const VERANGE_ACTIVATION_LIFECYCLE: &str = "proposed-relative-height-template-v1";
+    "proposal_and_activation_equal_governed_execution_height";
+const VERANGE_ACTIVATION_LIFECYCLE: &str = "explicit-governed-registration-and-activation-v1";
 const VERANGE_GOVERNANCE_PERMISSION: &str = "CanEnactGovernance";
 const VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT: u64 = 1;
 const MAX_COMPILED_PROFILE_BYTES: usize = 64 * 1024;
@@ -229,7 +231,7 @@ struct VeRangePublicAdmissionArtifactsV1 {
 }
 /// Canonical public requirements for a future controller-owned setup bundle.
 ///
-/// The relative-height activation record is a binding template, not a signed
+/// The same-block instruction pair is a binding template, not a signed
 /// instruction and not evidence that the setup authority exists in genesis.
 /// All signing material remains internal and absent from this response.
 #[derive(Debug, norito::JsonSerialize)]
@@ -237,13 +239,11 @@ struct VeRangeQualificationSetupRequirementsV1 {
     action_authority_account_id: String,
     action_authority_public_key_hex: String,
     activation_height_rule: String,
-    activation_instruction: String,
+    activation_instruction_wire_ids: Vec<String>,
     activation_lifecycle: String,
-    activation_minimum_delay_blocks: u64,
-    activation_template_activate_at_height: u64,
-    activation_template_norito_hex: String,
-    activation_template_proposed_at_height: u64,
-    activation_template_sha256: String,
+    activation_instructions_template_norito_hex: String,
+    activation_template_execution_height: u64,
+    activation_instructions_template_sha256: String,
     asset_definition_id: String,
     candidate_binding_sha256: String,
     compiled_profile_sha256: String,
@@ -391,6 +391,38 @@ fn verange_setup_identity_binding_v1(
     hash.update(setup_public_key);
     hex::encode(hash.finalize())
 }
+/// Build the ordered governance pair; execution binds both operations to one block.
+fn verange_activation_instructions_v1(
+    compiled: &CompiledPrivacyProfileV1,
+) -> Result<Vec<InstructionBox>, String> {
+    if compiled.protocol_id != PrivacyProtocolIdV1::VeRangeTransparentRangeV1 {
+        return Err("VeRange activation template requires the exact compiled protocol".to_owned());
+    }
+    let height = VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT;
+    let proposal = compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+        PrivacyProposedLifecycleV1 {
+            proposed_at_height: height,
+        },
+    ));
+    proposal
+        .validate()
+        .map_err(|error| format!("native VeRange proposal template is invalid: {error}"))?;
+    let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: height,
+        activated_at_height: height,
+        state_since_height: height,
+    });
+    proposal
+        .lifecycle
+        .validate_transition_to(&active)
+        .map_err(|error| {
+            format!("native VeRange explicit activation template is invalid: {error}")
+        })?;
+    Ok(vec![
+        RegisterPrivacyProtocolActivationV1::new(proposal).into(),
+        TransitionPrivacyProtocolLifecycleV1::new(compiled.protocol_id, active).into(),
+    ])
+}
 fn verange_public_admission_artifacts_v1(
     authority: &AccountId,
     policy_id: [u8; 32],
@@ -420,20 +452,11 @@ fn verange_public_admission_artifacts_v1(
     {
         return Err("native VeRange compiled profile violates its byte bound".to_owned());
     }
-    let activation_template_activate_at_height = VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT
-        .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-        .ok_or_else(|| "VeRange activation template height overflowed".to_owned())?;
-    let activation_template = compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 {
-            proposed_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
-            activate_at_height: activation_template_activate_at_height,
-        },
-    ));
-    activation_template
-        .validate()
-        .map_err(|error| format!("native VeRange activation template is invalid: {error}"))?;
-    let activation_template_bytes = norito::to_bytes(&activation_template)
-        .map_err(|error| format!("cannot encode native VeRange activation template: {error}"))?;
+    let activation_instructions = verange_activation_instructions_v1(&compiled)?;
+    let activation_template_bytes =
+        norito::to_bytes(&activation_instructions).map_err(|error| {
+            format!("cannot encode native VeRange activation instruction pair: {error}")
+        })?;
     if activation_template_bytes.is_empty()
         || activation_template_bytes.len() > MAX_ACTIVATION_TEMPLATE_BYTES
     {
@@ -449,13 +472,14 @@ fn verange_public_admission_artifacts_v1(
         action_authority_account_id: authority_account_id.clone(),
         action_authority_public_key_hex: hex::encode(&public_key_bytes),
         activation_height_rule: VERANGE_ACTIVATION_HEIGHT_RULE.to_owned(),
-        activation_instruction: VERANGE_ACTIVATION_INSTRUCTION.to_owned(),
+        activation_instruction_wire_ids: vec![
+            RegisterPrivacyProtocolActivationV1::WIRE_ID.to_owned(),
+            TransitionPrivacyProtocolLifecycleV1::WIRE_ID.to_owned(),
+        ],
         activation_lifecycle: VERANGE_ACTIVATION_LIFECYCLE.to_owned(),
-        activation_minimum_delay_blocks: PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-        activation_template_activate_at_height,
-        activation_template_norito_hex: hex::encode(&activation_template_bytes),
-        activation_template_proposed_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
-        activation_template_sha256: sha256_hex(&activation_template_bytes),
+        activation_instructions_template_norito_hex: hex::encode(&activation_template_bytes),
+        activation_template_execution_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
+        activation_instructions_template_sha256: sha256_hex(&activation_template_bytes),
         asset_definition_id: asset_definition_id.to_string(),
         candidate_binding_sha256: hex::encode(candidate),
         compiled_profile_sha256: compiled_profile_sha256.clone(),
@@ -825,6 +849,51 @@ mod tests {
             compute_request_id(&golden.request).expect("derive request ID"),
             golden.request_id
         );
+    }
+    #[test]
+    fn verange_activation_template_is_one_governed_same_block_pair() {
+        let compiled =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1).unwrap();
+        let pair = verange_activation_instructions_v1(&compiled).unwrap();
+        assert_eq!(pair.len(), 2);
+        let proposal = pair[0]
+            .as_any()
+            .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
+            .unwrap();
+        let transition = pair[1]
+            .as_any()
+            .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
+            .unwrap();
+        assert_eq!(
+            proposal.activation,
+            compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT
+                }
+            ))
+        );
+        assert_eq!(transition.protocol_id, compiled.protocol_id);
+        assert_eq!(
+            transition.next_lifecycle,
+            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
+                activated_at_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
+                state_since_height: VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT,
+            })
+        );
+        assert!(
+            proposal
+                .activation
+                .lifecycle
+                .can_transition_to(&transition.next_lifecycle)
+        );
+        assert!(norito::to_bytes(&pair).unwrap().len() <= MAX_ACTIVATION_TEMPLATE_BYTES);
+    }
+    #[test]
+    fn verange_activation_template_rejects_another_compiled_protocol() {
+        let compiled =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
+        assert!(verange_activation_instructions_v1(&compiled).is_err());
     }
     #[test]
     fn verange_setup_identity_is_candidate_only() {

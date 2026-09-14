@@ -6001,6 +6001,116 @@ mod tests {
             Hash::prehashed(TEST_GENESIS_HASH),
         ))
     }
+    #[test]
+    fn governed_registration_and_activation_share_one_state_transaction() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+            .expect("compiled profile")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: TEST_BLOCK_HEIGHT,
+                },
+            ));
+        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
+        RegisterPrivacyProtocolActivationV1::new(proposal)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("authorized registration");
+        assert_eq!(
+            transaction.world.privacy_activations.get(&key),
+            Some(&proposal)
+        );
+        let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: TEST_BLOCK_HEIGHT,
+            activated_at_height: TEST_BLOCK_HEIGHT,
+            state_since_height: TEST_BLOCK_HEIGHT,
+        });
+        TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("authorized same-transaction activation");
+        let expected = PrivacyProtocolActivationRecordV1 {
+            lifecycle: active,
+            ..proposal
+        };
+        assert_eq!(
+            transaction.world.privacy_activations.get(&key),
+            Some(&expected)
+        );
+        transaction.apply();
+        assert_eq!(block.world.privacy_activations.get(&key), Some(&expected));
+        crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
+            &block.world.privacy_activations,
+            TEST_BLOCK_HEIGHT,
+        )
+        .expect("same-block activation is a valid durable history");
+    }
+    #[test]
+    fn explicit_activation_keeps_authority_height_and_transaction_rollback_checks() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(test_header());
+        let proposal = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+            .expect("compiled profile")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: TEST_BLOCK_HEIGHT,
+                },
+            ));
+        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
+        {
+            let mut transaction = block.transaction();
+            let error = RegisterPrivacyProtocolActivationV1::new(proposal)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("post-genesis registration requires governance authority");
+            assert!(error.to_string().contains("CanEnactGovernance"));
+            assert!(transaction.world.privacy_activations.get(&key).is_none());
+            grant_governance(&mut transaction);
+            RegisterPrivacyProtocolActivationV1::new(proposal)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("authorized registration");
+            let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: TEST_BLOCK_HEIGHT,
+                activated_at_height: TEST_BLOCK_HEIGHT,
+                state_since_height: TEST_BLOCK_HEIGHT,
+            });
+            let error = TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active)
+                .execute(&iroha_test_samples::BOB_ID, &mut transaction)
+                .expect_err("activation independently requires governance authority");
+            assert!(error.to_string().contains("CanEnactGovernance"));
+            assert_eq!(
+                transaction.world.privacy_activations.get(&key),
+                Some(&proposal)
+            );
+            let future = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: TEST_BLOCK_HEIGHT,
+                activated_at_height: TEST_BLOCK_HEIGHT + 1,
+                state_since_height: TEST_BLOCK_HEIGHT + 1,
+            });
+            TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, future)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("a signed activation cannot claim another block height");
+            assert_eq!(
+                transaction.world.privacy_activations.get(&key),
+                Some(&proposal)
+            );
+            TransitionPrivacyProtocolLifecycleV1::new(proposal.protocol_id, active)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("valid explicit activation");
+        }
+        assert!(
+            block.world.privacy_activations.get(&key).is_none(),
+            "an unapplied transaction rolls back both registration and activation"
+        );
+    }
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -8360,7 +8470,6 @@ mod tests {
         for lifecycle in [
             PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                 proposed_at_height: 1,
-                activate_at_height: 20,
             }),
             PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
                 proposed_at_height: 1,

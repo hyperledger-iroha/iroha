@@ -5956,7 +5956,6 @@ mod tests {
         let mut proposed = activation;
         proposed.lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
             proposed_at_height: 1,
-            activate_at_height: 20,
         });
         assert!(matches!(
             verify_privacy_envelope_v1(

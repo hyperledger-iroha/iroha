@@ -19,6 +19,7 @@ use iroha_data_model::{
         InstructionBox,
         privacy::{
             RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
+            TransitionPrivacyProtocolLifecycleV1,
         },
     },
     privacy::{
@@ -52,7 +53,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "3ee465268b21d40f50223d250d6653f441ab90d494a70e596b19a9a67a65e6fd";
+    "6030d12c01c919f055a58acf85d2dc05f99230a296fd7a3d1c9283018db2fb3d";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -256,7 +257,8 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "native_recomposition_passed": (artifacts.native_recomposition_passed),
         "broker_public_path": (args.broker_public_output.display().to_string()),
         "broker_public_sha256": (hex::encode(sha256(&artifacts.broker_public))),
-        "qualification_activation_template_count": (PrivacyProtocolIdV1::COUNT as u64),
+        "qualification_activation_protocol_count": (PrivacyProtocolIdV1::COUNT as u64),
+        "qualification_activation_instruction_count": (super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64),
         "genesis_privacy_instruction_count": 0_u64,
         "rollout_state": "not-executed",
     });
@@ -990,10 +992,9 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         &[
             "activation_state",
             "controller_observation_required",
-            "genesis_activation_forbidden",
+            "execution_height",
+            "instruction_count",
             "mode",
-            "notice_interval_blocks",
-            "observation_interval_blocks",
             "rollout_plan_path",
             "rollout_plan_sha256",
         ],
@@ -1008,14 +1009,19 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     expect_string_v1(
         rollout,
         "mode",
-        "governance-four-wave",
+        "explicit-register-then-activate",
         "governance rollout",
     )?;
-    expect_u64_v1(rollout, "notice_interval_blocks", 300, "governance rollout")?;
     expect_u64_v1(
         rollout,
-        "observation_interval_blocks",
-        300,
+        "execution_height",
+        super::BOOTSTRAP_EXECUTION_HEIGHT_V1,
+        "governance rollout",
+    )?;
+    expect_u64_v1(
+        rollout,
+        "instruction_count",
+        super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64,
         "governance rollout",
     )?;
     expect_string_v1(
@@ -1041,13 +1047,9 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         .get("controller_observation_required")
         .and_then(JsonValue::as_bool)
         != Some(true)
-        || rollout
-            .get("genesis_activation_forbidden")
-            .and_then(JsonValue::as_bool)
-            != Some(true)
     {
         bail!(
-            "privacy plan template must forbid genesis activation and require a controller observation"
+            "privacy plan template must require authenticated controller observation after explicit activation"
         );
     }
     validate_catalog_inventory_v1(object_field_v1(root, "privacy_catalog", "privacy plan")?)?;
@@ -1209,7 +1211,6 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
             "chain_id",
             "endpoints",
             "halt_conditions",
-            "intervals",
             "post_cutover_contract",
             "protocol_matrix_sha256",
             "protocols",
@@ -1219,7 +1220,6 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
             "rollback_contract",
             "schema",
             "schema_version",
-            "waves",
             "wire_contract",
         ],
         "privacy rollout plan",
@@ -1339,36 +1339,62 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
         )?;
     }
 
-    let waves = root
-        .get("waves")
-        .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("privacy rollout plan `waves` must be an array"))?;
-    if waves.len() != 4 {
-        bail!("privacy rollout plan must contain exactly four waves");
-    }
-    let mut scheduled = BTreeSet::new();
-    for (index, value) in waves.iter().enumerate() {
-        let wave = object_v1(value, "privacy rollout wave")?;
-        expect_exact_keys_v1(
-            wave,
-            &["index", "label", "protocols"],
-            "privacy rollout wave",
-        )?;
-        expect_u64_v1(wave, "index", (index + 1) as u64, "privacy rollout wave")?;
-        for label in string_array_field_v1(wave, "protocols", "privacy rollout wave")? {
-            if !PrivacyProtocolIdV1::ALL
-                .iter()
-                .any(|protocol| protocol.canonical_label() == label)
-            {
-                bail!("privacy rollout wave contains an unknown protocol label");
-            }
-            if !scheduled.insert(label) {
-                bail!("privacy rollout wave schedules a protocol more than once");
-            }
-        }
-    }
-    if scheduled.len() != PrivacyProtocolIdV1::COUNT {
-        bail!("privacy rollout waves must schedule every Exact12 protocol exactly once");
+    let activation = object_field_v1(root, "activation_contract", "privacy rollout plan")?;
+    expect_exact_keys_v1(
+        activation,
+        &[
+            "mode",
+            "execution_height",
+            "proposed_lifecycle",
+            "active_lifecycle",
+            "ordered_instruction_count",
+            "protocol_count",
+            "one_governed_instruction_batch",
+        ],
+        "privacy activation contract",
+    )?;
+    expect_string_v1(
+        activation,
+        "mode",
+        "explicit-register-then-activate",
+        "privacy activation contract",
+    )?;
+    expect_string_v1(
+        activation,
+        "proposed_lifecycle",
+        "Proposed",
+        "privacy activation contract",
+    )?;
+    expect_string_v1(
+        activation,
+        "active_lifecycle",
+        "Active",
+        "privacy activation contract",
+    )?;
+    expect_u64_v1(
+        activation,
+        "execution_height",
+        super::BOOTSTRAP_EXECUTION_HEIGHT_V1,
+        "privacy activation contract",
+    )?;
+    expect_u64_v1(
+        activation,
+        "ordered_instruction_count",
+        super::BOOTSTRAP_INSTRUCTION_COUNT_V1 as u64,
+        "privacy activation contract",
+    )?;
+    expect_u64_v1(
+        activation,
+        "protocol_count",
+        PrivacyProtocolIdV1::COUNT as u64,
+        "privacy activation contract",
+    )?;
+    if activation
+        .get("one_governed_instruction_batch")
+        .and_then(JsonValue::as_bool)
+        != Some(true)
+    {
+        bail!("privacy activation must preserve the complete ordered instruction batch");
     }
     Ok(())
 }
@@ -1734,6 +1760,10 @@ fn render_release_genesis_v1(
                 .as_any()
                 .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
                 .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
+                    .is_some()
                 || instruction
                     .as_any()
                     .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
@@ -2859,37 +2889,43 @@ mod tests {
         let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: 1,
-                activate_at_height: 301,
             },
         ));
-        let instruction =
-            InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation));
-        let mut genesis: JsonValue =
-            norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
-        let mut one = String::new();
-        iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
-        let mut decoded: JsonValue =
-            norito::json::from_str(&one).expect("parse decoded activation JSON");
-        let injected = decoded
-            .as_array_mut()
-            .expect("activation array")
-            .pop()
-            .expect("one activation");
-        genesis
-            .get_mut("transactions")
-            .and_then(JsonValue::as_array_mut)
-            .and_then(|transactions| transactions.last_mut())
-            .and_then(|transaction| transaction.get_mut("instructions"))
-            .and_then(JsonValue::as_array_mut)
-            .expect("final instructions")
-            .push(injected);
-        let tampered = json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
-        assert!(
-            render_release_genesis_v1(&tampered, None)
-                .expect_err("reject pre-existing decoded privacy instruction")
-                .to_string()
-                .contains("already contains a privacy bootstrap instruction")
-        );
+        for instruction in [
+            InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation)),
+            InstructionBox::from(TransitionPrivacyProtocolLifecycleV1::new(
+                profile.protocol_id,
+                super::super::bootstrap_active_lifecycle_v1(),
+            )),
+        ] {
+            let mut genesis: JsonValue =
+                norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
+            let mut one = String::new();
+            iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
+            let mut decoded: JsonValue =
+                norito::json::from_str(&one).expect("parse decoded activation JSON");
+            let injected = decoded
+                .as_array_mut()
+                .expect("activation array")
+                .pop()
+                .expect("one activation");
+            genesis
+                .get_mut("transactions")
+                .and_then(JsonValue::as_array_mut)
+                .and_then(|transactions| transactions.last_mut())
+                .and_then(|transaction| transaction.get_mut("instructions"))
+                .and_then(JsonValue::as_array_mut)
+                .expect("final instructions")
+                .push(injected);
+            let tampered =
+                json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
+            assert!(
+                render_release_genesis_v1(&tampered, None)
+                    .expect_err("reject pre-existing decoded privacy instruction")
+                    .to_string()
+                    .contains("already contains a privacy bootstrap instruction")
+            );
+        }
     }
     #[test]
     fn wrong_and_scoped_governance_grants_are_rejected_before_composition() {

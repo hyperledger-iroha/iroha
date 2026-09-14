@@ -13956,9 +13956,9 @@ impl<'state> StateBlock<'state> {
             crate::privacy::PrivacyBlockBudgetV1::new(pending.next_limits)
                 .expect("validated scheduled privacy limits construct a block budget");
     }
-    fn promote_due_privacy_activations(&mut self) {
+    fn apply_due_privacy_protocol_limits(&mut self) {
         let incoming_height = self._curr_block.height().get();
-        let promotions = crate::privacy_state::plan_due_privacy_activation_promotions_v1(
+        let updates = crate::privacy_state::plan_due_privacy_protocol_limits_v1(
             &self.world.privacy_activations,
             incoming_height,
         )
@@ -13968,7 +13968,7 @@ impl<'state> StateBlock<'state> {
                      {incoming_height}: {error}"
             )
         });
-        for (key, record) in promotions {
+        for (key, record) in updates {
             self.world.privacy_activations.insert(key, record);
         }
     }
@@ -30220,7 +30220,7 @@ impl State {
     ///
     /// The ordinary block-start hooks run in a discarded overlay, so this also
     /// covers scheduled work without an external entrypoint, such as privacy
-    /// activation. The same predicate excludes that work from a pristine merge
+    /// protocol-limit tightening. The same predicate excludes that work from a pristine merge
     /// execution carrier and admits the ordinary carrier which must apply it.
     /// A stale parent or concurrent state publication returns `None`.
     pub(crate) fn deterministic_start_work_pending(&self, header: &BlockHeader) -> Option<bool> {
@@ -30429,10 +30429,10 @@ impl State {
         // Chain-wide privacy policy changes take effect at the start of their
         // exact incoming height, before protocol promotions or transactions.
         sb.apply_due_privacy_consensus_policy();
-        // Privacy lifecycle is persisted state, not a verifier-time projection.
-        // Plan every due promotion before applying any of them so malformed
-        // restored state cannot leave the block overlay partially promoted.
-        sb.promote_due_privacy_activations();
+        // Privacy resource limits are persisted state, not a verifier-time projection.
+        // Plan every due tightening before applying any of them so malformed
+        // restored state cannot leave the block overlay partially updated.
+        sb.apply_due_privacy_protocol_limits();
         crate::smartcontracts::ivm::active_runtime_abi_hash(
             &sb.world,
             sb._curr_block.height().get(),

@@ -244,20 +244,19 @@ function parseLifecycle(value, committedHeight, path) {
   const state = lifecycle.state;
   if (!new Set(["proposed", "active", "suspended", "retired"]).has(state)) fail("unknown lifecycle state", `${path}.state`);
   const keys = state === "proposed"
-    ? ["proposed_at_height", "activate_at_height"]
+    ? ["proposed_at_height"]
     : ["proposed_at_height", "activated_at_height", "state_since_height"];
   const record = objectWithExactKeys(lifecycle.record, keys, `${path}.record`);
   const proposed = positiveU64(record.proposed_at_height, `${path}.record.proposed_at_height`);
   let normalized;
   if (state === "proposed") {
-    const activate = positiveU64(record.activate_at_height, `${path}.record.activate_at_height`);
-    if (activate <= proposed || proposed > committedHeight || activate <= committedHeight) fail("has invalid proposed lifecycle heights", path);
-    normalized = { proposed_at_height: proposed, activate_at_height: activate };
+    if (proposed > committedHeight) fail("claims a proposal after committed height", path);
+    normalized = { proposed_at_height: proposed };
   } else {
     const activated = state === "retired" && record.activated_at_height === null ? null : positiveU64(record.activated_at_height, `${path}.record.activated_at_height`);
     const since = positiveU64(record.state_since_height, `${path}.record.state_since_height`);
     if (proposed > committedHeight || since > committedHeight || (activated !== null && activated > committedHeight)) fail("claims a state after committed height", path);
-    if (activated === null ? state !== "retired" || since <= proposed : activated <= proposed || (state === "active" ? since < activated : since <= activated)) fail("has invalid lifecycle ordering", path);
+    if (activated === null ? state !== "retired" || since <= proposed : activated < proposed || (state === "active" ? since < activated : since <= activated)) fail("has invalid lifecycle ordering", path);
     normalized = { proposed_at_height: proposed, activated_at_height: activated, state_since_height: since };
   }
   return { state, record: normalized };

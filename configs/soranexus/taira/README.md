@@ -669,8 +669,11 @@ authorization headers in this repository.
   operator-owned mint-finality authority, is not a raw or signable manifest,
   and is not an input to the disposable generator.
 - `privacy_bootstrap_plan.json` and `privacy_rollout_plan_v1.json` remain
-  coupled to Kagami's compiled privacy bootstrap feature. The V1 rollout does
-  not carry caller-authored assurance or availability claims. It admits a wave
+  coupled to Kagami's compiled privacy bootstrap feature. Kagami emits one
+  height-1 template of twelve ordered registration/explicit-activation pairs,
+  with no activation notice or observation-height delay. The template remains
+  unexecuted until an authorized governance transaction applies it. The rollout
+  carries no caller-authored assurance or availability claims. It proceeds
   only when the authenticated committed Exact12 manifest reports every one of
   the twelve rows as `production-qualified`; missing release, audit, security,
   or deployment evidence therefore halts rollout.

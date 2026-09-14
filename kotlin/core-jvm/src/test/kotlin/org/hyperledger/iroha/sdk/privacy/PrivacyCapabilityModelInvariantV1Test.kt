@@ -80,29 +80,28 @@ class PrivacyCapabilityModelInvariantV1Test {
             {
                 lifecycle(
                     PrivacyProtocolLifecycleStateV1.PROPOSED,
-                    activateAtHeight = null,
+                    stateSinceHeight = height(2),
                 )
             },
             {
                 lifecycle(
                     PrivacyProtocolLifecycleStateV1.PROPOSED,
-                    activateAtHeight = height(2),
                     activatedAtHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.PROPOSED,
-                    proposedAtHeight = height(2),
-                    activateAtHeight = height(2),
                 )
             },
             {
                 lifecycle(
                     PrivacyProtocolLifecycleStateV1.ACTIVE,
-                    activateAtHeight = height(3),
+                    proposedAtHeight = height(3),
                     activatedAtHeight = height(2),
                     stateSinceHeight = height(2),
+                )
+            },
+            {
+                lifecycle(
+                    PrivacyProtocolLifecycleStateV1.RETIRED,
+                    activatedAtHeight = null,
+                    stateSinceHeight = height(1),
                 )
             },
             {
@@ -160,6 +159,36 @@ class PrivacyCapabilityModelInvariantV1Test {
         hostile.forEachIndexed { index, construct ->
             assertFailsWith<IllegalArgumentException>("hostile lifecycle $index") {
                 construct()
+            }
+        }
+    }
+
+    @Test
+    fun explicitActivationAllowsSameProposalHeightAndKeepsLaterHistoryStrict() {
+        val proposed = lifecycle(PrivacyProtocolLifecycleStateV1.PROPOSED)
+        assertEquals(PrivacyProtocolLifecycleStateV1.PROPOSED, proposed.state)
+        assertEquals(proposed, lifecycle(PrivacyProtocolLifecycleStateV1.PROPOSED))
+        assertEquals(
+            proposed.hashCode(),
+            lifecycle(PrivacyProtocolLifecycleStateV1.PROPOSED).hashCode(),
+        )
+        val active = lifecycle(
+            PrivacyProtocolLifecycleStateV1.ACTIVE,
+            activatedAtHeight = height(1),
+            stateSinceHeight = height(1),
+        )
+        assertEquals(height(1), active.activatedAtHeight)
+        for (state in listOf(
+            PrivacyProtocolLifecycleStateV1.SUSPENDED,
+            PrivacyProtocolLifecycleStateV1.RETIRED,
+        )) {
+            assertEquals(
+                height(1),
+                lifecycle(state, activatedAtHeight = height(1), stateSinceHeight = height(2))
+                    .activatedAtHeight,
+            )
+            assertFailsWith<IllegalArgumentException> {
+                lifecycle(state, activatedAtHeight = height(1), stateSinceHeight = height(1))
             }
         }
     }
@@ -357,13 +386,11 @@ class PrivacyCapabilityModelInvariantV1Test {
     private fun lifecycle(
         state: PrivacyProtocolLifecycleStateV1,
         proposedAtHeight: BigInteger = BigInteger.ONE,
-        activateAtHeight: BigInteger? = null,
         activatedAtHeight: BigInteger? = null,
         stateSinceHeight: BigInteger? = null,
     ): PrivacyProtocolLifecycleV1 = PrivacyProtocolLifecycleV1(
         state,
         proposedAtHeight,
-        activateAtHeight,
         activatedAtHeight,
         stateSinceHeight,
     )

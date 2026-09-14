@@ -7625,7 +7625,7 @@ fn run_real_process_fault_campaign(
     };
     verify_controller_readiness(&network, &runtime)?;
     let sponsor = network.client();
-    activate_ivm_private_note(&sponsor)?;
+    require_genesis_private_note_active(&sponsor)?;
     let routes = routes_from_network(&network, shape)?;
     let committees = committees_from_network(&network, shape, &routes)?;
     ensure!(
@@ -8699,7 +8699,7 @@ fn run_real_process_leakage_campaign(
     let inventory =
         collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
     let sponsor = network.client();
-    let activated_height = activate_ivm_private_note(&sponsor)?;
+    let activated_height = require_genesis_private_note_active(&sponsor)?;
     let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(routes.len() == request.participants, "route count mismatch");

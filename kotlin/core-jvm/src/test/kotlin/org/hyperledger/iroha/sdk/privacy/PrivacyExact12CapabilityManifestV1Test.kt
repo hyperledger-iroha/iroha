@@ -101,6 +101,70 @@ class PrivacyExact12CapabilityManifestV1Test {
     }
 
     @Test
+    fun proposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        for (committedHeight in listOf("1", "42", "18446744073709551615")) {
+            val candidate = inspection(mapOf(protocol to availableRow("proposed", proposedLifecycle())))
+                .replace("\"committed_height\":42", "\"committed_height\":$committedHeight")
+            val row = parseInspection(candidate).rowFor(protocol)
+            assertSame(
+                PrivacyCapabilityUnavailableReasonV1.Proposed,
+                assertIs<PrivacyCapabilityReadinessV1.Unavailable>(row.readiness).reason,
+            )
+            assertEquals(PrivacyProtocolLifecycleStateV1.PROPOSED, row.activation!!.lifecycle.state)
+            assertFalse(row.isNetworkAvailable())
+            assertFailsWith<IllegalArgumentException> {
+                parseInspection(candidate.replace(
+                    unavailableReadiness("proposed"),
+                    unavailableReadiness("missing-production-qualification"),
+                ))
+            }
+        }
+    }
+
+    @Test
+    fun sameHeightActivationRetainsQualificationAndHistoryRequirements() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        for ((state, since, reason) in listOf(
+            Triple("active", 1, "missing-production-qualification"),
+            Triple("suspended", 2, "suspended"),
+            Triple("retired", 2, "retired"),
+        )) {
+            val lifecycle = """{"state":"$state","record":{"proposed_at_height":1,"activated_at_height":1,"state_since_height":$since}}"""
+            val row = parseInspection(
+                inspection(mapOf(protocol to availableRow(reason, lifecycle))),
+            ).rowFor(protocol)
+            assertEquals(1.toBigInteger(), row.activation!!.lifecycle.activatedAtHeight)
+            assertIs<PrivacyCapabilityReadinessV1.Unavailable>(row.readiness)
+            assertFalse(row.isNetworkAvailable())
+        }
+    }
+
+    @Test
+    fun rejectsRemovedScheduleAndReversedOrFutureLifecycleHistory() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        val cases = listOf(
+            "proposed" to """{"proposed_at_height":1,"activate_at_height":100}""",
+            "proposed" to """{}""",
+            "proposed" to """{"proposed_at_height":0}""",
+            "proposed" to """{"proposed_at_height":43}""",
+            "active" to """{"proposed_at_height":2,"activated_at_height":1,"state_since_height":2}""",
+            "active" to """{"proposed_at_height":1,"activated_at_height":2,"state_since_height":1}""",
+            "active" to """{"proposed_at_height":1,"activated_at_height":43,"state_since_height":43}""",
+            "suspended" to """{"proposed_at_height":1,"activated_at_height":1,"state_since_height":1}""",
+            "retired" to """{"proposed_at_height":1,"activated_at_height":1,"state_since_height":1}""",
+            "retired" to """{"proposed_at_height":1,"activated_at_height":null,"state_since_height":1}""",
+        )
+        for ((state, record) in cases) {
+            val lifecycle = """{"state":"$state","record":$record}"""
+            val reason = if (state == "active") "missing-production-qualification" else state
+            assertFailsWith<IllegalArgumentException>("hostile lifecycle: $lifecycle") {
+                parseInspection(inspection(mapOf(protocol to availableRow(reason, lifecycle))))
+            }
+        }
+    }
+
+    @Test
     fun rejectsPreHardCutRowReadinessAndActivationShapes() {
         val canonical = inspection()
         val readiness = compiledUnavailableReadiness()
@@ -248,7 +312,7 @@ class PrivacyExact12CapabilityManifestV1Test {
         """{"protocol":"${protocol.canonicalLabel}","value":null}"""
 
     private fun proposedLifecycle(): String =
-        """{"state":"proposed","record":{"proposed_at_height":1,"activate_at_height":100}}"""
+        """{"state":"proposed","record":{"proposed_at_height":1}}"""
 
     private fun activeLifecycle(): String =
         """{"state":"active","record":{"proposed_at_height":1,"activated_at_height":2,"state_since_height":2}}"""

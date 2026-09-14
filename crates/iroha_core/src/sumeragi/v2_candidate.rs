@@ -2326,20 +2326,74 @@ pub(super) mod tests {
         assert_eq!(report, CandidateScanReport::default());
     }
     #[test]
-    fn scheduled_privacy_activation_is_proposal_work_at_exact_height_301() {
+    fn pending_privacy_proposal_does_not_create_an_empty_candidate() {
         use iroha_data_model::privacy::{
             PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         };
         let mut world = World::new();
         let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol)
+        let proposal = crate::privacy_profiles::compiled_privacy_profile_v1(protocol)
             .expect("compiled private-note profile")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 1,
-                    activate_at_height: 301,
                 },
             ));
+        let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(protocol);
+        world.privacy_activations.insert(activation_key, proposal);
+        let (state, context, anchor, key) = snapshot_parent_fixture_with_world(300, world);
+        let header = BlockHeader::new(
+            NonZeroU64::new(301).expect("successor height"),
+            Some(anchor.snapshot_block_hash),
+            None,
+            None,
+            301,
+            0,
+        );
+        assert_eq!(state.deterministic_start_work_pending(&header), Some(false));
+        let outcome = assemble_empty_snapshot_candidate_for_state(
+            CandidateAttachments::default(),
+            &state,
+            context,
+            anchor,
+            key,
+        );
+        assert!(
+            matches!(outcome, CandidateAssemblyOutcome::NoProposalWork(_)),
+            "a pending privacy proposal cannot manufacture block work"
+        );
+        assert_eq!(
+            state.world.privacy_activations.view().get(&activation_key),
+            Some(&proposal)
+        );
+    }
+    #[test]
+    fn scheduled_privacy_protocol_limits_are_proposal_work_at_exact_height() {
+        use iroha_data_model::privacy::{
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1,
+        };
+        let mut world = World::new();
+        let protocol = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        let mut activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol)
+            .expect("compiled VeRange profile")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 1,
+                },
+            ));
+        let mut next_limits = activation.protocol_limits;
+        let PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(ref mut limits) =
+            next_limits
+        else {
+            unreachable!("VeRange fixture");
+        };
+        limits.max_aggregation_count -= 1;
+        activation.pending_protocol_limits_tightening = Some(PrivacyProtocolLimitsTighteningV1 {
+            scheduled_at_height: 1,
+            effective_at_height: 301,
+            next_limits,
+        });
         let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(protocol);
         world.privacy_activations.insert(activation_key, activation);
         let (state, context, anchor, key) = snapshot_parent_fixture_with_world(300, world);
@@ -2350,7 +2404,7 @@ pub(super) mod tests {
             .map(|voter| voter.validator.clone())
             .collect();
         let header = BlockHeader::new(
-            NonZeroU64::new(301).expect("activation height"),
+            NonZeroU64::new(301).expect("protocol-limit effective height"),
             Some(parent_hash),
             None,
             None,
@@ -2379,7 +2433,7 @@ pub(super) mod tests {
             key,
         );
         let CandidateAssemblyOutcome::Assembled(candidate) = outcome else {
-            panic!("scheduled activation must produce its ordinary carrier without a transaction");
+            panic!("scheduled limits must produce their ordinary carrier without a transaction");
         };
         assert_eq!(candidate.block().header().height().get(), 301);
         assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
@@ -2399,20 +2453,27 @@ pub(super) mod tests {
                 Vec::new(),
                 AxtPolicySnapshot::default(),
             )
-            .expect("empty activation execution record");
+            .expect("empty protocol-limit execution record");
         signed.set_committed_fragment_count(0);
         let committed = ValidBlock::new_unverified_for_tests(signed)
             .commit_unchecked()
             .unpack(|_| {});
         let mut overlay = state.block(committed.as_ref().header());
-        assert!(matches!(
-            overlay.world.privacy_activations.get(&activation_key).expect("activation").lifecycle,
-            PrivacyProtocolLifecycleV1::Active(active) if active.activated_at_height == 301
-        ));
+        let updated = overlay
+            .world
+            .privacy_activations
+            .get(&activation_key)
+            .expect("activation");
+        assert_eq!(
+            updated.lifecycle, activation.lifecycle,
+            "protocol-limit work must not activate a pending proposal"
+        );
+        assert_eq!(updated.protocol_limits, next_limits);
+        assert_eq!(updated.pending_protocol_limits_tightening, None);
         let _events = overlay.apply_without_execution(&committed, topology);
         overlay
             .commit()
-            .expect("publish scheduled activation in the ordinary carrier");
+            .expect("publish scheduled protocol limits in the ordinary carrier");
         let successor = BlockHeader::new(
             NonZeroU64::new(302).expect("successor height"),
             Some(committed.as_ref().hash()),

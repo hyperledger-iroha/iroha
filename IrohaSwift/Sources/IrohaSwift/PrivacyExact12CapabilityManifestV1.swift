@@ -162,7 +162,7 @@ public struct PrivacyConsensusPolicyV1: Equatable, Sendable {
 }
 
 public enum PrivacyProtocolLifecycleV1: Equatable, Sendable {
-    case proposed(proposedAtHeight: UInt64, activateAtHeight: UInt64)
+    case proposed(proposedAtHeight: UInt64)
     case active(proposedAtHeight: UInt64, activatedAtHeight: UInt64, stateSinceHeight: UInt64)
     case suspended(proposedAtHeight: UInt64, activatedAtHeight: UInt64, stateSinceHeight: UInt64)
     case retired(proposedAtHeight: UInt64, activatedAtHeight: UInt64?, stateSinceHeight: UInt64)
@@ -1546,13 +1546,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         let lifecycle: PrivacyProtocolLifecycleV1
         switch tagged.tag {
         case 0:
-            let activate = try exactUInt64(
-                state.readField(maximum: 8, label: "activate height"), "activate height"
-            )
-            guard activate > proposed, activate > committedHeight else {
-                throw invalid("proposed lifecycle has a due or unordered activation height")
-            }
-            lifecycle = .proposed(proposedAtHeight: proposed, activateAtHeight: activate)
+            lifecycle = .proposed(proposedAtHeight: proposed)
         case 1, 2:
             let activated = try exactUInt64(
                 state.readField(maximum: 8, label: "activated height"), "activated height"
@@ -1561,7 +1555,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 state.readField(maximum: 8, label: "state-since height"), "state-since height"
             )
             let validSince = tagged.tag == 1 ? since >= activated : since > activated
-            guard activated > proposed, validSince,
+            guard activated >= proposed, validSince,
                   activated <= committedHeight, since <= committedHeight else {
                 throw invalid("active/suspended lifecycle heights are invalid")
             }
@@ -1580,7 +1574,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 "retired state-since height"
             )
             if let activated {
-                guard activated > proposed, since > activated else {
+                guard activated >= proposed, since > activated else {
                     throw invalid("retired lifecycle activation history is invalid")
                 }
             } else if since <= proposed {

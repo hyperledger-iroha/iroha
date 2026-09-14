@@ -7,7 +7,18 @@ path. It is separate from transparent Native AMX DvP/PvP. Configuration keeps
 it disabled by default. Enabling the flag is necessary but not sufficient:
 admission also requires a governed activation height, the active compiled
 `IrohaIvmPrivateNoteStarkV1` capability, adequate fixed-slot limits, V1 policy
-permission, and the configured governance notice period.
+permission, and the independent pool-policy governance notice period.
+
+Privacy protocol registration stores only a nonzero proposal execution height.
+The proposal remains pending until `TransitionPrivacyProtocolLifecycleV1`
+explicitly activates the exact compiled profile under governance authority.
+Registration and initial activation may execute in the same transaction,
+including the authorized signed genesis transaction. Both recorded heights
+must equal the executing block height. There is no protocol activation delay,
+automatic height promotion, or compatibility decoding for a scheduled proposal.
+Suspension, resumption and retirement retain strictly increasing lifecycle
+history. Scheduled protocol-resource tightening and pool-policy notice remain
+independent constraints.
 
 The implementation is not production-qualified until every release gate in
 this document and `specs/private_settlement_threat_model.md` is satisfied.
@@ -130,7 +141,7 @@ performance preparation share this ordering. They do not predict how many
 admission blocks precede activation or require a later capability query to
 equal the activation transaction's block height. Exact historical committee
 authorization, governance validity, root membership for positive inputs and
-the 300-height protocol activation notice remain mandatory. Current runtime
+explicit activation of the exact compiled protocol remain mandatory. Current runtime
 qualification of this harness correction is pending.
 
 The required public `audit_input_commitment` binds the exact two ordered input
@@ -757,8 +768,8 @@ commitments.
 
 Release execution first requires a completed
 `scripts/private_settlement_smoke_campaign.py` campaign: ten consecutive fresh
-N=3 runs, each with sixteen distinct validators, the governed 300-height
-activation notice, continuous financial-state observations, signed RS16
+N=3 runs, each with sixteen distinct validators, explicit governed protocol
+activation, continuous financial-state observations, signed RS16
 finality, replay rejection, and restart of every validator. The driver builds
 the exact signed clean source and retains requests, process inventories,
 state/certificate/finality artifacts, command logs, and source/executable

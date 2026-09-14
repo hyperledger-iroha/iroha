@@ -3504,7 +3504,6 @@ pub(crate) mod tests {
             iroha_data_model::privacy::PrivacyProtocolLifecycleV1::Proposed(
                 iroha_data_model::privacy::PrivacyProposedLifecycleV1 {
                     proposed_at_height: 1,
-                    activate_at_height: 2,
                 },
             ),
         );

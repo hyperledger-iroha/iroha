@@ -565,7 +565,7 @@ test("unavailable readiness preserves exact registration and lifecycle reasons",
       "proposed",
       {
         state: "proposed",
-        record: { proposed_at_height: 1, activate_at_height: 43 },
+        record: { proposed_at_height: 1 },
       },
     ],
     [
@@ -606,6 +606,71 @@ test("unavailable readiness preserves exact registration and lifecycle reasons",
     await withNative(fakeNative(payload), () => {
       const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
       assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+    });
+  }
+});
+
+test("proposed remains pending at later heights until explicit activation", async () => {
+  for (const committedHeight of [1, 42, 4_000]) {
+    const payload = manifestPayload();
+    payload.committed_height = committedHeight;
+    const row = payload.protocols[1];
+    row.activation.lifecycle = { state: "proposed", record: { proposed_at_height: 1 } };
+    row.readiness = { readiness: "unavailable", detail: { reason: "proposed", detail: null } };
+    await withNative(fakeNative(payload), () => {
+      const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+      assert.deepEqual(manifest.protocols[1].activation.lifecycle.record, { proposed_at_height: 1n });
+      assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+    });
+    row.readiness = { readiness: "unavailable", detail: { reason: "missing-production-qualification", detail: null } };
+    await withNative(fakeNative(payload), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /Exact12 capability manifest/u);
+    });
+  }
+});
+
+test("same-height activation preserves history and qualification requirements", async () => {
+  for (const [state, since, reason] of [
+    ["active", 1, "missing-production-qualification"],
+    ["suspended", 2, "suspended"],
+    ["retired", 2, "retired"],
+  ]) {
+    const payload = manifestPayload();
+    const row = payload.protocols[1];
+    row.activation.lifecycle = {
+      state,
+      record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: since },
+    };
+    row.readiness = { readiness: "unavailable", detail: { reason, detail: null } };
+    await withNative(fakeNative(payload), () => {
+      const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+      assert.equal(manifest.protocols[1].activation.lifecycle.record.activated_at_height, 1n);
+      assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+    });
+  }
+});
+
+test("explicit activation rejects scheduled fields and reversed or future history", async () => {
+  const cases = [
+    { state: "proposed", record: { proposed_at_height: 1, activate_at_height: 43 } },
+    { state: "proposed", record: {} },
+    { state: "proposed", record: { proposed_at_height: 0 } },
+    { state: "proposed", record: { proposed_at_height: 43 } },
+    { state: "active", record: { proposed_at_height: 2, activated_at_height: 1, state_since_height: 2 } },
+    { state: "active", record: { proposed_at_height: 1, activated_at_height: 2, state_since_height: 1 } },
+    { state: "active", record: { proposed_at_height: 1, activated_at_height: 43, state_since_height: 43 } },
+    { state: "suspended", record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: 1 } },
+    { state: "retired", record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: 1 } },
+    { state: "retired", record: { proposed_at_height: 1, activated_at_height: null, state_since_height: 1 } },
+  ];
+  for (const lifecycle of cases) {
+    const payload = manifestPayload();
+    const row = payload.protocols[1];
+    row.activation.lifecycle = lifecycle;
+    const reason = lifecycle.state === "active" ? "missing-production-qualification" : lifecycle.state;
+    row.readiness = { readiness: "unavailable", detail: { reason, detail: null } };
+    await withNative(fakeNative(payload), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /Exact12 capability manifest/u);
     });
   }
 });

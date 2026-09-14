@@ -33,7 +33,7 @@ use iroha::{
         domain::Domain,
         isi::{
             Grant, GrantBox, InstructionBox, Log, Mint, Register,
-            privacy::RegisterPrivacyProtocolActivationV1,
+            privacy::{RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1},
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
             },
@@ -63,11 +63,11 @@ use iroha::{
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
-            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
-            PrivacyCompiledProfileResultV1, PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1,
-            PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-            PrivacyRecipientIdV1, PrivacyRootV1,
+            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyActiveLifecycleV1,
+            PrivacyCommitmentV1, PrivacyCompiledProfileResultV1, PrivacyEncryptedOutputV1,
+            PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
         },
         query::block::prelude::FindBlocks,
         transaction::{
@@ -77,7 +77,6 @@ use iroha::{
     },
 };
 use iroha_core::{
-    privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_engines::{
         atomic_private_settlement::{
             AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementProvisionalLegInputV1,
@@ -135,8 +134,7 @@ const REAL_PROCESS_VALIDATOR_WORKER_THREADS: u64 = 4;
 const GLOBAL_LANE_ID: u32 = 0;
 const VALIDATOR_STAKE: u64 = 2_000;
 const PRIVACY_GENESIS_PROPOSAL_HEIGHT: u64 = 1;
-const PRIVACY_PROFILE_ACTIVATION_HEIGHT: u64 =
-    PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1;
+const PRIVACY_PROFILE_ACTIVATION_HEIGHT: u64 = PRIVACY_GENESIS_PROPOSAL_HEIGHT;
 const PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS: u64 = 1;
 const PRIVATE_SETTLEMENT_NOTICE_ACTIVATION_HEIGHT: u64 =
     PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS;
@@ -365,15 +363,22 @@ fn ensure_exact_private_settlement_carrier_fee(
     Ok(())
 }
 
-fn genesis_private_note_activation() -> PrivacyProtocolActivationRecordV1 {
+fn genesis_private_note_proposal() -> PrivacyProtocolActivationRecordV1 {
     compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
         .expect("compiled IVM private-note profile")
         .activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
-                activate_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
             },
         ))
+}
+
+fn genesis_private_note_active_lifecycle() -> PrivacyProtocolLifecycleV1 {
+    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+        activated_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
+        state_since_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
+    })
 }
 
 fn hash(seed: u8) -> Hash {
@@ -501,9 +506,17 @@ fn genesis_post_topology(
     // Genesis pre-exec evaluates its transactions independently, so a grant in
     // an earlier transaction is not an authorization source for a later one.
     // Instruction order inside this transaction makes the grant visible before
-    // the profile is registered at canonical height one.
+    // the profile is registered and explicitly activated at canonical height one.
+    // Both instructions execute the ordinary governance/profile validation path.
     universal
-        .push(RegisterPrivacyProtocolActivationV1::new(genesis_private_note_activation()).into());
+        .push(RegisterPrivacyProtocolActivationV1::new(genesis_private_note_proposal()).into());
+    universal.push(
+        TransitionPrivacyProtocolLifecycleV1::new(
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            genesis_private_note_active_lifecycle(),
+        )
+        .into(),
+    );
     let mut transactions = vec![universal];
     // Staking uses one globally scoped stake asset, so all lane registrations
     // remain together in the targetless transaction routed through universal.
@@ -907,41 +920,29 @@ fn committees_from_network(
         .collect()
 }
 
-/// Setup diagnostics only; these stages are outside settlement measurements.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PrivateNoteActivationStage {
-    CapabilityRead,
-    PrepareSign,
-    SubmitWait,
-}
-
+/// Setup readiness diagnostics are outside settlement measurements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrivateNoteActivationDiagnostic {
     Call {
-        stage: PrivateNoteActivationStage,
         succeeded: bool,
         elapsed: Duration,
     },
     Completed {
-        confirmed_ticks: u64,
         committed_height: u64,
         elapsed: Duration,
     },
 }
 
-/// Observe the existing call once, before its unchanged error context is added.
+/// Observe one readiness read without changing its result or error identity.
 fn observe_private_note_activation_call<T, E>(
-    stage: PrivateNoteActivationStage,
     observe: &mut impl FnMut(PrivateNoteActivationDiagnostic),
     call: impl FnOnce() -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E> {
     let started = Instant::now();
     let result = call();
-    let elapsed = started.elapsed();
     observe(PrivateNoteActivationDiagnostic::Call {
-        stage,
         succeeded: result.is_ok(),
-        elapsed,
+        elapsed: started.elapsed(),
     });
     result
 }
@@ -952,152 +953,77 @@ fn write_private_note_activation_diagnostic(
     diagnostic: PrivateNoteActivationDiagnostic,
 ) -> std::io::Result<()> {
     match diagnostic {
-        PrivateNoteActivationDiagnostic::Call {
-            stage,
-            succeeded,
-            elapsed,
-        } => {
-            let stage = match stage {
-                PrivateNoteActivationStage::CapabilityRead => "capability_read",
-                PrivateNoteActivationStage::PrepareSign => "prepare_sign",
-                PrivateNoteActivationStage::SubmitWait => "submit_wait",
-            };
+        PrivateNoteActivationDiagnostic::Call { succeeded, elapsed } => {
             let outcome = if succeeded { "success" } else { "error" };
             writeln!(
                 writer,
-                "private-note activation diagnostic_timing stage={stage} outcome={outcome} elapsed_ns={}",
+                "private-note activation diagnostic_timing stage=capability_read outcome={outcome} elapsed_ns={}",
                 elapsed.as_nanos()
             )
         }
         PrivateNoteActivationDiagnostic::Completed {
-            confirmed_ticks,
             committed_height,
             elapsed,
-        } => writeln!(
-            writer,
-            "private-note activation diagnostic_completed confirmed_ticks={confirmed_ticks} committed_height={committed_height} elapsed_ns={}",
-            elapsed.as_nanos()
-        ),
+        } => {
+            writeln!(
+                writer,
+                "private-note activation diagnostic_completed committed_height={committed_height} elapsed_ns={}",
+                elapsed.as_nanos()
+            )
+        }
     }
 }
 
-fn activate_ivm_private_note(client: &Client) -> Result<u64> {
-    let activation_started = Instant::now();
-    // Best-effort setup diagnostics must not replace the original operation result.
+fn validate_genesis_private_note_readiness(
+    activation: &PrivacyProtocolActivationRecordV1,
+    compiled_profile: &PrivacyCompiledProfileResultV1,
+    committed_height: u64,
+) -> Result<u64> {
+    let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?;
+    let expected = compiled.activation_record(genesis_private_note_active_lifecycle());
+    ensure!(
+        activation == &expected,
+        "governed IVM private-note activation differs from the exact active genesis record"
+    );
+    ensure!(
+        compiled_profile == &PrivacyCompiledProfileResultV1::Available(compiled.into()),
+        "active IVM profile differs from the exact compiled private-note profile"
+    );
+    ensure!(
+        committed_height >= PRIVACY_PROFILE_ACTIVATION_HEIGHT,
+        "active genesis profile is ahead of the committed authority context"
+    );
+    Ok(committed_height)
+}
+
+fn require_genesis_private_note_active(client: &Client) -> Result<u64> {
+    let started = Instant::now();
     let mut observe = |diagnostic| {
         let _ = write_private_note_activation_diagnostic(&mut std::io::stderr().lock(), diagnostic);
     };
-    let expected = genesis_private_note_activation();
-    let expected_compiled_profile = PrivacyCompiledProfileResultV1::Available(
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?.into(),
-    );
-    let mut ticks = 0_u64;
-    let mut last_observed_height = None;
-    let tick_limit = PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
-        .checked_add(16)
-        .expect("privacy activation tick limit fits u64");
-    loop {
-        let capability = observe_private_note_activation_call(
-            PrivateNoteActivationStage::CapabilityRead,
-            &mut observe,
-            || client.client().get_privacy_capabilities(),
-        )
-        .wrap_err_with(|| {
-            format!(
-                "private-note activation phase=capability confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
-            )
-        })?;
-        last_observed_height = Some(capability.committed_height);
-        let row = capability
-            .protocols
-            .iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
-            .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
-        let activation = row
-            .activation
-            .ok_or_else(|| eyre!("governed IVM private-note activation is absent"))?;
-        let mut expected_at_lifecycle = expected;
-        expected_at_lifecycle.lifecycle = activation.lifecycle;
-        ensure!(
-            activation == expected_at_lifecycle,
-            "governed IVM private-note activation bindings differ from genesis"
-        );
-        match activation.lifecycle {
-            PrivacyProtocolLifecycleV1::Active(active) => {
-                ensure!(
-                    active.proposed_at_height == PRIVACY_GENESIS_PROPOSAL_HEIGHT
-                        && active.activated_at_height == PRIVACY_PROFILE_ACTIVATION_HEIGHT
-                        && active.state_since_height == active.activated_at_height,
-                    "governed IVM private-note activation history differs from genesis schedule"
-                );
-                ensure!(
-                    row.compiled_profile == expected_compiled_profile,
-                    "active IVM profile differs from the exact compiled private-note profile"
-                );
-                observe(PrivateNoteActivationDiagnostic::Completed {
-                    confirmed_ticks: ticks,
-                    committed_height: capability.committed_height,
-                    elapsed: activation_started.elapsed(),
-                });
-                return Ok(capability.committed_height);
-            }
-            PrivacyProtocolLifecycleV1::Proposed(proposed) => {
-                ensure!(
-                    proposed
-                        == match expected.lifecycle {
-                            PrivacyProtocolLifecycleV1::Proposed(expected) => expected,
-                            _ => unreachable!("genesis activation is proposed"),
-                        },
-                    "governed IVM private-note proposal schedule differs from genesis"
-                );
-            }
-            PrivacyProtocolLifecycleV1::Suspended(_) | PrivacyProtocolLifecycleV1::Retired(_) => {
-                return Err(eyre!(
-                    "governed IVM private-note activation became unavailable before the smoke"
-                ));
-            }
-        }
-        ensure!(
-            ticks < tick_limit,
-            "governed IVM private-note activation did not promote within {tick_limit} blocks"
-        );
-        let tick = observe_private_note_activation_call(
-            PrivateNoteActivationStage::PrepareSign,
-            &mut observe,
-            || {
-                let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [InstructionBox::from(Log::new(
-                            Level::INFO,
-                            format!(
-                                "atomic-private-settlement activation tick {}",
-                                capability.committed_height
-                            ),
-                        ))],
-                        bounded_nexus_fee(),
-                        Metadata::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            },
-        )
-        .wrap_err_with(|| {
-            format!(
-                "private-note activation phase=tick_build confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
-            )
-        })?;
-        observe_private_note_activation_call(
-            PrivateNoteActivationStage::SubmitWait,
-            &mut observe,
-            || client.submit_transaction_and_wait(&tick),
-        )
-        .wrap_err_with(|| {
-            format!(
-                "private-note activation phase=tick_confirmation confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
-            )
-        })?;
-        ticks += 1;
-    }
+    let capability = observe_private_note_activation_call(&mut observe, || {
+        client.client().get_privacy_capabilities()
+    })
+    .wrap_err("read governed IVM private-note genesis activation")?;
+    let row = capability
+        .protocols
+        .iter()
+        .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+        .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
+    let activation = row
+        .activation
+        .as_ref()
+        .ok_or_else(|| eyre!("governed IVM private-note activation is absent"))?;
+    let height = validate_genesis_private_note_readiness(
+        activation,
+        &row.compiled_profile,
+        capability.committed_height,
+    )?;
+    observe(PrivateNoteActivationDiagnostic::Completed {
+        committed_height: height,
+        elapsed: started.elapsed(),
+    });
+    Ok(height)
 }
 
 fn signing_key(seed: u8) -> KeyPair {
@@ -2624,7 +2550,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let sponsor = network.client();
     let privacy_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrivacyActivation, None);
-    let activated_height = activate_ivm_private_note(&sponsor)?;
+    let activated_height = require_genesis_private_note_active(&sponsor)?;
     privacy_timing.complete();
     let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
@@ -3256,12 +3182,10 @@ fn activation_diagnostic_preserves_success_value_and_observation_order() {
     let value = Box::new(17_u8);
     let original = std::ptr::from_ref(value.as_ref());
     let result: std::result::Result<_, ()> = observe_private_note_activation_call(
-        PrivateNoteActivationStage::CapabilityRead,
         &mut |event| {
             assert!(matches!(
                 event,
                 PrivateNoteActivationDiagnostic::Call {
-                    stage: PrivateNoteActivationStage::CapabilityRead,
                     succeeded: true,
                     ..
                 }
@@ -3282,29 +3206,18 @@ fn activation_diagnostic_preserves_success_value_and_observation_order() {
 fn activation_diagnostic_preserves_error_identity_and_fail_fast_order() {
     use std::cell::RefCell;
 
-    let stages = [
-        PrivateNoteActivationStage::CapabilityRead,
-        PrivateNoteActivationStage::PrepareSign,
-        PrivateNoteActivationStage::SubmitWait,
-    ];
-    for failed_index in 0..stages.len() {
+    let call_count = 3;
+    for failed_index in 0..call_count {
         let trace = RefCell::new(Vec::new());
         let mut error = Some(Box::new(23_u8));
         let original = std::ptr::from_ref(error.as_ref().unwrap().as_ref());
         let result: std::result::Result<(), Box<u8>> = (|| {
-            for (index, stage) in stages.into_iter().enumerate() {
+            for index in 0..call_count {
                 observe_private_note_activation_call(
-                    stage,
                     &mut |event| {
-                        let PrivateNoteActivationDiagnostic::Call {
-                            stage: observed_stage,
-                            succeeded,
-                            ..
-                        } = event
-                        else {
+                        let PrivateNoteActivationDiagnostic::Call { succeeded, .. } = event else {
                             panic!("call emits only a call diagnostic")
                         };
-                        assert_eq!(observed_stage, stage);
                         assert_eq!(succeeded, index != failed_index);
                         trace.borrow_mut().push((index, "observed"));
                     },
@@ -3331,28 +3244,20 @@ fn activation_diagnostic_preserves_error_identity_and_fail_fast_order() {
 #[test]
 fn activation_diagnostic_output_has_only_declared_fields() {
     let mut output = Vec::new();
-    for stage in [
-        PrivateNoteActivationStage::CapabilityRead,
-        PrivateNoteActivationStage::PrepareSign,
-        PrivateNoteActivationStage::SubmitWait,
-    ] {
-        for succeeded in [true, false] {
-            write_private_note_activation_diagnostic(
-                &mut output,
-                PrivateNoteActivationDiagnostic::Call {
-                    stage,
-                    succeeded,
-                    elapsed: Duration::from_nanos(37),
-                },
-            )
-            .unwrap();
-        }
+    for succeeded in [true, false] {
+        write_private_note_activation_diagnostic(
+            &mut output,
+            PrivateNoteActivationDiagnostic::Call {
+                succeeded,
+                elapsed: Duration::from_nanos(37),
+            },
+        )
+        .unwrap();
     }
     write_private_note_activation_diagnostic(
         &mut output,
         PrivateNoteActivationDiagnostic::Completed {
-            confirmed_ticks: 100,
-            committed_height: 301,
+            committed_height: 1,
             elapsed: Duration::from_nanos(41),
         },
     )
@@ -3362,11 +3267,7 @@ fn activation_diagnostic_output_has_only_declared_fields() {
         concat!(
             "private-note activation diagnostic_timing stage=capability_read outcome=success elapsed_ns=37\n",
             "private-note activation diagnostic_timing stage=capability_read outcome=error elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=prepare_sign outcome=success elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=prepare_sign outcome=error elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=submit_wait outcome=success elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=submit_wait outcome=error elapsed_ns=37\n",
-            "private-note activation diagnostic_completed confirmed_ticks=100 committed_height=301 elapsed_ns=41\n",
+            "private-note activation diagnostic_completed committed_height=1 elapsed_ns=41\n",
         )
     );
 }
@@ -3387,7 +3288,6 @@ fn activation_diagnostic_output_failure_does_not_replace_call_result() {
         let original = std::ptr::from_ref(value.as_ref());
         let mut observation_failed = false;
         let result = observe_private_note_activation_call(
-            PrivateNoteActivationStage::SubmitWait,
             &mut |event| {
                 observation_failed =
                     write_private_note_activation_diagnostic(&mut BrokenWriter, event).is_err();
@@ -3406,9 +3306,8 @@ fn activation_diagnostic_output_failure_does_not_replace_call_result() {
 #[test]
 fn genesis_ivm_private_note_activation_is_exact() {
     assert_eq!(
-        PRIVACY_PROFILE_ACTIVATION_HEIGHT,
-        PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-        "compiled private-note governance delay determines profile activation"
+        PRIVACY_PROFILE_ACTIVATION_HEIGHT, PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+        "explicit governed profile activation is committed in genesis"
     );
     assert_eq!(
         PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT,
@@ -3480,14 +3379,87 @@ fn genesis_ivm_private_note_activation_is_exact() {
         *activation_instruction > governance_instruction,
         "governed activation must follow its permission grant"
     );
-    assert_eq!(registration.activation, genesis_private_note_activation());
+    assert_eq!(registration.activation, genesis_private_note_proposal());
     assert_eq!(
         registration.activation.lifecycle,
         PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
             proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
-            activate_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
         })
     );
+    let transitions = transactions
+        .iter()
+        .enumerate()
+        .flat_map(|(tx, instructions)| {
+            instructions
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, instruction)| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
+                        .map(|transition| (tx, index, transition))
+                })
+        })
+        .collect::<Vec<_>>();
+    let [(transition_transaction, transition_instruction, transition)] = transitions.as_slice()
+    else {
+        panic!("genesis must contain exactly one explicit IVM profile activation");
+    };
+    assert_eq!(*transition_transaction, *activation_transaction);
+    assert!(*transition_instruction > *activation_instruction);
+    assert_eq!(
+        transition.protocol_id,
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+    );
+    assert_eq!(
+        transition.next_lifecycle,
+        genesis_private_note_active_lifecycle()
+    );
+}
+
+#[test]
+fn genesis_private_note_readiness_accepts_committed_explicit_activation() {
+    let compiled =
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
+    let activation = compiled.activation_record(genesis_private_note_active_lifecycle());
+    let snapshot = PrivacyCompiledProfileResultV1::Available(compiled.into());
+    for height in [
+        PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+        PRIVACY_GENESIS_PROPOSAL_HEIGHT + 17,
+    ] {
+        assert_eq!(
+            validate_genesis_private_note_readiness(&activation, &snapshot, height).unwrap(),
+            height
+        );
+    }
+    assert!(validate_genesis_private_note_readiness(&activation, &snapshot, 0).is_err());
+}
+
+#[test]
+fn genesis_private_note_readiness_rejects_pending_and_substituted_profiles() {
+    let compiled =
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
+    let active = compiled.activation_record(genesis_private_note_active_lifecycle());
+    let snapshot = PrivacyCompiledProfileResultV1::Available(compiled.into());
+    let mut wrong_protocol = active;
+    wrong_protocol.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    let mut wrong_history = active;
+    wrong_history.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 1,
+        activated_at_height: 2,
+        state_since_height: 2,
+    });
+    for candidate in [
+        genesis_private_note_proposal(),
+        wrong_protocol,
+        wrong_history,
+    ] {
+        assert!(validate_genesis_private_note_readiness(&candidate, &snapshot, 3).is_err());
+    }
+    let other =
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1).unwrap();
+    let wrong_snapshot = PrivacyCompiledProfileResultV1::Available(other.into());
+    assert!(validate_genesis_private_note_readiness(&active, &wrong_snapshot, 3).is_err());
 }
 
 #[test]

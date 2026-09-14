@@ -236,7 +236,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         var cases = new[]
         {
             (
-                Lifecycle: EnumValue(0, Struct(U64(1), U64(4))),
+                Lifecycle: EnumValue(0, Struct(U64(1))),
                 Reason: PrivacyCapabilityUnavailableReasonV1.Proposed,
                 ReasonTag: 2U),
             (
@@ -264,6 +264,104 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             Assert.Equal(PrivacyCapabilityReadinessV1.Unavailable, decoded.Protocols[0].Readiness);
             Assert.Equal(item.Reason, decoded.Protocols[0].UnavailableReason);
             Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+        }
+    }
+
+    [Fact]
+    public void ProposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight()
+    {
+        foreach (var committedHeight in new[] { 1UL, 3UL, ulong.MaxValue })
+        {
+            var lifecycle = EnumValue(0, Struct(U64(1)));
+            var fixture = BuildFixture(
+                rowZeroReadiness: UnavailableReadiness(2),
+                rowZeroLifecycle: lifecycle,
+                committedHeight: committedHeight,
+                includeQualification: false);
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                fixture.Manifest, fixture.Catalog);
+            Assert.Equal(PrivacyCapabilityUnavailableReasonV1.Proposed,
+                decoded.Protocols[0].UnavailableReason);
+            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+            Assert.Equal(Option(ActivationForProfileZero(lifecycleOverride: lifecycle), present: true),
+                decoded.Protocols[0].ActivationCanonicalBytes);
+
+            var forged = BuildFixture(
+                rowZeroLifecycle: lifecycle,
+                committedHeight: committedHeight,
+                includeQualification: false);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                    forged.Manifest, forged.Catalog));
+        }
+    }
+
+    [Fact]
+    public void SameHeightActivationRetainsQualificationAndStrictLaterHistory()
+    {
+        var cases = new[]
+        {
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(1))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification, Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(3))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification, Tag: 5U),
+            (Lifecycle: EnumValue(2, Struct(U64(1), U64(1), U64(2))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Suspended, Tag: 3U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(U64(1), present: true), U64(2))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Retired, Tag: 4U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(Array.Empty<byte>(), present: false), U64(2))),
+                Reason: PrivacyCapabilityUnavailableReasonV1.Retired, Tag: 4U),
+        };
+        foreach (var item in cases)
+        {
+            var fixture = BuildFixture(
+                rowZeroReadiness: UnavailableReadiness(item.Tag),
+                rowZeroLifecycle: item.Lifecycle,
+                includeQualification: false);
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                fixture.Manifest, fixture.Catalog);
+            Assert.Equal(item.Reason, decoded.Protocols[0].UnavailableReason);
+            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+            Assert.Equal(Option(ActivationForProfileZero(lifecycleOverride: item.Lifecycle), present: true),
+                decoded.Protocols[0].ActivationCanonicalBytes);
+        }
+
+        var qualified = BuildFixture(
+            rowZeroLifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(1))),
+            qualificationActivationHeight: 1);
+        var projected = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            qualified.Manifest, qualified.Catalog);
+        Assert.True(projected.Protocols[0].IsNetworkAvailable);
+        // This managed projection preserves evidence; native admission still validates it.
+    }
+
+    [Fact]
+    public void ExplicitActivationRejectsRemovedScheduleAndInvalidHistory()
+    {
+        var cases = new[]
+        {
+            (Lifecycle: EnumValue(0, Struct(U64(1), U64(4))), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct(U64(1), U64(301))), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct()), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct(U64(0))), Tag: 2U),
+            (Lifecycle: EnumValue(0, Struct(U64(4))), Tag: 2U),
+            (Lifecycle: EnumValue(1, Struct(U64(2), U64(1), U64(2))), Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(2), U64(1))), Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(4), U64(4))), Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(4))), Tag: 5U),
+            (Lifecycle: EnumValue(2, Struct(U64(1), U64(1), U64(1))), Tag: 3U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(U64(1), present: true), U64(1))), Tag: 4U),
+            (Lifecycle: EnumValue(3, Struct(U64(1), Option(Array.Empty<byte>(), present: false), U64(1))), Tag: 4U),
+        };
+        foreach (var item in cases)
+        {
+            var fixture = BuildFixture(
+                rowZeroReadiness: UnavailableReadiness(item.Tag),
+                rowZeroLifecycle: item.Lifecycle,
+                includeQualification: false);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+                    fixture.Manifest, fixture.Catalog));
         }
     }
 

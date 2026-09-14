@@ -200,9 +200,9 @@ pub(crate) fn validate_privacy_exact12_qualification_registration_v1(
         .validate_against_snapshot(committed_height, &rows)
         .map_err(|error| format!("Exact12 qualification does not match committed state: {error}"))
 }
-/// Deterministic failure while planning scheduled activation promotion.
+/// Deterministic failure while validating the registry and planning protocol-limit updates.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub(crate) enum PrivacyActivationPromotionErrorV1 {
+pub(crate) enum PrivacyProtocolLimitsPlanErrorV1 {
     /// The typed storage key and activation payload identify different protocols.
     #[error(transparent)]
     KeyProtocolMismatch(Box<PrivacyActivationKeyProtocolMismatchV1>),
@@ -245,28 +245,26 @@ pub(crate) struct PrivacyActivationMissedProtocolLimitsV1 {
     effective_at_height: u64,
     incoming_height: u64,
 }
-/// Prevalidate and plan every scheduled activation promotion due at `current_height`.
+/// Validate the registry and plan protocol-limit tightenings due at `incoming_height`.
 ///
-/// This function is deliberately read-only. The block-start hook applies the returned ordered
-/// update set only after every persisted activation has been validated, so one malformed record
-/// cannot cause a partially promoted registry. A height jump promotes a due proposal with its
-/// original scheduled height, and a subsequent restart produces an empty plan.
+/// The read-only plan is applied only after every persisted record validates. Lifecycle
+/// activation is exclusively governed by an explicit instruction and is never inferred
+/// from the block height. Independent protocol-limit schedules retain their exact deadline.
 ///
 /// # Errors
 ///
-/// Rejects any key/record mismatch, malformed activation, or non-canonical
-/// chain-wide limits before returning an update.
-pub(crate) fn plan_due_privacy_activation_promotions_v1(
+/// Rejects key/record mismatches, malformed or uncompiled bindings, and missed limit updates.
+pub(crate) fn plan_due_privacy_protocol_limits_v1(
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
     incoming_height: u64,
 ) -> Result<
     Vec<(PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1)>,
-    PrivacyActivationPromotionErrorV1,
+    PrivacyProtocolLimitsPlanErrorV1,
 > {
-    let mut promotions = Vec::new();
+    let mut updates = Vec::new();
     for (key, record) in activations.iter() {
         if key.protocol_id() != record.protocol_id {
-            return Err(PrivacyActivationPromotionErrorV1::KeyProtocolMismatch(
+            return Err(PrivacyProtocolLimitsPlanErrorV1::KeyProtocolMismatch(
                 Box::new(PrivacyActivationKeyProtocolMismatchV1 {
                     key_protocol: key.protocol_id(),
                     record_protocol: record.protocol_id,
@@ -274,7 +272,7 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
             ));
         }
         record.validate().map_err(|source| {
-            PrivacyActivationPromotionErrorV1::InvalidActivation(Box::new(
+            PrivacyProtocolLimitsPlanErrorV1::InvalidActivation(Box::new(
                 PrivacyInvalidActivationV1 {
                     protocol_id: record.protocol_id,
                     source,
@@ -283,7 +281,7 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
         })?;
         crate::privacy_profiles::validate_compiled_privacy_activation_v1(record).map_err(
             |source| {
-                PrivacyActivationPromotionErrorV1::CompiledProfile(Box::new(
+                PrivacyProtocolLimitsPlanErrorV1::CompiledProfile(Box::new(
                     PrivacyActivationCompiledProfileMismatchV1 {
                         protocol_id: record.protocol_id,
                         source,
@@ -291,13 +289,10 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
                 ))
             },
         )?;
-        let mut promoted = *record;
-        let lifecycle =
-            crate::privacy::effective_privacy_lifecycle_v1(record.lifecycle, incoming_height);
-        promoted.lifecycle = lifecycle;
+        let mut updated = *record;
         if let Some(pending) = record.pending_protocol_limits_tightening {
             if pending.effective_at_height < incoming_height {
-                return Err(PrivacyActivationPromotionErrorV1::MissedProtocolLimits(
+                return Err(PrivacyProtocolLimitsPlanErrorV1::MissedProtocolLimits(
                     Box::new(PrivacyActivationMissedProtocolLimitsV1 {
                         protocol_id: record.protocol_id,
                         effective_at_height: pending.effective_at_height,
@@ -306,40 +301,41 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
                 ));
             }
             if pending.effective_at_height == incoming_height {
-                promoted.protocol_limits = pending.next_limits;
-                promoted.pending_protocol_limits_tightening = None;
+                updated.protocol_limits = pending.next_limits;
+                updated.pending_protocol_limits_tightening = None;
             }
         }
-        if promoted != *record {
-            promoted.validate().map_err(|source| {
-                PrivacyActivationPromotionErrorV1::InvalidActivation(Box::new(
+        if updated != *record {
+            updated.validate().map_err(|source| {
+                PrivacyProtocolLimitsPlanErrorV1::InvalidActivation(Box::new(
                     PrivacyInvalidActivationV1 {
-                        protocol_id: promoted.protocol_id,
+                        protocol_id: updated.protocol_id,
                         source,
                     },
                 ))
             })?;
-            crate::privacy_profiles::validate_compiled_privacy_activation_v1(&promoted).map_err(
+            crate::privacy_profiles::validate_compiled_privacy_activation_v1(&updated).map_err(
                 |source| {
-                    PrivacyActivationPromotionErrorV1::CompiledProfile(Box::new(
+                    PrivacyProtocolLimitsPlanErrorV1::CompiledProfile(Box::new(
                         PrivacyActivationCompiledProfileMismatchV1 {
-                            protocol_id: promoted.protocol_id,
+                            protocol_id: updated.protocol_id,
                             source,
                         },
                     ))
                 },
             )?;
-            promotions.push((*key, promoted));
+            updates.push((*key, updated));
         }
     }
-    Ok(promotions)
+    Ok(updates)
 }
 /// Validate every restored activation against its exact committed height.
 ///
-/// A proposed activation or protocol-limit transition effective at `E` is valid in a snapshot
-/// committed at `E - 1` and invalid once committed height `E` has already been reached. No
-/// lifecycle may claim a transition height after the snapshot's committed height, and every
-/// lifecycle that records an activation must retain the protocol-wide minimum activation notice.
+/// A protocol-limit transition effective at `E` is valid in a snapshot committed at
+/// `E - 1` and invalid once committed height `E` has already been reached. A proposal stays
+/// pending until an explicit governance instruction activates or retires it. No
+/// lifecycle may claim a transition height after the snapshot's committed height. Initial
+/// activation may share the proposal height; subsequent lifecycle history remains ordered.
 pub(crate) fn validate_privacy_activations_at_committed_height_v1(
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
     committed_height: u64,
@@ -381,15 +377,7 @@ pub(crate) fn validate_privacy_activations_at_committed_height_v1(
             }
         }
         let (proposed_at_height, activated_at_height, state_since_height) = match record.lifecycle {
-            PrivacyProtocolLifecycleV1::Proposed(state) => {
-                if state.activate_at_height <= committed_height {
-                    return Err(format!(
-                        "privacy activation {:?} remains proposed at due height {} in snapshot committed at height {committed_height}",
-                        record.protocol_id, state.activate_at_height
-                    ));
-                }
-                (state.proposed_at_height, None, None)
-            }
+            PrivacyProtocolLifecycleV1::Proposed(state) => (state.proposed_at_height, None, None),
             PrivacyProtocolLifecycleV1::Active(state) => (
                 state.proposed_at_height,
                 Some(state.activated_at_height),
@@ -413,20 +401,6 @@ pub(crate) fn validate_privacy_activations_at_committed_height_v1(
             ));
         }
         if let Some(activated_at_height) = activated_at_height {
-            let earliest_activation_height = proposed_at_height
-                .checked_add(crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-                .ok_or_else(|| {
-                    format!(
-                        "privacy activation {:?} minimum activation notice overflows after proposal height {proposed_at_height}",
-                        record.protocol_id
-                    )
-                })?;
-            if activated_at_height < earliest_activation_height {
-                return Err(format!(
-                    "privacy activation {:?} activation height {activated_at_height} is earlier than minimum notice height {earliest_activation_height} after proposal height {proposed_at_height}",
-                    record.protocol_id
-                ));
-            }
             if activated_at_height > committed_height {
                 return Err(format!(
                     "privacy activation {:?} activation height {activated_at_height} is after committed height {committed_height}",
@@ -4430,7 +4404,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     policy
         .validate()
         .map_err(|error| format!("invalid privacy consensus policy: {error}"))?;
-    plan_due_privacy_activation_promotions_v1(activations, 0)
+    plan_due_privacy_protocol_limits_v1(activations, 0)
         .map_err(|error| format!("invalid privacy activation registry: {error}"))?;
     let ensure_protocol_activation = |protocol_id: PrivacyProtocolIdV1| -> Result<(), String> {
         let key = PrivacyActivationKeyV1::new(protocol_id);
@@ -10035,7 +10009,6 @@ mod tests {
         .activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: 1_000,
-                activate_at_height: 1_300,
             },
         ))
     }
@@ -11475,41 +11448,24 @@ mod tests {
         }
     }
     #[test]
-    fn due_activation_plan_preserves_schedule_across_height_jump_and_restart() {
+    fn pending_proposal_is_unchanged_across_height_jump_and_restart() {
         let proposal = activation_proposal();
         let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
         let mut activations = Storage::new();
         activations.insert(key, proposal);
-        assert!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_299)
-                .expect("valid registry")
-                .is_empty()
-        );
-        let promotions = plan_due_privacy_activation_promotions_v1(&activations.view(), 1_337)
-            .expect("height jump promotes due proposal");
-        assert_eq!(promotions.len(), 1);
-        assert_eq!(
-            promotions[0].1.lifecycle,
-            PrivacyProtocolLifecycleV1::Active(
-                iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1_000,
-                    activated_at_height: 1_300,
-                    state_since_height: 1_300,
-                }
-            )
-        );
-        for (key, record) in promotions {
-            activations.insert(key, record);
+        for height in [1_000, 1_300, 1_337, u64::MAX] {
+            assert!(
+                plan_due_privacy_protocol_limits_v1(&activations.view(), height)
+                    .expect("valid pending proposal")
+                    .is_empty()
+            );
+            assert_eq!(activations.view().get(&key), Some(&proposal));
+            validate_privacy_activations_at_committed_height_v1(&activations.view(), height)
+                .expect("pending proposal remains durable without automatic activation");
         }
-        assert!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_338)
-                .expect("restored active registry")
-                .is_empty(),
-            "promotion must happen exactly once"
-        );
     }
     #[test]
-    fn malformed_activation_aborts_entire_promotion_plan_without_mutation() {
+    fn malformed_activation_aborts_protocol_limit_plan_without_mutation() {
         let proposal = activation_proposal();
         let valid_key = PrivacyActivationKeyV1::new(proposal.protocol_id);
         let mismatched_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::PqMaspStarkV1);
@@ -11517,8 +11473,8 @@ mod tests {
         activations.insert(valid_key, proposal);
         activations.insert(mismatched_key, proposal);
         assert!(matches!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_300),
-            Err(PrivacyActivationPromotionErrorV1::KeyProtocolMismatch(_))
+            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_300),
+            Err(PrivacyProtocolLimitsPlanErrorV1::KeyProtocolMismatch(_))
         ));
         assert_eq!(
             activations
@@ -11527,11 +11483,11 @@ mod tests {
                 .expect("valid record remains")
                 .lifecycle,
             proposal.lifecycle,
-            "read-only planning cannot partially promote an earlier record"
+            "read-only planning cannot partially update an earlier record"
         );
     }
     #[test]
-    fn promotion_rejects_a_missed_protocol_limit_schedule() {
+    fn protocol_limit_plan_rejects_a_missed_schedule() {
         let mut proposal = activation_proposal();
         let mut next_limits = proposal.protocol_limits;
         let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
@@ -11552,15 +11508,15 @@ mod tests {
         let mut activations = Storage::new();
         activations.insert(key, proposal);
         assert!(matches!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_301),
-            Err(PrivacyActivationPromotionErrorV1::MissedProtocolLimits(error))
+            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_301),
+            Err(PrivacyProtocolLimitsPlanErrorV1::MissedProtocolLimits(error))
                 if error.protocol_id == proposal.protocol_id
                     && error.effective_at_height == 1_300
                     && error.incoming_height == 1_301
         ));
     }
     #[test]
-    fn protocol_limit_schedule_applies_with_lifecycle_only_at_exact_height() {
+    fn protocol_limit_schedule_applies_at_exact_height_without_activating_proposal() {
         let mut proposal = activation_proposal();
         let mut next_limits = proposal.protocol_limits;
         let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
@@ -11581,26 +11537,17 @@ mod tests {
         let mut activations = Storage::new();
         activations.insert(key, proposal);
         assert!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_299)
+            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_299)
                 .expect("valid pre-effective registry")
                 .is_empty()
         );
-        let promotions = plan_due_privacy_activation_promotions_v1(&activations.view(), 1_300)
-            .expect("lifecycle and protocol limits apply atomically");
-        assert_eq!(promotions.len(), 1);
-        let promoted = promotions[0].1;
-        assert_eq!(promoted.protocol_limits, next_limits);
-        assert_eq!(promoted.pending_protocol_limits_tightening, None);
-        assert_eq!(
-            promoted.lifecycle,
-            PrivacyProtocolLifecycleV1::Active(
-                iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1_000,
-                    activated_at_height: 1_300,
-                    state_since_height: 1_300,
-                }
-            )
-        );
+        let updates = plan_due_privacy_protocol_limits_v1(&activations.view(), 1_300)
+            .expect("protocol limits apply without changing the lifecycle");
+        assert_eq!(updates.len(), 1);
+        let updated = updates[0].1;
+        assert_eq!(updated.protocol_limits, next_limits);
+        assert_eq!(updated.pending_protocol_limits_tightening, None);
+        assert_eq!(updated.lifecycle, proposal.lifecycle);
         assert!(
             validate_privacy_activations_at_committed_height_v1(&activations.view(), 999)
                 .expect_err("a snapshot cannot contain a future-admitted schedule")
@@ -11632,11 +11579,8 @@ mod tests {
                 .contains("proposal height")
         );
         validate(proposal, 1_000).expect("proposal is durable at its admission height");
-        assert!(
-            validate(proposal, 1_300)
-                .expect_err("due proposal must already be promoted")
-                .contains("remains proposed")
-        );
+        validate(proposal, u64::MAX)
+            .expect("pending proposal has no automatic activation deadline");
         let mut active = proposal;
         active.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
             proposed_at_height: 1_000,
@@ -11682,7 +11626,7 @@ mod tests {
         );
     }
     #[test]
-    fn restored_activated_lifecycles_require_minimum_activation_notice() {
+    fn restored_same_block_activation_preserves_history_and_committed_height() {
         let validate = |record: PrivacyProtocolActivationRecordV1, committed_height| {
             let key = PrivacyActivationKeyV1::new(record.protocol_id);
             let mut activations = Storage::new();
@@ -11692,72 +11636,59 @@ mod tests {
                 committed_height,
             )
         };
-        let proposal = activation_proposal();
-        let short_notice_lifecycles = [
+        let mut record = activation_proposal();
+        for (lifecycle, height) in [
             (
-                "active",
                 PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
                     proposed_at_height: 1_000,
-                    activated_at_height: 1_299,
-                    state_since_height: 1_299,
+                    activated_at_height: 1_000,
+                    state_since_height: 1_000,
                 }),
-                1_299,
+                1_000,
             ),
             (
-                "suspended",
                 PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
                     proposed_at_height: 1_000,
-                    activated_at_height: 1_299,
-                    state_since_height: 1_300,
+                    activated_at_height: 1_000,
+                    state_since_height: 1_001,
                 }),
-                1_300,
+                1_001,
             ),
             (
-                "retired after activation",
                 PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
                     proposed_at_height: 1_000,
-                    activated_at_height: Some(1_299),
-                    state_since_height: 1_300,
+                    activated_at_height: Some(1_000),
+                    state_since_height: 1_001,
                 }),
-                1_300,
+                1_001,
             ),
-        ];
-        for (label, lifecycle, committed_height) in short_notice_lifecycles {
-            let mut record = proposal;
+        ] {
             record.lifecycle = lifecycle;
-            let error = validate(record, committed_height)
-                .expect_err("restored activation with short notice must reject");
+            validate(record, height)
+                .expect("same-block first activation has valid durable history");
             assert!(
-                error.contains("minimum notice height 1300"),
-                "unexpected {label} restore error: {error}"
+                validate(record, height - 1).is_err(),
+                "future state must not restore"
             );
         }
-
-        let mut retired_at_boundary = proposal;
-        retired_at_boundary.lifecycle =
-            PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-                proposed_at_height: 1_000,
-                activated_at_height: Some(1_300),
-                state_since_height: 1_301,
-            });
-        validate(retired_at_boundary, 1_301)
-            .expect("the exact minimum notice remains valid after retirement");
-
-        let mut overflowing_notice = proposal;
-        overflowing_notice.lifecycle =
-            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: u64::MAX - 1,
-                activated_at_height: u64::MAX,
-                state_since_height: u64::MAX,
-            });
+        record.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 1_000,
+            activated_at_height: 999,
+            state_since_height: 1_000,
+        });
         assert!(
-            validate(overflowing_notice, u64::MAX)
-                .expect_err("overflowing restored notice must reject")
-                .contains("minimum activation notice overflows")
+            validate(record, 1_000).is_err(),
+            "activation cannot predate its proposal"
         );
+        record.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: u64::MAX,
+            activated_at_height: u64::MAX,
+            state_since_height: u64::MAX,
+        });
+        validate(record, u64::MAX).expect("restoration adds no artificial delay arithmetic");
     }
     #[test]
-    fn promotion_rejects_structurally_valid_but_uncompiled_binding() {
+    fn protocol_limit_plan_rejects_uncompiled_binding() {
         let mut proposal = activation_proposal();
         proposal.verifier_digest = PrivacyVerifierDigestV1::new(nonzero(0xD7));
         proposal
@@ -11767,8 +11698,8 @@ mod tests {
         let mut activations = Storage::new();
         activations.insert(key, proposal);
         assert!(matches!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_300),
-            Err(PrivacyActivationPromotionErrorV1::CompiledProfile(error))
+            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_300),
+            Err(PrivacyProtocolLimitsPlanErrorV1::CompiledProfile(error))
                 if error.protocol_id == PrivacyProtocolIdV1::VeRangeTransparentRangeV1
                 && matches!(
                     &error.source,
@@ -11782,7 +11713,7 @@ mod tests {
                 .expect("record remains")
                 .lifecycle,
             proposal.lifecycle,
-            "failed compiled-profile validation cannot partially promote"
+            "failed compiled-profile validation cannot partially update the registry"
         );
     }
     #[test]

@@ -2831,3 +2831,81 @@ fn privacy_stark_ids_require_the_single_sha3_outer_suite() {
         .is_err()
     );
 }
+
+#[test]
+fn proposed_lifecycle_schema_and_codecs_have_no_activation_schedule() {
+    use iroha_schema::{IntoSchema as _, Metadata};
+
+    let schema = PrivacyProposedLifecycleV1::schema();
+    let Metadata::Struct(fields) = schema
+        .get::<PrivacyProposedLifecycleV1>()
+        .expect("proposed lifecycle schema")
+    else {
+        panic!("proposed lifecycle must be a named struct");
+    };
+    assert_eq!(fields.declarations.len(), 1);
+    assert_eq!(fields.declarations[0].name, "proposed_at_height");
+    assert_eq!(fields.declarations[0].ty, std::any::TypeId::of::<u64>());
+    let proposed = PrivacyProposedLifecycleV1 {
+        proposed_at_height: 7,
+    };
+    let json = norito::json::to_json(&proposed).expect("serialize pending proposal");
+    assert_eq!(json, r#"{"proposed_at_height":7}"#);
+    assert_eq!(
+        norito::json::from_json::<PrivacyProposedLifecycleV1>(&json)
+            .expect("decode pending proposal"),
+        proposed
+    );
+    let bytes = norito::to_bytes(&proposed).expect("encode pending proposal");
+    assert_eq!(
+        norito::decode_from_bytes::<PrivacyProposedLifecycleV1>(&bytes)
+            .expect("decode pending proposal"),
+        proposed
+    );
+    for removed_schedule in [
+        r#"{"proposed_at_height":7,"activate_at_height":7}"#,
+        r#"{"proposed_at_height":7,"activate_at_height":307}"#,
+    ] {
+        assert!(norito::json::from_json::<PrivacyProposedLifecycleV1>(removed_schedule).is_err());
+    }
+    assert!(
+        norito::json::from_json::<PrivacyProtocolLifecycleV1>(
+            r#"{"state":"proposed","record":{"proposed_at_height":7,"activate_at_height":307}}"#,
+        )
+        .is_err()
+    );
+    let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: 7,
+        state_since_height: 7,
+    });
+    active.validate().expect("same-block active record");
+    let active_bytes = norito::to_bytes(&active).expect("encode immediate active state");
+    let decoded = norito::decode_from_bytes::<PrivacyProtocolLifecycleV1>(&active_bytes)
+        .expect("decode immediate active state");
+    assert_eq!(decoded, active);
+    decoded.validate().expect("decoded immediate active state");
+}
+
+#[test]
+fn proposed_lifecycle_norito_rejects_removed_schedule_payload() {
+    // Test-only encoding of the removed shape under its unchanged nominal frame identity.
+    #[derive(norito::codec::Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::privacy::PrivacyProposedLifecycleV1")]
+    struct RemovedScheduledProposal {
+        proposed_at_height: u64,
+        activate_at_height: u64,
+    }
+    assert_eq!(
+        norito::schema::identity::frame_hash::<RemovedScheduledProposal>(),
+        norito::schema::identity::frame_hash::<PrivacyProposedLifecycleV1>()
+    );
+    for activate_at_height in [7, 307] {
+        let removed = RemovedScheduledProposal {
+            proposed_at_height: 7,
+            activate_at_height,
+        };
+        let frame = norito::encode_canonical(&removed).expect("encode removed payload fixture");
+        assert!(norito::decode_from_bytes::<PrivacyProposedLifecycleV1>(&frame).is_err());
+    }
+}

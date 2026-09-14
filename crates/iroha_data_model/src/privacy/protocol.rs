@@ -2246,8 +2246,6 @@ pub enum PrivacyPolicyValidationErrorV1 {
 pub struct PrivacyProposedLifecycleV1 {
     /// Height at which the proposal became canonical.
     pub proposed_at_height: u64,
-    /// Scheduled first active height.
-    pub activate_at_height: u64,
 }
 /// Active lifecycle state fields.
 #[derive(
@@ -2346,7 +2344,7 @@ pub struct PrivacyRetiredLifecycleV1 {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLifecycleV1")]
 pub enum PrivacyProtocolLifecycleV1 {
-    /// Governance approved a future activation height.
+    /// Governance registered a protocol awaiting an explicit activation instruction.
     #[norito(rename = "proposed")]
     Proposed(PrivacyProposedLifecycleV1),
     /// The protocol is currently active.
@@ -2365,17 +2363,16 @@ impl PrivacyProtocolLifecycleV1 {
     /// # Errors
     ///
     /// Returns [`PrivacyLifecycleValidationError`] when a transition height is
-    /// zero, equal to, or earlier than the height that must precede it.
+    /// zero or violates the ordering required for its lifecycle state. Initial
+    /// activation may share the proposal height; later lifecycle changes must advance.
     pub fn validate(&self) -> Result<(), PrivacyLifecycleValidationError> {
         match *self {
-            Self::Proposed(state) => validate_strictly_later(
+            Self::Proposed(state) => validate_nonzero_height(
                 PrivacyLifecycleHeightFieldV1::Proposed,
                 state.proposed_at_height,
-                PrivacyLifecycleHeightFieldV1::Activated,
-                state.activate_at_height,
             ),
             Self::Active(state) => {
-                validate_strictly_later(
+                validate_not_earlier(
                     PrivacyLifecycleHeightFieldV1::Proposed,
                     state.proposed_at_height,
                     PrivacyLifecycleHeightFieldV1::Activated,
@@ -2392,7 +2389,7 @@ impl PrivacyProtocolLifecycleV1 {
                 Ok(())
             }
             Self::Suspended(state) => {
-                validate_strictly_later(
+                validate_not_earlier(
                     PrivacyLifecycleHeightFieldV1::Proposed,
                     state.proposed_at_height,
                     PrivacyLifecycleHeightFieldV1::Activated,
@@ -2407,7 +2404,7 @@ impl PrivacyProtocolLifecycleV1 {
             }
             Self::Retired(state) => {
                 if let Some(activated_at_height) = state.activated_at_height {
-                    validate_strictly_later(
+                    validate_not_earlier(
                         PrivacyLifecycleHeightFieldV1::Proposed,
                         state.proposed_at_height,
                         PrivacyLifecycleHeightFieldV1::Activated,
@@ -2445,7 +2442,8 @@ impl PrivacyProtocolLifecycleV1 {
     /// # Errors
     ///
     /// Returns [`PrivacyLifecycleTransitionError`] for invalid states, unsupported edges,
-    /// mismatched proposal/activation history, or a non-increasing transition height.
+    /// mismatched proposal/activation history, or a non-increasing later transition height.
+    /// Initial explicit activation may occur at the proposal height.
     pub fn validate_transition_to(
         &self,
         next: &Self,
@@ -2462,8 +2460,7 @@ impl PrivacyProtocolLifecycleV1 {
             }
             (Self::Proposed(current), Self::Retired(next))
                 if current.proposed_at_height == next.proposed_at_height
-                    && next.activated_at_height.is_none()
-                    && next.state_since_height <= current.activate_at_height =>
+                    && next.activated_at_height.is_none() =>
             {
                 Ok(())
             }
@@ -2507,10 +2504,34 @@ const fn proposed_activation_history_matches(
     if proposed.proposed_at_height != active.proposed_at_height {
         return false;
     }
-    if proposed.activate_at_height != active.activated_at_height {
-        return false;
-    }
     active.activated_at_height == active.state_since_height
+}
+fn validate_nonzero_height(
+    field: PrivacyLifecycleHeightFieldV1,
+    height: u64,
+) -> Result<(), PrivacyLifecycleValidationError> {
+    if height == 0 {
+        return Err(PrivacyLifecycleValidationError::ZeroHeight { field });
+    }
+    Ok(())
+}
+fn validate_not_earlier(
+    earlier_field: PrivacyLifecycleHeightFieldV1,
+    earlier_height: u64,
+    later_field: PrivacyLifecycleHeightFieldV1,
+    later_height: u64,
+) -> Result<(), PrivacyLifecycleValidationError> {
+    validate_nonzero_height(earlier_field, earlier_height)?;
+    validate_nonzero_height(later_field, later_height)?;
+    if later_height < earlier_height {
+        return Err(PrivacyLifecycleValidationError::HeightOrder {
+            earlier_field,
+            earlier_height,
+            later_field,
+            later_height,
+        });
+    }
+    Ok(())
 }
 fn validate_strictly_later(
     earlier_field: PrivacyLifecycleHeightFieldV1,
@@ -2518,14 +2539,8 @@ fn validate_strictly_later(
     later_field: PrivacyLifecycleHeightFieldV1,
     later_height: u64,
 ) -> Result<(), PrivacyLifecycleValidationError> {
-    if earlier_height == 0 {
-        return Err(PrivacyLifecycleValidationError::ZeroHeight {
-            field: earlier_field,
-        });
-    }
-    if later_height == 0 {
-        return Err(PrivacyLifecycleValidationError::ZeroHeight { field: later_field });
-    }
+    validate_nonzero_height(earlier_field, earlier_height)?;
+    validate_nonzero_height(later_field, later_height)?;
     if later_height <= earlier_height {
         return Err(PrivacyLifecycleValidationError::HeightOrder {
             earlier_field,
@@ -2556,9 +2571,9 @@ pub enum PrivacyLifecycleValidationError {
         /// Invalid height field.
         field: PrivacyLifecycleHeightFieldV1,
     },
-    /// A later lifecycle height is not strictly later.
+    /// Lifecycle heights violate the ordering required by their state.
     #[error(
-        "privacy lifecycle {later_field:?} height {later_height} must be later than {earlier_field:?} height {earlier_height}"
+        "privacy lifecycle has invalid {earlier_field:?} height {earlier_height} and {later_field:?} height {later_height} ordering"
     )]
     HeightOrder {
         /// Earlier height field.
@@ -4125,17 +4140,7 @@ fn validate_privacy_capability_activation_height_v1(
     committed_height: u64,
 ) -> Result<(), PrivacyCapabilityRowValidationErrorV1> {
     let (proposed_at_height, activated_at_height, state_since_height) = match activation.lifecycle {
-        PrivacyProtocolLifecycleV1::Proposed(state) => {
-            if state.activate_at_height <= committed_height {
-                return Err(
-                    PrivacyCapabilityRowValidationErrorV1::UnpromotedDueActivation {
-                        activate_at_height: state.activate_at_height,
-                        committed_height,
-                    },
-                );
-            }
-            (state.proposed_at_height, None, None)
-        }
+        PrivacyProtocolLifecycleV1::Proposed(state) => (state.proposed_at_height, None, None),
         PrivacyProtocolLifecycleV1::Active(state) => (
             state.proposed_at_height,
             Some(state.activated_at_height),
@@ -4269,16 +4274,6 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
     ProposalAfterCommitted {
         /// Persisted proposal height.
         proposed_at_height: u64,
-        /// Snapshot height.
-        committed_height: u64,
-    },
-    /// A due proposal remained unpromoted in committed state.
-    #[error(
-        "privacy activation at height {activate_at_height} remained proposed at committed height {committed_height}"
-    )]
-    UnpromotedDueActivation {
-        /// Scheduled activation height.
-        activate_at_height: u64,
         /// Snapshot height.
         committed_height: u64,
     },

@@ -115,6 +115,93 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         )
     }
 
+    func testProposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight() throws {
+        for committedHeight in [UInt64(1), UInt64(3), UInt64.max] {
+            let fixture = makeFixture(
+                rowZeroReadiness: enumValue(1, enumValue(2)),
+                rowZeroLifecycle: enumValue(0, structure(u64(1))),
+                includeQualification: false,
+                committedHeight: committedHeight
+            )
+            let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            )
+            let row = manifest.row(for: .zkAcePqAuthorizationV1)
+            guard case let .proposed(proposed) = try XCTUnwrap(row.activation).lifecycle else {
+                return XCTFail("pending lifecycle was not retained")
+            }
+            XCTAssertEqual(proposed, 1)
+            XCTAssertEqual(row.readiness, .unavailable(.proposed))
+            XCTAssertFalse(row.isNetworkAvailable)
+            let forged = makeFixture(
+                rowZeroLifecycle: enumValue(0, structure(u64(1))),
+                includeQualification: false,
+                committedHeight: committedHeight
+            )
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                forged.manifest, nativeCatalogArchive: forged.catalog
+            ))
+        }
+    }
+
+    func testSameHeightActivationRetainsQualificationAndHistoryRequirements() throws {
+        let cases: [(UInt32, UInt64, UInt32)] = [(1, 1, 5), (2, 2, 3), (3, 2, 4)]
+        for (tag, since, reason) in cases {
+            let activated = tag == 3 ? option(u64(1)) : u64(1)
+            let fixture = makeFixture(
+                rowZeroReadiness: enumValue(1, enumValue(reason)),
+                rowZeroLifecycle: enumValue(tag, structure(u64(1), activated, u64(since))),
+                includeQualification: false
+            )
+            let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            )
+            let row = manifest.row(for: .zkAcePqAuthorizationV1)
+            let lifecycle = try XCTUnwrap(row.activation).lifecycle
+            switch lifecycle {
+            case let .active(proposed, activated, stateSince):
+                XCTAssertEqual([proposed, activated, stateSince], [1, 1, 1])
+                XCTAssertEqual(row.readiness, .unavailable(.missingProductionQualification))
+            case let .suspended(proposed, activated, stateSince):
+                XCTAssertEqual([proposed, activated, stateSince], [1, 1, 2])
+                XCTAssertEqual(row.readiness, .unavailable(.suspended))
+            case let .retired(proposed, activated, stateSince):
+                XCTAssertEqual(proposed, 1)
+                XCTAssertEqual(activated, 1)
+                XCTAssertEqual(stateSince, 2)
+                XCTAssertEqual(row.readiness, .unavailable(.retired))
+            case .proposed:
+                XCTFail("explicit activation was lost")
+            }
+            XCTAssertFalse(row.isNetworkAvailable)
+        }
+    }
+
+    func testExplicitActivationRejectsRemovedScheduleAndInvalidHistory() throws {
+        let cases: [(Data, UInt32)] = [
+            (enumValue(0, structure(u64(1), u64(4))), 2),
+            (enumValue(0, structure()), 2),
+            (enumValue(0, structure(u64(0))), 2),
+            (enumValue(0, structure(u64(4))), 2),
+            (enumValue(1, structure(u64(2), u64(1), u64(2))), 5),
+            (enumValue(1, structure(u64(1), u64(2), u64(1))), 5),
+            (enumValue(1, structure(u64(1), u64(4), u64(4))), 5),
+            (enumValue(2, structure(u64(1), u64(1), u64(1))), 3),
+            (enumValue(3, structure(u64(1), option(u64(1)), u64(1))), 4),
+            (enumValue(3, structure(u64(1), option(nil), u64(1))), 4),
+        ]
+        for (lifecycle, reason) in cases {
+            let fixture = makeFixture(
+                rowZeroReadiness: enumValue(1, enumValue(reason)),
+                rowZeroLifecycle: lifecycle,
+                includeQualification: false
+            )
+            XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                fixture.manifest, nativeCatalogArchive: fixture.catalog
+            ))
+        }
+    }
+
     func testActiveProtocolWithoutSingletonEvidenceIsUnavailable() throws {
         let fixture = makeFixture(includeQualification: false)
         let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
@@ -568,6 +655,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
 
     private func makeFixture(
         rowZeroReadiness: Data? = nil,
+        rowZeroLifecycle: Data? = nil,
         maxActionsPerTransaction: UInt32 = 1,
         activationDigestByte: UInt8 = 0x31,
         catalogDigestByte: UInt8 = 0x31,
@@ -632,7 +720,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             if index == 0 {
                 activation = option(activationForProfileZero(
                     digestByte: activationDigestByte,
-                    useRetiredExperimentalAssurance: useRetiredExperimentalAssurance
+                    useRetiredExperimentalAssurance: useRetiredExperimentalAssurance,
+                    lifecycle: rowZeroLifecycle
                 ))
             } else if index == 6, includePendingState {
                 activation = option(activationForJindoWithPendingTightening())
@@ -728,13 +817,14 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
 
     private func activationForProfileZero(
         digestByte: UInt8 = 0x31,
-        useRetiredExperimentalAssurance: Bool = false
+        useRetiredExperimentalAssurance: Bool = false,
+        lifecycle: Data? = nil
     ) -> Data {
         let digest = structure(Data(repeating: digestByte, count: 32))
         var activation = structure(
             enumValue(0), enumValue(0), enumValue(0),
             digest, digest, digest, digest, digest,
-            enumValue(1, structure(u64(1), u64(2), u64(2))),
+            lifecycle ?? enumValue(1, structure(u64(1), u64(2), u64(2))),
             enumValue(0), option(nil)
         )
         if useRetiredExperimentalAssurance {

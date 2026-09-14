@@ -27912,11 +27912,6 @@
               "record": {
                 "additionalProperties": false,
                 "properties": {
-                  "activate_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
                   "proposed_at_height": {
                     "format": "uint64",
                     "minimum": 1,
@@ -27924,8 +27919,7 @@
                   }
                 },
                 "required": [
-                  "proposed_at_height",
-                  "activate_at_height"
+                  "proposed_at_height"
                 ],
                 "type": "object"
               },

@@ -174,7 +174,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -184,7 +183,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -194,7 +192,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -204,7 +201,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -214,7 +210,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -224,7 +219,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -234,7 +228,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -244,7 +237,6 @@ mod tests {
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
-                    activate_at_height: 400,
                 },
             ))
     }
@@ -573,18 +565,18 @@ mod tests {
             }
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-                    "755bd48dd1ec364da87e9fdc82cb8145bab2ae3422e602acde39f4659a3470c8".to_owned(),
-                    "4bd1d4ed3304d873d3111f0c37a1151df9ac48c99b3e2a760be93f0656ef76a2".to_owned(),
-                    "b566ed92037f905cda0ee5f295ba2c1e70e006398bdedf7f57aac99e5758167d".to_owned(),
+                    "b00b724769457ed4cc6640b8246bfb8e9a8c2dde5010882ec8d3d7730cac61ba".to_owned(),
+                    "99f257e4b6217fcef2472438bb031847df6f943bfc07db7943f99553a8800123".to_owned(),
+                    "db1fec434a430dab7014e9c8f14139d0835083865f3575e27c2033737217ae92".to_owned(),
                     "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
-                    "ef48407e9fffa1d18f32321136e616ba24a38febefd3700736c8507e9a97d3d3".to_owned(),
+                    "bd98d6356de6f2ec3cb67ac5f66aad6a79a47cf56e357c9dedfa0172e7939b19".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV1 => (
-                    "6265e763be8e1f62feb4e34a0b9fe0f4ca7748be2ca5d0ad334996a029b42197".to_owned(),
-                    "c7bee6a60c069cf303c3bc9022a52fe59e1af6dd28ee114dab47718ac0b54129".to_owned(),
-                    "175934207a8a851284551a4f494b07b0b045b2b8008d009564232f6a26d76a55".to_owned(),
+                    "31beb12e9a6eb02355375b0b91af88aaf1183cf659a8851f478e2d4f88e3f8f6".to_owned(),
+                    "667c838c011e61eaaca1508a1b7539b6010208eaca3c6c0ad78ee9fd0142ee7d".to_owned(),
+                    "2637d6dd033db92774ca67b5ebcaf7d366dafffe0876b5cad15ccf880369f7b0".to_owned(),
                     "a6314323ab707a3766599aed2d109b3ada63acec793ff2a729c749cd951a332d".to_owned(),
-                    "7c254368cd3b41773cb92fea58df239745467d80aefcde365e224c058f88d87c".to_owned(),
+                    "f8f79f31be11929172b8acd1132038c6c2f3cfaeea0b663955ad19f1c4437eba".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };
@@ -1393,7 +1385,6 @@ mod tests {
         let activation = first.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: 1,
-                activate_at_height: 2,
             },
         ));
         assert_eq!(activation.protocol_id, first.protocol_id);
@@ -1795,7 +1786,6 @@ mod tests {
         let valid = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: 100,
-                activate_at_height: 400,
             },
         ));
         validate_compiled_privacy_activation_v1(&valid).expect("exact compiled profile");

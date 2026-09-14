@@ -9749,7 +9749,6 @@ mod tests {
         let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: 2,
-                activate_at_height: 2 + crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
             },
         ));
         let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
