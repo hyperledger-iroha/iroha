@@ -146,6 +146,8 @@ fn lock_slash_restitute(
 }
 #[test]
 fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
+    // Direct retained-custody movements share the execution witness recorder.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let (receiver_id, _) = gen_account_in("wonderland");
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(

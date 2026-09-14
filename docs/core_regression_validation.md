@@ -43,6 +43,64 @@ history and runtime tests. Changed Rust sources remained byte-identical througho
 execution. Scoped Rust formatting, diff checks and historical-archive verification
 pass. Full Core/workspace execution was not rerun.
 
+## Group 03 mandatory transfers and IVM fixtures
+
+The reported group passed 157 tests, failed seven and ignored two. The numeric
+movement planner selected typed mandatory-debit exceptions for outbound controls,
+but its later balance precheck reapplied ordinary outgoing availability. That
+precheck now receives the same typed control policy. Retained mandatory debits
+preserve their outgoing exceptions; receiver availability and holding limits
+remain enforced except for the existing finality-owned staking/moderation custody
+exceptions. Scope, source authority, custody, usage, privacy, precision and checked
+balance arithmetic retain their separate admission checks.
+
+The other six failures were fixtures asserting or constructing obsolete inputs:
+
+- ZK referendum guards receive exact ballot grants and check absent, proposed,
+  closed, too-early and too-late referenda without mutating election state.
+- Composite state keys decode as canonical `NoritoBytes(StatePath)`, including
+  a key exceeding the `Name` size bound.
+- CoreHost rejects low-level polynomial-opening envelopes at decode admission.
+  A real registered Pallas proof checks successful verification and curve-policy
+  rejection; Goldilocks cannot be admitted as an IPA registry group.
+- Host asset definitions carry explicit owning domains. Shadow/native parity
+  initializes incarnations at genesis and asserts the actual minted balance;
+  insufficient transfers assert the precise balance error and unchanged funds.
+
+Regressions exercise every typed movement policy's outgoing availability,
+incoming availability, holding limit and insufficient-balance behavior. Oracle
+integration controls distinguish mandatory penalties from ordinary transfers and
+preserve receiver restrictions.
+
+A related Group 02 parallel rerun exposed direct slash/restitution fixture writes
+entering another test's global FASTPQ witness capture. Those fixtures now hold
+the existing execution-witness guard through direct execution and transcript
+draining. The mixed direct/signed-block test releases that non-reentrant guard
+before signed validation acquires its own. Runtime recording policy is unchanged.
+
+Validation rebuilt the shared Core feature graph:
+
+```sh
+cargo test --locked -p iroha_core --lib \
+  --test iroha_core_group_02 --test iroha_core_group_03 \
+  --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run
+target/debug/deps/iroha_core_group_02-d19bd85425b1bbb1
+target/debug/deps/iroha_core_group_03-eed19256d2d47a07
+target/debug/deps/iroha_core-cb6ba39648f33023 \
+  smartcontracts::isi::asset:: smartcontracts::isi::oracle:: \
+  smartcontracts::isi::world::isi::tests::direct_zk_ballot \
+  smartcontracts::isi::world::isi::tests::direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission
+```
+
+The complete Group 03 run passes 165 tests with two existing ignores, including
+all seven repaired cases (the invalid disabled-Goldilocks fixture is replaced by
+`core_host_enforces_registered_ipa_curve_policy`). After witness isolation, Group
+02 passes all 27 tests in three consecutive runs with normal parallel execution;
+the focused Core selection passes all 105 tests, for 297 distinct passing tests.
+Workspace formatting, diff checks, codec-retirement guards and historical-archive
+verification pass. The builds retain warnings in unchanged code. Full Core and
+workspace runtime suites were not rerun.
+
 ## Group 01 integration fixtures
 
 The reported group passed 56 tests and failed 11. Its fixtures and assertions

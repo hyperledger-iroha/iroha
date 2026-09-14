@@ -13,7 +13,12 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{account::NewAccount, nft::NftId, prelude::*};
+use iroha_data_model::{
+    account::NewAccount,
+    isi::error::{InstructionExecutionError, MathError},
+    nft::NftId,
+    prelude::*,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -240,7 +245,7 @@ fn host_rejects_insufficient_asset_transfer() {
         asset_def.clone(),
         "coin".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(domain_id),
     );
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_quantity(
@@ -293,9 +298,30 @@ fn host_rejects_insufficient_asset_transfer() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    let result = host.apply_queued(&mut tx, &from);
-    result.expect_err("should reject");
-    // We don't assert exact error kind to avoid tight coupling, just that it rejects.
+    let err = host
+        .apply_queued(&mut tx, &from)
+        .expect_err("transfer must reject spending more than the source balance");
+    assert!(
+        matches!(
+            err,
+            ValidationFail::InstructionFailed(InstructionExecutionError::Math(
+                MathError::NotEnoughQuantity
+            ))
+        ),
+        "expected insufficient balance rejection, got {err:?}"
+    );
+    assert_eq!(
+        tx.world
+            .assets()
+            .get(&AssetId::of(asset_def.clone(), from.clone()))
+            .map(|value| value.as_ref().clone()),
+        Some(Quantity::from(100_u64)),
+        "rejected transfer must preserve the source balance"
+    );
+    assert!(
+        tx.world.assets().get(&AssetId::of(asset_def, to)).is_none(),
+        "rejected transfer must not create a destination balance"
+    );
 }
 #[test]
 fn host_batches_transfer_v1_calls() {
@@ -581,7 +607,7 @@ fn host_bridges_mint_asset() {
             asset_def.clone(),
             "coin".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id),
         );
         let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
         let executor = tx.world.executor().clone();
