@@ -492,7 +492,7 @@ fn fallback_config_derives_checked_signing_key() {
         .expect("fallback signature should verify");
 }
 #[test]
-fn fallback_config_is_limited_to_kagemusha_commands() {
+fn fallback_config_is_limited_to_local_commands() {
     let args = Args::try_parse_from([
         "iroha",
         "app",
@@ -640,11 +640,6 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     )
     .to_string();
     for command in [
-        vec!["iroha", "--machine", "contract", "app", "build"],
-        vec!["iroha", "--machine", "contract", "dev", "check"],
-        vec!["iroha", "--machine", "contract", "dev", "build"],
-        vec!["iroha", "--machine", "contract", "dev", "test"],
-        vec!["iroha", "--machine", "contract", "dev", "schema"],
         vec![
             "iroha",
             "--machine",
@@ -698,9 +693,6 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
         assert!(args.command.allows_fallback_config());
         assert!(args.command.allows_fallback_config_in_machine_mode());
     }
-    let args = Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
-        .expect("parse network-aware contract doctor");
-    assert!(!args.command.allows_fallback_config());
     let args = Args::try_parse_from([
         "iroha",
         "contract",
@@ -711,6 +703,7 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     ])
     .expect("parse on-chain contract manifest query");
     assert!(!args.command.allows_fallback_config());
+    assert!(!args.command.allows_fallback_config_in_machine_mode());
 }
 #[test]
 fn vk_register_and_update_help_documents_namespace() {

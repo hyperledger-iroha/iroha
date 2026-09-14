@@ -1749,16 +1749,26 @@ mod tests {
     fn package_project_commands_are_owned_by_musubi() {
         use crate::Args;
         use clap::Parser;
-        for command in [
-            ["iroha", "contract", "dev", "doctor"].as_slice(),
-            ["iroha", "contract", "app", "build"].as_slice(),
-            ["iroha", "app", "contracts", "dev", "doctor"].as_slice(),
-            ["iroha", "contracts", "dev", "doctor"].as_slice(),
-        ] {
-            assert!(
-                Args::try_parse_from(command).is_err(),
-                "duplicate package project command remains: {command:?}"
-            );
+        for prefix in [["iroha"].as_slice(), ["iroha", "--machine"].as_slice()] {
+            for command in [
+                ["contract", "dev", "doctor"].as_slice(),
+                ["contract", "dev", "check"].as_slice(),
+                ["contract", "dev", "build"].as_slice(),
+                ["contract", "dev", "test"].as_slice(),
+                ["contract", "dev", "schema"].as_slice(),
+                ["contract", "app", "build"].as_slice(),
+                ["app", "contracts", "dev", "doctor"].as_slice(),
+                ["contracts", "dev", "doctor"].as_slice(),
+            ] {
+                let args = [prefix, command].concat();
+                let error = Args::try_parse_from(&args)
+                    .expect_err("Musubi package project commands must not parse in iroha");
+                assert_eq!(
+                    error.kind(),
+                    clap::error::ErrorKind::InvalidSubcommand,
+                    "duplicate package project command remains: {args:?}"
+                );
+            }
         }
         let help = Args::try_parse_from(["iroha", "contract", "view", "--help"])
             .expect_err("low-level view still exposes native help");
