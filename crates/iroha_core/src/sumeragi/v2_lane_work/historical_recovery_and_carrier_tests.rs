@@ -4539,3 +4539,251 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         "cold hydration must not mint votes for either unreceipted raw link"
     );
 }
+
+#[cfg(feature = "bls")]
+#[test]
+fn former_producer_first_binds_view_zero_merge_body_after_view_change_with_owned_output() {
+    use crate::sumeragi::{
+        v2_effects::{ConsensusBroadcastDisposition, V2EffectServices},
+        v2_worker::tests::{
+            exact_output_snapshot_with_actor_owners_for_test, install_network_for_test,
+            ordinary_dispatch_services_for_test, prepare_successor_worker_view_one_for_test,
+        },
+    };
+    let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    let context = adapter.context.clone();
+    let local = context.leader(0);
+    assert_eq!(adapter.local_peer, context.roster[local as usize].validator);
+    assert_ne!(
+        local,
+        context.leader(1),
+        "the former producer is not the next leader"
+    );
+    let parent = context
+        .parent_commit_qc
+        .as_ref()
+        .expect("durable parent")
+        .subject
+        .block_hash;
+    assert_eq!(adapter.kura.blocks_count(), 1);
+    assert_eq!(
+        adapter.state.committed_block_hash_at_height(1),
+        Some(parent)
+    );
+
+    // Re-sign the complete current-state merge candidate, not an arbitrary
+    // digest copied from the missing-sidecar fixture.
+    let candidate = merge_candidate_for_persistence_retry(&adapter, 0);
+    let mut qc = missing_sidecar_reference(&adapter, &keys, 0).merge_qc;
+    qc.message_digest = crate::merge::merge_qc_message_digest(
+        &qc.network_id,
+        &candidate,
+        qc.validator_set_hash_version,
+        qc.validator_set_hash,
+    );
+    let signatures = keys
+        .iter()
+        .enumerate()
+        .filter_map(|(index, key)| {
+            (qc.signers_bitmap[index / 8] & (1 << (index % 8)) != 0).then(|| {
+                Signature::try_new(key.private_key(), qc.message_digest.as_ref())
+                    .expect("sign the exact merge candidate")
+                    .payload()
+                    .to_vec()
+            })
+        })
+        .collect::<Vec<_>>();
+    qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate exact merge candidate signatures");
+    let entry = candidate.into_entry(qc);
+    let entry_hash = adapter
+        .kura
+        .persist_pending_certified_merge_entry(&entry)
+        .expect("retain the certified merge entry before the proposal");
+    let block = merge_sidecar_carrier_block(&adapter, &keys, &entry);
+    let wire_bytes = block.encode_wire().expect("immutable resultless body");
+    assert!(block.is_resultless_proposal());
+    assert_eq!(block.header().view_change_index(), 0);
+    assert_eq!(block.external_entrypoints_cloned().count(), 0);
+    let bundle = block.execution_context().expect("merge-only context");
+    assert!(bundle.lane_payload_ownerships.is_empty());
+    assert!(bundle.autonomous_lane_payloads.is_empty());
+    assert!(bundle.queue_plan_admissions().is_empty());
+    assert_eq!(
+        bundle
+            .merge_entry
+            .as_ref()
+            .map(|reference| reference.entry_hash),
+        Some(entry_hash)
+    );
+    assert!(
+        crate::sumeragi::v2_candidate::candidate_block_has_proposal_work(
+            &block,
+            adapter.state.as_ref(),
+            false,
+        )
+    );
+    let (round_zero, subject) = global_lock_for_block(&adapter, &block);
+    assert_eq!(round_zero.view, 0);
+    // The exact-empty producer plan is the output of the carrier planning
+    // boundary. Local production does not imply replica locked-body binding.
+    adapter
+        .planned_lane_proposals
+        .insert(round_zero, Vec::new());
+    assert_eq!(
+        adapter.bind_local_candidate(round_zero, block.hash()),
+        V2LaneIngressOutcome::Duplicate
+    );
+    assert_eq!(
+        adapter.pending_local_lane_proposals.get(&block.hash()),
+        Some(&Vec::new())
+    );
+    assert!(adapter.globally_locked_body.is_none());
+    assert!(adapter.locally_bound_lane_proposals.is_empty());
+
+    let tag = crate::sumeragi::v2_core::EventTag::new(
+        context.height,
+        0,
+        crate::sumeragi::v2_core::Generation::INITIAL,
+    );
+    let mut services = ordinary_dispatch_services_for_test(
+        Arc::clone(&adapter.kura),
+        context.clone(),
+        &keys,
+        local,
+        Arc::clone(&adapter.state),
+        Arc::clone(&adapter.output_guard),
+        tag,
+    );
+    let enter_view_one =
+        prepare_successor_worker_view_one_for_test(&mut services, &keys, subject, entry_hash);
+    let targets = context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .filter(|peer| peer != &adapter.local_peer)
+        .collect();
+    let (network, mut actor) = crate::IrohaNetwork::actor_admission_for_tests(
+        adapter.local_peer.clone(),
+        targets,
+        NonZeroUsize::new(1).expect("capacity-one actor"),
+    );
+    install_network_for_test(&mut services, network);
+    let payload =
+        crate::sumeragi::v2_chunks::encode_payload(&context, round_zero, subject, &wire_bytes)
+            .expect("RS16-encode unchanged certified merge body");
+    let mut proposal = wire::Proposal {
+        round: round_zero,
+        proposer: local,
+        subject,
+        manifest: payload.manifest().clone(),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: context.parent_commit_qc.clone(),
+        }),
+        signature: Vec::new(),
+    };
+    proposal.signature = Signature::new(
+        keys[local as usize].private_key(),
+        &proposal.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    services
+        .register_outbound_payload(tag, payload)
+        .expect("retain exact signed proposal chunks");
+    assert_eq!(
+        services
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+            ))
+            .expect("real actor receives the producer output"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    let before = exact_output_snapshot_with_actor_owners_for_test(&services);
+    assert!(
+        before.0 > 0,
+        "real actor capacity must leave retained fanouts"
+    );
+    assert!(
+        before.1 > 0,
+        "at least one retained target owns an actual actor ticket"
+    );
+
+    let _wal_directory = enter_view_one(&mut services);
+    assert_eq!(
+        exact_output_snapshot_with_actor_owners_for_test(&services),
+        before,
+        "certified EnterView must preserve retained worker ownership until explicit retirement"
+    );
+    adapter
+        .retain_merge_sidecars_for_global_view(1, Some(subject), None)
+        .expect("the certified higher view protects the original body");
+    assert_eq!(
+        adapter.mark_global_body_locked(round_zero, subject),
+        Ok(GlobalBodyLockOutcome::Inserted)
+    );
+    assert!(adapter.pending_local_lane_proposals.is_empty());
+    assert_ne!(
+        adapter.bind_locked_global_body(&block),
+        V2LaneIngressOutcome::Rejected,
+        "FIRST locked-body bind after view change must accept the exact earlier-view merge body"
+    );
+    assert_eq!(
+        block.encode_wire().expect("unchanged body after binding"),
+        wire_bytes
+    );
+    assert_eq!(
+        exact_output_snapshot_with_actor_owners_for_test(&services),
+        before,
+        "binding must preserve every actual worker FIFO, actor ticket, target, payload and credit"
+    );
+    assert!(!adapter.output_guard.restart_required());
+
+    // Exercise the same post-schedule dispatcher as the failed runner. The
+    // certified view may retire old Proposal/chunk owners, but must not fail
+    // ownership validation or consume the post already admitted to the actor.
+    crate::sumeragi::v2_runner::dispatch_lane_work_effects(&mut adapter, &services, 1)
+        .expect("higher-view retirement and first post-bind dispatch remain live");
+    assert!(!adapter.output_guard.restart_required());
+    let mut delivered = Vec::new();
+    assert_eq!(
+        actor.drain_posts(|post| delivered.push(post.clone())),
+        1,
+        "the saturated actor owns exactly one previously admitted post"
+    );
+    let crate::NetworkMessage::SumeragiBlock(envelope) = &delivered[0].data else {
+        panic!("first actor output must be global proposal control")
+    };
+    assert!(matches!(envelope.as_message(), BlockMessage::V2(message)
+        if message.payload == wire::ConsensusMessageV2Payload::Proposal(proposal)));
+    assert!(
+        context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == delivered[0].peer_id)
+    );
+    assert_ne!(delivered[0].peer_id, adapter.local_peer);
+    assert_eq!(adapter.kura.blocks_count(), 1);
+    assert_eq!(adapter.state.committed_height(), 1);
+    assert_eq!(
+        adapter.state.committed_block_hash_at_height(1),
+        Some(parent)
+    );
+    assert_eq!(
+        adapter.state.committed_block_hash_at_height(context.height),
+        None
+    );
+    assert_eq!(
+        adapter
+            .kura
+            .merge_entry_by_hash(entry_hash)
+            .expect("retained merge entry"),
+        Some(entry)
+    );
+    assert!(
+        adapter.locally_bound_lane_proposals.is_empty(),
+        "no lane work or voting is invented"
+    );
+}
