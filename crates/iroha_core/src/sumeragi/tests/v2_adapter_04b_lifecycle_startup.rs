@@ -747,6 +747,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
         &mut block_sync_request,
         &mut npos_beacon,
         1,
+        64,
         super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
         None,
     )
@@ -777,6 +778,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
             &mut block_sync_request,
             &mut npos_beacon,
             1,
+            64,
             producer_claim,
             None,
         )
@@ -2501,6 +2503,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_beacon,
+                        16,
                     )
                     .expect("consume the exact ordinary runner handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2545,6 +2548,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_beacon,
+                        16,
                     )
                     .expect("consume the exact malformed-response ordinary handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2586,6 +2590,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     &mut block_sync_request,
                     &mut npos_beacon,
                     1,
+                    16,
                     producer_claim,
                     None,
                 )

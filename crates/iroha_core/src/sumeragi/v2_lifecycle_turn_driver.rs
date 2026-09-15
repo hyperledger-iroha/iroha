@@ -3045,7 +3045,9 @@ impl ActivatedProductionLifecycleV1 {
     /// The activated lifecycle supplies only its retained ingress, executor,
     /// and services. Every lane, Kura, historical-Serve, block-sync, and NPoS
     /// dependency remains borrowed from the serialized runner, and no token
-    /// field or callback crosses this boundary.
+    /// field or callback crosses this boundary. The runner also supplies its
+    /// control queue capacity as `lane_output_limit`, so authenticated lane
+    /// output is serviced before completing this ordinary handoff.
     #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn consume_prepared_ordinary_ingress_turn(
@@ -3061,6 +3063,7 @@ impl ActivatedProductionLifecycleV1 {
             iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CommitCertificateRequest>,
         >,
         npos_beacon: &mut crate::sumeragi::v2_beacon::V2GlobalBeaconLifecycle,
+        lane_output_limit: usize,
     ) -> Result<
         ProductionPreparedOrdinaryIngressConsumptionV1,
         crate::sumeragi::v2_runner::V2RunnerError,
@@ -3089,6 +3092,7 @@ impl ActivatedProductionLifecycleV1 {
             block_sync,
             block_sync_request,
             npos_beacon,
+            lane_output_limit,
         )
     }
 

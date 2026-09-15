@@ -32073,4 +32073,6 @@ pub(super) mod tests {
     }
     include!("v2_lane_work/autonomous_retirement_and_merge_tests.rs");
     include!("v2_lane_work/queue_plan_admission_handoff_tests.rs");
+    include!("tests/v2_lane_work_ordinary_dispatch.rs");
+
 }

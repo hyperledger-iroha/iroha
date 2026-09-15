@@ -113,7 +113,7 @@ fn validate_real_process_smoke_request(request: &RealProcessSmokeRequestV1) -> R
     ensure!(
         request.version == 1
             && request.protocol == "AtomicPrivateSettlementV1"
-            && request.kind == "smoke"
+            && matches!(request.kind.as_str(), "smoke" | "happy_day")
             && request.run < 10
             && lowercase_digest(&request.request_id, &[64])
             && lowercase_digest(&request.invocation_nonce, &[64])
@@ -1785,7 +1785,7 @@ fn read_bound_real_process_request() -> Result<(RealProcessBoundRequestV1, Strin
         .and_then(HarnessJsonValue::as_str)
         .ok_or_else(|| eyre!("real-process request lacks kind"))?;
     let request = match kind {
-        "smoke" => {
+        "smoke" | "happy_day" => {
             let request: RealProcessSmokeRequestV1 =
                 norito::json::from_value(value).wrap_err("decode strict smoke request")?;
             validate_real_process_smoke_request(&request)?;
@@ -3825,19 +3825,15 @@ fn classify_fault_continuous_observation(
             observation.peer_index
         );
     }
-    for field in [
-        "staged_pool_heads",
-        "staged_nullifiers",
-        "staged_output_commitments",
-        "replicated_staged_locks",
-        "staged_locks",
-    ] {
-        ensure!(
-            fault_count(&observation.counts, field)? == 0,
-            "validator #{} retained APS `{field}` after finalization",
-            observation.peer_index
-        );
-    }
+    // Replicated locks retire in the atomic financial transaction. Torii's
+    // separate local sidecar retires reservations through its background
+    // finality reconciler; the accumulator enforces monotonic cleanup and the
+    // terminal snapshot still requires every local reservation to be gone.
+    ensure!(
+        fault_count(&observation.counts, "replicated_staged_locks")? == 0,
+        "validator #{} retained replicated APS locks after finalization",
+        observation.peer_index
+    );
     Ok(FaultContinuousObservationClassV1::Finalized)
 }
 
@@ -4084,6 +4080,7 @@ struct FaultContinuousObservationAccumulatorV1 {
     baseline_observations: u64,
     finalized_observations: u64,
     seen_finalized: bool,
+    last_finalized_local: Option<(u64, String)>,
     bundle_id: [u8; Hash::LENGTH],
     phase_coverage: Vec<FaultContinuousObservationPhaseAccumulatorV1>,
 }
@@ -4112,6 +4109,7 @@ impl FaultContinuousObservationAccumulatorV1 {
             baseline_observations: 0,
             finalized_observations: 0,
             seen_finalized: false,
+            last_finalized_local: None,
             bundle_id,
             phase_coverage: vec![FaultContinuousObservationPhaseAccumulatorV1::new(
                 peer_index,
@@ -4186,7 +4184,29 @@ impl FaultContinuousObservationAccumulatorV1 {
             !matches!(class, FaultContinuousObservationClassV1::Baseline) || !self.seen_finalized,
             "continuous APS observer saw finalized state roll back to baseline"
         );
+        let final_local = if matches!(class, FaultContinuousObservationClassV1::Finalized) {
+            let current = (
+                fault_count(&observation.counts, "staged_locks")?,
+                observation.staged_lock_commitment.clone(),
+            );
+            if let Some(previous) = &self.last_finalized_local {
+                ensure!(
+                    current.0 <= previous.0 && (current.0 != previous.0 || current.1 == previous.1),
+                    "continuous APS local staging increased or changed after financial finality"
+                );
+            }
+            ensure!(
+                phase.phase != "terminal" || current.0 == 0,
+                "continuous APS terminal observation retains local staging"
+            );
+            Some(current)
+        } else {
+            None
+        };
         phase.record_success(class, observation, &digest)?;
+        if let Some(current) = final_local {
+            self.last_finalized_local = Some(current);
+        }
         self.check_count = self
             .check_count
             .checked_add(1)
@@ -4275,6 +4295,12 @@ impl FaultContinuousObservationAccumulatorV1 {
     }
 
     fn finish(self) -> Result<FaultContinuousObservationSummaryV1> {
+        ensure!(
+            self.last_finalized_local
+                .as_ref()
+                .is_none_or(|local| local.0 == 0),
+            "continuous APS evidence ended before local staging reconciliation"
+        );
         ensure!(
             self.check_count >= 3,
             "continuous APS observer did not record a live poll between its bound endpoints"
@@ -10136,6 +10162,48 @@ fn smoke_prepare_registration_requires_empty_baseline_and_exact_inventory() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn fault_continuous_observer_tracks_local_reconciliation_without_partial_financial_state() {
+    let baseline = fault_observation_fixture(0, 'a', 0);
+    let finalized = fault_observation_fixture(0, 'b', 2);
+    let mut pending = finalized.clone();
+    set_smoke_registration_local_leg(&mut pending);
+    let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], true);
+    accumulator.checkpoint_phase(0, &[]).unwrap();
+    accumulator.record(&baseline, &baseline, 2, 0).unwrap();
+    accumulator.record(&baseline, &pending, 2, 0).unwrap();
+    accumulator.record(&baseline, &pending, 2, 0).unwrap();
+    let mut substituted = pending.clone();
+    substituted.staged_lock_commitment = "8".repeat(64);
+    assert!(accumulator.record(&baseline, &substituted, 2, 0).is_err());
+    assert!(accumulator.record(&baseline, &baseline, 2, 0).is_err());
+    let mut replicated = pending.clone();
+    set_smoke_registration_count(&mut replicated, "replicated_staged_locks", 19);
+    assert!(accumulator.record(&baseline, &replicated, 2, 0).is_err());
+    let terminal = accumulator.start_phase("terminal", false, true).unwrap();
+    accumulator.checkpoint_phase(terminal, &[]).unwrap();
+    assert!(
+        accumulator
+            .record(&baseline, &pending, 2, terminal)
+            .is_err()
+    );
+    accumulator
+        .record(&baseline, &finalized, 2, terminal)
+        .unwrap();
+    assert!(
+        accumulator
+            .record(&baseline, &pending, 2, terminal)
+            .is_err()
+    );
+    accumulator.finish().unwrap();
+    let mut stranded = FaultContinuousObservationAccumulatorV1::new(0, [9; Hash::LENGTH], true);
+    stranded.checkpoint_phase(0, &[]).unwrap();
+    stranded.record(&baseline, &baseline, 2, 0).unwrap();
+    stranded.record(&baseline, &pending, 2, 0).unwrap();
+    stranded.record(&baseline, &pending, 2, 0).unwrap();
+    assert!(stranded.finish().is_err());
 }
 
 #[test]

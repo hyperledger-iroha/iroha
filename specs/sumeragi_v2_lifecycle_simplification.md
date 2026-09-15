@@ -373,6 +373,16 @@ decided-lane recovery authority, which alone may classify current or historical
 Serve, Kura adverts, lane-local traffic, and obsolete leader-wire retirement
 while the exact Apply output is settling.
 
+An authenticated ordinary lane message receives a bounded lane-output dispatch
+at the end of its own post-dequeue consumer, before the next ingress message
+or the outer retransmission cadence. The runner supplies its existing control
+queue capacity. The exact prepared handoff and output fail-stop scope remain
+armed until this dispatch succeeds and the final output admission is reacquired.
+Network backpressure retains an exact source or worker owner for a later attempt; it
+does not authorize dropping the output or bypassing the guard. Global V2 and
+other non-lane consumers keep their own existing output paths. Apply barriers
+and the separate decided-lane recovery selector remain unchanged.
+
 `ProductionV2Services::capture_lifecycle_capacity_rank` consumes the complete
 selector. Under one locked transaction it either retains the physical I/O FIFO
 guard, the correctly derived Consensus admission slot, and the canonical-output

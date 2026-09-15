@@ -527,6 +527,14 @@ fn seal_empty_exact_output_for_cleanup_test(service: &ProductionV2Services) {
         .seal()
         .expect("seal the cleanup fixture's empty exact-output corridor");
 }
+/// Install the network whose actor receiver is retained by the caller's fixture.
+pub(in crate::sumeragi) fn install_network_for_test(
+    service: &mut ProductionV2Services,
+    network: crate::IrohaNetwork,
+) {
+    service.network = network;
+}
+
 /// Rebind closed-network production services to an exact durable context.
 pub(in crate::sumeragi) fn service_for_history_context(
     kura: Arc<Kura>,
@@ -631,4 +639,28 @@ fn successor_service_for_history_as(
     context.height = parent.height.saturating_add(1);
     context.parent_commit_qc = Some(parent.commit_qc.clone());
     service_for_history_context_with_local_validator(kura, context, validators, local_validator)
+}
+
+/// Test-only services for an existing exact State/Kura/guard owner.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sumeragi) fn ordinary_dispatch_services_for_test(
+    kura: Arc<Kura>,
+    context: wire::HeightContext,
+    validators: &[KeyPair],
+    local_validator: wire::ValidatorIndex,
+    state: Arc<State>,
+    output_guard: Arc<ConsensusOutputGuard>,
+    active_tag: EventTag,
+) -> ProductionV2Services {
+    let mut service = service_for_history_context_with_local_validator(
+        kura,
+        context,
+        validators,
+        local_validator,
+    );
+    assert_eq!(state.network_id, service.context.network_id);
+    service.state = state;
+    service.output_guard = output_guard;
+    service.active_tag = active_tag;
+    service
 }

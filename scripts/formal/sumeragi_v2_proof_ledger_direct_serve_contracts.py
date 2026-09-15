@@ -1471,6 +1471,7 @@ match inbound.message() {
             inbound, executor.current_tag().view(),
         )?;
         let _ = service_historical_recovery_tick(lane_work, services)?;
+        dispatch_lane_work_effects(lane_work, services, lane_output_limit)?;
         finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
     }
     BlockMessage::V2(_) => {}
@@ -3789,7 +3790,13 @@ def _lifecycle_certified_serve_reconciled_owner_errors(
         if owner:
             attributes = (
                 "#[allow(clippy::result_large_err)]", "#[inline(never)]",
-            ) if role == "launch" else ()
+            ) if role == "launch" else (
+                ("#[cfg_attr(not(test), allow(dead_code))]", "#[allow(clippy::too_many_arguments)]")
+                if (role, owner, name) == (
+                    "turn", "ActivatedProductionLifecycleV1",
+                    "consume_prepared_ordinary_ingress_turn",
+                ) else ()
+            )
             item = _require_qualified_rust_item(
                 path, source, owner, name, errors, description,
                 expected_attributes=attributes,
@@ -3874,6 +3881,30 @@ let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_hi
     activated.ready_for_finalized_rollover(&mut active_runner)?
 } else { false };
 """)
+    require("turn", "ActivatedProductionLifecycleV1", "consume_prepared_ordinary_ingress_turn",
+            "ordinary lane output forwards the exact runner budget", """
+consume_prepared_dequeued_v2_ingress(
+    handoff, &leader_wire_ingress_binding.ingress, executor, services,
+    lane_work, kura, local_key, block_sync_server, block_sync,
+    block_sync_request, npos_beacon, lane_output_limit,
+)
+""")
+    require("height", None, "drain_lifecycle_v2_ingress",
+            "all ordinary lane consumer paths forward the same output budget", """
+lane_work, kura, local_key, block_sync_server, block_sync,
+block_sync_request, npos_beacon, lane_output_limit,
+)
+""", count=3)
+    require("ordinary", None, "run_lifecycle_active_height",
+            "ordinary batch preserves distinct ingress and output budgets", """
+drain_lifecycle_v2_ingress(
+    &mut activated, &mut active_runner, receiver, &mut lane_work,
+    kura.as_ref(), &common_config.key_pair, block_sync_server, block_sync,
+    &mut block_sync_request, npos_beacon, body_queue_capacity,
+    control_queue_capacity, producer_claim, terminal_finalization_cut.as_ref(),
+)?;
+""")
+
     require("ordinary", None, "run_lifecycle_active_height",
             "sidecar ingress needs typed permit and prepared owner", """
 } else if lane_only_completion_barrier {
@@ -3883,7 +3914,7 @@ let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_hi
         let _ = activated.consume_prepared_ordinary_ingress_turn(
             &mut active_runner, prepared, &mut lane_work, kura.as_ref(),
             &common_config.key_pair, block_sync_server, block_sync,
-            &mut block_sync_request, npos_beacon,
+            &mut block_sync_request, npos_beacon, control_queue_capacity,
         )?;
     }
 """)

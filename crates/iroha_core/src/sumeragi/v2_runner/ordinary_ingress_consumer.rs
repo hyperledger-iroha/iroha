@@ -276,6 +276,9 @@ pub(in crate::sumeragi) fn settle_prepared_certified_serve_for_test(
 /// This is the sole post-selection implementation used by the activated
 /// lifecycle handoff. Every failure leaves both the local
 /// non-permit scope and the move-only handoff armed for restart.
+/// An authenticated lane message gets a bounded output dispatch attempt before
+/// this handoff completes. `lane_output_limit` is the runner control queue
+/// capacity; full queues retain an exact source or worker owner.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     mut prepared: PreparedDequeuedV2IngressV1,
@@ -289,6 +292,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_beacon: &mut V2GlobalBeaconLifecycle,
+    lane_output_limit: usize,
 ) -> Result<ProductionPreparedOrdinaryIngressConsumptionV1, V2RunnerError> {
     let services_output_guard = services.lifecycle_output_guard();
     if !prepared.matches_output_guard(&services_output_guard) {
@@ -349,6 +353,11 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 executor.current_tag().view(),
             )?;
             let _ = service_historical_recovery_tick(lane_work, services)?;
+            // Transfer already-owned lane output before another expensive ingress
+            // or a retransmission cadence can overtake its first delivery attempt.
+            // Backpressure retains an exact source or worker owner; transfers still
+            // passes the ordinary ownership, capacity and output-guard checks.
+            dispatch_lane_work_effects(lane_work, services, lane_output_limit)?;
             finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
         }
         BlockMessage::V2(_) => {}

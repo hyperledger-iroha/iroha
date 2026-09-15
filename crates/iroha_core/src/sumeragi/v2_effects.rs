@@ -5726,6 +5726,27 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             config,
         )
     }
+    /// Test-only constructor sharing the exact ordinary consumer output guard.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn ordinary_dispatch_executor_for_test(
+        runtime: R,
+        context: wire::HeightContext,
+        requester: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self::with_runtime_and_guard(
+            runtime,
+            BTreeMap::new(),
+            context,
+            requester,
+            local_validator,
+            output_guard,
+            EffectQueueConfig::default(),
+        )
+        .expect("real ordinary-dispatch executor with the shared guard")
+    }
+
     fn with_runtime_and_guard(
         mut runtime: R,
         recovered_bodies: BTreeMap<
