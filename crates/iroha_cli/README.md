@@ -49,6 +49,10 @@ artifacts or reading signing custody. Prepared Inrou stage files use mode0600;
 retained runtime snapshots use mode0400. Both remain owner-only, direct,
 singly linked files, with unchanged content verification.
 
+Journal admission holds one exclusive lock through classification and execution.
+The journal owner explicitly unlocks it on drop, so descriptors inherited by
+unrelated forked children cannot delay the next admission.
+
 Automation that already retains a private client file uses `--config-fd <FD>`
 with `--config-source-path <absolute-original-path>`. The descriptor is read
 directly, without environment overrides; the source path provides provenance
