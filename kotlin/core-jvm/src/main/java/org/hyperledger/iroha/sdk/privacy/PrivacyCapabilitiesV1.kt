@@ -8,7 +8,6 @@ import java.util.Collections
 import java.util.LinkedHashMap
 
 private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-private val POLICY_DELAY_BLOCKS_V1 = BigInteger.valueOf(300L)
 private val CONSENSUS_LIMIT_MAXIMA_V1 = linkedMapOf(
     "max_actions_per_transaction" to 1,
     "max_actions_per_block" to 2,
@@ -608,18 +607,15 @@ private fun requirePositivePrivacyHeightV1(height: BigInteger, subject: String) 
     require(height.signum() > 0) { "$subject must be non-zero" }
 }
 
-private fun requireValidPrivacyPolicyScheduleV1(
+internal fun requireValidPrivacyPolicyScheduleV1(
     scheduledAtHeight: BigInteger,
     effectiveAtHeight: BigInteger,
     subject: String,
 ) {
     requirePositivePrivacyHeightV1(scheduledAtHeight, "$subject scheduled-at height")
     requirePositivePrivacyHeightV1(effectiveAtHeight, "$subject effective-at height")
-    require(scheduledAtHeight <= U64_MAX.subtract(POLICY_DELAY_BLOCKS_V1)) {
-        "$subject scheduled-at height overflows the notice window"
-    }
-    require(effectiveAtHeight >= scheduledAtHeight.add(POLICY_DELAY_BLOCKS_V1)) {
-        "$subject must provide at least ${POLICY_DELAY_BLOCKS_V1} blocks of notice"
+    require(effectiveAtHeight > scheduledAtHeight) {
+        "$subject effective-at height must be after scheduled-at height"
     }
 }
 

@@ -757,6 +757,10 @@ pub struct Kura {
         NestedMap<CertifiedBundleCapacityIdentity, CertifiedBundleCapacityReservation>,
     >,
     /// Full authenticated reservation reconstruction has completed for this process.
+    native_amx_publication_capacity_reservations: ResidentMutex<
+        NestedMap<NativeAmxPublicationCarrier, NativeAmxPublicationCapacityReservation>,
+    >,
+    native_amx_resident_recovery_complete: AtomicBool,
     post_wsv_resident_recovery_complete: AtomicBool,
     /// Full certified/bundle reservation reconstruction has completed for this process.
     certified_resident_recovery_complete: AtomicBool,
@@ -831,6 +835,9 @@ pub struct Kura {
     /// Test hook for failing association recovery after a canonical stage exists.
     #[cfg(test)]
     fail_next_canonical_association_recovery: AtomicBool,
+    /// Test hook for failing removal of an existing canonical association stage.
+    #[cfg(test)]
+    fail_next_canonical_association_cleanup: AtomicBool,
     /// Test hook for forcing the next lane-geometry catalog publication to fail.
     #[cfg(test)]
     fail_next_lane_geometry_publication: AtomicBool,
@@ -2887,7 +2894,7 @@ impl Kura {
             Self::reject_retired_pipeline_artifacts(&blocks_root)?;
             Self::reject_retired_rollback_intents(&blocks_root)?;
         }
-        let canonical_replica_terminal_carrier_pins =
+        let mut canonical_replica_terminal_carrier_pins =
             if config.init_mode == InitMode::Strict && !provisional_open {
                 Self::canonical_replica_terminal_carrier_pins_for_store(&store_root, &blocks_root)?
             } else {
@@ -2907,6 +2914,23 @@ impl Kura {
         }
         let mut block_store =
             BlockStore::with_fsync(&blocks_root, config.fsync_mode, config.fsync_interval);
+        if config.init_mode == InitMode::Strict && !provisional_open {
+            // Both independent operation owners protect the exact selected canonical
+            // body before strict initialization can repair or truncate its suffix.
+            let native_pins =
+                block_store.native_amx_publication_pins_before_storage_recovery(&store_root)?;
+            for (height, hash) in native_pins {
+                if canonical_replica_terminal_carrier_pins
+                    .insert(height, hash)
+                    .is_some_and(|old| old != hash)
+                {
+                    return Err(Error::PruneIntentConflict(
+                        "Native publication and terminal recovery pin different canonical bodies"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
         let mut provisional_snapshot_bootstrap = None;
         let durable_height_bound;
         let mut fast_preflight_height = None;
@@ -3295,6 +3319,11 @@ impl Kura {
                 NestedMap::default(),
                 &resource_inventory,
             ),
+            native_amx_publication_capacity_reservations: ResidentMutex::new(
+                NestedMap::default(),
+                &resource_inventory,
+            ),
+            native_amx_resident_recovery_complete: AtomicBool::new(false),
             post_wsv_resident_recovery_complete: AtomicBool::new(false),
             certified_resident_recovery_complete: AtomicBool::new(false),
             #[cfg(test)]
@@ -3341,6 +3370,8 @@ impl Kura {
             store_paused_after_pending_merge_stage: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_canonical_association_recovery: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_canonical_association_cleanup: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
             #[cfg(test)]
@@ -3425,6 +3456,7 @@ impl Kura {
         }
         if !provisional_open {
             if config.init_mode == InitMode::Strict {
+                kura.rebuild_native_amx_publication_capacity_on_startup()?;
                 kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
                 kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
@@ -3691,6 +3723,11 @@ impl Kura {
                 NestedMap::default(),
                 &resource_inventory,
             ),
+            native_amx_publication_capacity_reservations: ResidentMutex::new(
+                NestedMap::default(),
+                &resource_inventory,
+            ),
+            native_amx_resident_recovery_complete: AtomicBool::new(true),
             post_wsv_resident_recovery_complete: AtomicBool::new(true),
             certified_resident_recovery_complete: AtomicBool::new(true),
             #[cfg(test)]
@@ -3737,6 +3774,8 @@ impl Kura {
             store_paused_after_pending_merge_stage: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_canonical_association_recovery: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_canonical_association_cleanup: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
             #[cfg(test)]
@@ -4609,6 +4648,16 @@ impl Kura {
         if before == 0 {
             return Ok(());
         }
+        #[cfg(test)]
+        if self
+            .fail_next_canonical_association_cleanup
+            .swap(false, Ordering::Relaxed)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected canonical association cleanup failure"),
+                path,
+            ));
+        }
         let accounting_mutation = self
             .begin_total_disk_usage_mutation()
             .with_resource_paths(vec![path.clone()]);
@@ -4703,6 +4752,14 @@ impl Kura {
         }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
+        // An unfinished Native carrier is a local recovery source even when a
+        // signed remote replica exists. Snapshot its typed owners before block-store locks.
+        let native_publication_pins = self
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .keys()
+            .map(|carrier| (carrier.height, carrier.block_hash))
+            .collect::<BTreeSet<_>>();
         let _write_guard = self.block_store_write_lock.lock();
         self.ensure_no_retired_rollback_intents()?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
@@ -4835,6 +4892,23 @@ impl Kura {
             let mut freed = 0u64;
             let mut selected = 0usize;
             for idx in 1..evict_limit {
+                let height = u64::try_from(idx)?.checked_add(1).ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "Native publication body pin height overflowed".to_owned(),
+                    )
+                })?;
+                if native_publication_pins
+                    .iter()
+                    .any(|(pinned_height, _)| *pinned_height == height)
+                {
+                    if !native_publication_pins.contains(&(height, hashes[idx])) {
+                        return Err(Error::PruneIntentConflict(
+                            "Native publication body pin differs from the canonical hash journal"
+                                .to_owned(),
+                        ));
+                    }
+                    continue;
+                }
                 let entry = indices[idx];
                 if entry.is_evicted() {
                     continue;
@@ -5885,6 +5959,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.rebuild_native_amx_publication_capacity_on_startup()?;
         self.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
@@ -5966,6 +6041,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.rebuild_native_amx_publication_capacity_on_startup()?;
         self.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
@@ -19010,6 +19086,9 @@ impl Kura {
             &self.store_root.join(PENDING_MERGE_ENTRIES_DIR),
         )?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY),
+        )?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
             &self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR),
         )?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
@@ -19355,7 +19434,7 @@ impl Kura {
         let block_required = self.block_required_bytes_for_budget(block, merge_entry, limit)?;
         let association_stage_bytes =
             self.canonical_association_stage_additional_bytes(block, merge_entry)?;
-        let post_wsv_artifact_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;
@@ -19364,7 +19443,7 @@ impl Kura {
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
         let mut budget_used = used
             .saturating_add(pending_bytes)
-            .saturating_add(post_wsv_artifact_reservations)
+            .saturating_add(lane_publication_reservations)
             .saturating_add(certified_bundle_reservations)
             .saturating_add(autonomous_terminal_reservations)
             .saturating_add(prune_maintenance_headroom);
@@ -19377,13 +19456,13 @@ impl Kura {
                 used = self.disk_usage.load(Ordering::Relaxed);
                 budget_used = used
                     .saturating_add(pending_bytes)
-                    .saturating_add(post_wsv_artifact_reservations)
+                    .saturating_add(lane_publication_reservations)
                     .saturating_add(certified_bundle_reservations)
                     .saturating_add(autonomous_terminal_reservations)
                     .saturating_add(prune_maintenance_headroom);
                 required = used
                     .saturating_add(pending_bytes)
-                    .saturating_add(post_wsv_artifact_reservations)
+                    .saturating_add(lane_publication_reservations)
                     .saturating_add(certified_bundle_reservations)
                     .saturating_add(autonomous_terminal_reservations)
                     .saturating_add(prune_maintenance_headroom)
@@ -19457,7 +19536,7 @@ impl Kura {
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
-        let post_wsv_artifact_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;
@@ -19465,7 +19544,7 @@ impl Kura {
         let mut used = self.disk_usage.load(Ordering::Relaxed);
         let mut budget_used = used
             .saturating_add(pending_current)
-            .saturating_add(post_wsv_artifact_reservations)
+            .saturating_add(lane_publication_reservations)
             .saturating_add(certified_bundle_reservations)
             .saturating_add(autonomous_terminal_reservations)
             .saturating_add(prune_maintenance_headroom);
@@ -19478,7 +19557,7 @@ impl Kura {
             let pending_after = pending_raw_after.saturating_sub(unindexed_bytes);
             used_after
                 .saturating_add(pending_after)
-                .saturating_add(post_wsv_artifact_reservations)
+                .saturating_add(lane_publication_reservations)
                 .saturating_add(certified_bundle_reservations)
                 .saturating_add(autonomous_terminal_reservations)
                 .saturating_add(prune_maintenance_headroom)
@@ -19494,7 +19573,7 @@ impl Kura {
                 used = self.disk_usage.load(Ordering::Relaxed);
                 budget_used = used
                     .saturating_add(pending_current)
-                    .saturating_add(post_wsv_artifact_reservations)
+                    .saturating_add(lane_publication_reservations)
                     .saturating_add(certified_bundle_reservations)
                     .saturating_add(autonomous_terminal_reservations)
                     .saturating_add(prune_maintenance_headroom);
@@ -19507,7 +19586,7 @@ impl Kura {
                     let pending_after = pending_raw_after.saturating_sub(unindexed_bytes);
                     used_after
                         .saturating_add(pending_after)
-                        .saturating_add(post_wsv_artifact_reservations)
+                        .saturating_add(lane_publication_reservations)
                         .saturating_add(certified_bundle_reservations)
                         .saturating_add(autonomous_terminal_reservations)
                         .saturating_add(prune_maintenance_headroom)
@@ -19655,9 +19734,23 @@ impl Kura {
                 let chain_len = data.len();
                 drop(data);
                 self.ensure_existing_block_wire_matches(&block, height, block_hash)?;
+                let mut native_capacity = self
+                    .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
+                        &block, None, None,
+                    )?;
+                if let Some(owner) = &mut native_capacity {
+                    owner.durable_write_started();
+                }
+                self.check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards()?;
+                if let Some(owner) = &mut native_capacity {
+                    owner.publish_pending_index()?;
+                }
                 self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
                 self.set_block_height_index_entry(height_usize, block_hash);
                 self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
+                if let Some(owner) = &native_capacity {
+                    owner.finish_exact_replacement_retirement(&block)?;
+                }
                 self.note_committed_lane_status_change();
                 return Ok(());
             }
@@ -19675,7 +19768,24 @@ impl Kura {
         }
         self.invalidate_pending_budget_cache();
         self.ensure_v2_finality_allows_rewrite_from(&blocks_dir, height)?;
+        let retired_native_block =
+            self.get_block_without_merge_sidecar(NonZeroUsize::new(height_usize).ok_or_else(
+                || Error::PruneIntentConflict("Native AMX replacement has zero height".to_owned()),
+            )?);
+        let retired_native_carrier = retired_native_block
+            .as_deref()
+            .map(Self::native_amx_publication_carrier)
+            .transpose()?;
+        let mut native_capacity = self
+            .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
+                &block,
+                None,
+                retired_native_block.as_deref(),
+            )?;
         self.check_replace_storage_budget(block.as_ref())?;
+        if let Some(owner) = &mut native_capacity {
+            owner.publish_pending_index()?;
+        }
         self.validate_lane_payload_ownership_artifacts_for_block(
             &block,
             LaneBlockArtifactConflictPolicy::AllowCanonicalReplacementAtProposalHeight(height),
@@ -19697,15 +19807,24 @@ impl Kura {
             let chain_len = data.len();
             drop(data);
             self.ensure_existing_block_wire_matches(&block, height, block_hash)?;
+            if let Some(owner) = &mut native_capacity {
+                owner.durable_write_started();
+            }
             drop(write_guard);
             drop(replay_metadata_guard);
             self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
             self.set_block_height_index_entry(height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
+            if let Some(owner) = &native_capacity {
+                owner.finish_exact_replacement_retirement(&block)?;
+            }
             self.note_committed_lane_status_change();
             return Ok(());
         }
         self.write_canonical_association_stage(&block, None)?;
+        if let Some(owner) = &mut native_capacity {
+            owner.durable_write_started();
+        }
         match self.with_retained_block_records_staged_for_rewrite(&blocks_dir, height, || {
             self.persist_block_at_height_while_locked(&block, height, &write_guard)
         }) {
@@ -19716,7 +19835,16 @@ impl Kura {
                 | Error::CanonicalStoragePoisoned),
             ) => return Err(error),
             Err(error) => {
+                if let Some(owner) = &mut native_capacity {
+                    owner.canonical_write_proven_uncommitted();
+                }
                 self.remove_canonical_association_stage()?;
+                drop(data);
+                drop(write_guard);
+                drop(replay_metadata_guard);
+                if let Some(owner) = &mut native_capacity {
+                    owner.rollback_after_proven_uncommitted_write()?;
+                }
                 return Err(error);
             }
         }
@@ -19730,6 +19858,12 @@ impl Kura {
         drop(data);
         drop(write_guard);
         drop(replay_metadata_guard);
+        if let Some(retired) = retired_native_carrier {
+            self.complete_native_amx_replacement_capacity(retired, &block)
+                .map_err(|error| {
+                    self.committed_recovery_failure("Native replacement retirement", &error)
+                })?;
+        }
         if let Err(association_error) = self.recover_canonical_association_stage() {
             return Err(self.committed_recovery_failure(
                 "committed replacement association recovery",
@@ -20230,7 +20364,7 @@ impl Kura {
     }
     fn decode_native_amx_manifest_file_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         file: &NativeAmxEvidenceFile,
     ) -> Result<NativeAmxParticipantApplicationManifestArtifactV1> {
@@ -20250,8 +20384,8 @@ impl Kura {
                 )
             })?;
         if Self::validate_native_amx_participant_application_manifest_artifact(&artifact).is_err()
-            || artifact.leaf.lane_id != entry.lane_id
-            || artifact.leaf.dataspace_id != entry.dataspace_id
+            || artifact.leaf.lane_id != entry.lane_id()
+            || artifact.leaf.dataspace_id != entry.dataspace_id()
             || artifact.leaf.participant_height != file.participant_height
             || self
                 .require_active_lane_incarnation(
@@ -20270,7 +20404,7 @@ impl Kura {
     }
     fn decode_native_amx_receipt_file_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         file: &NativeAmxEvidenceFile,
     ) -> Result<NativeAmxParticipantApplicationReceiptArtifact> {
@@ -20289,7 +20423,7 @@ impl Kura {
     }
     fn decode_structural_native_amx_receipt_file_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         file: &NativeAmxEvidenceFile,
     ) -> Result<NativeAmxParticipantApplicationReceiptArtifact> {
@@ -20310,8 +20444,8 @@ impl Kura {
                 })?;
         let descriptor = &artifact.participant_proposal.descriptor;
         if Self::validate_native_amx_participant_application_receipt_artifact(&artifact).is_err()
-            || descriptor.lane_id != entry.lane_id
-            || descriptor.dataspace_id != entry.dataspace_id
+            || descriptor.lane_id != entry.lane_id()
+            || descriptor.dataspace_id != entry.dataspace_id()
             || descriptor.lane_block_height != file.participant_height
         {
             return Err(Self::invalid_lane_artifact_error(
@@ -20323,7 +20457,7 @@ impl Kura {
     }
     fn validate_native_amx_evidence_file_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         file: &NativeAmxEvidenceFile,
     ) -> Result<()> {
@@ -21029,7 +21163,7 @@ impl Kura {
     /// `lane_geometry_lock`, and `sidecar_lock`, in that order.
     fn validate_native_amx_evidence_prune_protected_latest_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         protected: NativeAmxEvidencePruneProtectedLatestV2,
     ) -> Result<()> {
@@ -21037,8 +21171,8 @@ impl Kura {
         let (active_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
         Self::validate_native_amx_participant_receipt_latest_index(&identity)
             .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
-        if identity.lane_id != entry.lane_id
-            || identity.dataspace_id != entry.dataspace_id
+        if identity.lane_id != entry.lane_id()
+            || identity.dataspace_id != entry.dataspace_id()
             || identity.lane_incarnation != active_incarnation
             || Hash::from(protected.receipt_artifact_hash)
                 .as_ref()
@@ -21090,7 +21224,7 @@ impl Kura {
     /// independently of the optional derived latest pointer.
     fn derive_native_amx_evidence_prune_protected_latest_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         inventory: &NativeAmxEvidenceInventory,
     ) -> Result<NativeAmxEvidencePruneProtectedLatestV2> {
@@ -21133,7 +21267,7 @@ impl Kura {
     }
     fn validate_native_amx_evidence_prune_intent_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         intent: &NativeAmxEvidencePruneIntentV2,
     ) -> Result<()> {
@@ -21142,8 +21276,8 @@ impl Kura {
             self.native_amx_participant_evidence_retention(),
         )?;
         if intent.version != NativeAmxEvidencePruneIntentV2::VERSION
-            || intent.lane_id != entry.lane_id
-            || intent.dataspace_id != entry.dataspace_id
+            || intent.lane_id != entry.lane_id()
+            || intent.dataspace_id != entry.dataspace_id()
             || intent.lane_incarnation != active_incarnation
             || intent.protected_latest.identity.lane_id != intent.lane_id
             || intent.protected_latest.identity.dataspace_id != intent.dataspace_id
@@ -21685,12 +21819,7 @@ impl Kura {
         entry: &LaneConfigEntry,
         namespace: &BoundProgressNamespace,
         inventory: &NativeAmxEvidenceInventory,
-    ) -> Result<
-        Option<(
-            NativeAmxEvidencePruneProtectedLatestV2,
-            Vec<NativeAmxEvidencePruneEntryV2>,
-        )>,
-    > {
+    ) -> Result<Option<NativeAmxEvidencePruneIntentV2>> {
         let mut manifests = BTreeMap::new();
         for (height, file) in &inventory.manifests {
             manifests.insert(
@@ -21705,47 +21834,96 @@ impl Kura {
                 self.decode_native_amx_receipt_file_locked(entry, namespace, file)?,
             );
         }
-        Self::validate_native_amx_retained_history_continuity(&manifests, &receipts, false)
+        let plan = Self::plan_native_amx_evidence_prune_intent_from_artifacts(
+            self.native_amx_participant_evidence_retention(),
+            self.native_amx_participant_evidence_file_bytes(),
+            self.native_amx_evidence_prune_intent_max_bytes(),
+            &manifests,
+            &receipts,
+        )?;
+        if manifests.keys().any(|height| receipts.contains_key(height)) {
+            let protected_latest = self.derive_native_amx_evidence_prune_protected_latest_locked(
+                entry, namespace, inventory,
+            )?;
+            if plan
+                .as_ref()
+                .is_some_and(|intent| intent.protected_latest != protected_latest)
+            {
+                return Err(Error::PruneIntentConflict(
+                    "Native AMX prune plan differs from its authenticated protected latest"
+                        .to_owned(),
+                ));
+            }
+        }
+        if let Some(intent) = &plan {
+            // Journal hashes bind the retained bytes, not merely decoded values.
+            for removal in &intent.entries {
+                let kind = Self::native_amx_evidence_prune_entry_kind(removal)?;
+                let file = inventory
+                    .stable(kind)
+                    .get(&removal.participant_height)
+                    .ok_or_else(|| {
+                        Error::PruneIntentConflict(
+                            "Native AMX planned removal disappeared".to_owned(),
+                        )
+                    })?;
+                let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
+                if Hash::new(bytes) != removal.artifact_hash {
+                    return Err(Error::PruneIntentConflict(
+                        "Native AMX planned removal differs from its exact canonical frame"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(plan)
+    }
+    /// Plan one route's exact prune journal from a bounded retained snapshot plus any
+    /// prospective complete pair. This grants no publication or finality authority:
+    /// live pruning independently authenticates the selected protected pair.
+    /// No journal is needed when the complete retained suffix already fits.
+    fn plan_native_amx_evidence_prune_intent_from_artifacts(
+        retention: NonZeroUsize,
+        stable_byte_limit: u64,
+        journal_byte_limit: usize,
+        manifests: &BTreeMap<u64, NativeAmxParticipantApplicationManifestArtifactV1>,
+        receipts: &BTreeMap<u64, NativeAmxParticipantApplicationReceiptArtifact>,
+    ) -> Result<Option<NativeAmxEvidencePruneIntentV2>> {
+        let count_limit = retention.get().checked_add(1).ok_or_else(|| {
+            Error::PruneIntentConflict(
+                "Native AMX prospective inventory entry bound overflowed".to_owned(),
+            )
+        })?;
+        if manifests.len() > count_limit || receipts.len() > count_limit {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX prospective inventory exceeds one incoming pair".to_owned(),
+            ));
+        }
+        Self::validate_native_amx_retained_history_continuity(manifests, receipts, false)
             .map_err(|message| Error::PruneIntentConflict(message.to_owned()))?;
         let complete = manifests
             .keys()
             .filter(|height| receipts.contains_key(*height))
             .copied()
             .collect::<BTreeSet<_>>();
-        if complete.is_empty() {
+        let Some(protected_height) = complete.last().copied() else {
             return Ok(None);
-        }
-        let protected_latest = self.derive_native_amx_evidence_prune_protected_latest_locked(
-            entry, namespace, inventory,
-        )?;
-        let retention = self.native_amx_participant_evidence_retention().get();
-        let stable_byte_limit = self.native_amx_participant_evidence_file_bytes();
+        };
+        let protected_latest = NativeAmxEvidencePruneProtectedLatestV2::from_artifacts(
+            &manifests[&protected_height],
+            &receipts[&protected_height],
+        )
+        .ok_or_else(|| {
+            Error::PruneIntentConflict(
+                "Native AMX prospective protected pair has conflicting identities".to_owned(),
+            )
+        })?;
         let mut kept_complete = BTreeSet::new();
         let mut kept_pair_bytes = 0_u64;
         let mut stopped = false;
         for height in complete.iter().rev() {
-            let manifest_len = inventory
-                .manifests
-                .get(height)
-                .ok_or_else(|| {
-                    Error::PruneIntentConflict(
-                        "complete Native AMX prune height lost its manifest".to_owned(),
-                    )
-                })?
-                .metadata
-                .file
-                .len();
-            let receipt_len = inventory
-                .receipts
-                .get(height)
-                .ok_or_else(|| {
-                    Error::PruneIntentConflict(
-                        "complete Native AMX prune height lost its receipt".to_owned(),
-                    )
-                })?
-                .metadata
-                .file
-                .len();
+            let manifest_len = u64::try_from(manifests[height].encode_framed()?.len())?;
+            let receipt_len = u64::try_from(receipts[height].encode_framed()?.len())?;
             let pair_len = manifest_len.checked_add(receipt_len).ok_or_else(|| {
                 Error::PruneIntentConflict(
                     "Native AMX retained pair byte count overflowed".to_owned(),
@@ -21753,12 +21931,11 @@ impl Kura {
             })?;
             if pair_len > stable_byte_limit {
                 return Err(Error::PruneIntentConflict(
-                    "one Native AMX manifest/receipt pair exceeds the shared stable aggregate byte bound"
-                        .to_owned(),
+                    "one Native AMX manifest/receipt pair exceeds the shared stable aggregate byte bound".to_owned(),
                 ));
             }
             let fits = !stopped
-                && kept_complete.len() < retention
+                && kept_complete.len() < retention.get()
                 && kept_pair_bytes
                     .checked_add(pair_len)
                     .is_some_and(|bytes| bytes <= stable_byte_limit);
@@ -21769,39 +21946,69 @@ impl Kura {
             kept_complete.insert(*height);
             kept_pair_bytes += pair_len;
         }
-        if !kept_complete.contains(&protected_latest.identity.lane_block_height) {
+        if !kept_complete.contains(&protected_height) {
             return Err(Error::PruneIntentConflict(
-                "Native AMX retained budget cannot preserve the authenticated protected latest evidence"
-                    .to_owned(),
+                "Native AMX retained budget cannot preserve the authenticated protected latest evidence".to_owned(),
             ));
         }
-        let mut removals = Vec::new();
+        let mut entries = Vec::new();
         for height in complete.difference(&kept_complete) {
-            for (kind, encoded_kind) in [
+            for (kind, bytes) in [
                 (
-                    NativeAmxEvidenceKind::Manifest,
                     NativeAmxEvidencePruneIntentV2::MANIFEST_KIND,
+                    manifests[height].encode_framed()?,
                 ),
                 (
-                    NativeAmxEvidenceKind::Receipt,
                     NativeAmxEvidencePruneIntentV2::RECEIPT_KIND,
+                    receipts[height].encode_framed()?,
                 ),
             ] {
-                let file = inventory.stable(kind).get(height).ok_or_else(|| {
-                    Error::PruneIntentConflict(format!(
-                        "complete Native AMX prune height lost its {}",
-                        kind.label()
-                    ))
-                })?;
-                let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
-                removals.push(NativeAmxEvidencePruneEntryV2 {
-                    kind: encoded_kind,
+                entries.push(NativeAmxEvidencePruneEntryV2 {
+                    kind,
                     participant_height: *height,
                     artifact_hash: Hash::new(bytes),
                 });
             }
         }
-        Ok(Some((protected_latest, removals)))
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        if entries.len() > Self::native_amx_evidence_prune_intent_max_entries(retention)? {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX prospective prune exceeds its entry bound".to_owned(),
+            ));
+        }
+        let identity = protected_latest.identity;
+        let mut intent = NativeAmxEvidencePruneIntentV2 {
+            version: NativeAmxEvidencePruneIntentV2::VERSION,
+            lane_id: identity.lane_id,
+            dataspace_id: identity.dataspace_id,
+            lane_incarnation: identity.lane_incarnation,
+            protected_latest,
+            entries,
+            removed_settlements: Vec::new(),
+        };
+        intent.removed_settlements = Self::collect_native_amx_prune_settlement_preimages(
+            &intent,
+            journal_byte_limit,
+            |height| {
+                receipts
+                    .get(&height)
+                    .map(|receipt| receipt.participant_settlement.clone())
+                    .ok_or_else(|| {
+                        Error::PruneIntentConflict(
+                            "Native AMX prune preimage receipt disappeared".to_owned(),
+                        )
+                    })
+            },
+        )?;
+        let bytes = norito::encode_canonical(&intent)?;
+        if bytes.is_empty() || bytes.len() > journal_byte_limit {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent exceeds its hard byte limit".to_owned(),
+            ));
+        }
+        Ok(Some(intent))
     }
     /// Bound retained preimages before each vector allocation. Loading one
     /// receipt remains bounded by the existing strict single-artifact budget.
@@ -21869,7 +22076,7 @@ impl Kura {
             namespace,
             NativeAmxEvidenceRecoveryPhase::Startup,
         )?;
-        let Some((protected_latest, removals)) =
+        let Some(intent) =
             self.plan_native_amx_evidence_pair_prune_locked(entry, namespace, &inventory)?
         else {
             self.inventory_native_amx_evidence_files_locked(namespace, false)?;
@@ -21877,36 +22084,6 @@ impl Kura {
             batch.finish();
             return Ok(());
         };
-        if removals.is_empty() {
-            self.inventory_native_amx_evidence_files_locked(namespace, false)?;
-            batch.guard().resource_batch(0).finish();
-            batch.finish();
-            return Ok(());
-        }
-        let (lane_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
-        let mut intent = NativeAmxEvidencePruneIntentV2 {
-            version: NativeAmxEvidencePruneIntentV2::VERSION,
-            lane_id: entry.lane_id,
-            dataspace_id: entry.dataspace_id,
-            lane_incarnation,
-            protected_latest,
-            entries: removals,
-            removed_settlements: Vec::new(),
-        };
-        intent.removed_settlements = Self::collect_native_amx_prune_settlement_preimages(
-            &intent,
-            self.native_amx_evidence_prune_intent_max_bytes(),
-            |height| {
-                let file = inventory.receipts.get(&height).ok_or_else(|| {
-                    Error::PruneIntentConflict(
-                        "Native AMX prune preimage receipt disappeared".to_owned(),
-                    )
-                })?;
-                Ok(self
-                    .decode_native_amx_receipt_file_locked(entry, namespace, file)?
-                    .participant_settlement)
-            },
-        )?;
         self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
         let bytes = norito::encode_canonical(&intent)?;
         if bytes.is_empty() || bytes.len() > self.native_amx_evidence_prune_intent_max_bytes() {
@@ -22457,6 +22634,8 @@ impl Kura {
             marker_temporary_bytes,
             marker_stable_growth_bytes,
         )?;
+        let native_amx_retirement_record_hashes =
+            self.native_amx_publication_prune_record_hashes(height)?;
         let validated_carrier_records =
             self.merge_carrier_records_for_prune_under_prune_and_canonical_guards(height)?;
         let (carrier_records, carrier_generation) = {
@@ -22487,6 +22666,7 @@ impl Kura {
         }
         let intent =
             self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV3 {
+                native_amx_retirement_record_hashes,
                 version: 3,
                 source_height,
                 source_tip_hash,
@@ -22687,7 +22867,12 @@ impl Kura {
             "completed prune validation",
             self.validate_completed_prune_intent(&intent)
         );
+        forward_or_stop!(
+            "Native pending publication retirement",
+            self.retire_native_amx_publication_records_for_completed_prune(&intent)
+        );
         forward_or_stop!("prune-intent clearance", self.finish_prune_intent());
+        self.release_native_amx_capacity_after_completed_prune(height);
         prune_accounting_mutation.finish_resources_before_disk_rescan();
         self.note_committed_lane_status_change();
         Ok(())
@@ -23509,6 +23694,46 @@ struct LaneArtifactPhysicalTarget {
     activation_height: u64,
     blocks_path: PathBuf,
 }
+/// Physical fields required by read-only Native evidence inventories. This view
+/// grants neither active catalog membership nor authority to provision storage.
+trait LaneArtifactStorageView {
+    fn lane_id(&self) -> LaneId;
+    fn dataspace_id(&self) -> DataSpaceId;
+    fn blocks_dir(&self, store_root: &Path) -> PathBuf;
+}
+impl LaneArtifactStorageView for LaneConfigEntry {
+    fn lane_id(&self) -> LaneId {
+        self.lane_id
+    }
+    fn dataspace_id(&self) -> DataSpaceId {
+        self.dataspace_id
+    }
+    fn blocks_dir(&self, store_root: &Path) -> PathBuf {
+        LaneConfigEntry::blocks_dir(self, store_root)
+    }
+}
+impl LaneArtifactStorageView for LaneArtifactPhysicalTarget {
+    fn lane_id(&self) -> LaneId {
+        self.lane_id
+    }
+    fn dataspace_id(&self) -> DataSpaceId {
+        self.dataspace_id
+    }
+    fn blocks_dir(&self, _store_root: &Path) -> PathBuf {
+        self.blocks_path.clone()
+    }
+}
+impl<T: LaneArtifactStorageView + ?Sized> LaneArtifactStorageView for &T {
+    fn lane_id(&self) -> LaneId {
+        (**self).lane_id()
+    }
+    fn dataspace_id(&self) -> DataSpaceId {
+        (**self).dataspace_id()
+    }
+    fn blocks_dir(&self, store_root: &Path) -> PathBuf {
+        (**self).blocks_dir(store_root)
+    }
+}
 /// Durable lane/merge association decision resolved only after the canonical marker is known.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -23891,7 +24116,7 @@ impl Kura {
         )
     }
     fn native_amx_participant_receipt_path_for_entry(
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         store_root: &Path,
         participant_height: u64,
     ) -> PathBuf {
@@ -23900,7 +24125,7 @@ impl Kura {
         )
     }
     fn native_amx_application_manifest_path_for_entry(
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         store_root: &Path,
         participant_height: u64,
     ) -> PathBuf {
@@ -23913,7 +24138,7 @@ impl Kura {
     }
     fn native_amx_evidence_namespace_for_entry(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
     ) -> Result<BoundProgressNamespace> {
         let anchor_manifest =
             Self::native_amx_application_manifest_path_for_entry(entry, &self.store_root, 1);
@@ -23922,7 +24147,7 @@ impl Kura {
         self.open_bound_progress_namespace(&anchor_manifest, &anchor_receipt)
     }
     fn native_amx_participant_receipt_latest_index_path_for_entry(
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         store_root: &Path,
     ) -> PathBuf {
         Self::lane_artifact_dir(&entry.blocks_dir(store_root))
@@ -24399,7 +24624,7 @@ impl Kura {
     }
     fn decode_bound_native_amx_participant_receipt_latest_index_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         path: &Path,
         namespace: &BoundProgressNamespace,
     ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV2>> {
@@ -24413,8 +24638,8 @@ impl Kura {
             return Ok(None);
         };
         Self::decode_native_amx_participant_receipt_latest_index_bytes_for_route(
-            entry.lane_id,
-            entry.dataspace_id,
+            entry.lane_id(),
+            entry.dataspace_id(),
             path,
             &bytes,
         )
@@ -24892,6 +25117,9 @@ impl Kura {
     }
 }
 include!("kura/lane_artifact_budget.rs");
+include!("kura/native_amx_publication_capacity.rs");
+include!("kura/native_amx_publication_index.rs");
+include!("kura/native_amx_publication_startup_pins.rs");
 impl Kura {
     fn persist_lane_payload_ownership_artifacts_for_block(
         &self,
@@ -37811,7 +38039,7 @@ impl Kura {
     }
     fn native_amx_fully_authenticated_evidence_for_latest_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         namespace: &BoundProgressNamespace,
         latest: NativeAmxParticipantReceiptLatestIndexV2,
     ) -> Result<(
@@ -38252,14 +38480,39 @@ impl Kura {
                 plan,
                 target_indices,
             )?;
+        let publication_required = self
+            .ensure_native_amx_publication_capacity_under_publication_guard(
+                block,
+                plan,
+                target_indices,
+            )?;
+        if !publication_required {
+            self.read_back_native_amx_repair_target_manifests_under_publication_guard(
+                plan,
+                target_indices,
+            )?;
+            for &index in target_indices {
+                let (manifest, receipt) = &plan.artifacts[index];
+                let _ = self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(manifest, receipt, true)?;
+                self.cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                    receipt,
+                )?;
+            }
+            return Ok(target_indices.len());
+        }
         // Repair keeps the same crash boundary as live publication, but only
         // marker-owned routes may touch current storage. Authenticate and
         // publish every target manifest before promoting any target receipt.
         for &index in target_indices {
-            let (manifest, _) = &plan.artifacts[index];
+            let (manifest, receipt) = &plan.artifacts[index];
             self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
                 manifest,
                 true,
+            )?;
+            self.consume_native_amx_publication_component_after_durable_publication(
+                receipt,
+                NativeAmxPublicationComponent::Manifest,
+                manifest.encode_framed()?.len(),
             )?;
         }
         self.read_back_native_amx_repair_target_manifests_under_publication_guard(
@@ -38273,6 +38526,11 @@ impl Kura {
                 manifest,
                 true,
             )?;
+            self.consume_native_amx_publication_component_after_durable_publication(
+                receipt,
+                NativeAmxPublicationComponent::Receipt,
+                receipt.encode_framed()?.len(),
+            )?;
         }
         for (&index, preflight) in target_indices.iter().zip(route_preflights.iter()) {
             let (manifest, receipt) = &plan.artifacts[index];
@@ -38281,6 +38539,14 @@ impl Kura {
                 manifest,
                 true,
                 preflight,
+            )?;
+            self.consume_native_amx_publication_component_after_durable_publication(
+                receipt,
+                NativeAmxPublicationComponent::Latest,
+                norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
+                    receipt,
+                ))?
+                .len(),
             )?;
         }
         for &index in target_indices {
@@ -38322,12 +38588,45 @@ impl Kura {
         let permit_cleanup = mode.permits_retention_cleanup();
         let route_preflights =
             self.preflight_native_amx_participant_application_plan_under_publication_guard(plan)?;
+        let all_targets = (0..plan.artifacts.len()).collect::<Vec<_>>();
+        let publication_required = self
+            .ensure_native_amx_publication_capacity_under_publication_guard(
+                block,
+                plan,
+                &all_targets,
+            )?;
+        if !publication_required {
+            self.read_back_native_amx_plan_manifests_under_publication_guard(plan)?;
+            let mut identities = Vec::with_capacity(plan.artifacts.len());
+            for (manifest, receipt) in &plan.artifacts {
+                identities.push(self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(manifest, receipt, mode.requires_post_apply_metadata())?);
+            }
+            let token =
+                NativeAmxParticipantApplicationPrepublicationToken::from_plan(plan, identities)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "Native AMX completed token does not cover the exact manifest",
+                        )
+                    })?;
+            if permit_cleanup {
+                for (_, receipt) in &plan.artifacts {
+                    self.cleanup_native_amx_participant_application_evidence_under_publication_guard(receipt)?;
+                }
+            }
+            return Ok(token);
+        }
         // Publication order is consensus-significant for crash recovery:
         // every manifest, then every receipt, then every exact latest pointer.
-        for (manifest, _) in &plan.artifacts {
+        for (manifest, receipt) in &plan.artifacts {
             self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
                 manifest,
                 permit_cleanup,
+            )?;
+            self.consume_native_amx_publication_component_after_durable_publication(
+                receipt,
+                NativeAmxPublicationComponent::Manifest,
+                manifest.encode_framed()?.len(),
             )?;
         }
         let manifest_readback =
@@ -38348,6 +38647,11 @@ impl Kura {
                 manifest,
                 permit_cleanup,
             )?;
+            self.consume_native_amx_publication_component_after_durable_publication(
+                receipt,
+                NativeAmxPublicationComponent::Receipt,
+                receipt.encode_framed()?.len(),
+            )?;
         }
         for ((manifest, receipt), preflight) in plan.artifacts.iter().zip(route_preflights.iter()) {
             self.write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard(
@@ -38355,6 +38659,14 @@ impl Kura {
                 manifest,
                 permit_cleanup,
                 preflight,
+            )?;
+            self.consume_native_amx_publication_component_after_durable_publication(
+                receipt,
+                NativeAmxPublicationComponent::Latest,
+                norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
+                    receipt,
+                ))?
+                .len(),
             )?;
         }
         let mut identities = Vec::with_capacity(plan.artifacts.len());
@@ -38517,7 +38829,7 @@ impl Kura {
     }
     fn read_native_amx_participant_application_manifest_from_paths_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         lane_block_height: u64,
         path: &Path,
         namespace: &BoundProgressNamespace,
@@ -38536,8 +38848,8 @@ impl Kura {
             Err(error) => {
                 iroha_logger::warn!(
                     ?error,
-                    lane = %entry.lane_id.as_u32(),
-                    dataspace = entry.dataspace_id.as_u64(),
+                    lane = %entry.lane_id().as_u32(),
+                    dataspace = entry.dataspace_id().as_u64(),
                     lane_block_height,
                     "Native AMX participant manifest identity, marker, proof, or file mismatch"
                 );
@@ -39164,12 +39476,13 @@ impl Kura {
         self.prune_native_amx_evidence_pairs_locked(&mut accounting_mutation, &entry, &namespace)?;
         let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
+        self.complete_native_amx_publication_route_capacity_locked(&entry, &namespace, artifact)?;
         accounting_mutation.finish();
         Ok(())
     }
     fn read_native_amx_participant_application_receipt_from_paths_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         lane_block_height: u64,
         path: &Path,
         namespace: &BoundProgressNamespace,
@@ -39188,8 +39501,8 @@ impl Kura {
             Err(error) => {
                 iroha_logger::warn!(
                     ?error,
-                    lane = %entry.lane_id.as_u32(),
-                    dataspace = entry.dataspace_id.as_u64(),
+                    lane = %entry.lane_id().as_u32(),
+                    dataspace = entry.dataspace_id().as_u64(),
                     lane_block_height,
                     "Native AMX participant receipt identity, marker, structure, or file mismatch"
                 );
@@ -40347,6 +40660,64 @@ impl Kura {
             }
             let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
             self.update_disk_usage_delta(before_bytes, after_bytes);
+            if native_amx_startup_retention_cleanup_authorized(
+                expected_startup_evidence,
+                !receipt_without_manifest.is_empty() || !manifest_without_receipt.is_empty(),
+            ) && let Some(receipt) = expected_receipt.as_ref()
+            {
+                let height = receipt.participant_proposal.descriptor.lane_block_height;
+                let manifest = validated_manifests.get(&height).ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "Native startup completion lost its authenticated manifest".to_owned(),
+                    )
+                })?;
+                self.validate_native_amx_startup_completed_pair_locked(
+                    &entry, &namespace, &inventory, manifest, receipt,
+                )?;
+                let carrier = NativeAmxPublicationCarrier {
+                    height: receipt.application_block_height,
+                    block_hash: receipt.application_block_hash,
+                    executed_wire_hash: receipt.executed_block_wire_hash,
+                };
+                // A clean completed pair legitimately has no pending publication or
+                // retention-maintenance owner. The exact protected pair was validated
+                // above; completion below still authenticates latest/WSV and fsyncs the
+                // namespace. Never manufacture an owner merely to consume stable bytes.
+                let descriptor = &receipt.participant_proposal.descriptor;
+                let route = NativeAmxPublicationRoute {
+                    lane_id: descriptor.lane_id,
+                    dataspace_id: descriptor.dataspace_id,
+                    incarnation: descriptor.lane_incarnation,
+                };
+                let owns_capacity = self
+                    .native_amx_publication_capacity_reservations
+                    .lock()
+                    .get(&carrier)
+                    .is_some_and(|owner| owner.routes.contains_key(&route));
+                if owns_capacity {
+                    self.consume_native_amx_publication_component_after_durable_publication(
+                        receipt,
+                        NativeAmxPublicationComponent::Manifest,
+                        manifest.encode_framed()?.len(),
+                    )?;
+                    self.consume_native_amx_publication_component_after_durable_publication(
+                        receipt,
+                        NativeAmxPublicationComponent::Receipt,
+                        receipt.encode_framed()?.len(),
+                    )?;
+                    self.consume_native_amx_publication_component_after_durable_publication(
+                        receipt,
+                        NativeAmxPublicationComponent::Latest,
+                        norito::encode_canonical(
+                            &NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt),
+                        )?
+                        .len(),
+                    )?;
+                }
+                self.complete_native_amx_publication_route_capacity_locked(
+                    &entry, &namespace, receipt,
+                )?;
+            }
             lane_resources.finish();
         }
         accounting_mutation.finish();
@@ -47150,6 +47521,7 @@ pub(crate) mod tests {
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
     include!("kura/tests/10_native_amx_and_roster.rs");
     include!("kura/tests/10b_native_amx_prepublication_transition.rs");
+    include!("kura/tests/10d_native_amx_publication_capacity.rs");
     include!("kura/tests/11_roster_and_progress_sidecars.rs");
     include!("kura/tests/12_sidecar_index_and_pruning.rs");
     include!("kura/tests/13_manifests_and_fsync.rs");

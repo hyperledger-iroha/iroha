@@ -1239,12 +1239,11 @@ pub struct PrivateSettlementBundleStatusResponseV1 {
     name = "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleReceiptResponseV1"
 )]
 pub enum PrivateSettlementBundleReceiptResponseV1 {
-    /// The bundle is known but has no public terminal receipt yet.
+    /// This node has no public finalized receipt or abort marker for this identifier.
+    /// This does not establish that the bundle is known, accepted, or locally stored.
     Pending {
         /// Public bundle identifier.
         bundle_id: Hash,
-        /// Current public lifecycle.
-        lifecycle: PrivateSettlementLifecycleDtoV1,
     },
     /// Every private delta finalized atomically.
     Finalized(PrivateSettlementReceiptV1),
@@ -2188,7 +2187,6 @@ mod tests {
     fn lifecycle_and_pending_receipt_roundtrip_canonically() {
         let response = PrivateSettlementBundleReceiptResponseV1::Pending {
             bundle_id: Hash::new(b"private-settlement-dto-roundtrip"),
-            lifecycle: PrivateSettlementLifecycleDtoV1::Prepared,
         };
         let bytes = norito::encode_canonical(&response).expect("DTO encodes canonically");
         let decoded: PrivateSettlementBundleReceiptResponseV1 =
@@ -2198,6 +2196,10 @@ mod tests {
         let decoded_json: PrivateSettlementBundleReceiptResponseV1 =
             norito::json::from_json(&json).expect("DTO JSON decodes");
         assert_eq!(decoded_json, response);
+        let value = norito::json::to_value(&response).expect("pending JSON");
+        let fields = value["value"].as_object().expect("pending fields");
+        assert_eq!(fields.len(), 1);
+        assert!(fields.contains_key("bundle_id"));
     }
 
     #[test]
@@ -2245,10 +2247,7 @@ mod tests {
         let fixture = response_validation_fixture_v1();
         let bundle_id = fixture.committee.manifest.bundle_id;
         let receipt_variants = [
-            PrivateSettlementBundleReceiptResponseV1::Pending {
-                bundle_id,
-                lifecycle: PrivateSettlementLifecycleDtoV1::Prepared,
-            },
+            PrivateSettlementBundleReceiptResponseV1::Pending { bundle_id },
             PrivateSettlementBundleReceiptResponseV1::Finalized(PrivateSettlementReceiptV1 {
                 version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
                 manifest: fixture.committee.manifest.clone(),
@@ -2275,7 +2274,21 @@ mod tests {
             assert_unknown_json_field_rejected(response, &["value"]);
         }
 
-        assert_unknown_json_field_rejected(&receipt_variants[0], &["value", "lifecycle"]);
+        let mut removed_field = norito::json::to_value(&receipt_variants[0]).expect("pending JSON");
+        removed_field
+            .get_mut("value")
+            .expect("pending variant value")
+            .as_object_mut()
+            .expect("pending value")
+            .insert(
+                "lifecycle".into(),
+                norito::json::to_value(&PrivateSettlementLifecycleDtoV1::Prepared)
+                    .expect("lifecycle JSON"),
+            );
+        assert!(
+            norito::json::from_value::<PrivateSettlementBundleReceiptResponseV1>(removed_field)
+                .is_err()
+        );
     }
 
     #[test]

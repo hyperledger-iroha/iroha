@@ -63,6 +63,11 @@ configuration of four Rayon, scheduler, and pipeline workers. The sixteen
 validators and proving process can exceed sixteen runnable workers; these
 settings do not impose a host-wide CPU cap.
 
+The experimental result field `activation_height` records the committed height
+of the first successful exact Active-genesis capability observation; it is not
+a scheduled activation height. The Rust fixture authenticates the compiled Active
+genesis record before that observation.
+
 Each request has exactly `version`, `protocol`, `kind`, `request_id`,
 `invocation_nonce`, `commit`, `seed`, and `run`. The version is 1, protocol is
 `AtomicPrivateSettlementV1`, kind is `smoke`, and run is in `0..9`. The request ID
@@ -85,7 +90,8 @@ result binds an exact 80-file inventory with lengths and SHA-256 digests:
   attempts, classifications, counts, checkpoint coverage and hash chains.
 - Sixteen full `BridgeFinalityProof` files before restart and sixteen afterward.
 
-Validation checks the 300-height activation notice, disjoint four-member
+Validation checks a nonzero genesis-readiness observation, a strictly later
+authority-context observation, finalized-height ordering, disjoint four-member
 committees, all 16 distinct process IDs and configuration commitments, changed
 process IDs for every restart, and the final atomic financial deltas (three
 roots, six nullifiers, nine commitments/encrypted outputs, one replay marker and

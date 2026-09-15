@@ -44,6 +44,60 @@ class PrivacyExact12CapabilityManifestV1Test {
         }
     }
     @Test
+    fun pendingTighteningAcceptsNextBlockAndRejectsInvalidSnapshotHeights() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        val cases = listOf(
+            listOf("42", "43", "42", "true"),
+            listOf("42", "44", "42", "true"),
+            listOf("42", "44", "43", "true"),
+            listOf("18446744073709551614", "18446744073709551615", "18446744073709551614", "true"),
+            listOf("-1", "43", "42", "false"),
+            listOf("0", "43", "42", "false"),
+            listOf("42", "-1", "42", "false"),
+            listOf("42", "0", "42", "false"),
+            listOf("42", "42", "42", "false"),
+            listOf("42", "41", "42", "false"),
+            listOf("43", "44", "42", "false"),
+            listOf("42", "43", "43", "false"),
+            listOf("42", "43", "44", "false"),
+            listOf("18446744073709551615", "18446744073709551615", "18446744073709551615", "false"),
+            listOf("18446744073709551615", "18446744073709551616", "18446744073709551615", "false"),
+            listOf("18446744073709551616", "18446744073709551617", "42", "false"),
+        )
+        for (consensus in listOf(true, false)) {
+            for ((scheduled, effective, committed, accepted) in cases) {
+                val next = if (consensus) consensusLimits().replace("2048", "1024") else
+                    """{"protocol":"${protocol.canonicalLabel}","limits":{"max_anonymity_set_size":32,"max_recipient_count":8}}"""
+                val pending = """{"scheduled_at_height":$scheduled,"effective_at_height":$effective,"next_limits":$next}"""
+                var input = inspection(mapOf(protocol to availableRow(
+                    "missing-production-qualification", activeLifecycle(),
+                ))).replace("\"committed_height\":42", "\"committed_height\":$committed")
+                val field = if (consensus) "pending_tightening" else "pending_protocol_limits_tightening"
+                input = input.replace("\"$field\":null", "\"$field\":$pending")
+                if (accepted == "true") {
+                    val manifest = parseInspection(input)
+                    assertEquals(committed.toBigInteger(), manifest.committedHeight)
+                    val parsedSchedule = if (consensus) {
+                        manifest.consensusPolicy.pendingTightening?.let {
+                            it.scheduledAtHeight to it.effectiveAtHeight
+                        }
+                    } else {
+                        manifest.rowFor(protocol).activation?.pendingProtocolLimitsTightening?.let {
+                            it.scheduledAtHeight to it.effectiveAtHeight
+                        }
+                    }
+                    assertEquals(scheduled.toBigInteger() to effective.toBigInteger(), parsedSchedule)
+                    assertFailsWith<IllegalArgumentException> {
+                        PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(manifest, protocol)
+                    }
+                } else {
+                    assertFailsWith<IllegalArgumentException> { parseInspection(input) }
+                }
+            }
+        }
+    }
+
+    @Test
     fun parsesSevenFieldRowsAndPreservesCanonicalManifestState() {
         val manifest = parseInspection(inspection())
 

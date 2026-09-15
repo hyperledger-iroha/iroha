@@ -11500,7 +11500,7 @@ mod tests {
         proposal.pending_protocol_limits_tightening = Some(
             iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
                 scheduled_at_height: 1_000,
-                effective_at_height: 1_300,
+                effective_at_height: 1_001,
                 next_limits,
             },
         );
@@ -11508,11 +11508,11 @@ mod tests {
         let mut activations = Storage::new();
         activations.insert(key, proposal);
         assert!(matches!(
-            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_301),
+            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_002),
             Err(PrivacyProtocolLimitsPlanErrorV1::MissedProtocolLimits(error))
                 if error.protocol_id == proposal.protocol_id
-                    && error.effective_at_height == 1_300
-                    && error.incoming_height == 1_301
+                    && error.effective_at_height == 1_001
+                    && error.incoming_height == 1_002
         ));
     }
     #[test]
@@ -11529,7 +11529,7 @@ mod tests {
         proposal.pending_protocol_limits_tightening = Some(
             iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
                 scheduled_at_height: 1_000,
-                effective_at_height: 1_300,
+                effective_at_height: 1_001,
                 next_limits,
             },
         );
@@ -11537,11 +11537,11 @@ mod tests {
         let mut activations = Storage::new();
         activations.insert(key, proposal);
         assert!(
-            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_299)
+            plan_due_privacy_protocol_limits_v1(&activations.view(), 1_000)
                 .expect("valid pre-effective registry")
                 .is_empty()
         );
-        let updates = plan_due_privacy_protocol_limits_v1(&activations.view(), 1_300)
+        let updates = plan_due_privacy_protocol_limits_v1(&activations.view(), 1_001)
             .expect("protocol limits apply without changing the lifecycle");
         assert_eq!(updates.len(), 1);
         let updated = updates[0].1;
@@ -11553,10 +11553,10 @@ mod tests {
                 .expect_err("a snapshot cannot contain a future-admitted schedule")
                 .contains("scheduled-at")
         );
-        validate_privacy_activations_at_committed_height_v1(&activations.view(), 1_299)
+        validate_privacy_activations_at_committed_height_v1(&activations.view(), 1_000)
             .expect("effective E is valid in committed E-1");
         assert!(
-            validate_privacy_activations_at_committed_height_v1(&activations.view(), 1_300)
+            validate_privacy_activations_at_committed_height_v1(&activations.view(), 1_001)
                 .expect_err("effective E cannot remain pending in committed E")
                 .contains("not after committed height")
         );

@@ -486,7 +486,6 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
     private const val MAX_INSPECTION_BYTES = 1024 * 1024
     private const val CATALOG_COMMITMENT_BYTES = 48
     private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-    private val POLICY_DELAY_BLOCKS = BigInteger.valueOf(300L)
 
     fun parse(
         canonicalArchive: ByteArray,
@@ -836,11 +835,11 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
                 setOf("scheduled_at_height", "effective_at_height", "next_limits"),
                 pendingPath,
             )
-            val scheduled = positiveUint64(
+            val scheduled = integer(
                 tightening["scheduled_at_height"],
                 "$pendingPath.scheduled_at_height",
             )
-            val effective = positiveUint64(
+            val effective = integer(
                 tightening["effective_at_height"],
                 "$pendingPath.effective_at_height",
             )
@@ -972,11 +971,11 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
             setOf("scheduled_at_height", "effective_at_height", "next_limits"),
             path,
         )
-        val scheduled = positiveUint64(
+        val scheduled = integer(
             tightening["scheduled_at_height"],
             "$path.scheduled_at_height",
         )
-        val effective = positiveUint64(
+        val effective = integer(
             tightening["effective_at_height"],
             "$path.effective_at_height",
         )
@@ -993,9 +992,9 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         committedHeight: BigInteger,
         path: String,
     ) {
+        requireValidPrivacyPolicyScheduleV1(scheduled, effective, path)
         require(
-            effective >= scheduled.add(POLICY_DELAY_BLOCKS) &&
-                scheduled <= committedHeight &&
+            scheduled <= committedHeight &&
                 effective > committedHeight,
         ) { "$path has an invalid committed-height schedule" }
     }

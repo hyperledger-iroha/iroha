@@ -45226,8 +45226,7 @@ impl Torii {
         );
         builder.route(
             &routes::BUNDLE_RECEIPT,
-            catalog_get(private_settlement::handler_bundle_receipt)
-                .layer(axum::Extension(self.private_settlement_runtime.clone())),
+            catalog_get(private_settlement::handler_bundle_receipt),
         );
         #[cfg(feature = "test-network-private-settlement-route-control")]
         builder.route(
@@ -48225,7 +48224,6 @@ impl Torii {
         let route_index = mounted_manifest.route_index();
         let mut router = router
             .fallback(handler_route_not_found_or_sorafs_site)
-            .method_not_allowed_fallback(handler_method_not_allowed)
             .layer(axum::middleware::from_fn(enforce_route_timeout));
         #[cfg(feature = "app_api")]
         {

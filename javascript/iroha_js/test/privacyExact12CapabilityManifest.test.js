@@ -610,6 +610,58 @@ test("unavailable readiness preserves exact registration and lifecycle reasons",
   }
 });
 
+test("pending tightening accepts next block and rejects invalid snapshot heights", async () => {
+  for (const kind of ["consensus", "protocol"]) {
+    for (const [scheduled, effective, committed, accepted] of [
+      [42, 43, 42, true],
+      [42, 44, 42, true],
+      ["18446744073709551614", "18446744073709551615", "18446744073709551614", true],
+      [0, 43, 42, false],
+      [42, 42, 42, false],
+      [42, 41, 42, false],
+      [43, 44, 42, false],
+      [42, 43, 43, false],
+      ["18446744073709551615", "18446744073709551615", "18446744073709551615", false],
+      ["18446744073709551615", "18446744073709551616", "18446744073709551615", false],
+    ]) {
+      const payload = manifestPayload();
+      payload.committed_height = committed;
+      const pending = { scheduled_at_height: scheduled, effective_at_height: effective };
+      if (kind === "consensus") {
+        pending.next_limits = { ...payload.consensus_policy.current_limits, retained_root_count: 1024 };
+        payload.consensus_policy.pending_tightening = pending;
+      } else {
+        const row = payload.protocols[1];
+        pending.next_limits = {
+          protocol: ACTIVE_PROTOCOL,
+          limits: { max_anonymity_set_size: 32, max_recipient_count: 8 },
+        };
+        row.activation.pending_protocol_limits_tightening = pending;
+      }
+      // Native JSON carries uint64 values as integer tokens, never quoted strings.
+      const native = fakeNative(payload, {
+        privacyExact12CapabilityManifestJsonV1: () =>
+          JSON.stringify(payload).replace(
+            /"(committed_height|scheduled_at_height|effective_at_height)":"([0-9]+)"/gu,
+            '"$1":$2',
+          ),
+      });
+      await withNative(native, () => {
+        if (accepted) {
+          const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+          const actual = kind === "consensus"
+            ? manifest.consensus_policy.pending_tightening
+            : manifest.protocols[1].activation.pending_protocol_limits_tightening;
+          assert.equal(actual.effective_at_height, BigInt(effective));
+          assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL));
+        } else {
+          assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+        }
+      });
+    }
+  }
+});
+
 test("proposed remains pending at later heights until explicit activation", async () => {
   for (const committedHeight of [1, 42, 4_000]) {
     const payload = manifestPayload();

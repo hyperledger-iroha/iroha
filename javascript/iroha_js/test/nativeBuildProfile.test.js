@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import {
+import fs, {
   chmodSync,
   existsSync,
   linkSync,
@@ -12,6 +12,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -27,6 +28,11 @@ import {
   runNativeBuild,
 } from "../scripts/build-native.mjs";
 import { publishNativeBinding } from "../scripts/copy-native.mjs";
+import {
+  nativeBuildProvenancePath,
+  readNativeBuildProvenance,
+  writeNativeBuildProvenance,
+} from "../scripts/native-build-provenance.mjs";
 import { nativeSourceProvenanceMatches } from "../src/native.js";
 
 const SOURCE_DIGEST = "b".repeat(64);
@@ -386,6 +392,7 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
     },
     writeProvenance(nativePath, provenance) {
       written = { nativePath, provenance };
+      writeNativeBuildProvenance(nativePath, provenance);
     },
   });
   assert.equal(status, 0);
@@ -429,8 +436,9 @@ test("a fresh Cargo artifact is authenticated without forcing a rebuild", (t) =>
           stdout: successfulCargoJson(fixture, { fresh: true }),
         };
       },
-      writeProvenance() {
+      writeProvenance(nativePath, provenance) {
         written += 1;
+        writeNativeBuildProvenance(nativePath, provenance);
       },
     }),
     0,
@@ -503,7 +511,7 @@ test("Cargo hardlink uplift is replaced by one authenticated output link", (t) =
           stdout: successfulCargoJson(fixture),
         };
       },
-      writeProvenance() {},
+      writeProvenance: writeNativeBuildProvenance,
     }),
     0,
   );
@@ -869,4 +877,597 @@ test("native loading policy binds dirty debug artifacts to the exact tree", () =
     ),
     true,
   );
+});
+
+
+// These tests inject only synchronous filesystem boundary observations and fake
+// Cargo responses. They neither run the stub executables nor load native code.
+const OUTPUT_FIELDS = ["ctimeNs", "dev", "ino", "mode", "mtimeNs", "nlink", "size"];
+
+function withFilesystemOverrides(factory, action) {
+  const originals = { ...fs };
+  const overrides = factory(originals);
+  Object.assign(fs, overrides);
+  syncBuiltinESMExports();
+  try {
+    return action();
+  } finally {
+    for (const name of Object.keys(overrides)) fs[name] = originals[name];
+    syncBuiltinESMExports();
+  }
+}
+
+function changedStat(metadata, field) {
+  return Object.assign(Object.create(Object.getPrototypeOf(metadata)), metadata, {
+    [field]: metadata[field] + 1n,
+  });
+}
+
+function buildFixture(fixture, overrides = {}) {
+  return runNativeBuild({
+    repoRoot: fixture.repoRoot,
+    env: fixture.env,
+    platform: "linux",
+    runTool: fixture.runTool,
+    readSourceState: () => sourceState(),
+    runCargo() {
+      writeNativeOutput(fixture);
+      return { status: 0, stdout: successfulCargoJson(fixture) };
+    },
+    ...overrides,
+  });
+}
+
+function assertArtifactRefusal(action, phase, comparison, changedFields) {
+  let refusal;
+  assert.throws(action, (error) => {
+    refusal = error;
+    assert.equal(error.code, "ERR_IROHA_NATIVE_ARTIFACT_CHANGED");
+    assert.equal(error.artifactIdentity.phase, phase);
+    const failed = error.artifactIdentity.failed_comparisons.find(
+      (entry) => entry.comparison === comparison,
+    );
+    assert.ok(failed, JSON.stringify(error.artifactIdentity));
+    if (changedFields !== undefined) assert.deepEqual(failed.changed_fields, changedFields);
+    assert.ok(error.message.includes(JSON.stringify(error.artifactIdentity)));
+    return true;
+  });
+  return refusal.artifactIdentity;
+}
+
+test("exact canonical ROOT/target is admitted as the generated cache", (t) => {
+  const fixture = createFixture(t);
+  fixture.targetRoot = path.join(fixture.repoRoot, "target");
+  fixture.env.CARGO_TARGET_DIR = fixture.targetRoot;
+  fixture.nativePath = nativeBuildOutputPath({ repoRoot: fixture.repoRoot, cargoProfile: fixture.profile, env: fixture.env, platform: "linux" });
+  assert.equal(buildFixture(fixture, {
+    runCargo(_cargo, args, { cargoEnv }) {
+      assert.equal(args[args.indexOf("--target-dir") + 1], fixture.targetRoot);
+      assert.equal(cargoEnv.CARGO_TARGET_DIR, fixture.targetRoot);
+      writeNativeOutput(fixture);
+      return { status: 0, stdout: successfulCargoJson(fixture) };
+    },
+  }), 0);
+});
+
+for (const location of ["root", "ancestor", "source-subdirectory", "target-descendant"]) {
+  test("Cargo target rejects " + location + " before creating it or running Cargo", (t) => {
+    const fixture = createFixture(t);
+    const target = {
+      root: fixture.repoRoot,
+      ancestor: path.dirname(fixture.repoRoot),
+      "source-subdirectory": path.join(fixture.repoRoot, "generated-elsewhere"),
+      "target-descendant": path.join(fixture.repoRoot, "target", "nested"),
+    }[location];
+    const existed = existsSync(target);
+    assert.throws(() => buildFixture(fixture, {
+      env: { ...fixture.env, CARGO_TARGET_DIR: target },
+      runCargo() { assert.fail("rejected targets must not run Cargo"); },
+    }), /must not contain or be contained by the build source/u);
+    assert.equal(existsSync(target), existed);
+  });
+}
+
+for (const location of ["canonical-target", "external-target", "external-ancestor"]) {
+  test("Cargo target rejects symlink " + location, (t) => {
+    const fixture = createFixture(t);
+    let target;
+    if (location === "canonical-target") {
+      target = path.join(fixture.repoRoot, "target");
+      fs.symlinkSync(fixture.targetRoot, target);
+    } else {
+      const alias = path.join(path.dirname(fixture.cargoPath), "target-alias");
+      fs.symlinkSync(fixture.targetRoot, alias);
+      target = location === "external-ancestor" ? path.join(alias, "nested") : alias;
+    }
+    assert.throws(() => buildFixture(fixture, {
+      env: { ...fixture.env, CARGO_TARGET_DIR: target },
+      runCargo() { assert.fail("symlink targets must not run Cargo"); },
+    }), /non-symbolic-link directory|path must be canonical/u);
+  });
+}
+
+for (const [boundary, phase, comparison] of [
+  ["initial", "before-digest", "expected-to-before"],
+  ["opened", "opened", "before-to-opened"],
+  ["during", "after-digest", "before-to-opened-after"],
+  ["path", "after-digest", "before-to-path-after"],
+]) {
+  for (const field of OUTPUT_FIELDS) {
+    test("Cargo digest rejects " + field + " drift at " + boundary + " boundary", (t) => {
+      const fixture = createFixture(t);
+      let active = false;
+      let nativeInode;
+      let pathReads = 0;
+      let descriptorReads = 0;
+      let writes = 0;
+      withFilesystemOverrides((original) => ({
+        lstatSync(file, options) {
+          const metadata = original.lstatSync(file, options);
+          if (active && file === fixture.nativePath) {
+            pathReads += 1;
+            if ((boundary === "initial" && pathReads === 2) ||
+                (boundary === "path" && pathReads === 3)) return changedStat(metadata, field);
+          }
+          return metadata;
+        },
+        fstatSync(descriptor, options) {
+          const metadata = original.fstatSync(descriptor, options);
+          if (active && metadata.ino === nativeInode) {
+            descriptorReads += 1;
+            if ((boundary === "opened" && descriptorReads === 1) ||
+                (boundary === "during" && descriptorReads === 2)) return changedStat(metadata, field);
+          }
+          return metadata;
+        },
+      }), () => {
+        const diagnostic = assertArtifactRefusal(() => buildFixture(fixture, {
+          runCargo() {
+            writeNativeOutput(fixture);
+            nativeInode = lstatSync(fixture.nativePath, { bigint: true }).ino;
+            active = true;
+            return { status: 0, stdout: successfulCargoJson(fixture) };
+          },
+          writeProvenance() { writes += 1; },
+        }), phase, comparison, [field]);
+        assert.deepEqual(Object.keys(diagnostic.before), OUTPUT_FIELDS);
+        if (boundary === "during" || boundary === "path") {
+          assert.equal(diagnostic.bytes_read, diagnostic.expected_bytes);
+          assert.ok(diagnostic.opened_before);
+          assert.ok(diagnostic.opened_after);
+          assert.ok(diagnostic.at_path);
+        }
+      });
+      assert.equal(writes, 0);
+    });
+  }
+}
+
+test("Cargo digest names a short-read byte-count mismatch even with unchanged stat fields", (t) => {
+  const fixture = createFixture(t);
+  let nativeInode;
+  withFilesystemOverrides((original) => ({
+    readSync(descriptor, ...args) {
+      if (original.fstatSync(descriptor, { bigint: true }).ino === nativeInode) return 0;
+      return original.readSync(descriptor, ...args);
+    },
+  }), () => {
+    const diagnostic = assertArtifactRefusal(() => buildFixture(fixture, {
+      runCargo() {
+        writeNativeOutput(fixture);
+        nativeInode = lstatSync(fixture.nativePath, { bigint: true }).ino;
+        return { status: 0, stdout: successfulCargoJson(fixture) };
+      },
+    }), "after-digest", "byte-count");
+    assert.equal(diagnostic.bytes_read, "0");
+    assert.equal(diagnostic.expected_bytes, String(Buffer.byteLength("native-output")));
+    assert.deepEqual(diagnostic.failed_comparisons.map((entry) => entry.comparison), ["byte-count"]);
+  });
+});
+
+for (const directory of ["target", "profile"]) {
+  test("directory identity is retained across Cargo for " + directory, (t) => {
+    const fixture = createFixture(t);
+    const target = directory === "target" ? fixture.targetRoot : path.dirname(fixture.nativePath);
+    const retired = target + "-retired";
+    t.after(() => rmSync(retired, { recursive: true, force: true }));
+    assert.throws(() => buildFixture(fixture, {
+      runCargo() {
+        fs.renameSync(target, retired);
+        mkdirSync(target);
+        writeNativeOutput(fixture);
+        return { status: 0, stdout: successfulCargoJson(fixture) };
+      },
+      writeProvenance() { assert.fail("replacement must not publish provenance"); },
+    }), /Cargo (target|profile) directory changed identity/u);
+  });
+}
+
+test("profile replacement during copy is refused without cleaning through the replacement", (t) => {
+  const fixture = createFixture(t);
+  const profile = path.dirname(fixture.nativePath);
+  const retired = profile + "-retired";
+  t.after(() => rmSync(retired, { recursive: true, force: true }));
+  let foreignTemporary;
+  withFilesystemOverrides((original) => ({
+    copyFileSync(from, to, flags) {
+      original.copyFileSync(from, to, flags);
+      original.renameSync(profile, retired);
+      original.mkdirSync(profile);
+      foreignTemporary = to;
+      original.writeFileSync(to, "foreign-directory-marker");
+    },
+  }), () => assert.throws(() => buildFixture(fixture), /profile directory changed identity/u));
+  assert.equal(readFileSync(foreignTemporary, "utf8"), "foreign-directory-marker");
+});
+
+test("profile replacement during provenance publication is refused without invalidating foreign data", (t) => {
+  const fixture = createFixture(t);
+  const profile = path.dirname(fixture.nativePath);
+  const retired = profile + "-retired";
+  t.after(() => rmSync(retired, { recursive: true, force: true }));
+  let invalidations = 0;
+  assert.throws(() => buildFixture(fixture, {
+    invalidateProvenance() { invalidations += 1; },
+    writeProvenance() {
+      fs.renameSync(profile, retired);
+      mkdirSync(profile);
+      writeFileSync(path.join(profile, "foreign-marker"), "preserve");
+    },
+  }), /profile directory changed identity/u);
+  assert.equal(invalidations, 1);
+  assert.equal(readFileSync(path.join(profile, "foreign-marker"), "utf8"), "preserve");
+});
+
+for (const changedCopy of ["source", "staged"]) {
+  test("copy mismatch diagnostics include expected and actual digests for " + changedCopy, (t) => {
+    const fixture = createFixture(t);
+    let nativeInode;
+    let copied = false;
+    withFilesystemOverrides((original) => ({
+      copyFileSync(from, to, flags) {
+        original.copyFileSync(from, to, flags);
+        copied = true;
+        if (changedCopy === "staged") original.writeFileSync(to, "different-copy");
+      },
+      readSync(descriptor, buffer, offset, length, position) {
+        const read = original.readSync(descriptor, buffer, offset, length, position);
+        // Simulate a same-metadata source read changing after the first digest.
+        if (changedCopy === "source" && read > 0 && copied &&
+            original.fstatSync(descriptor, { bigint: true }).ino === nativeInode) buffer[offset] ^= 1;
+        return read;
+      },
+    }), () => {
+      const diagnostic = assertArtifactRefusal(() => buildFixture(fixture, {
+        runCargo() {
+          writeNativeOutput(fixture);
+          nativeInode = lstatSync(fixture.nativePath, { bigint: true }).ino;
+          return { status: 0, stdout: successfulCargoJson(fixture) };
+        },
+      }), "copied", changedCopy === "staged" ? "source-to-staged-copy" : "source-before-to-after-copy");
+      const mismatch = diagnostic.failed_comparisons[0];
+      assert.match(mismatch.expected_sha256, /^[a-f0-9]{64}$/u);
+      assert.match(mismatch.actual_sha256, /^[a-f0-9]{64}$/u);
+      assert.notEqual(mismatch.expected_sha256, mismatch.actual_sha256);
+      assert.ok(diagnostic.failed_comparisons.every((entry) => !entry.changed_fields));
+    });
+  });
+}
+
+for (const side of ["source", "staged"]) {
+  test("pre-rename diagnostics separately join the " + side + " identity", (t) => {
+    const fixture = createFixture(t);
+    let active = false;
+    let sourceReads = 0;
+    let stagedReads = 0;
+    withFilesystemOverrides((original) => ({
+      lstatSync(file, options) {
+        const metadata = original.lstatSync(file, options);
+        if (active && file === fixture.nativePath) {
+          sourceReads += 1;
+          if (side === "source" && sourceReads === 6) return changedStat(metadata, "ctimeNs");
+        }
+        if (typeof file === "string" && path.basename(file).startsWith(".libiroha_js_host.so.authenticated-")) {
+          stagedReads += 1;
+          if (side === "staged" && stagedReads === 3) return changedStat(metadata, "ctimeNs");
+        }
+        return metadata;
+      },
+    }), () => {
+      const diagnostic = assertArtifactRefusal(() => buildFixture(fixture, {
+        runCargo() {
+          writeNativeOutput(fixture);
+          active = true;
+          return { status: 0, stdout: successfulCargoJson(fixture) };
+        },
+      }), "before-rename", side + "-seal-to-before-rename", ["ctimeNs"]);
+      assert.equal(diagnostic.failed_comparisons.length, 1);
+    });
+  });
+}
+
+test("publication rejects a same-byte replacement instead of the staged inode", (t) => {
+  const fixture = createFixture(t);
+  let writes = 0;
+  withFilesystemOverrides((original) => ({
+    renameSync(from, to) {
+      original.renameSync(from, to);
+      if (to === fixture.nativePath && path.basename(from).includes(".authenticated-")) {
+        const replacement = to + ".foreign";
+        original.copyFileSync(to, replacement, fs.constants.COPYFILE_EXCL);
+        original.renameSync(replacement, to);
+      }
+    },
+  }), () => {
+    const diagnostic = assertArtifactRefusal(() => buildFixture(fixture, {
+      writeProvenance() { writes += 1; },
+    }), "after-rename", "staged-to-published");
+    const failed = diagnostic.failed_comparisons.find((entry) => entry.comparison === "staged-to-published");
+    assert.ok(failed.changed_fields.includes("ino"));
+    assert.ok(!failed.changed_fields.includes("ctimeNs"));
+    assert.ok(!diagnostic.failed_comparisons.some((entry) => entry.comparison === "source-to-published"));
+  });
+  assert.equal(writes, 0);
+});
+
+test("publication digest mismatch names the expected and actual SHA-256", (t) => {
+  const fixture = createFixture(t);
+  withFilesystemOverrides((original) => ({
+    renameSync(from, to) {
+      original.renameSync(from, to);
+      if (to === fixture.nativePath && path.basename(from).includes(".authenticated-")) {
+        original.writeFileSync(to, "changed-publication");
+      }
+    },
+  }), () => {
+    const diagnostic = assertArtifactRefusal(() => buildFixture(fixture), "after-rename", "source-to-published");
+    const failed = diagnostic.failed_comparisons.find((entry) => entry.comparison === "source-to-published");
+    assert.equal(failed.expected_sha256, createHash("sha256").update("native-output").digest("hex"));
+    assert.equal(failed.actual_sha256, createHash("sha256").update("changed-publication").digest("hex"));
+  });
+});
+
+test("the owned rename allows its ctime transition while both stable reads remain strict", (t) => {
+  const fixture = createFixture(t);
+  let publishedInode;
+  withFilesystemOverrides((original) => ({
+    renameSync(from, to) {
+      original.renameSync(from, to);
+      if (to === fixture.nativePath && path.basename(from).includes(".authenticated-")) {
+        publishedInode = original.lstatSync(to, { bigint: true }).ino;
+      }
+    },
+    lstatSync(file, options) {
+      const metadata = original.lstatSync(file, options);
+      return metadata.ino === publishedInode ? changedStat(metadata, "ctimeNs") : metadata;
+    },
+    fstatSync(descriptor, options) {
+      const metadata = original.fstatSync(descriptor, options);
+      return metadata.ino === publishedInode ? changedStat(metadata, "ctimeNs") : metadata;
+    },
+  }), () => assert.equal(buildFixture(fixture), 0));
+});
+
+test("ctime drift during the final published read remains a refusal", (t) => {
+  const fixture = createFixture(t);
+  let publishedInode;
+  let reads = 0;
+  withFilesystemOverrides((original) => ({
+    renameSync(from, to) {
+      original.renameSync(from, to);
+      if (to === fixture.nativePath && path.basename(from).includes(".authenticated-")) {
+        publishedInode = original.lstatSync(to, { bigint: true }).ino;
+      }
+    },
+    fstatSync(descriptor, options) {
+      const metadata = original.fstatSync(descriptor, options);
+      if (metadata.ino === publishedInode && ++reads === 2) return changedStat(metadata, "ctimeNs");
+      return metadata;
+    },
+  }), () => assert.throws(() => buildFixture(fixture), /authenticated output changed while it was read/u));
+});
+
+function assertNoBuildReceipt(fixture) {
+  const receipt = nativeBuildProvenancePath(fixture.nativePath);
+  assert.equal(existsSync(receipt), false);
+  assert.equal(existsSync(receipt + ".previous"), false);
+}
+
+function atFinalSourceRead(action) {
+  let reads = 0;
+  return () => {
+    if (++reads === 3) action();
+    return sourceState();
+  };
+}
+
+test("final publication admits the unchanged default writer receipt", (t) => {
+  const fixture = createFixture(t);
+  assert.equal(buildFixture(fixture), 0);
+  assert.deepEqual(readNativeBuildProvenance(fixture.nativePath), buildProvenance(
+    fixture.nativePath, "debug", sourceState(),
+  ));
+});
+
+for (const boundary of ["receipt-rename", "final-source-read"]) {
+  for (const mutation of ["same-byte-inode", "changed-bytes"]) {
+    test(`final publication refuses ${mutation} at ${boundary} and invalidates receipts`, (t) => {
+      const fixture = createFixture(t);
+      let replaced = false;
+      withFilesystemOverrides((original) => {
+        const replace = () => {
+          const previous = original.lstatSync(fixture.nativePath, { bigint: true });
+          const bytes = mutation === "same-byte-inode"
+            ? original.readFileSync(fixture.nativePath) : Buffer.from("changed-native-output");
+          const replacement = fixture.nativePath + ".replacement";
+          original.writeFileSync(replacement, bytes);
+          original.renameSync(replacement, fixture.nativePath);
+          assert.notEqual(original.lstatSync(fixture.nativePath, { bigint: true }).ino, previous.ino);
+          replaced = true;
+        };
+        fixture.finalRead = atFinalSourceRead(() => {
+          if (boundary === "final-source-read") replace();
+        });
+        return {
+          renameSync(from, to) {
+            original.renameSync(from, to);
+            if (boundary === "receipt-rename" && to === nativeBuildProvenancePath(fixture.nativePath)) replace();
+          },
+        };
+      }, () => assert.throws(() => buildFixture(fixture, {
+        readSourceState: fixture.finalRead,
+      }), /artifact changed before digest verification/u));
+      assert.equal(replaced, true);
+      assertNoBuildReceipt(fixture);
+      assert.equal(existsSync(fixture.nativePath), true);
+    });
+  }
+}
+
+for (const field of OUTPUT_FIELDS) {
+  test(`final publication keeps saved ${field} strict after the source read`, (t) => {
+    const fixture = createFixture(t);
+    let finalRead = false;
+    withFilesystemOverrides((original) => ({
+      lstatSync(file, options) {
+        const metadata = original.lstatSync(file, options);
+        return finalRead && file === fixture.nativePath ? changedStat(metadata, field) : metadata;
+      },
+    }), () => assertArtifactRefusal(() => buildFixture(fixture, {
+      readSourceState: atFinalSourceRead(() => { finalRead = true; }),
+    }), "before-digest", "expected-to-before", [field]));
+    assertNoBuildReceipt(fixture);
+  });
+}
+
+test("final publication compares the full digest even when metadata observations are unchanged", (t) => {
+  const fixture = createFixture(t);
+  let finalRead = false;
+  let descriptor;
+  withFilesystemOverrides((original) => ({
+    openSync(file, ...args) {
+      const result = original.openSync(file, ...args);
+      if (finalRead && file === fixture.nativePath) descriptor = result;
+      return result;
+    },
+    readSync(fd, buffer, ...args) {
+      const count = original.readSync(fd, buffer, ...args);
+      if (finalRead && fd === descriptor && count > 0) buffer[0] ^= 1;
+      return count;
+    },
+  }), () => assertArtifactRefusal(() => buildFixture(fixture, {
+    readSourceState: atFinalSourceRead(() => { finalRead = true; }),
+  }), "final-publication", "sealed-to-final"));
+  assertNoBuildReceipt(fixture);
+});
+
+for (const mutation of ["valid-different-profile", "same-byte-inode", "deleted", "malformed", "extra-field"]) {
+  test(`final publication refuses ${mutation} receipt after the source read`, (t) => {
+    const fixture = createFixture(t);
+    assert.throws(() => buildFixture(fixture, {
+      readSourceState: atFinalSourceRead(() => {
+        const receipt = nativeBuildProvenancePath(fixture.nativePath);
+        const bytes = readFileSync(receipt);
+        // Recovery sidecars cannot continue authenticating a refused build.
+        writeFileSync(receipt + ".previous", bytes);
+        if (mutation === "deleted") {
+          rmSync(receipt);
+        } else if (mutation === "same-byte-inode") {
+          writeFileSync(receipt + ".replacement", bytes);
+          fs.renameSync(receipt + ".replacement", receipt);
+        } else if (mutation === "malformed") {
+          writeFileSync(receipt, "{broken");
+        } else {
+          const data = JSON.parse(bytes);
+          if (mutation === "valid-different-profile") data.cargo_profile = "release";
+          else data.extra = true;
+          writeFileSync(receipt, JSON.stringify(data, null, 2) + "\n");
+        }
+      }),
+    }), /generated provenance|ENOENT/u);
+    assertNoBuildReceipt(fixture);
+    assert.equal(readFileSync(fixture.nativePath, "utf8"), "native-output");
+  });
+}
+
+for (const mutation of ["same-byte-inode", "changed-content"]) {
+  test(`final publication refuses ${mutation} receipt substitution during native digest`, (t) => {
+    const fixture = createFixture(t);
+    let finalRead = false;
+    let mutated = false;
+    let descriptor;
+    withFilesystemOverrides((original) => ({
+      openSync(file, ...args) {
+        const result = original.openSync(file, ...args);
+        if (finalRead && file === fixture.nativePath) descriptor = result;
+        return result;
+      },
+      readSync(fd, ...args) {
+        const count = original.readSync(fd, ...args);
+        if (finalRead && fd === descriptor && !mutated) {
+          const receipt = nativeBuildProvenancePath(fixture.nativePath);
+          const bytes = original.readFileSync(receipt);
+          if (mutation === "same-byte-inode") {
+            original.writeFileSync(receipt + ".replacement", bytes);
+            original.renameSync(receipt + ".replacement", receipt);
+          } else original.writeFileSync(receipt, "{}");
+          mutated = true;
+        }
+        return count;
+      },
+    }), () => assert.throws(() => buildFixture(fixture, {
+      readSourceState: atFinalSourceRead(() => { finalRead = true; }),
+    }), /generated provenance changed after publication/u));
+    assert.equal(mutated, true);
+    assertNoBuildReceipt(fixture);
+  });
+}
+
+test("final publication checks native identity after the last receipt read", (t) => {
+  const fixture = createFixture(t);
+  let finalRead = false;
+  let receiptOpens = 0;
+  let changed = false;
+  withFilesystemOverrides((original) => ({
+    openSync(file, ...args) {
+      const descriptor = original.openSync(file, ...args);
+      if (finalRead && file === nativeBuildProvenancePath(fixture.nativePath) && ++receiptOpens === 2) {
+        const replacement = fixture.nativePath + ".replacement";
+        original.writeFileSync(replacement, original.readFileSync(fixture.nativePath));
+        original.renameSync(replacement, fixture.nativePath);
+        changed = true;
+      }
+      return descriptor;
+    },
+  }), () => assertArtifactRefusal(() => buildFixture(fixture, {
+    readSourceState: atFinalSourceRead(() => { finalRead = true; }),
+  }), "final-publication", "sealed-to-final-path"));
+  assert.equal(changed, true);
+  assertNoBuildReceipt(fixture);
+});
+
+test("final publication refuses source drift and removes the actual writer receipt", (t) => {
+  const fixture = createFixture(t);
+  let reads = 0;
+  assert.throws(() => buildFixture(fixture, {
+    readSourceState() {
+      return ++reads === 3 ? sourceState({ sourceTreeSha256: "c".repeat(64) }) : sourceState();
+    },
+  }), /source changed while provenance was published/u);
+  assertNoBuildReceipt(fixture);
+});
+
+test("final publication does not invalidate receipts through a replaced profile directory", (t) => {
+  const fixture = createFixture(t);
+  const profile = path.dirname(fixture.nativePath);
+  const retired = profile + "-retired";
+  t.after(() => rmSync(retired, { recursive: true, force: true }));
+  assert.throws(() => buildFixture(fixture, {
+    readSourceState: atFinalSourceRead(() => {
+      fs.renameSync(profile, retired);
+      mkdirSync(profile);
+      writeFileSync(nativeBuildProvenancePath(fixture.nativePath), "foreign-receipt");
+    }),
+  }), /profile directory changed identity/u);
+  assert.equal(readFileSync(nativeBuildProvenancePath(fixture.nativePath), "utf8"), "foreign-receipt");
 });

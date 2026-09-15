@@ -115,6 +115,39 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         )
     }
 
+    func testPendingTighteningAcceptsNextBlockAndRejectsInvalidSnapshotHeights() throws {
+        let cases: [(UInt64, UInt64, UInt64, Bool)] = [
+            (3, 4, 3, true), (3, 5, 3, true),
+            (UInt64.max - 1, UInt64.max, UInt64.max - 1, true),
+            (0, 4, 3, false), (3, 3, 3, false), (3, 2, 3, false),
+            (4, 5, 3, false), (3, 4, 4, false),
+            (UInt64.max, UInt64.max, UInt64.max, false),
+        ]
+        for consensus in [true, false] {
+            for (scheduled, effective, committed, accepted) in cases {
+                let valid = (committed, committed == UInt64.max ? UInt64.max : committed + 1)
+                let fixture = makeFixture(
+                    includeQualification: false,
+                    committedHeight: committed,
+                    includePendingState: true,
+                    consensusSchedule: consensus ? (scheduled, effective) : valid,
+                    protocolSchedule: consensus ? valid : (scheduled, effective)
+                )
+                if accepted {
+                    let manifest = try PrivacyExact12CapabilityManifestCodecV1.decode(
+                        fixture.manifest, nativeCatalogArchive: fixture.catalog
+                    )
+                    XCTAssertEqual(manifest.canonicalBytes(), fixture.manifest)
+                    XCTAssertFalse(manifest.row(for: .irohaJindoPolynomialCommitmentV1).isNetworkAvailable)
+                } else {
+                    XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+                        fixture.manifest, nativeCatalogArchive: fixture.catalog
+                    ))
+                }
+            }
+        }
+    }
+
     func testProposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight() throws {
         for committedHeight in [UInt64(1), UInt64(3), UInt64.max] {
             let fixture = makeFixture(
@@ -669,6 +702,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         swapFirstRows: Bool = false,
         embeddedDigest: Data? = nil,
         includePendingState: Bool = false,
+        consensusSchedule: (UInt64, UInt64) = (2, 302),
+        protocolSchedule: (UInt64, UInt64) = (2, 302),
         opaqueProofArtifacts: Data? = nil,
         deploymentNetworkBytes: Data? = nil,
         deploymentGenesisBytes: Data? = nil
@@ -724,7 +759,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
                     lifecycle: rowZeroLifecycle
                 ))
             } else if index == 6, includePendingState {
-                activation = option(activationForJindoWithPendingTightening())
+                activation = option(activationForJindoWithPendingTightening(schedule: protocolSchedule))
             } else {
                 activation = option(nil)
             }
@@ -781,6 +816,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
                 digest: Data(repeating: 0, count: 32),
                 maxActionsPerTransaction: maxActionsPerTransaction,
                 includePendingState: includePendingState,
+                schedule: consensusSchedule,
                 committedHeight: committedHeight
             )
             var preimage = Data("iroha:privacy:exact12-capability-manifest:v1".utf8)
@@ -795,6 +831,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
                 digest: digest,
                 maxActionsPerTransaction: maxActionsPerTransaction,
                 includePendingState: includePendingState,
+                schedule: consensusSchedule,
                 committedHeight: committedHeight
             ),
             catalog: catalog
@@ -1043,7 +1080,9 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         return enumValue(tag, structure(context, Data([1])))
     }
 
-    private func activationForJindoWithPendingTightening() -> Data {
+    private func activationForJindoWithPendingTightening(
+        schedule: (UInt64, UInt64) = (2, 302)
+    ) -> Data {
         let digest = structure(Data(repeating: 0x61, count: 32))
         return structure(
             enumValue(6), enumValue(5), enumValue(5),
@@ -1051,14 +1090,15 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
             enumValue(1, structure(u64(1), u64(2), u64(2))),
             enumValue(6, structure(u32(4))),
             option(structure(
-                u64(2), u64(302), enumValue(6, structure(u32(3)))
+                u64(schedule.0), u64(schedule.1), enumValue(6, structure(u32(3)))
             ))
         )
     }
 
     private func consensusPolicy(
         maxActionsPerTransaction: UInt32 = 1,
-        includePendingState: Bool = false
+        includePendingState: Bool = false,
+        schedule: (UInt64, UInt64) = (2, 302)
     ) -> Data {
         let current = structure(
             u32(maxActionsPerTransaction), u32(2),
@@ -1069,8 +1109,8 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         let pending: Data?
         if includePendingState {
             pending = structure(
-                u64(2),
-                u64(302),
+                u64(schedule.0),
+                u64(schedule.1),
                 structure(
                     u32(maxActionsPerTransaction), u32(2),
                     u32(9 * 1024 * 1024), u32(9 * 1024 * 1024),
@@ -1093,13 +1133,15 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         digest: Data,
         maxActionsPerTransaction: UInt32,
         includePendingState: Bool,
+        schedule: (UInt64, UInt64),
         committedHeight: UInt64
     ) -> Data {
         manifestFrame(structure(
             u32(1), u64(committedHeight),
             consensusPolicy(
                 maxActionsPerTransaction: maxActionsPerTransaction,
-                includePendingState: includePendingState
+                includePendingState: includePendingState,
+                schedule: schedule
             ),
             option(qualification),
             sequence(rows), structure(digest)

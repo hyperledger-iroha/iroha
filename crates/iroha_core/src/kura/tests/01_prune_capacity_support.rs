@@ -9,13 +9,12 @@ fn run_prune_crash_test_in_subprocess() -> bool {
         assert_eq!(child_test, test_name, "run only the selected crash fixture");
         return false;
     }
-    let output = std::process::Command::new(
-        std::env::current_exe().expect("current Core test executable"),
-    )
-    .args(["--exact", test_name, "--test-threads=1", "--nocapture"])
-    .env(CHILD_TEST, test_name)
-    .output()
-    .expect("run isolated canonical-prune crash fixture");
+    let output =
+        std::process::Command::new(std::env::current_exe().expect("current Core test executable"))
+            .args(["--exact", test_name, "--test-threads=1", "--nocapture"])
+            .env(CHILD_TEST, test_name)
+            .output()
+            .expect("run isolated canonical-prune crash fixture");
     assert!(
         output.status.success(),
         "isolated prune fixture {test_name} failed: {}\n{}\n{}",
@@ -30,7 +29,7 @@ fn unsealed_prune_capacity_fixture() -> KuraPruneCapacityAdmissionV3 {
     KuraPruneCapacityAdmissionV3 {
         source_physical_bytes: 0,
         pending_canonical_bytes: 0,
-        post_wsv_reserved_bytes: 0,
+        lane_publication_reserved_bytes: 0,
         certified_bundle_reserved_bytes: 0,
         autonomous_terminal_reserved_bytes: 0,
         intent_bytes: 0,

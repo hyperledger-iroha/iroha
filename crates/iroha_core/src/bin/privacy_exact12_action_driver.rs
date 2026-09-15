@@ -814,7 +814,6 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    const DRIVER_SOURCE: &str = include_str!("privacy_exact12_action_driver.rs");
     const REQUEST_ID_GOLDEN: &str =
         include_str!("../../../../fixtures/privacy_exact12_action_driver_request_id_v1.json");
     #[derive(Debug, norito::JsonDeserialize)]
@@ -945,17 +944,75 @@ mod tests {
 
     #[test]
     fn construction_response_reports_missing_evidence_without_assurance() {
+        let domain = iroha_model_base::domain::DomainId::try_new("privacy", "universal")
+            .expect("typed asset domain");
+        let asset = AssetDefinitionId::derive_from_components(
+            domain,
+            "jindo_value".parse().expect("asset name"),
+        );
+        let mut request = BuildActionRequestV1 {
+            asset_definition_id: asset.to_string(),
+            candidate_binding_sha256: "11".repeat(32),
+            creation_time_millis: 1_900_000_000_000,
+            network_id_hex: "23".repeat(32),
+            nonce: 17,
+            operation: JINDO_OPERATION.to_owned(),
+            request_id: String::new(),
+            schema: REQUEST_SCHEMA.to_owned(),
+            schema_version: SCHEMA_VERSION,
+            ttl_millis: 60_000,
+        };
+        request.request_id = compute_request_id(&request).expect("bind the Jindo request body");
+        let response = build_response(request).expect("construct a native Jindo response");
+        let encoded = norito::json::to_string(&response).expect("serialize the actual response");
+        let value: norito::json::Value =
+            norito::json::from_str(&encoded).expect("decode the response wire object");
+        let object = value.as_object().expect("response is a JSON object");
+        let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
         assert_eq!(
-            operation_missing_evidence_v1("iroha-jindo-polynomial-commitment-v1"),
+            keys,
             [
-                MISSING_CONTROLLER_CASE_EVIDENCE.to_owned(),
-                MISSING_JINDO_KNOWLEDGE_SOUNDNESS.to_owned(),
+                "candidate_binding_sha256",
+                "construction_state",
+                "missing_evidence",
+                "network_outcome_authoritative",
+                "operation",
+                "protocol",
+                "public_admission_artifacts",
+                "qualification_scope",
+                "request_id",
+                "schema",
+                "schema_version",
+                "transaction_hash_hex",
+                "transaction_norito_hex",
+                "transaction_sha256",
             ]
         );
-        assert!(!DRIVER_SOURCE.contains("available-experimental"));
-        assert!(!DRIVER_SOURCE.contains("limitations:"));
-        assert!(DRIVER_SOURCE.contains("construction_state: String"));
-        assert!(DRIVER_SOURCE.contains("missing_evidence: Vec<String>"));
+        assert_eq!(object["construction_state"].as_str(), Some("constructed"));
+        assert_eq!(
+            object["network_outcome_authoritative"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            object["qualification_scope"].as_str(),
+            Some("native-action-construction-only")
+        );
+        assert_eq!(
+            object["protocol"].as_str(),
+            Some("iroha-jindo-polynomial-commitment-v1")
+        );
+        assert_eq!(
+            object["missing_evidence"],
+            norito::json!([
+                "MissingSealedControllerProtocolCaseEvidence",
+                "MissingDistributionWideKnowledgeSoundnessEvidence",
+            ])
+        );
+        let transaction = hex::decode(&response.transaction_norito_hex)
+            .expect("decode the actual constructed transaction");
+        assert!(!transaction.is_empty());
+        assert_eq!(response.transaction_sha256, sha256_hex(&transaction));
     }
 
     #[test]
@@ -976,29 +1033,6 @@ mod tests {
         assert_eq!(
             build_response(request).expect_err("Vega must remain unavailable"),
             MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS
-        );
-        assert_eq!(
-            DRIVER_SOURCE
-                .matches("\"MissingGovernedFigure9ProverArtifacts\"")
-                .count(),
-            1
-        );
-        let retired_builder = ["build_privacy_release_", "vega_network_action_v1"].concat();
-        assert!(!DRIVER_SOURCE.contains(&retired_builder));
-        let response_source = DRIVER_SOURCE
-            .split_once("fn build_response")
-            .expect("build-response boundary")
-            .1
-            .split_once("fn run()")
-            .expect("driver-run boundary")
-            .0;
-        assert!(
-            response_source
-                .find("unavailable_operation_reason_v1")
-                .expect("explicit unavailable-operation check")
-                < response_source
-                    .find("let signing_seed")
-                    .expect("secret seed derivation")
         );
     }
 }

@@ -560,8 +560,8 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         )
         .expect("global and participant committee validators fit P2P fanout")
         // Keep every release profile, including the correctness-only N=3
-        // smoke, on a production-like signed cadence. The smoke deliberately
-        // pays the mandatory 300-height governance notice in full.
+        // smoke, on a production-like signed cadence. Privacy activation is
+        // explicit in genesis; independent pool-policy notice remains enforced.
         .with_block_cadence(Duration::from_secs(4))
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
         .with_npos_consensus()
@@ -811,9 +811,8 @@ const N3_DIAGNOSTIC_LOG_FILTER: &str = concat!(
 fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
     // Keep the production-like four-second cadence so a release host running
     // sixteen independent validators has enough time to validate and relay the
-    // mandatory DA payload before the view deadline. This release-only smoke
-    // deliberately pays the full 300-height privacy-governance notice instead
-    // of weakening the consensus rule or using a test-only activation path.
+    // mandatory DA payload before the view deadline. Privacy activation is
+    // an explicit governed genesis transition; pool-policy notice is independent.
     // The authenticated test controller exposes the same financial-state
     // observation route used by the release fault campaign. No fault rule is
     // installed by the positive smoke test.
@@ -1520,6 +1519,68 @@ fn proof_manifest(
     Ok(manifest)
 }
 
+/// Spawn all three local proof jobs, then join all owners before ordinal reduction.
+///
+/// The three orchestration threads share the process-wide Rayon pool. They do
+/// not create per-leg pools or change the configured eight-worker kernel bound.
+fn collect_three_smoke_leg_jobs_v1<T, R, F>(jobs: [T; 3], prepare: F) -> Result<Vec<R>>
+where
+    T: Send,
+    R: Send,
+    F: Fn(usize, T) -> Result<R> + Sync,
+{
+    collect_three_smoke_leg_jobs_with_builders_v1(jobs, prepare, |ordinal| {
+        Ok(thread::Builder::new()
+            .name(format!("aps-proof-leg-{ordinal}"))
+            .stack_size(TEST_STACK_BYTES))
+    })
+}
+
+/// The builder factory permits deterministic launch-failure ownership controls.
+fn collect_three_smoke_leg_jobs_with_builders_v1<T, R, F, B>(
+    jobs: [T; 3],
+    prepare: F,
+    mut builder: B,
+) -> Result<Vec<R>>
+where
+    T: Send,
+    R: Send,
+    F: Fn(usize, T) -> Result<R> + Sync,
+    B: FnMut(usize) -> std::io::Result<thread::Builder>,
+{
+    let diagnostic_context = SmokeDiagnosticScopeV1::capture();
+    thread::scope(|scope| {
+        let prepare = &prepare;
+        let mut ordinal = 0;
+        let children = jobs.map(|job| {
+            let index = ordinal;
+            ordinal += 1;
+            let context = diagnostic_context.clone();
+            let child = builder(index).and_then(|builder| {
+                builder.spawn_scoped(scope, move || {
+                    let _diagnostics = SmokeDiagnosticScopeV1::install(context);
+                    prepare(index, job)
+                })
+            });
+            (index, child)
+        });
+        // Array::map performs every join before Result collection can return.
+        // Preserve each proof error and choose the first ordinal error only
+        // after every initiated worker has physically finished.
+        let joined = children.map(|(ordinal, child)| match child {
+            Ok(child) => child.join().unwrap_or_else(|_| {
+                Err(eyre!(
+                    "private-settlement proof leg {ordinal} worker panicked"
+                ))
+            }),
+            Err(_) => Err(eyre!(
+                "private-settlement proof leg {ordinal} worker could not start"
+            )),
+        });
+        joined.into_iter().collect()
+    })
+}
+
 fn prepare_leg(
     ordinal: usize,
     governed: GovernedLeg,
@@ -2165,20 +2226,22 @@ fn emit_smoke_diagnostic_v1(event: SmokeDiagnosticEventV1) {
     emit_smoke_diagnostic_to_v1(&mut std::io::stderr().lock(), event);
 }
 
+#[derive(Clone)]
 struct SmokeDiagnosticContextV1 {
     origin: std::time::Instant,
-    next_span: u64,
+    next_span: std::sync::Arc<std::sync::atomic::AtomicU64>,
     active: Vec<u64>,
 }
 
 std::thread_local! {
-    // Enabled only inside the N3 diagnostic on its existing smoke thread.
+    // Enabled only inside the N3 diagnostic and its explicitly scoped proof workers.
     // Registered benchmark helpers otherwise remain observationally unchanged.
     static SMOKE_DIAGNOSTIC_CONTEXT_V1: std::cell::RefCell<Option<SmokeDiagnosticContextV1>> = const { std::cell::RefCell::new(None) };
 }
 
 struct SmokeDiagnosticScopeV1 {
     owns_context: bool,
+    previous_context: Option<SmokeDiagnosticContextV1>,
 }
 
 impl SmokeDiagnosticScopeV1 {
@@ -2193,13 +2256,43 @@ impl SmokeDiagnosticScopeV1 {
                 }
                 *context = Some(SmokeDiagnosticContextV1 {
                     origin: std::time::Instant::now(),
-                    next_span: 1,
+                    next_span: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
                     active: Vec::new(),
                 });
                 true
             })
             .unwrap_or(false);
-        Self { owns_context }
+        Self {
+            owns_context,
+            previous_context: None,
+        }
+    }
+
+    fn capture() -> Option<SmokeDiagnosticContextV1> {
+        SMOKE_DIAGNOSTIC_CONTEXT_V1
+            .try_with(|cell| cell.try_borrow().ok().and_then(|context| context.clone()))
+            .ok()
+            .flatten()
+    }
+
+    fn install(context: Option<SmokeDiagnosticContextV1>) -> Self {
+        let previous = SMOKE_DIAGNOSTIC_CONTEXT_V1
+            .try_with(|cell| {
+                let mut current = cell.try_borrow_mut().ok()?;
+                Some(std::mem::replace(&mut *current, context))
+            })
+            .ok()
+            .flatten();
+        match previous {
+            Some(previous_context) => Self {
+                owns_context: true,
+                previous_context,
+            },
+            None => Self {
+                owns_context: false,
+                previous_context: None,
+            },
+        }
     }
 }
 
@@ -2208,7 +2301,7 @@ impl Drop for SmokeDiagnosticScopeV1 {
         if self.owns_context {
             let _ = SMOKE_DIAGNOSTIC_CONTEXT_V1.try_with(|cell| {
                 if let Ok(mut context) = cell.try_borrow_mut() {
-                    *context = None;
+                    *context = self.previous_context.take();
                 }
             });
         }
@@ -2225,8 +2318,16 @@ impl SmokeDiagnosticSpanV1 {
             .try_with(|cell| {
                 let mut context = cell.try_borrow_mut().ok()?;
                 let context = context.as_mut()?;
-                let span = context.next_span;
-                context.next_span = context.next_span.checked_add(1)?;
+                // IDs are shared across workers; timing stacks remain thread-local.
+                // Relaxed order is sufficient for uniqueness, not clock ordering.
+                let span = context
+                    .next_span
+                    .fetch_update(
+                        std::sync::atomic::Ordering::Relaxed,
+                        std::sync::atomic::Ordering::Relaxed,
+                        |next| next.checked_add(1),
+                    )
+                    .ok()?;
                 let parent = context.active.last().copied().unwrap_or(0);
                 let at_ns = context.origin.elapsed().as_nanos();
                 context.active.push(span);
@@ -2303,6 +2404,235 @@ fn observe_smoke_diagnostic_milestone_v1(phase: SmokeDiagnosticPhaseV1, height: 
     if let Some(event) = event {
         emit_smoke_diagnostic_v1(event);
     }
+}
+
+#[test]
+fn smoke_three_leg_jobs_overlap_and_reduce_reverse_completion_in_ordinal_order() {
+    use std::collections::BTreeSet;
+    use std::sync::{Mutex, mpsc};
+    let (started_tx, started_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let (release_tx, release_rx): (Vec<_>, Vec<_>) = (0..3).map(|_| mpsc::channel()).unzip();
+    let release_rx = release_rx.into_iter().map(Mutex::new).collect::<Vec<_>>();
+    let timeout = Duration::from_secs(5);
+    let results = thread::scope(|scope| {
+        let controller = scope.spawn(move || {
+            let started = (0..3)
+                .map(|_| {
+                    started_rx
+                        .recv_timeout(timeout)
+                        .expect("all three jobs overlap")
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(started, BTreeSet::from([0, 1, 2]));
+            for ordinal in (0..3).rev() {
+                release_tx[ordinal].send(()).expect("release live worker");
+                assert_eq!(
+                    finished_rx.recv_timeout(timeout).expect("worker completed"),
+                    ordinal
+                );
+            }
+        });
+        let results = collect_three_smoke_leg_jobs_v1([10, 20, 30], |ordinal, value| {
+            started_tx.send(ordinal).expect("controller observes job");
+            release_rx[ordinal]
+                .lock()
+                .expect("receiver lock")
+                .recv_timeout(timeout)
+                .expect("controller releases job");
+            finished_tx
+                .send(ordinal)
+                .expect("controller observes finish");
+            Ok(value)
+        });
+        controller.join().expect("controller joined");
+        results.expect("all proof owners joined")
+    });
+    assert_eq!(results, [10, 20, 30]);
+}
+
+#[test]
+fn smoke_three_leg_jobs_join_all_before_returning_first_ordinal_proof_error() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let finished = AtomicUsize::new(0);
+    let result = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| -> Result<usize> {
+        finished.fetch_or(1 << ordinal, Ordering::SeqCst);
+        if ordinal < 2 {
+            Err(eyre!("proof error at ordinal {ordinal}"))
+        } else {
+            Ok(ordinal)
+        }
+    });
+    assert_eq!(finished.load(Ordering::SeqCst), 0b111);
+    assert_eq!(result.unwrap_err().to_string(), "proof error at ordinal 0");
+}
+
+#[test]
+fn smoke_three_leg_jobs_join_every_owner_after_worker_panic() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Finished<'a>(&'a AtomicUsize, usize);
+    impl Drop for Finished<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_or(1 << self.1, Ordering::SeqCst);
+        }
+    }
+    let finished = AtomicUsize::new(0);
+    let result = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        let _finished = Finished(&finished, ordinal);
+        assert_ne!(ordinal, 0, "intentional proof worker panic");
+        Ok(ordinal)
+    });
+    assert_eq!(finished.load(Ordering::SeqCst), 0b111);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "private-settlement proof leg 0 worker panicked"
+    );
+}
+
+#[test]
+fn smoke_three_leg_jobs_attempt_all_launches_and_join_after_launch_failure() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let attempted = AtomicUsize::new(0);
+    let finished = AtomicUsize::new(0);
+    let result = collect_three_smoke_leg_jobs_with_builders_v1(
+        [0, 1, 2],
+        |ordinal, _| {
+            finished.fetch_or(1 << ordinal, Ordering::SeqCst);
+            Ok(ordinal)
+        },
+        |ordinal| {
+            attempted.fetch_or(1 << ordinal, Ordering::SeqCst);
+            if ordinal == 1 {
+                Err(std::io::Error::other("controlled builder failure"))
+            } else {
+                Ok(thread::Builder::new())
+            }
+        },
+    );
+    assert_eq!(attempted.load(Ordering::SeqCst), 0b111);
+    assert_eq!(finished.load(Ordering::SeqCst), 0b101);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "private-settlement proof leg 1 worker could not start"
+    );
+}
+
+#[test]
+fn smoke_worker_diagnostics_share_origin_ids_and_parent_without_sharing_stacks() {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+    let scope = SmokeDiagnosticScopeV1::start();
+    let workflow = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    let original = SmokeDiagnosticScopeV1::capture().unwrap();
+    let parent = workflow.event.unwrap().span;
+    let results = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        let context = SmokeDiagnosticScopeV1::capture().unwrap();
+        assert_eq!(context.origin, original.origin);
+        assert!(Arc::ptr_eq(&context.next_span, &original.next_span));
+        assert_eq!(context.active, [parent]);
+        let leg = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        let witness = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::WitnessAndCapsulePreparation,
+            Some(ordinal),
+        );
+        let leg_event = leg.event.unwrap();
+        let witness_event = witness.event.unwrap();
+        assert_eq!(leg_event.parent, parent);
+        assert_eq!(witness_event.parent, leg_event.span);
+        witness.complete();
+        assert_eq!(
+            SmokeDiagnosticScopeV1::capture().unwrap().active,
+            [parent, leg_event.span]
+        );
+        leg.complete();
+        assert_eq!(SmokeDiagnosticScopeV1::capture().unwrap().active, [parent]);
+        Ok([leg_event.span, witness_event.span])
+    })
+    .expect("joined diagnostic jobs");
+    let ids = results.into_iter().flatten().collect::<BTreeSet<_>>();
+    assert_eq!(ids, BTreeSet::from([2, 3, 4, 5, 6, 7]));
+    assert_eq!(SmokeDiagnosticScopeV1::capture().unwrap().active, [parent]);
+    workflow.complete();
+    drop(scope);
+    assert!(SmokeDiagnosticScopeV1::capture().is_none());
+}
+
+#[test]
+fn smoke_worker_diagnostics_remain_disabled_without_parent_scope() {
+    assert!(SmokeDiagnosticScopeV1::capture().is_none());
+    collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        assert!(SmokeDiagnosticScopeV1::capture().is_none());
+        let span = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        assert!(span.event.is_none());
+        span.complete();
+        Ok(())
+    })
+    .expect("disabled diagnostics do not alter jobs");
+    assert!(SmokeDiagnosticScopeV1::capture().is_none());
+}
+
+#[test]
+fn smoke_worker_diagnostic_install_restores_context_on_success_error_and_unwind() {
+    let _scope = SmokeDiagnosticScopeV1::start();
+    let parent = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    let original = SmokeDiagnosticScopeV1::capture().unwrap();
+    for outcome in 0..3 {
+        let result = std::panic::catch_unwind(|| -> Result<()> {
+            let mut installed = original.clone();
+            installed.active = vec![100];
+            let _installed = SmokeDiagnosticScopeV1::install(Some(installed));
+            let _incomplete = SmokeDiagnosticSpanV1::start(
+                SmokeDiagnosticPhaseV1::ClientLegConstruction,
+                Some(0),
+            );
+            if outcome == 1 {
+                return Err(eyre!("controlled error"));
+            }
+            assert_ne!(outcome, 2, "controlled unwind");
+            Ok(())
+        });
+        assert_eq!(result.is_err(), outcome == 2);
+        if outcome == 1 {
+            assert!(result.unwrap().is_err());
+        }
+        let restored = SmokeDiagnosticScopeV1::capture().unwrap();
+        assert_eq!(restored.active, original.active);
+        assert_eq!(restored.origin, original.origin);
+        assert!(std::sync::Arc::ptr_eq(
+            &restored.next_span,
+            &original.next_span
+        ));
+    }
+    parent.complete();
+}
+
+#[test]
+fn smoke_shared_span_counter_exhaustion_never_reuses_identity() {
+    let _scope = SmokeDiagnosticScopeV1::start();
+    let context = SmokeDiagnosticScopeV1::capture().unwrap();
+    context
+        .next_span
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        let span = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        assert!(span.event.is_none());
+        Ok(())
+    })
+    .expect("diagnostic exhaustion does not replace operation results");
+    assert_eq!(
+        context.next_span.load(std::sync::atomic::Ordering::Relaxed),
+        u64::MAX
+    );
+    assert!(SmokeDiagnosticScopeV1::capture().unwrap().active.is_empty());
 }
 
 #[test]
@@ -2578,22 +2908,9 @@ fn run_n3_real_process_smoke() -> Result<()> {
         expiry_height,
         &governed,
     )?;
-    let workflow_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
-    let prepared = governed
-        .into_iter()
-        .zip(&committees)
-        .enumerate()
-        .map(|(ordinal, (leg, committee))| {
-            let leg_timing = SmokeDiagnosticSpanV1::start(
-                SmokeDiagnosticPhaseV1::ClientLegConstruction,
-                Some(ordinal),
-            );
-            let prepared = prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)?;
-            leg_timing.complete();
-            Ok(prepared)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // Establish the measurement baseline and continuous observer before client
+    // work begins. Proof construction, self-verification, material preparation
+    // and settlement remain inside the measured workflow.
     let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
     ensure!(
         before.validators.len() == shape.process_count(),
@@ -2620,6 +2937,30 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &manifest.bundle_id,
         false,
     )?;
+
+    let workflow_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    ensure!(
+        governed.len() == 3 && committees.len() == 3,
+        "exactly three proof jobs are required"
+    );
+    // Authenticate all committee digests before launching any proof worker.
+    let jobs: [(GovernedLeg, Hash); 3] = governed
+        .into_iter()
+        .zip(&committees)
+        .map(|(leg, committee)| Ok((leg, committee.authority.digest()?)))
+        .collect::<Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| eyre!("exactly three proof jobs are required"))?;
+    let prepared = collect_three_smoke_leg_jobs_v1(jobs, |ordinal, (leg, authority_digest)| {
+        let leg_timing = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        let prepared = prepare_leg(ordinal, leg, &manifest, authority_digest)?;
+        leg_timing.complete();
+        Ok(prepared)
+    })?;
     let materials = provisional_materials(manifest, &prepared, &committees)?;
     let availability_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AvailabilityCertification, None);
@@ -2905,16 +3246,40 @@ fn run_n3_real_process_smoke() -> Result<()> {
     signed_finality_timing.complete();
     let replay_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
+    // Replay the original signed carrier while it is live. QueuePlan acknowledges
+    // its immutable admission owner; this must not create another financial effect.
+    let replay_height = sponsor
+        .client()
+        .get_privacy_capabilities()?
+        .committed_height;
     ensure!(
-        sponsor
-            .client()
-            .submit_private_settlement_bundle_v1(&request)
-            .is_err(),
-        "replaying the exact finalized carrier was accepted"
+        replay_height >= receipt.finalized_height
+            && replay_height >= final_manifest.authority_context_height
+            && replay_height
+                .checked_add(1)
+                .is_some_and(|candidate| candidate <= final_manifest.expiry_height),
+        "exact finalized replay is outside the original carrier's live height window"
+    );
+    let replay_acknowledgment = sponsor
+        .client()
+        .submit_private_settlement_bundle_v1(&request)
+        .wrap_err("live exact finalized replay must acknowledge its immutable admission owner")?;
+    ensure!(
+        replay_acknowledgment.bundle_id == final_manifest.bundle_id
+            && replay_acknowledgment.carrier_id == Hash::from(request.transaction.hash()),
+        "exact finalized replay acknowledgment changed the bundle or signed carrier identity"
+    );
+    ensure!(
+        replay_acknowledgment.accepted_at_height >= replay_height
+            && replay_acknowledgment
+                .accepted_at_height
+                .checked_add(1)
+                .is_some_and(|candidate| candidate <= final_manifest.expiry_height),
+        "exact finalized replay acknowledgment is outside the original carrier's live height window"
     );
     ensure!(
         sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
-        "rejected finalization replay charged a third carrier fee"
+        "acknowledged finalization replay charged a third carrier fee"
     );
     ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
@@ -3415,6 +3780,21 @@ fn genesis_ivm_private_note_activation_is_exact() {
         transition.next_lifecycle,
         genesis_private_note_active_lifecycle()
     );
+    // Building the real signed topology pre-executes every normalized genesis
+    // transaction through Initial. This catches admission failures and rollback
+    // of the earlier stake definition/funding before validator registration.
+    // No validator processes are started by this regression.
+    let handle = std::thread::Builder::new()
+        .name("atomic-private-settlement-genesis".to_owned())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(move || {
+            let network = n3_smoke_builder(shape).build();
+            let _validated_genesis = network.genesis();
+        })
+        .expect("spawn normalized genesis regression");
+    if let Err(panic) = handle.join() {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[test]

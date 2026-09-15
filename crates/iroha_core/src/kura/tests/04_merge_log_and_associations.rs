@@ -12,7 +12,7 @@ fn canonical_storage_budget_base_for_test(kura: &Kura) -> u64 {
         .autonomous_global_terminal_outcome_reserved_bytes()
         .expect("measure canonical storage-budget terminal reservations");
     let post_wsv = kura
-        .post_wsv_lane_artifact_budget_reserved_bytes()
+        .lane_publication_budget_reserved_bytes()
         .expect("measure canonical storage-budget post-WSV reservations");
     let certified = kura
         .certified_bundle_capacity_reserved_bytes()
@@ -1235,19 +1235,13 @@ fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
         .store_block(block)
         .expect_err("sidecar bytes should exceed budget");
     assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
-    let native_temp_dir = TempDir::new().expect("create Native AMX budget temp dir");
-    let mut native_cfg = kura_config_for_dir(&native_temp_dir, BLOCKS_IN_MEMORY);
-    native_cfg.lane_history_retention = nonzero!(2_usize);
-    let (mut native_kura, _) = Kura::open_test_kura_with_configured_lane_config(
-        &native_cfg,
-        &RuntimeLaneConfig::default(),
-    )
-    .expect("initialize Native Kura");
+    let mut fixture = native_amx_publication_capacity_fixture();
+    let native_kura = &fixture.kura;
     let configured_prune_bound = Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
-        native_cfg.lane_history_retention,
+        native_kura.lane_history_retention,
         V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
     )
-    .expect("configured Native AMX prune bound");
+    .expect("configured Native AMX hard journal bound");
     assert_eq!(
         native_kura.native_amx_evidence_prune_intent_max_bytes(),
         configured_prune_bound
@@ -1255,138 +1249,146 @@ fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
     assert_eq!(
         configured_prune_bound,
         V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
-        "removed settlement preimages use the complete shared sidecar byte bound"
+        "hard decode bound still covers variable removed settlement preimages"
     );
     assert!(
-        Kura::native_amx_evidence_prune_intent_max_entries(native_cfg.lane_history_retention)
-            .expect("configured prune entry bound")
+        Kura::native_amx_evidence_prune_intent_max_entries(nonzero!(2_usize))
+            .expect("small retention")
             < Kura::native_amx_evidence_prune_intent_max_entries(LANE_HISTORY_RETENTION)
-                .expect("default prune entry bound"),
-        "the prune entry bound must derive from configured retention"
+                .expect("default retention"),
+        "entry count bound remains derived from retention"
     );
-    let native_block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
     assert!(
-        native_block
+        fixture
+            .block
             .execution_context()
             .is_none_or(|context| context.lane_payload_ownerships.is_empty()),
-        "Native accounting fixture must isolate standalone evidence bytes"
+        "fixture isolates Native publication allocation"
     );
-    let native_manifest =
-        crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
-            &native_block,
-        )
-        .expect("construct Native AMX accounting manifest");
-    let placeholder_finality_hash = HashOf::from_untyped_unchecked(Hash::new(
-        b"Native AMX application disk-accounting finality placeholder",
-    ));
-    let mut exact_evidence_bytes = 0_u64;
-    let mut unique_routes = BTreeSet::new();
-    for (index, entry) in native_manifest.entries().iter().enumerate() {
-        let leaf_index = u32::try_from(index).expect("fixture leaf index fits u32");
-        let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
-            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-            leaf: entry.leaf.clone(),
-            leaf_index,
-            proof: native_manifest
-                .proof(leaf_index)
-                .expect("fixture manifest proof"),
-            manifest_root: native_manifest.root(),
-            manifest_leaf_count: native_manifest.count(),
-            finality_artifact_hash: placeholder_finality_hash,
-        };
-        let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
-            entry,
-            HashOf::new(&manifest_artifact),
-            placeholder_finality_hash,
-        );
-        let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&receipt);
-        exact_evidence_bytes = exact_evidence_bytes
-            .checked_add(
-                u64::try_from(
-                    manifest_artifact
-                        .encode_framed()
-                        .expect("encode fixture manifest")
-                        .len(),
-                )
-                .expect("manifest length fits u64"),
+    let artifacts = native_amx_participant_application_artifacts(
+        &fixture.manifest,
+        native_amx_participant_application_finality_placeholder_hash(),
+    )
+    .expect("derive exact first three route artifacts");
+    assert_eq!(artifacts.len(), 3);
+    let mut routes = BTreeSet::new();
+    let exact_evidence_bytes = artifacts
+        .iter()
+        .try_fold(0_u64, |total, (manifest, receipt)| {
+            assert!(routes.insert((
+                manifest.leaf.lane_id,
+                manifest.leaf.dataspace_id,
+                manifest.leaf.lane_incarnation
+            )));
+            let (manifest, receipt_bytes) =
+                native_amx_participant_application_pair_framed_bytes(manifest, receipt)
+                    .expect("canonical pair bytes");
+            let latest = norito::encode_canonical(
+                &NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt),
             )
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    u64::try_from(
-                        receipt
-                            .encode_framed()
-                            .expect("encode fixture receipt")
-                            .len(),
-                    )
-                    .expect("receipt length fits u64"),
-                )
-            })
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    u64::try_from(
-                        norito::to_bytes(&latest)
-                            .expect("encode fixture latest index")
-                            .len(),
-                    )
-                    .expect("latest length fits u64"),
-                )
-            })
-            .expect("fixture evidence accounting does not overflow");
-        unique_routes.insert((
-            entry.leaf.lane_id,
-            entry.leaf.dataspace_id,
-            entry.leaf.lane_incarnation,
-        ));
-    }
-    assert!(
-        unique_routes.len() > 1,
-        "fixture must cover multiple routes"
-    );
-    let expected_native_artifacts = exact_evidence_bytes
-        .checked_add(
-            u64::try_from(configured_prune_bound)
-                .expect("configured prune bound fits u64")
-                .checked_mul(u64::try_from(unique_routes.len()).expect("route count fits u64"))
-                .expect("prune reservation does not overflow"),
-        )
-        .expect("Native artifact accounting does not overflow");
+            .expect("canonical latest bytes");
+            total.checked_add(
+                u64::try_from(manifest.len() + receipt_bytes.len() + latest.len())
+                    .expect("exact artifact length"),
+            )
+        })
+        .expect("three route evidence fits u64");
     assert_eq!(
         native_kura
-            .lane_artifact_required_bytes_for_block(&native_block, None)
-            .expect("account Native artifacts"),
-        expected_native_artifacts,
-        "each unique Native route must reserve exactly one configured prune journal"
+            .lane_artifact_required_bytes_for_block(&fixture.block, None)
+            .expect("immutable Native-free block geometry"),
+        0
     );
-    let native_required = native_kura
-        .block_required_bytes_for_budget(&native_block, None, u64::MAX)
-        .expect("account complete Native block");
-    let native_association_stage_required = native_kura
-        .canonical_association_stage_additional_bytes(&native_block, None)
-        .expect("account Native canonical association stage");
-    let exact_limit = canonical_storage_budget_base_for_test(&native_kura)
-        .checked_add(native_required)
-        .and_then(|bytes| bytes.checked_add(native_association_stage_required))
-        .expect("exact Native storage budget fits u64");
-    Arc::get_mut(&mut native_kura)
-        .expect("exclusive Native Kura before budget check")
+    let immutable_required = native_kura
+        .block_required_bytes_for_budget(&fixture.block, None, u64::MAX)
+        .expect("canonical carrier bytes");
+    let stage = native_kura
+        .canonical_association_stage_additional_bytes(&fixture.block, None)
+        .expect("canonical association stage");
+    let index_bytes = {
+        let _prune = native_kura.prune_lock.lock();
+        let _canonical = native_kura.canonical_chain_lock.lock();
+        let publication = native_kura
+            .prepare_native_amx_publication_index(&fixture.block, None, None)
+            .expect("exact pending carrier discovery allocation");
+        assert!(publication.additional_bytes > 0);
+        publication.additional_bytes
+    };
+    let exact_limit = canonical_storage_budget_base_for_test(native_kura)
+        .checked_add(immutable_required)
+        .and_then(|bytes| bytes.checked_add(stage))
+        .and_then(|bytes| bytes.checked_add(exact_evidence_bytes))
+        .and_then(|bytes| bytes.checked_add(index_bytes))
+        .expect("exact three-route capacity");
+    assert!(
+        exact_limit < 375_809_640,
+        "first three Native routes fit the actual N3 Kura share without any prune operation"
+    );
+    Arc::get_mut(&mut fixture.kura)
+        .expect("exclusive Native budget fixture")
         .max_disk_usage_bytes = exact_limit;
-    native_kura
-        .check_storage_budget(&native_block, None)
-        .expect("exact Native evidence budget must admit the block");
-    Arc::get_mut(&mut native_kura)
-        .expect("exclusive Native Kura before negative budget check")
+    {
+        let _prune = fixture.kura.prune_lock.lock();
+        let _canonical = fixture.kura.canonical_chain_lock.lock();
+        let _owner = fixture
+            .kura
+            .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
+                &fixture.block,
+                None,
+                None,
+            )
+            .expect("admit exact Native operation")
+            .expect("nonempty Native owner");
+        assert_eq!(
+            fixture
+                .kura
+                .native_amx_publication_capacity_reserved_bytes()
+                .expect("owned capacity"),
+            exact_evidence_bytes + index_bytes
+        );
+        fixture
+            .kura
+            .check_storage_budget(&fixture.block, None)
+            .expect("exact Native envelope fits");
+    }
+    assert!(
+        fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty(),
+        "precommit scope release is exact"
+    );
+    Arc::get_mut(&mut fixture.kura)
+        .expect("exclusive Native negative fixture")
         .max_disk_usage_bytes = exact_limit - 1;
-    let err = native_kura
-        .check_storage_budget(&native_block, None)
-        .expect_err("one byte below exact Native evidence budget must reject");
-    assert!(matches!(
-        err,
-        Error::StorageBudgetExceeded {
-            limit,
-            required,
-            ..
-        } if limit == exact_limit - 1 && required == exact_limit
-    ));
+    {
+        let _prune = fixture.kura.prune_lock.lock();
+        let _canonical = fixture.kura.canonical_chain_lock.lock();
+        let _owner = fixture
+            .kura
+            .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
+                &fixture.block,
+                None,
+                None,
+            )
+            .expect("construct exact operation envelope");
+        let err = fixture
+            .kura
+            .check_storage_budget(&fixture.block, None)
+            .expect_err("one byte below exact Native evidence budget rejects");
+        assert!(
+            matches!(err, Error::StorageBudgetExceeded { limit, required, .. }
+            if limit == exact_limit - 1 && required == exact_limit)
+        );
+    }
+    assert!(
+        fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
 }
 #[test]
 fn kura_disk_usage_includes_temp_and_debug_files() {

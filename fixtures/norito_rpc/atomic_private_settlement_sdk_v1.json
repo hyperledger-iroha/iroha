@@ -93,8 +93,33 @@
     "receipt_pending": {
       "status": "pending",
       "value": {
+        "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667"
+      }
+    },
+    "receipt_finalized": {
+      "status": "finalized",
+      "value": {
+        "version": 1,
+        "manifest": {
+          "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667"
+        },
+        "authority_catalog": {},
+        "legs": [],
+        "finalized_height": 105
+      }
+    },
+    "receipt_aborted": {
+      "status": "aborted",
+      "value": {
+        "version": 1,
+        "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
         "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
-        "lifecycle": {"status": "prepared", "value": null}
+        "manifest_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+        "finalized_height": 105,
+        "reason": {
+          "reason": "expired",
+          "value": null
+        }
       }
     },
     "committee_proof": {

@@ -15,6 +15,7 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
 use iroha_crypto::sha256;
 use iroha_data_model::{
     NetworkId,
+    account::address::ChainDiscriminantGuard,
     isi::{
         InstructionBox,
         privacy::{
@@ -63,6 +64,9 @@ const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/config.toml");
 const CANONICAL_GENESIS_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/genesis.template.json");
+const CANONICAL_NEVO_OVERLAY_V1: &[u8] =
+    include_bytes!("../../../../configs/soranexus/taira/nevo_genesis_overlay.template.json");
+#[cfg(test)]
 const GOLDEN_NEVO_UNSIGNED_V2: &[u8] =
     include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json");
 #[cfg(test)]
@@ -624,29 +628,39 @@ fn expected_nevo_genesis_v1(
 ) -> color_eyre::Result<JsonValue> {
     let mut expected: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
         .wrap_err("failed to decode the canonical Taira genesis template")?;
-    let golden: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
-        .wrap_err("failed to decode the source-pinned Python NEVO v2 golden")?;
-    let golden_transactions = golden
-        .as_object()
-        .and_then(|root| root.get("transactions"))
+    let mut overlay: JsonValue = norito::json::from_slice(CANONICAL_NEVO_OVERLAY_V1)
+        .wrap_err("failed to decode the canonical NEVO overlay transaction")?;
+    let fields = object_v1(&overlay, "canonical NEVO overlay")?;
+    expect_exact_keys_v1(
+        fields,
+        &["instructions", "ivm_triggers", "topology"],
+        "canonical NEVO overlay",
+    )?;
+    if fields
+        .get("instructions")
         .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("source-pinned Python NEVO v2 golden omitted transactions"))?;
+        .map(Vec::len)
+        != Some(29)
+        || fields
+            .get("ivm_triggers")
+            .and_then(JsonValue::as_array)
+            .map(Vec::len)
+            != Some(0)
+        || fields
+            .get("topology")
+            .and_then(JsonValue::as_array)
+            .map(Vec::len)
+            != Some(0)
+    {
+        bail!(
+            "canonical NEVO overlay must contain exactly 29 instructions and no triggers or topology"
+        );
+    }
     let expected_transactions = expected
         .as_object_mut()
         .and_then(|root| root.get_mut("transactions"))
         .and_then(JsonValue::as_array_mut)
         .ok_or_else(|| eyre!("canonical Taira genesis template omitted transactions"))?;
-    if golden_transactions.len() != expected_transactions.len() + 1
-        || golden_transactions[..expected_transactions.len()] != expected_transactions[..]
-    {
-        bail!(
-            "source-pinned Python NEVO v2 golden must equal the canonical Taira genesis plus exactly one overlay transaction"
-        );
-    }
-    let mut overlay = golden_transactions
-        .last()
-        .expect("the exact transaction-count check proves an overlay exists")
-        .clone();
     for (source, target, label) in [
         (GOLDEN_NEVO_ONBOARDING_V2, onboarding, "onboarding"),
         (GOLDEN_NEVO_API_SIGNER_V2, api_signer, "API signer"),
@@ -654,7 +668,7 @@ fn expected_nevo_genesis_v1(
         (GOLDEN_NEVO_EPR_GUARD_V2, dpn_epr_guard, "EPR guard"),
     ] {
         if replace_nevo_golden_identity_v2(&mut overlay, source, target) == 0 {
-            bail!("compiled Python NEVO v2 overlay omitted the {label} identity");
+            bail!("canonical NEVO overlay omitted the {label} identity");
         }
     }
     expected_transactions.push(overlay);
@@ -1742,6 +1756,11 @@ fn render_release_genesis_v1(
         CHAIN_DISCRIMINANT_V1,
         "Taira genesis",
     )?;
+    // Account decoding must use the validated document network, independently
+    // of the caller's ambient address context. The guard restores that context
+    // on success and every error return.
+    let _chain_discriminant =
+        ChainDiscriminantGuard::enter(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
     let transactions = root
         .get("transactions")
         .and_then(JsonValue::as_array)
@@ -2487,17 +2506,21 @@ mod tests {
             .expect("decode canonical Taira genesis");
         let mut golden: JsonValue = norito::json::from_slice(GOLDEN_NEVO_UNSIGNED_V2)
             .expect("decode source-pinned NEVO genesis");
-        golden
+        let overlay = golden
             .as_object_mut()
             .and_then(|root| root.get_mut("transactions"))
             .and_then(JsonValue::as_array_mut)
             .expect("NEVO genesis transactions")
             .pop()
             .expect("exactly one NEVO overlay transaction");
+        let canonical_overlay: JsonValue = norito::json::from_slice(CANONICAL_NEVO_OVERLAY_V1)
+            .expect("decode canonical NEVO overlay");
+        assert_eq!(overlay, canonical_overlay);
         assert_eq!(golden, base);
     }
     #[test]
     fn validate_only_nevo_review_rejects_digest_unbound_identity_mutation() {
+        let _caller_network = ChainDiscriminantGuard::enter(42);
         let directory = tempfile::tempdir().expect("create NEVO validation directory");
         let unsigned_genesis_path = directory.path().join("unsigned-genesis.template.json");
         let review_path = directory.path().join("review.json");
@@ -2511,6 +2534,7 @@ mod tests {
         let mut output = std::io::BufWriter::new(Vec::new());
         validate_taira_nevo_review_v1(&args, &mut output)
             .expect("validate exact reviewed NEVO genesis");
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
         let output = String::from_utf8(output.into_inner().expect("flush NEVO validation receipt"))
             .expect("NEVO validation receipt is UTF-8");
         let receipt: JsonValue =
@@ -2563,6 +2587,7 @@ mod tests {
         let error = validate_taira_nevo_review_v1(&args, &mut std::io::BufWriter::new(Vec::new()))
             .expect_err("digest-unbound public identity mutation must fail native validation");
         assert!(error.to_string().contains("public_inputs_sha256"));
+        assert_eq!(iroha_data_model::account::address::chain_discriminant(), 42);
     }
     #[test]
     fn reviewed_nevo_genesis_is_natively_recomposed_and_splices_are_rejected() {
@@ -2643,6 +2668,8 @@ mod tests {
     }
     #[test]
     fn reviewed_nevo_genesis_carries_exact_ephemeral_alias_authority() {
+        let _chain_discriminant =
+            ChainDiscriminantGuard::enter(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
         let (genesis, _) = nevo_fixture_v1();
         let genesis_json: JsonValue =
             norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");

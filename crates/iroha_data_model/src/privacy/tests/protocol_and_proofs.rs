@@ -2534,19 +2534,19 @@ fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
     ));
 }
 #[test]
-fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
+fn consensus_policy_schedule_enforces_future_height_and_snapshot_boundaries() {
     let current_limits = PrivacyConsensusLimitsV1::taira_default();
     let mut next_limits = current_limits;
     next_limits.max_actions_per_block -= 1;
     next_limits.retained_root_count -= 1;
     let valid = PrivacyConsensusPolicyTighteningV1 {
         scheduled_at_height: 100,
-        effective_at_height: 100 + MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1,
+        effective_at_height: 101,
         next_limits,
     };
     valid
         .validate_against(&current_limits)
-        .expect("exact +300 schedule");
+        .expect("next-block schedule");
     for invalid in [
         PrivacyConsensusPolicyTighteningV1 {
             scheduled_at_height: 0,
@@ -2561,11 +2561,7 @@ fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
             ..valid
         },
         PrivacyConsensusPolicyTighteningV1 {
-            effective_at_height: valid.effective_at_height - 1,
-            ..valid
-        },
-        PrivacyConsensusPolicyTighteningV1 {
-            scheduled_at_height: u64::MAX - 100,
+            scheduled_at_height: u64::MAX,
             effective_at_height: u64::MAX,
             ..valid
         },
@@ -2575,6 +2571,24 @@ fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
             "invalid schedule must reject: {invalid:?}"
         );
     }
+    for (scheduled_at_height, effective_at_height) in [(100, 102), (u64::MAX - 1, u64::MAX)] {
+        PrivacyConsensusPolicyTighteningV1 {
+            scheduled_at_height,
+            effective_at_height,
+            ..valid
+        }
+        .validate_against(&current_limits)
+        .expect("any representable future block is allowed");
+    }
+    assert!(matches!(
+        PrivacyConsensusPolicyTighteningV1 {
+            scheduled_at_height: u64::MAX,
+            effective_at_height: u64::MAX,
+            ..valid
+        }
+        .validate_against(&current_limits),
+        Err(PrivacyPolicyValidationErrorV1::HeightOverflow)
+    ));
     let policy = PrivacyConsensusPolicyV1 {
         current_limits,
         pending_tightening: Some(valid),
@@ -2619,12 +2633,12 @@ fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
         });
     let valid = PrivacyProtocolLimitsTighteningV1 {
         scheduled_at_height: 25,
-        effective_at_height: 25 + MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1,
+        effective_at_height: 26,
         next_limits: next,
     };
     valid
         .validate_against(&current)
-        .expect("exact delayed protocol tightening");
+        .expect("next-block protocol tightening");
     assert!(matches!(
         PrivacyProtocolLimitsTighteningV1 {
             next_limits: current,
@@ -2640,7 +2654,7 @@ fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
         }
         .validate_against(&current),
         Err(PrivacyProtocolLimitsTighteningValidationErrorV1::Schedule(
-            PrivacyPolicyValidationErrorV1::LeadTimeTooShort { .. }
+            PrivacyPolicyValidationErrorV1::EffectiveNotLater { .. }
         ))
     ));
     assert!(matches!(

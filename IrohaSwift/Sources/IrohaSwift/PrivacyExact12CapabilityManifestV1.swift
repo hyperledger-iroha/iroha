@@ -556,7 +556,6 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
     private static let maximumFieldBytes = PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
     private static let maximumEvidenceBytes = PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
     private static let maximumActionBytes = 9 * 1024 * 1024
-    private static let noticeBlocks: UInt64 = 300
 
     static func decode(
         _ archive: Data,
@@ -1789,10 +1788,9 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         _ effective: UInt64,
         committedHeight: UInt64
     ) throws {
-        let (earliest, overflow) = scheduled.addingReportingOverflow(noticeBlocks)
-        guard scheduled > 0, !overflow, effective >= earliest,
+        guard scheduled > 0, effective > scheduled,
               scheduled <= committedHeight, effective > committedHeight else {
-            throw invalid("pending tightening violates notice or committed-height bounds")
+            throw invalid("pending tightening violates future or committed-height bounds")
         }
     }
 

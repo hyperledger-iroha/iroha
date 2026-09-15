@@ -581,7 +581,6 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
 
     private const byte CanonicalFlags = NoritoCodec.CanonicalLayoutFlags;
     private const int RowCount = 12;
-    private const ulong MinimumPolicyDelayBlocks = 300;
 
     private static readonly byte[] DigestDomain =
         Encoding.UTF8.GetBytes("iroha:privacy:exact12-capability-manifest:v1");
@@ -1820,11 +1819,9 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         if (scheduled == 0
             || scheduled > committedHeight
             || effective <= committedHeight
-            || effective <= scheduled
-            || scheduled > ulong.MaxValue - MinimumPolicyDelayBlocks
-            || effective < scheduled + MinimumPolicyDelayBlocks)
+            || effective <= scheduled)
         {
-            throw Invalid($"{context} has invalid notice or committed-height binding.");
+            throw Invalid($"{context} has invalid future or committed-height binding.");
         }
     }
 

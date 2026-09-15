@@ -17,8 +17,12 @@ including the authorized signed genesis transaction. Both recorded heights
 must equal the executing block height. There is no protocol activation delay,
 automatic height promotion, or compatibility decoding for a scheduled proposal.
 Suspension, resumption and retirement retain strictly increasing lifecycle
-history. Scheduled protocol-resource tightening and pool-policy notice remain
-independent constraints.
+history. Governed consensus-policy and protocol-resource tightening choose an
+explicit effective height strictly after their admission block; the next block is
+allowed. There is no fixed minimum block delay and no wall-time guarantee. Limits
+change at the start of that block only after the scheduling transaction commits.
+Pending lower root-retention limits already constrain new histories, preserving a
+deterministic transition. Pool-policy notice remains an independent constraint.
 
 The implementation is not production-qualified until every release gate in
 this document and `specs/private_settlement_threat_model.md` is satisfied.
@@ -552,7 +556,17 @@ The canonical route catalog is
 | `POST .../legs/{payload_digest}/audit-approvals` | identity-bound governed auditor | record approval |
 | `POST /v1/nexus/private-settlements/bundles` | canonical sponsor signature | submit exact Prepare-lock registration, finalization, or abort carrier |
 | `GET .../bundles/{bundle_id}` | public | redacted bundle status |
-| `GET .../bundles/{bundle_id}/receipt` | public | final receipt or abort marker |
+| `GET .../bundles/{bundle_id}/receipt` | public | finalized receipt, abort marker, or `Pending { bundle_id }` |
+
+Receipt polling reads the active service configuration and public terminal records
+from one committed WSV view. Finalized receipts take precedence over abort markers;
+otherwise the response is HTTP 200 `Pending { bundle_id }`. Pending means only that
+this node has no public terminal record for the identifier. It does not establish
+that the bundle is known, accepted, or locally stored, and carries no lifecycle.
+Malformed identifiers and unavailable/inactive service configuration remain errors.
+Receipt polling never reads encrypted sidecars. The separate bundle-status route
+aggregates the node's validated local ordinal subset; advanced all-leg lifecycle
+states still require every manifest leg to be present locally.
 
 All restricted and authenticated settlement responses advertise private
 `no-store` behavior. The ordinary leg-status response exposes lifecycle and

@@ -41,28 +41,23 @@ class PrivacyCapabilityModelInvariantV1Test {
     fun consensusPolicyRejectsMalformedSchedulesIncreasesAndNoOps() {
         val current = consensusLimits()
         val next = consensusLimits(retainedRootCount = 1024)
-        val validPending = PrivacyConsensusPolicyTighteningV1(height(10), height(310), next)
-        assertEquals(validPending, PrivacyConsensusPolicyV1(current, validPending).pendingTightening)
+        validPolicySchedules().forEach { (scheduled, effective) ->
+            val pending = PrivacyConsensusPolicyTighteningV1(scheduled, effective, next)
+            assertEquals(pending, PrivacyConsensusPolicyV1(current, pending).pendingTightening)
+        }
 
-        val invalidSchedules = listOf(
-            BigInteger.ZERO to height(300),
-            height(10) to height(309),
-            height(10) to height(9),
-            U64_MAX_TEST to U64_MAX_TEST,
-            height(10) to U64_MAX_TEST.add(BigInteger.ONE),
-        )
-        invalidSchedules.forEachIndexed { index, (scheduled, effective) ->
+        invalidPolicySchedules().forEachIndexed { index, (scheduled, effective) ->
             assertFailsWith<IllegalArgumentException>("hostile consensus schedule $index") {
                 PrivacyConsensusPolicyTighteningV1(scheduled, effective, next)
             }
         }
 
-        val noOp = PrivacyConsensusPolicyTighteningV1(height(10), height(310), current)
+        val noOp = PrivacyConsensusPolicyTighteningV1(height(10), height(11), current)
         assertFailsWith<IllegalArgumentException> {
             PrivacyConsensusPolicyV1(current, noOp)
         }
         val lowerCurrent = consensusLimits(retainedRootCount = 1024)
-        val increase = PrivacyConsensusPolicyTighteningV1(height(10), height(310), current)
+        val increase = PrivacyConsensusPolicyTighteningV1(height(10), height(11), current)
         assertFailsWith<IllegalArgumentException> {
             PrivacyConsensusPolicyV1(lowerCurrent, increase)
         }
@@ -200,21 +195,21 @@ class PrivacyCapabilityModelInvariantV1Test {
             PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1,
             currentLimits,
         )
-        val validPending = PrivacyProtocolLimitsTighteningV1(
-            height(10),
-            height(310),
-            pgcLimits(32, 4),
-        )
-        assertEquals(validPending, activation(currentProfile, pending = validPending).pendingProtocolLimitsTightening)
+        validPolicySchedules().forEach { (scheduled, effective) ->
+            val pending = PrivacyProtocolLimitsTighteningV1(scheduled, effective, pgcLimits(32, 4))
+            assertEquals(pending, activation(currentProfile, pending = pending).pendingProtocolLimitsTightening)
+        }
 
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyProtocolLimitsTighteningV1(height(10), height(309), pgcLimits(32, 4))
+        invalidPolicySchedules().forEachIndexed { index, (scheduled, effective) ->
+            assertFailsWith<IllegalArgumentException>("hostile protocol schedule $index") {
+                PrivacyProtocolLimitsTighteningV1(scheduled, effective, pgcLimits(32, 4))
+            }
         }
         assertFailsWith<IllegalArgumentException> {
             pgcLimits(48, 4)
         }
 
-        val noOp = PrivacyProtocolLimitsTighteningV1(height(10), height(310), currentLimits)
+        val noOp = PrivacyProtocolLimitsTighteningV1(height(10), height(11), currentLimits)
         assertFailsWith<IllegalArgumentException> {
             activation(currentProfile, pending = noOp)
         }
@@ -225,7 +220,7 @@ class PrivacyCapabilityModelInvariantV1Test {
         )
         val increase = PrivacyProtocolLimitsTighteningV1(
             height(10),
-            height(310),
+            height(11),
             pgcLimits(64, 4),
         )
         assertFailsWith<IllegalArgumentException> {
@@ -234,7 +229,7 @@ class PrivacyCapabilityModelInvariantV1Test {
 
         val otherProtocol = PrivacyProtocolLimitsTighteningV1(
             height(10),
-            height(310),
+            height(11),
             PrivacyProtocolLimitsV1(
                 PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
                 mapOf("max_aggregation_count" to 4),
@@ -446,6 +441,26 @@ class PrivacyCapabilityModelInvariantV1Test {
         maxNullifiersPerAction = maxNullifiersPerAction,
         maxCommitmentsPerAction = maxCommitmentsPerAction,
         retainedRootCount = retainedRootCount,
+    )
+
+    private fun validPolicySchedules(): List<Pair<BigInteger, BigInteger>> = listOf(
+        height(10) to height(11),
+        height(10) to height(12),
+        height(10) to height(309),
+        U64_MAX_TEST.subtract(BigInteger.ONE) to U64_MAX_TEST,
+    )
+
+    private fun invalidPolicySchedules(): List<Pair<BigInteger, BigInteger>> = listOf(
+        height(-1) to height(11),
+        BigInteger.ZERO to height(11),
+        height(10) to height(-1),
+        height(10) to BigInteger.ZERO,
+        height(10) to height(10),
+        height(10) to height(9),
+        U64_MAX_TEST to U64_MAX_TEST,
+        U64_MAX_TEST to U64_MAX_TEST.add(BigInteger.ONE),
+        height(10) to U64_MAX_TEST.add(BigInteger.ONE),
+        U64_MAX_TEST.add(BigInteger.ONE) to U64_MAX_TEST.add(height(2)),
     )
 
     private fun height(value: Long): BigInteger = BigInteger.valueOf(value)

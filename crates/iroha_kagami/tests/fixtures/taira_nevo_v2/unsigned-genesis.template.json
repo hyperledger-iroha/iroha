@@ -416,7 +416,8 @@
               },
               "payout_account": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "lifecycle": {
-                "state": "staged"
+                "state": "staged",
+                "value": null
               }
             }
           }
@@ -430,13 +431,15 @@
               },
               "revision": 1,
               "eligibility": {
-                "mode": "enrolled_or_route_default"
+                "mode": "enrolled_or_route_default",
+                "value": null
               },
               "rules": [
                 {
                   "id": "taira_writes",
                   "effect": {
-                    "effect": "allow"
+                    "effect": "allow",
+                    "value": null
                   },
                   "selectors": [
                     {
@@ -472,7 +475,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-"wire_id": "iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest"
+                        "wire_id": "iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest"
                       }
                     },
                     {
@@ -621,6 +624,17 @@
               "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "object": {
                 "name": "CanRegisterSmartContractCode",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+              "object": {
+                "name": "CanManageSmartContractCodeRegistrars",
                 "payload": null
               }
             }

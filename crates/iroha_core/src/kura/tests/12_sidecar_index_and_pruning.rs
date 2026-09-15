@@ -1653,6 +1653,7 @@ fn prune_intent_tampering_fails_closed() {
     let valid_intent = admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 4,
             source_tip_hash: Some(blocks[3].hash()),

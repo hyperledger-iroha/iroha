@@ -2166,7 +2166,7 @@ pub struct PrivacyConsensusPolicyTighteningV1 {
 pub struct PrivacyConsensusPolicyV1 {
     /// Limits effective for the current committed state.
     pub current_limits: PrivacyConsensusLimitsV1,
-    /// At most one delayed, component-wise tightening.
+    /// At most one component-wise tightening for an explicitly chosen future block.
     pub pending_tightening: Option<PrivacyConsensusPolicyTighteningV1>,
 }
 /// Validation failure for a singleton privacy-policy value or schedule.
@@ -2191,17 +2191,7 @@ pub enum PrivacyPolicyValidationErrorV1 {
         /// Rejected effective height.
         effective_at_height: u64,
     },
-    /// The schedule does not provide the consensus minimum notice.
-    #[error(
-        "privacy policy effective height {effective_at_height} is earlier than minimum {earliest_effective_height}"
-    )]
-    LeadTimeTooShort {
-        /// Rejected effective height.
-        effective_at_height: u64,
-        /// Earliest admissible effective height.
-        earliest_effective_height: u64,
-    },
-    /// Adding the minimum notice overflows the height domain.
+    /// No representable block height follows the schedule admission height.
     #[error("privacy policy schedule height overflow")]
     HeightOverflow,
     /// A restored schedule claims admission after the snapshot it inhabits.
@@ -3404,7 +3394,7 @@ pub struct PrivacyProtocolLimitsTighteningV1 {
 /// Validation failure for a scheduled protocol-specific tightening.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
-    /// Scheduled/effective heights violate the chain-wide notice rule.
+    /// Scheduled/effective heights violate the strictly future block rule.
     #[error("privacy protocol-limit schedule is invalid: {0}")]
     Schedule(PrivacyPolicyValidationErrorV1),
     /// Successor limits are invalid, mismatched, or increase a component.
@@ -3453,7 +3443,7 @@ pub struct PrivacyProtocolActivationRecordV1 {
     pub lifecycle: PrivacyProtocolLifecycleV1,
     /// Protocol-specific governed count limits.
     pub protocol_limits: PrivacyProtocolActivationLimitsV1,
-    /// At most one delayed, component-wise protocol-limit tightening.
+    /// At most one component-wise protocol-limit tightening for an explicitly chosen future block.
     pub pending_protocol_limits_tightening: Option<PrivacyProtocolLimitsTighteningV1>,
 }
 impl PrivacyProtocolActivationRecordV1 {

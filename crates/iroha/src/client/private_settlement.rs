@@ -47,6 +47,194 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
 
+// Diagnostic values are closed local categories or recognized public codes.
+// Never retain the request URL, headers, body, or arbitrary transport/server text.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+enum PrivateSettlementAvailabilityFailureV1 {
+    #[error("invalid_provisional_material")]
+    InvalidMaterial,
+    #[error("manifest_sponsor_required")]
+    SponsorRequired,
+    #[error("request_encoding_failed")]
+    RequestEncoding,
+    #[error("request_signing_failed")]
+    RequestSigning,
+    #[error("transport_failed")]
+    Transport,
+    #[error("transport_timeout")]
+    TransportTimeout,
+    #[error("http_status={status}, public_code={public_code:?}")]
+    Http {
+        status: u16,
+        public_code: Option<&'static str>,
+    },
+    #[error("invalid_response_content_type")]
+    InvalidContentType,
+    #[error("invalid_response_json")]
+    InvalidJson,
+    #[error("invalid_availability_share")]
+    InvalidShare,
+    #[error("substituted_response_binding")]
+    SubstitutedResponse,
+    #[error("request_failed")]
+    Request,
+}
+
+impl PrivateSettlementAvailabilityFailureV1 {
+    fn transport(error: &eyre::Report) -> Self {
+        if error.chain().any(|cause| {
+            cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+                || cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+        }) {
+            Self::TransportTimeout
+        } else {
+            Self::Transport
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PrivateSettlementAvailabilityQuorumFailureV1 {
+    valid_shares: usize,
+    // Bounded to the four roster positions by the collector below.
+    failures: Vec<(usize, PrivateSettlementAvailabilityFailureV1)>,
+}
+
+impl std::fmt::Display for PrivateSettlementAvailabilityQuorumFailureV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "private-settlement availability quorum is unavailable: valid_shares={}, required_quorum={}",
+            self.valid_shares, PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1
+        )?;
+        for (index, failure) in &self.failures {
+            write!(formatter, "; roster[{index}]={failure}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for PrivateSettlementAvailabilityQuorumFailureV1 {}
+
+fn private_settlement_availability_public_code_v1(
+    response: &Response<Vec<u8>>,
+) -> Option<&'static str> {
+    const CODES: &[&str] = &[
+        "request_payload_too_large",
+        "request_body_read_failed",
+        "request_timeout",
+        "rate_limited",
+        "request_rate_limited",
+        "service_unavailable",
+        "bad_request",
+        "not_found",
+        "method_not_allowed",
+        "conflict",
+        "gone",
+        "request_content_type_unsupported",
+        "unprocessable_entity",
+        "not_implemented",
+        "bad_gateway",
+        "gateway_timeout",
+        "internal_server_error",
+        "http_error",
+        "route_unavailable",
+        "unauthorized",
+        "forbidden",
+        "private_settlement_unavailable",
+        "private_settlement_invalid_request",
+        "private_settlement_conflict",
+        "private_settlement_invalid_transition",
+        "private_settlement_capacity_exceeded",
+        "private_settlement_service_unavailable",
+        "private_settlement_height_unavailable",
+        "private_settlement_sponsor_required",
+        "private_settlement_control_invalid",
+        "private_settlement_controlled_loss",
+    ];
+    let recognized = |value: &str| CODES.iter().copied().find(|known| *known == value);
+    let mut headers = response.headers().get_all("x-iroha-reject-code").iter();
+    if let Some(header) = headers.next()
+        && headers.next().is_none()
+        && header.as_bytes().len() <= 96
+        && let Ok(value) = header.to_str()
+        && let Some(code) = recognized(value)
+    {
+        return Some(code);
+    }
+    // The route's error envelope exposes only a public `code`. A small parse
+    // bound avoids parsing arbitrary large rejection bodies for diagnostics.
+    if response.body().len() > 4096
+        || !Client::is_json_content_type(Client::response_content_type(response))
+    {
+        return None;
+    }
+    let value: norito::json::Value = norito::json::from_slice(response.body()).ok()?;
+    recognized(value.get("code")?.as_str()?)
+}
+
+fn decode_private_settlement_availability_response_v1(
+    response: &Response<Vec<u8>>,
+) -> Result<PrivateSettlementAvailabilityShareResponseV1> {
+    if response.status() != StatusCode::OK {
+        return Err(eyre!(PrivateSettlementAvailabilityFailureV1::Http {
+            status: response.status().as_u16(),
+            public_code: private_settlement_availability_public_code_v1(response),
+        }));
+    }
+    if !Client::is_json_content_type(Client::response_content_type(response)) {
+        return Err(eyre!(
+            PrivateSettlementAvailabilityFailureV1::InvalidContentType
+        ));
+    }
+    norito::json::from_slice(response.body())
+        .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::InvalidJson))
+}
+
+fn collect_private_settlement_availability_shares_v1(
+    authority: &PrivateSettlementCommitteeAuthorityV1,
+    mut request: impl FnMut(usize) -> Result<PrivateSettlementAvailabilityShareResponseV1>,
+) -> Result<Vec<PrivateSettlementAvailabilityShareV1>> {
+    let roster_len = usize::from(PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1);
+    if authority.validators.len() != roster_len {
+        return Err(eyre!(
+            "private-settlement availability requires the four-validator roster"
+        ));
+    }
+    let mut shares = Vec::with_capacity(roster_len);
+    let mut failures = Vec::with_capacity(roster_len);
+    for index in 0..roster_len {
+        let response = match request(index) {
+            Ok(response) => response,
+            Err(error) => {
+                let cause = error
+                    .downcast_ref::<PrivateSettlementAvailabilityFailureV1>()
+                    .copied()
+                    .unwrap_or(PrivateSettlementAvailabilityFailureV1::Request);
+                failures.push((index, cause));
+                continue;
+            }
+        };
+        if response.share.signer != authority.validators[index] {
+            return Err(eyre!(
+                "private-settlement availability endpoint identity is substituted at roster[{index}]"
+            ));
+        }
+        shares.push(response.share);
+    }
+    if shares.len() < usize::from(PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1) {
+        return Err(eyre!(PrivateSettlementAvailabilityQuorumFailureV1 {
+            valid_shares: shares.len(),
+            failures,
+        }));
+    }
+    Ok(shares)
+}
+
 /// Issue one Prepare request per committee member and join every initiated worker.
 ///
 /// Results retain roster order, including ordinary request rejections. A local
@@ -1088,42 +1276,42 @@ impl Client {
     ) -> Result<PrivateSettlementAvailabilityShareResponseV1> {
         material
             .validate()
-            .map_err(|_| eyre!("private-settlement provisional leg is invalid"))?;
+            .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::InvalidMaterial))?;
         if material.manifest.sponsor != self.account {
             return Err(eyre!(
-                "private-settlement availability request requires the manifest sponsor"
+                PrivateSettlementAvailabilityFailureV1::SponsorRequired
             ));
         }
         let request = PrivateSettlementAvailabilityShareRequestV1 {
             material: material.clone(),
         };
         let body = norito::json::to_vec(&request)
-            .wrap_err("failed to encode private-settlement availability request")?;
+            .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::RequestEncoding))?;
         let url = join_torii_url(
             endpoint,
             "v1/nexus/private-settlements/legs/availability-shares",
         );
-        let response = self.send_private_settlement_builder_v1(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        let decoded: PrivateSettlementAvailabilityShareResponseV1 =
-            Self::decode_private_settlement_response_v1(
-                &response,
-                "private-settlement availability share failed",
-            )?;
+        let response = self
+            .send_private_settlement_builder_v1(
+                self.account_signed_request(HttpMethod::POST, url, body)
+                    .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::RequestSigning))?
+                    .header("Content-Type", APPLICATION_JSON)
+                    .header("Accept", APPLICATION_JSON),
+            )
+            .map_err(|error| eyre!(PrivateSettlementAvailabilityFailureV1::transport(&error)))?;
+        let decoded = decode_private_settlement_availability_response_v1(&response)?;
         validate_availability_share_v1(
             &decoded.share,
             &material.availability_body,
             &material.committee_authority,
-        )?;
+        )
+        .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::InvalidShare))?;
         if decoded.bundle_id != material.manifest.bundle_id
             || decoded.payload_digest != material.availability_body.payload_digest
             || decoded.leg_ordinal != material.statement.leg_ordinal
         {
             return Err(eyre!(
-                "private-settlement availability share response is substituted"
+                PrivateSettlementAvailabilityFailureV1::SubstitutedResponse
             ));
         }
         Ok(decoded)
@@ -1138,7 +1326,10 @@ impl Client {
     /// # Errors
     ///
     /// Fails if endpoint ordering is invalid or fewer than three exact shares
-    /// can be verified.
+    /// can be verified. Quorum failures include the valid-share count, required
+    /// quorum, and a bounded failure category for each failed zero-based roster index.
+    /// HTTP failures include status and a recognized public rejection code when
+    /// available; request contents, endpoint URLs and raw error bodies are omitted.
     pub fn certify_private_settlement_leg_availability_v1(
         &self,
         committee_endpoints: &[Url],
@@ -1152,20 +1343,15 @@ impl Client {
                 "private-settlement availability endpoints must match the four-validator roster"
             ));
         }
-        let mut shares = Vec::with_capacity(material.committee_authority.validators.len());
-        for (index, endpoint) in committee_endpoints.iter().enumerate() {
-            let Ok(response) =
-                self.request_private_settlement_availability_share_v1(endpoint, material)
-            else {
-                continue;
-            };
-            if response.share.signer != material.committee_authority.validators[index] {
-                return Err(eyre!(
-                    "private-settlement availability endpoint identity is substituted"
-                ));
-            }
-            shares.push(response.share);
-        }
+        let shares = collect_private_settlement_availability_shares_v1(
+            &material.committee_authority,
+            |index| {
+                self.request_private_settlement_availability_share_v1(
+                    &committee_endpoints[index],
+                    material,
+                )
+            },
+        )?;
         let selected = canonical_availability_share_quorum_v1(&shares)?;
         aggregate_availability_shares_v1(
             material.availability_body,
@@ -4949,13 +5135,582 @@ mod tests {
         assert!(canonical_availability_share_quorum_v1(&all_four[..2]).is_err());
     }
 
+    fn availability_response_fixture_v1(
+        share: PrivateSettlementAvailabilityShareV1,
+    ) -> PrivateSettlementAvailabilityShareResponseV1 {
+        PrivateSettlementAvailabilityShareResponseV1 {
+            bundle_id: share.body.bundle_id,
+            payload_digest: share.body.payload_digest,
+            leg_ordinal: share.body.leg_ordinal,
+            disposition: iroha_torii_shared::private_settlement_api::PrivateSettlementLegUploadDispositionV1::Stored,
+            share,
+        }
+    }
+
+    // Structural fixture for the public availability request/certifier:
+    // it uses opaque proof/capsule bytes, real committee keys/PoPs/signatures and the
+    // real material validator. It neither generates nor verifies a native proof.
+    // Binding order follows Core sidecar_store::provisional_material_fixture;
+    // padded opaque capsule shape follows torii_shared's response-validation fixture.
+    fn availability_material_fixture_v1(
+        client: &Client,
+    ) -> (
+        PrivateSettlementProvisionalLegMaterialV1,
+        Vec<PrivateSettlementAvailabilityShareV1>,
+    ) {
+        use iroha_data_model::nexus::{
+            PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1,
+            PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1, PrivateSettlementAuditAadV1,
+            PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditPolicyBodyV1,
+            PrivateSettlementAuditPolicyV1, PrivateSettlementAuditorV1,
+            PrivateSettlementCapsulePaddingV1, PrivateSettlementHybridPublicKeyV1,
+            PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
+            PrivateSettlementWrappedDekV1,
+        };
+        let (mut manifest, _) = finalization_manifest_v1(client);
+        let route = manifest.legs[0].route;
+        let (authority, keys) = finalization_authority_v1(route, 0);
+        let auditor = KeyPair::from_seed(vec![0xE1; 32], Algorithm::Ed25519);
+        let auditor_id = AccountId::new(auditor.public_key().clone());
+        let mut rng = iroha_crypto::rng_from_seed_slice(b"client availability fixture auditor");
+        let hybrid = iroha_crypto::HybridKeyPair::generate(&mut rng).expect("fixture hybrid key");
+        let policy = PrivateSettlementAuditPolicyV1::new(PrivateSettlementAuditPolicyBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            dataspace_id: route.dataspace_id,
+            policy_id: Hash::new(b"client availability fixture policy"),
+            revision: 1,
+            key_epoch: 3,
+            activation_height: 5,
+            retirement_height: None,
+            min_approvals: 1,
+            auditors: vec![PrivateSettlementAuditorV1 {
+                auditor_id: auditor_id.clone(),
+                signing_key: auditor.public_key().clone(),
+                encryption_key: PrivateSettlementHybridPublicKeyV1::from_hybrid(hybrid.public()),
+            }],
+        })
+        .expect("fixture audit policy");
+        manifest.legs[0].audit_policy_digest = policy.policy_digest;
+        for leg in &mut manifest.legs {
+            leg.availability_certificate_digest = Hash::prehashed([0; Hash::LENGTH]);
+        }
+        manifest.bundle_id = manifest.computed_bundle_id().expect("fixture bundle id");
+        for index in 0..manifest.legs.len() {
+            let digest = finalization_delta_v1(&manifest, index)
+                .digest()
+                .expect("fixture delta digest");
+            manifest.legs[index].delta_digest = digest;
+        }
+        let mut delta = finalization_delta_v1(&manifest, 0);
+        let authority_digest = authority.digest().expect("fixture authority digest");
+        let plaintext_commitment = Hash::new(b"client availability fixture plaintext");
+        let padding = PrivateSettlementCapsulePaddingV1::KiB4;
+        let audit_capsule = PrivateSettlementAuditCapsuleV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            aad: PrivateSettlementAuditAadV1 {
+                network_id: manifest.network_id,
+                bundle_id: manifest.bundle_id,
+                leg_ordinal: 0,
+                route,
+                authority_digest,
+                authority_context_height: manifest.authority_context_height,
+                audit_policy_digest: policy.policy_digest,
+                audit_key_epoch: policy.body.key_epoch,
+                plaintext_commitment,
+            },
+            padding,
+            nonce: [0xE2; 24],
+            ciphertext: vec![0xE3; padding.ciphertext_bytes()],
+            wrapped_deks: vec![PrivateSettlementWrappedDekV1 {
+                auditor_id,
+                ephemeral_x25519: [0xE4; 32],
+                ml_kem_ciphertext: vec![0xE5; PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1],
+                nonce: [0xE6; 24],
+                wrapped_dek: vec![0xE7; PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1],
+            }],
+        };
+        let profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out;
+        let statement = PrivateSettlementProofStatementV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            profile,
+            proof_profile_digest: profile.digest(),
+            network_id: manifest.network_id,
+            bundle_id: manifest.bundle_id,
+            leg_ordinal: 0,
+            route,
+            authority_context_height: manifest.authority_context_height,
+            pool_id: delta.pool_id,
+            asset_binding_commitment: delta.asset_binding_commitment,
+            old_root: delta.old_root,
+            new_root: delta.new_root,
+            old_epoch: delta.old_epoch,
+            new_epoch: delta.new_epoch,
+            nullifiers: delta.nullifiers.clone(),
+            output_commitments: delta.output_commitments.clone(),
+            encrypted_outputs: delta.encrypted_outputs.clone(),
+            audit_plaintext_commitment: plaintext_commitment,
+            audit_input_commitment: [0xE8; 32],
+            audit_capsule_digest: audit_capsule.digest().expect("fixture capsule digest"),
+            audit_policy_digest: policy.policy_digest,
+            audit_key_epoch: policy.body.key_epoch,
+            fee_intent_digest: manifest.fee_intent_digest,
+            reimbursement_terms_commitment: manifest.reimbursement_terms_commitment,
+            reimbursement_leg_ordinal: manifest.reimbursement_leg_ordinal,
+            expiry_height: manifest.expiry_height,
+        };
+        let proof = b"availability-request-proof-canary".to_vec();
+        delta.statement_digest = statement.digest().expect("fixture statement digest");
+        delta.proof_digest = iroha_data_model::nexus::private_settlement_proof_digest_v1(&proof);
+        delta.capsule_digest = statement.audit_capsule_digest;
+        manifest.legs[0].delta_digest = delta.digest().expect("fixture bound delta digest");
+        let availability_body = PrivateSettlementSidecarAvailabilityBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: manifest.network_id,
+            bundle_id: manifest.bundle_id,
+            leg_ordinal: 0,
+            route,
+            authority_digest,
+            authority_context_height: manifest.authority_context_height,
+            payload_digest: Hash::new(b"client availability fixture provisional digest"),
+            payload_bytes: 1,
+            retention_until_height: manifest.expiry_height,
+        };
+        let mut material = PrivateSettlementProvisionalLegMaterialV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            manifest,
+            audit_policy: policy,
+            committee_authority: authority,
+            statement,
+            proof,
+            delta,
+            audit_capsule,
+            availability_body,
+        };
+        let payload_digest = material.payload_digest().expect("fixture payload digest");
+        material.manifest.legs[0].payload_digest = payload_digest;
+        material.availability_body.payload_digest = payload_digest;
+        material.availability_body.payload_bytes = u32::try_from(
+            material
+                .sidecar_material_bytes_len()
+                .expect("fixture material size"),
+        )
+        .expect("fixture size fits u32");
+        material
+            .validate()
+            .expect("complete provisional material must validate");
+        let preimage = material
+            .availability_body
+            .signature_preimage()
+            .expect("fixture preimage");
+        let shares = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| PrivateSettlementAvailabilityShareV1 {
+                version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+                body: material.availability_body,
+                signer: material.committee_authority.validators[index].clone(),
+                signature: Signature::try_new(key.private_key(), &preimage)
+                    .expect("fixture availability signature")
+                    .payload()
+                    .to_vec(),
+            })
+            .collect();
+        (material, shares)
+    }
+
+    fn availability_endpoints_fixture_v1() -> Vec<Url> {
+        (0..4)
+            .map(|index| {
+                Url::parse(&format!("http://availability-{index}.mock/")).expect("fixture endpoint")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn availability_public_certifier_retains_all_four_http_rejections_without_private_text() {
+        const CANARY: &str = "availability-response-auth-capsule-canary";
+        let client = client_with_base_url(base_url());
+        let (material, _) = availability_material_fixture_v1(&client);
+        let endpoints = availability_endpoints_fixture_v1();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = Response::builder()
+            .status(413)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("x-iroha-reject-code", "request_payload_too_large")
+            .body(
+                format!(r#"{{"code":"request_payload_too_large","message":"{CANARY}"}}"#)
+                    .into_bytes(),
+            )
+            .expect("fixture HTTP rejection");
+        let error = with_mock_http(respond_with(&snapshots, response), |transport| {
+            client
+                .clone()
+                .with_test_http_transport(transport)
+                .certify_private_settlement_leg_availability_v1(&endpoints, &material)
+        })
+        .expect_err("all four HTTP rejections prevent quorum");
+        let requests = snapshots.lock().expect("snapshot lock");
+        assert_eq!(requests.len(), 4);
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(request.url.host_str(), endpoints[index].host_str());
+            assert_eq!(
+                request.url.path(),
+                "/v1/nexus/private-settlements/legs/availability-shares"
+            );
+            let decoded: PrivateSettlementAvailabilityShareRequestV1 =
+                norito::json::from_slice(&request.body).expect("real provisional request JSON");
+            assert_eq!(decoded.material, material);
+        }
+        let text = format!("{error:#}");
+        assert!(text.contains("valid_shares=0"));
+        for index in 0..4 {
+            assert!(text.contains(&format!("roster[{index}]=http_status=413")));
+        }
+        assert!(text.contains("request_payload_too_large"));
+        for text in [text, format!("{error:?}")] {
+            assert!(!text.contains(CANARY));
+            assert!(!text.contains("availability-request-proof-canary"));
+            assert!(!text.contains(".mock"));
+        }
+    }
+
+    #[test]
+    fn availability_public_certifier_tolerates_one_http_failure_and_verifies_three_real_shares() {
+        let client = client_with_base_url(base_url());
+        let (material, shares) = availability_material_fixture_v1(&client);
+        let endpoints = availability_endpoints_fixture_v1();
+        let expected = aggregate_availability_shares_v1(
+            material.availability_body,
+            &material.committee_authority,
+            &[shares[0].clone(), shares[2].clone(), shares[3].clone()],
+        )
+        .expect("expected exact-three certificate");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&snapshots);
+        let response_endpoints = endpoints.clone();
+        let certificate = with_mock_http(
+            move |request| {
+                let index = response_endpoints
+                    .iter()
+                    .position(|endpoint| endpoint.host_str() == request.url.host_str())
+                    .expect("requested fixture endpoint");
+                captured.lock().expect("snapshot lock").push(request);
+                let (status, body) = if index == 1 {
+                    (
+                        503,
+                        br#"{"code":"service_unavailable","message":"unavailable"}"#.to_vec(),
+                    )
+                } else {
+                    (
+                        200,
+                        norito::json::to_vec(&availability_response_fixture_v1(
+                            shares[index].clone(),
+                        ))
+                        .expect("fixture signed response"),
+                    )
+                };
+                Ok(Response::builder()
+                    .status(status)
+                    .header("Content-Type", APPLICATION_JSON)
+                    .body(body)
+                    .expect("fixture response"))
+            },
+            |transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(transport)
+                    .certify_private_settlement_leg_availability_v1(&endpoints, &material)
+            },
+        )
+        .expect("one endpoint failure is tolerated through the real public request method");
+        assert_eq!(certificate, expected);
+        assert_eq!(certificate.signers_bitmap, 0b1101);
+        assert_eq!(snapshots.lock().expect("snapshot lock").len(), 4);
+    }
+
+    #[test]
+    fn availability_collection_preserves_every_three_of_four_quorum_and_roster_failure() {
+        let (authority, keys, _) = phase_fixture_v1();
+        let all_four = availability_shares_v1(&authority, &keys);
+        for available in 0_u8..16 {
+            let mut requested = Vec::new();
+            let result = collect_private_settlement_availability_shares_v1(&authority, |index| {
+                requested.push(index);
+                if available & (1 << index) == 0 {
+                    Err(eyre!(PrivateSettlementAvailabilityFailureV1::Http {
+                        status: 503,
+                        public_code: Some("private_settlement_service_unavailable"),
+                    }))
+                } else {
+                    Ok(availability_response_fixture_v1(all_four[index].clone()))
+                }
+            });
+            assert_eq!(requested, vec![0, 1, 2, 3]);
+            let count = available.count_ones() as usize;
+            if count >= 3 {
+                let shares = result.expect("one unavailable endpoint is tolerated");
+                let selected =
+                    canonical_availability_share_quorum_v1(&shares).expect("exact quorum");
+                assert_eq!(selected.len(), 3);
+                let certificate =
+                    aggregate_availability_shares_v1(all_four[0].body, &authority, selected)
+                        .expect("valid exact-three certificate");
+                let expected = (0..4)
+                    .filter(|index| available & (1 << index) != 0)
+                    .take(3)
+                    .fold(0_u8, |mask, index| mask | (1 << index));
+                assert_eq!(certificate.signers_bitmap, expected);
+                assert_eq!(certificate.signers_bitmap.count_ones(), 3);
+            } else {
+                let error = result.expect_err("fewer than three must fail");
+                let details = error
+                    .downcast_ref::<PrivateSettlementAvailabilityQuorumFailureV1>()
+                    .expect("typed bounded quorum detail");
+                assert_eq!(details.valid_shares, count);
+                let expected = (0..4)
+                    .filter(|index| available & (1 << index) == 0)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    details
+                        .failures
+                        .iter()
+                        .map(|(index, _)| *index)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                let text = format!("{error:#}");
+                assert!(text.contains(&format!("valid_shares={count}, required_quorum=3")));
+                for index in expected {
+                    assert!(text.contains(&format!("roster[{index}]=http_status=503")));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn availability_collection_keeps_substituted_roster_identity_fatal_even_after_three_shares() {
+        let (authority, keys, _) = phase_fixture_v1();
+        let shares = availability_shares_v1(&authority, &keys);
+        let error = collect_private_settlement_availability_shares_v1(&authority, |index| {
+            Ok(availability_response_fixture_v1(
+                shares[if index == 3 { 0 } else { index }].clone(),
+            ))
+        })
+        .expect_err("wrong endpoint signer must not be tolerated as unavailable");
+        assert_eq!(
+            error.to_string(),
+            "private-settlement availability endpoint identity is substituted at roster[3]"
+        );
+    }
+
+    #[test]
+    fn availability_collection_rejects_invalid_roster_before_requesting() {
+        let (mut authority, _, _) = phase_fixture_v1();
+        authority.validators.pop();
+        let error = collect_private_settlement_availability_shares_v1(&authority, |_| {
+            panic!("invalid roster must not initiate a request")
+        })
+        .expect_err("four validator roster required");
+        assert!(error.to_string().contains("four-validator roster"));
+    }
+
+    #[test]
+    fn availability_http_diagnostics_keep_status_and_only_recognized_public_codes() {
+        const CANARY: &str = "private-proof-capsule-auth-response-canary";
+        for (status, header, body, expected) in [
+            (413, None, CANARY.to_owned(), None),
+            (
+                429,
+                Some("request_rate_limited"),
+                CANARY.to_owned(),
+                Some("request_rate_limited"),
+            ),
+            (
+                503,
+                None,
+                r#"{"code":"service_unavailable","message":"public rejection"}"#.to_owned(),
+                Some("service_unavailable"),
+            ),
+            (
+                413,
+                Some("request_payload_too_large"),
+                CANARY.to_owned(),
+                Some("request_payload_too_large"),
+            ),
+            (
+                503,
+                None,
+                format!(
+                    r#"{{"code":"private_settlement_service_unavailable","details":"{CANARY}"}}"#
+                ),
+                Some("private_settlement_service_unavailable"),
+            ),
+            (403, Some(CANARY), format!(r#"{{"code":"{CANARY}"}}"#), None),
+            (500, None, "x".repeat(4097), None),
+            (
+                500,
+                None,
+                format!(r#"{{"code":"private_settlement_unavailable","code":"{CANARY}"}}"#),
+                None,
+            ),
+        ] {
+            let mut builder = Response::builder()
+                .status(status)
+                .header("Content-Type", APPLICATION_JSON);
+            if let Some(header) = header {
+                builder = builder.header("x-iroha-reject-code", header);
+            }
+            let response = builder.body(body.into_bytes()).expect("failure response");
+            let error = decode_private_settlement_availability_response_v1(&response)
+                .expect_err("HTTP rejection");
+            let Some(PrivateSettlementAvailabilityFailureV1::Http {
+                status: actual,
+                public_code,
+            }) = error.downcast_ref::<PrivateSettlementAvailabilityFailureV1>()
+            else {
+                panic!("typed HTTP failure");
+            };
+            assert_eq!(*actual, status);
+            assert_eq!(*public_code, expected);
+            for text in [format!("{error:#}"), format!("{error:?}")] {
+                assert!(text.contains(&status.to_string()));
+                assert!(!text.contains(CANARY));
+            }
+            assert!(error.to_string().len() < 256);
+        }
+    }
+
+    #[test]
+    fn availability_public_codes_reject_duplicate_oversized_and_non_json_sources() {
+        let response = |headers: &[&str], content_type: &str, body: Vec<u8>| {
+            let mut builder = Response::builder()
+                .status(413)
+                .header("Content-Type", content_type);
+            for header in headers {
+                builder = builder.header("x-iroha-reject-code", *header);
+            }
+            builder.body(body).expect("response")
+        };
+        let known = br#"{"code":"private_settlement_unavailable"}"#.to_vec();
+        assert_eq!(
+            private_settlement_availability_public_code_v1(&response(
+                &["request_payload_too_large", "request_payload_too_large"],
+                "text/plain",
+                vec![]
+            )),
+            None
+        );
+        assert_eq!(
+            private_settlement_availability_public_code_v1(&response(
+                &[&"x".repeat(97)],
+                APPLICATION_JSON,
+                vec![]
+            )),
+            None
+        );
+        assert_eq!(
+            private_settlement_availability_public_code_v1(&response(
+                &[],
+                "text/plain",
+                known.clone()
+            )),
+            None
+        );
+        let mut oversized = known;
+        oversized.resize(4097, b' ');
+        assert_eq!(
+            private_settlement_availability_public_code_v1(&response(
+                &[],
+                APPLICATION_JSON,
+                oversized
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn availability_decoder_accepts_exact_json_and_sanitizes_malformed_success() {
+        let (authority, keys, _) = phase_fixture_v1();
+        let share = availability_shares_v1(&authority, &keys).remove(0);
+        let dto = availability_response_fixture_v1(share);
+        let response = Response::builder()
+            .status(200)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&dto).expect("encode share"))
+            .expect("response");
+        let decoded = decode_private_settlement_availability_response_v1(&response)
+            .expect("exact share JSON");
+        assert_eq!(decoded.share.signer, dto.share.signer);
+        const CANARY: &str = "private-invalid-json-content-type-canary";
+        for (content_type, expected) in [
+            (APPLICATION_JSON, "invalid_response_json"),
+            (CANARY, "invalid_response_content_type"),
+        ] {
+            let response = Response::builder()
+                .status(200)
+                .header("Content-Type", content_type)
+                .body(CANARY.as_bytes().to_vec())
+                .expect("response");
+            let error = decode_private_settlement_availability_response_v1(&response)
+                .expect_err("malformed response");
+            assert_eq!(error.to_string(), expected);
+            assert!(!format!("{error:#}").contains(CANARY));
+        }
+    }
+
+    #[test]
+    fn availability_transport_and_unknown_error_chains_never_enter_quorum_diagnostics() {
+        const CANARY: &str = "secret-url-proof-capsule-authorization-canary";
+        let timeout = eyre::Report::new(std::io::Error::new(std::io::ErrorKind::TimedOut, CANARY))
+            .wrap_err(CANARY);
+        assert!(matches!(
+            PrivateSettlementAvailabilityFailureV1::transport(&timeout),
+            PrivateSettlementAvailabilityFailureV1::TransportTimeout
+        ));
+        let arbitrary = eyre!(CANARY);
+        assert!(matches!(
+            PrivateSettlementAvailabilityFailureV1::transport(&arbitrary),
+            PrivateSettlementAvailabilityFailureV1::Transport
+        ));
+        let (authority, _, _) = phase_fixture_v1();
+        let error =
+            collect_private_settlement_availability_shares_v1(&authority, |index| match index {
+                0 => Err(eyre!(PrivateSettlementAvailabilityFailureV1::Http {
+                    status: 413,
+                    public_code: None
+                })
+                .wrap_err(CANARY)),
+                1 => Err(eyre!(
+                    PrivateSettlementAvailabilityFailureV1::TransportTimeout
+                )),
+                2 => Err(eyre!(PrivateSettlementAvailabilityFailureV1::InvalidShare)),
+                _ => Err(eyre!(CANARY).wrap_err(CANARY)),
+            })
+            .expect_err("all four fail");
+        let text = format!("{error:#}");
+        assert!(text.contains("valid_shares=0, required_quorum=3"));
+        for (index, expected) in [
+            "http_status=413",
+            "transport_timeout",
+            "invalid_availability_share",
+            "request_failed",
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert!(text.contains(&format!("roster[{index}]={expected}")));
+        }
+        assert!(!text.contains(CANARY));
+        assert!(!format!("{error:?}").contains(CANARY));
+        assert!(text.len() < 1024);
+    }
+
     #[test]
     fn pending_receipt_rejects_identifier_substitution() {
         let requested = Hash::new(b"requested-private-settlement-bundle");
         let substituted = Hash::new(b"substituted-private-settlement-bundle");
         let response = PrivateSettlementBundleReceiptResponseV1::Pending {
             bundle_id: substituted,
-            lifecycle: PrivateSettlementLifecycleDtoV1::Collecting,
         };
         assert!(validate_bundle_receipt_response_v1(requested, &response).is_err());
     }

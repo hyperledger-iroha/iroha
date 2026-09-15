@@ -689,7 +689,7 @@ def _session_lifetime(records, closure, identity, started, accepted, active, exp
             "workload_manifest_sha256", "activated_height", "process_inventory", "worker_pid", "network_ports"}, "session ready")
         _record_identity(ready, identity, "session ready")
         requested = records.object(started["request"])
-        if (ready["worker_pid"] != pid or type(ready["activated_height"]) is not int or ready["activated_height"] < 301
+        if (ready["worker_pid"] != pid or type(ready["activated_height"]) is not int or not 0 < ready["activated_height"] <= MAX_U64
                 or any(ready[key] != requested[key] for key in ("configuration_sha256", "workload_manifest_sha256"))):
             raise AccountingError("ready belongs to a different worker")
         _digest(ready["genesis_sha256"], "native genesis")

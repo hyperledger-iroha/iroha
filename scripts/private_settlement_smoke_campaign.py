@@ -493,8 +493,13 @@ def validate_finality(proof: Any, result: dict[str, Any], identities: list[Any])
 
 
 def validate_smoke_result_heights(result: dict[str, Any]) -> tuple[int, int, int]:
-    """Keep the notice barrier and exact observed authority/finality ordering."""
-    activation = integer(result["activation_height"], 301, 2**64 - 2, "300-height-notice activation")
+    """Bind nonzero genesis readiness and subsequent authority/finality observations.
+
+    The experimental result's ``activation_height`` is the committed height of
+    the first successful exact Active-genesis capability observation, not a
+    scheduled lifecycle transition. Pool authority must be observed afterward.
+    """
+    activation = integer(result["activation_height"], 1, 2**64 - 2, "genesis readiness height")
     authority = integer(result["authority_context_height"], activation + 1, 2**64 - 1, "authority height")
     finalized = integer(result["finalized_height"], authority, 2**64 - 1, "finalized height")
     return activation, authority, finalized

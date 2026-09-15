@@ -181,8 +181,6 @@ pub const TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1: u32 = 8;
 pub const TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1: u32 = 8;
 /// Number of recent privacy roots retained by the Taira first-release profile.
 pub const TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1: u32 = 2_048;
-/// Minimum on-chain notice before a privacy-policy tightening becomes effective.
-pub const MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1: u64 = 300;
 /// Canonical first-release privacy protocol identity.
 ///
 /// Variant order is part of the Norito wire contract. New protocols require a

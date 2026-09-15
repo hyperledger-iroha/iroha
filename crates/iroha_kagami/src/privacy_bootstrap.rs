@@ -236,7 +236,10 @@ fn render_artifacts_v1(
     genesis_instructions_json::serialize(&instructions, &mut instructions_json);
     instructions_json.push('\n');
     let instructions_json = instructions_json.into_bytes();
-    let labels = PrivacyProtocolIdV1::ALL.map(|id| id.canonical_label().to_owned());
+    let labels = PrivacyProtocolIdV1::ALL
+        .into_iter()
+        .map(|id| id.canonical_label().to_owned())
+        .collect::<Vec<_>>();
     let mut instruction_labels = Vec::with_capacity(instructions.len());
     let mut wire_ids = Vec::with_capacity(instructions.len());
     let mut instruction_norito_base64 = Vec::with_capacity(instructions.len());
@@ -927,15 +930,20 @@ mod tests {
                 "accepted incomplete {key}"
             );
         }
-        let mut report: JsonValue =
-            norito::json::from_slice(&artifacts.report_json).expect("report");
-        report
-            .get_mut("governance_activation_templates")
-            .and_then(|value| value.get_mut("instruction_wire_ids"))
-            .and_then(JsonValue::as_array_mut)
-            .expect("wire IDs")
-            .swap(0, 1);
-        assert!(validate_report_inventory_v1(&report, &artifacts.instructions).is_err());
+        for key in ["protocol_labels", "instruction_wire_ids"] {
+            let mut report: JsonValue =
+                norito::json::from_slice(&artifacts.report_json).expect("report");
+            report
+                .get_mut("governance_activation_templates")
+                .and_then(|value| value.get_mut(key))
+                .and_then(JsonValue::as_array_mut)
+                .expect("ordered identity inventory")
+                .swap(0, 1);
+            assert!(
+                validate_report_inventory_v1(&report, &artifacts.instructions).is_err(),
+                "accepted reordered {key}"
+            );
+        }
     }
     #[test]
     fn explicit_bootstrap_report_rejects_promoted_or_retimed_execution_metadata() {

@@ -1,6 +1,6 @@
 // Included at Kura module scope. Preparation/re-audit only; never a scrape path.
 
-const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 9] = [
+const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 10] = [
     "blocks",
     "retired/blocks",
     "merge_ledger",
@@ -9,12 +9,13 @@ const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 9] = [
     MERGE_CARRIERS_DIR,
     PENDING_MERGE_ENTRIES_DIR,
     PENDING_QUEUE_PLAN_ADMISSIONS_DIR,
+    NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY,
     fastpq_artifact_store::DIRECTORY,
 ];
 
 /// Exact Kura-managed physical scope, excluding delegated consensus stores.
 ///
-/// The old total-byte owner enumerates these nine trees, eleven fixed root files,
+/// The total-byte owner enumerates these declared trees, eleven fixed root files,
 /// and bounded process-generation publication residue. In particular,
 /// `sumeragi_v2` WAL/body/certificate-serve files have independent writers and
 /// are not part of this inventory. The `.kura.lock` process-control descriptor
@@ -65,7 +66,7 @@ impl KuraPhysicalResourceScope {
         store_root: &Path,
     ) -> std::result::Result<(), resource_inventory::Unavailable> {
         use resource_inventory::Unavailable as Missing;
-        if self.trees.len() != 9
+        if self.trees.len() != PHYSICAL_RESOURCE_OWNED_TREE_NAMES.len()
             || self.files.len() < 11
             || self.files.len() > 11 + AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT
         {
@@ -121,7 +122,7 @@ impl KuraPhysicalResourceScope {
             }
             Ok::<_, resource_inventory::Unavailable>(())
         };
-        // Each of the fixed nine roots shares the existing 4M-entry/128-depth
+        // Each of the declared roots shares the existing 4M-entry/128-depth
         // physical traversal bounds. No unbounded set of traversal roots exists.
         for tree in &self.trees {
             add(physical_resource_tree_usage(tree, limits)?)?;
@@ -135,7 +136,7 @@ impl KuraPhysicalResourceScope {
 }
 
 impl Kura {
-    fn physical_resource_owned_trees(&self) -> [PathBuf; 9] {
+    fn physical_resource_owned_trees(&self) -> [PathBuf; PHYSICAL_RESOURCE_OWNED_TREE_NAMES.len()] {
         PHYSICAL_RESOURCE_OWNED_TREE_NAMES.map(|name| self.store_root.join(name))
     }
 

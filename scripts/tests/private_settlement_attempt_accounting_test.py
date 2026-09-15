@@ -41,7 +41,7 @@ class Fixture:
     """Build one real-codec session among a complete 800-job registered plan."""
     def __init__(self, kinds=('succeeded',)*6+('failed',), *, ack_consumed=True,
                  pending_successor=False, setup_failure=False, fault_prefix=False,
-                 session_index=0, worker_birth=10, ack_published=True):
+                 session_index=0, worker_birth=10, ack_published=True, activated_height=4):
         self.store = MemoryRecords(); self.replays = 0
         self.image = {'sha256': 'f'*64, 'bytes': 100}
         self.command = ['/source-admitted/worker', 'retained_session', '--exact', '--ignored']
@@ -120,7 +120,7 @@ class Fixture:
             inventory = [{'pid': pid} for pid in pids]
             ports = self.store.put(self.prefix+'/network-ports.json', {'fixture': 'ports'})
             self.ready = self.store.put(self.prefix+'/ready.json', {**self.identity,
-                'worker_pid': 777, 'process_inventory': inventory, 'activated_height': 301,
+                'worker_pid': 777, 'process_inventory': inventory, 'activated_height': activated_height,
                 'network_id': '1'*64, 'genesis_sha256': '2'*64,
                 'configuration_sha256': request['configuration_sha256'],
                 'workload_manifest_sha256': request['workload_manifest_sha256'], 'network_ports': ports})
@@ -322,6 +322,42 @@ class RetainedAccountingTests(unittest.TestCase):
         result = Fixture(('succeeded',)*8).reduce()
         self.assertEqual(result['counts']['succeeded'], 8)
         self.assertEqual(result['campaigns'][0]['sessions'][0]['terminal_kind'], 'completed')
+
+    def test_ready_observed_heights_have_no_scheduled_activation_floor(self):
+        for height in (1, 4, 300, 301, accounting.MAX_U64):
+            with self.subTest(height=height):
+                f = Fixture(('succeeded',)*8, activated_height=height)
+                result = f.reduce()
+                self.assertEqual(result['counts']['succeeded'], 8)
+                self.assertEqual(f.replays, 8)
+                self.assertEqual(result['campaigns'][0]['sessions'][0]['terminal_kind'], 'completed')
+
+    def test_ready_rejects_zero_and_noninteger_observed_heights(self):
+        # These values survive the control JSON codec and reach accounting.
+        for height in (0, True, False, '4', None):
+            with self.subTest(height=height), self.assertRaises(accounting.AccountingError):
+                Fixture(activated_height=height).reduce()
+        # The bounded codec itself refuses values outside the wire u64 domain.
+        for height in (-1, 4.0, accounting.MAX_U64 + 1):
+            with self.subTest(height=height), self.assertRaises(control.SessionProtocolError):
+                Fixture(activated_height=height)
+
+    def test_rehashed_immediate_ready_cannot_replace_worker_or_session_workload(self):
+        for field, replacement in (('worker_pid', 778), ('configuration_sha256', '8'*64),
+                ('workload_manifest_sha256', '8'*64), ('session_invocation_nonce', '8'*64)):
+            f = Fixture(activated_height=1)
+            closure = json.loads(f.store.values[f.closure_ref['path']])
+            ready = json.loads(f.store.values[f.ready['path']]); ready[field] = replacement
+            f.store.values[f.ready['path']] = control.canonical(ready)
+            closure['ready'] = f.store.locate(f.ready['path'])
+            observed = json.loads(f.store.values[f.process_ready['path']])
+            observed['ready'] = closure['ready']
+            f.store.values[f.process_ready['path']] = control.canonical(observed)
+            closure['process_observation'] = f.store.locate(f.process_ready['path'])
+            with self.subTest(field=field), self.assertRaises(accounting.AccountingError):
+                accounting._session_lifetime(accounting._SessionRecords(f.store), closure,
+                    f.identity, json.loads(f.store.read(f.started)), f.accepted,
+                    f.rows[6]['attempt_id'], f.image, unready_attempts_absent=False)
 
     def test_setup_failure_creates_no_attempt_denominator(self):
         result = Fixture(setup_failure=True).reduce()

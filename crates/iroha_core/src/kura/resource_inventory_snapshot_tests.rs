@@ -105,6 +105,11 @@ fn resource_snapshot_rejects_every_deferred_or_unresolved_owner_state_after_init
         ),
         (&kura.prune_in_progress, true, Unavailable::Busy),
         (
+            &kura.native_amx_resident_recovery_complete,
+            false,
+            Unavailable::Unregistered,
+        ),
+        (
             &kura.post_wsv_resident_recovery_complete,
             false,
             Unavailable::Unregistered,

@@ -103,7 +103,7 @@ class SessionSemantics:
         self.native_invocations = {}
 
     def validate_ready(self, ready, request):
-        """Require the frozen ready record and the unmodified activation policy."""
+        """Require the frozen record of completed governed readiness."""
         control.require(request == self.prepared['request']
                         and self.records.read(self.prepared['reference']) == control.canonical(request),
                         'semantic owner received another session request')
@@ -114,7 +114,8 @@ class SessionSemantics:
         control.require(all(ready[key] == value for key, value in self.session.items())
                         and ready['configuration_sha256'] == request['configuration_sha256']
                         and ready['workload_manifest_sha256'] == request['workload_manifest_sha256']
-                        and type(ready['activated_height']) is int and ready['activated_height'] >= 301,
+                        and type(ready['activated_height']) is int
+                        and 0 < ready['activated_height'] <= control.MAX_U64,
                         'session readiness does not bind completed governed activation')
         control.digest(ready['genesis_sha256'])
         runner.validate_process_inventory(ready['process_inventory'], participants=request['participants'],

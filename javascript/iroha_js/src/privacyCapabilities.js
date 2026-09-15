@@ -43,7 +43,6 @@ export const PRIVACY_PROTOCOL_IDS_V1 = Object.freeze([
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U32 = 0xffff_ffff;
-const POLICY_DELAY_BLOCKS_V1 = 300n;
 const PROTOCOL_BINDINGS = Object.freeze({
   "zk-ace-pq-authorization-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   "anonymous-pgc-k-out-of-n-v1": ["anonymous-pgc-p256", "native-anonymous-pgc-p256"],
@@ -95,7 +94,7 @@ function parseConsensusPolicy(value, committedHeight, path) {
     const tightening = objectWithExactKeys(policy.pending_tightening, ["scheduled_at_height", "effective_at_height", "next_limits"], pendingPath);
     const scheduled = positiveU64(tightening.scheduled_at_height, `${pendingPath}.scheduled_at_height`);
     const effective = positiveU64(tightening.effective_at_height, `${pendingPath}.effective_at_height`);
-    if (scheduled > MAX_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) {
+    if (effective <= scheduled || scheduled > committedHeight || effective <= committedHeight) {
       fail("has invalid committed-height schedule", pendingPath);
     }
     const nextLimits = parseConsensusLimits(tightening.next_limits, `${pendingPath}.next_limits`);
@@ -267,7 +266,7 @@ function parseProtocolTightening(value, current, committedHeight, path) {
   const tightening = objectWithExactKeys(value, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
   const scheduled = positiveU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
   const effective = positiveU64(tightening.effective_at_height, `${path}.effective_at_height`);
-  if (scheduled > MAX_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
+  if (effective <= scheduled || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
   const next = parseProtocolLimits(tightening.next_limits, current.protocol, `${path}.next_limits`);
   assertLimitsAtMost(next, current, `${path}.next_limits`);
   if (sameJson(next, current)) fail("must be a strict tightening", path);

@@ -28432,7 +28432,7 @@
         }
       },
       "PrivateSettlementBundleReceiptResponseV1": {
-        "description": "Public compact receipt, opaque abort, or pending lifecycle; no plaintext contents.",
+        "description": "Public compact receipt, opaque abort, or absence of public terminal state at this node; no plaintext contents.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -28446,14 +28446,10 @@
                 "properties": {
                   "bundle_id": {
                     "$ref": "#/components/schemas/Hash"
-                  },
-                  "lifecycle": {
-                    "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
                   }
                 },
                 "required": [
-                  "bundle_id",
-                  "lifecycle"
+                  "bundle_id"
                 ],
                 "type": "object"
               }
