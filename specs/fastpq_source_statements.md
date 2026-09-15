@@ -216,6 +216,13 @@ The scoped witness recorder clears/deactivates its owned overlay on errors;
 repeated capture checks retained contents without reading another block's
 recorder. Authenticated replay does not invent local source ownership.
 
+Only the thread holding `ExecWitnessGuard` can record, synchronize transcripts,
+acquire an overlay's capture identity or mutate the recorder lifecycle. Detached
+execution workers return results for application on that owning thread.
+Unrelated `StateBlock` transactions and transcript drains on other threads cannot
+append to, replace or clear its witness. Read-only recorder snapshots remain available
+across threads; ownership is local and does not enter witness bytes.
+
 The test-only qualification helper `prepare_owned_fastpq_d7_capture` retains the
 inventory allocation, exact header milliseconds, saturating nanosecond slot,
 permission root, manifest and limits.
