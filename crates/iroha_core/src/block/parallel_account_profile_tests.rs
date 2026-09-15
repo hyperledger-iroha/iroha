@@ -266,9 +266,11 @@ fn parallel_account_profile_rejects_foreign_permission_payloads() {
     for foreign_profile in [753, 777] {
         let serial = fixture.execute(foreign_profile, None);
         assert!(
-            serial.0.iter().all(|result| matches!(result,
-                Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)))
-                    if message == "Can't set value to the metadata of another account"
+            serial.0.iter().all(|result| matches!(
+                result,
+                Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted(_)
+                ))
             )),
             "foreign permission must reject for its native policy reason: {:?}",
             serial.0

@@ -36,6 +36,16 @@ The corresponding Torii reads are
 `GET /v1/sns/policies/{suffix_id}`. A policy ID selects a live on-chain
 resource policy; it is not an external textual suffix catalog.
 
+An absent registration uses HTTP `404` with the standard `ErrorEnvelope` in
+`application/json` or `application/x-norito`. Its sole outer `code` must be
+`sns_registration_not_found`, and `details.sns_registration_not_found` must
+contain the exact requested canonical `suffix_id` and `label`. The typed detail
+has no inner error code. The fixed namespace IDs are `4097` (account alias),
+`4098` (domain), and `4099` (dataspace). A generic `404`, another error code,
+missing detail, or a mismatched selector remains an error. The SDK's optional
+lookup returns `None` only for this exact contract; its unsigned HTTP result
+is not a cryptographic proof of ledger state.
+
 Alias acquisition, repair, renewal, primary changes, rebinding, and auto-renew
 configuration are not SNS mutation routes. Use the signed planner and ordinary
 transaction flow under `iroha app alias`, as documented in

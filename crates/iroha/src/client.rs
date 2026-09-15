@@ -8921,7 +8921,14 @@ fn decode_parameters_response(
                 .into(),
         );
     }
-    norito::json::from_slice(resp.body()).map_err(Into::into)
+    let content_type = exact_single_response_header(resp, "content-type")
+        .wrap_err("invalid parameters response Content-Type")?;
+    if !Client::is_json_content_type(content_type) {
+        return Err(eyre!(
+            "parameters response requires application/json, received `{content_type}`"
+        ));
+    }
+    norito::json::from_slice(resp.body()).wrap_err("failed to decode parameters response JSON")
 }
 #[cfg(test)]
 fn decode_parameters_for_test(
@@ -9818,7 +9825,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_parameters(&self) -> Result<iroha_data_model::parameter::Parameters> {
         let url = join_torii_url(&self.torii_url, "v1/parameters");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         decode_parameters_response(&resp)
     }
     /// GET `/v1/sumeragi/qc` — authoritative v2 `PrepareQC` references.
@@ -34328,11 +34338,81 @@ mod tests {
     include!("client/status_response_tests.rs");
     #[test]
     fn decode_parameters_response_parses_json_payload() {
+        use http::{HeaderValue, header::CONTENT_TYPE};
+
         let params = iroha_data_model::parameter::Parameters::default();
         let body = norito::json::to_vec(&params).expect("serialize parameters");
         let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
         let decoded = decode_parameters_for_test(&response).expect("decode parameters");
         assert_eq!(decoded, params);
+
+        // Exercise the actual SDK HTTP boundary, not just its private decoder.
+        let request = |response| {
+            capture_request(response, |transport| {
+                client_with_base_url(base_url())
+                    .with_test_http_transport(transport.clone())
+                    .get_parameters()
+            })
+        };
+        let (result, snapshot) = request(response.clone());
+        assert_eq!(result.expect("native parameters response"), params);
+        assert_eq!(snapshot.url.path(), "/v1/parameters");
+        assert_single_accept_header(&snapshot, APPLICATION_JSON);
+
+        let malformed = json_response(StatusCode::OK, r#"{"message":"unexpected envelope"}"#);
+        let (result, _) = request(malformed);
+        let error = result.expect_err("an error envelope is not a parameter snapshot");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode parameters response JSON")
+        );
+        assert!(
+            error.downcast_ref::<norito::json::Error>().is_some(),
+            "response context must preserve the native strict decoder cause: {error:#}"
+        );
+        assert!(format!("{error:#}").contains("unknown field `message`"));
+
+        let mut wrong_media = response.clone();
+        wrong_media
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        let (result, _) = request(wrong_media);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires application/json")
+        );
+
+        let mut missing_media = response.clone();
+        missing_media.headers_mut().remove(CONTENT_TYPE);
+        let (result, _) = request(missing_media);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid parameters response Content-Type")
+        );
+
+        let mut duplicate_media = response.clone();
+        duplicate_media
+            .headers_mut()
+            .append(CONTENT_TYPE, HeaderValue::from_static(APPLICATION_JSON));
+        let (result, _) = request(duplicate_media);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid parameters response Content-Type")
+        );
+
+        let mut failed = response;
+        *failed.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        let (result, _) = request(failed);
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Unexpected parameters response"));
+        assert!(error.to_string().contains("503"));
     }
     #[test]
     fn decode_status_allows_json_fallback() {
