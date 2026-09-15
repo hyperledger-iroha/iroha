@@ -2138,6 +2138,38 @@ fn lookup_aliases_by_account_on_route(
             .collect(),
     )))
 }
+fn account_alias_not_found_response(alias: &str) -> AxResponse {
+    let envelope = ErrorEnvelope::new(
+        iroha_torii_shared::aliases::ACCOUNT_ALIAS_NOT_FOUND_CODE,
+        "The requested account alias does not resolve.",
+    )
+    .with_details(ErrorDetails {
+        account_alias_not_found: Some(iroha_torii_shared::aliases::AccountAliasNotFoundV1 {
+            alias: alias.to_owned(),
+        }),
+        ..Default::default()
+    });
+    (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response()
+}
+fn account_aliases_by_account_not_found_response(
+    request: &routing::AliasLookupByAccountRequestDto,
+) -> AxResponse {
+    let envelope = ErrorEnvelope::new(
+        iroha_torii_shared::aliases::ACCOUNT_ALIASES_BY_ACCOUNT_NOT_FOUND_CODE,
+        "The requested account was absent from the queried alias scopes.",
+    )
+    .with_details(ErrorDetails {
+        account_aliases_by_account_not_found: Some(
+            iroha_torii_shared::aliases::AccountAliasesByAccountNotFoundV1 {
+                account_id: request.account_id.clone(),
+                dataspace: request.dataspace.clone(),
+                domain: request.domain.clone(),
+            },
+        ),
+        ..Default::default()
+    });
+    (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response()
+}
 fn execute_alias_resolve_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2150,7 +2182,7 @@ fn execute_alias_resolve_local_read(
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, source);
     }
-    Ok(StatusCode::NOT_FOUND.into_response())
+    Ok(account_alias_not_found_response(&alias.canonical))
 }
 fn execute_alias_resolve_unrouted_local_read(
     app: &SharedAppState,
@@ -2158,12 +2190,12 @@ fn execute_alias_resolve_unrouted_local_read(
     alias_label: &iroha_data_model::account::rekey::AccountAlias,
 ) -> Result<AxResponse, Error> {
     if let Some((alias, account_id, source)) =
-        resolve_alias_label_on_chain(app, canonical, alias_label)?
+        resolve_alias_label_on_chain(app, canonical.clone(), alias_label)?
     {
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, source);
     }
-    Ok(StatusCode::NOT_FOUND.into_response())
+    Ok(account_alias_not_found_response(&canonical))
 }
 fn execute_alias_resolve_index_local_read(
     app: &SharedAppState,
@@ -2190,7 +2222,7 @@ fn execute_alias_lookup_by_account_local_read(
     {
         return alias_lookup_by_account_ok(&account_id, items, "on_chain");
     }
-    Ok(StatusCode::NOT_FOUND.into_response())
+    Ok(account_aliases_by_account_not_found_response(request))
 }
 fn resolve_alias_index_via_service(
     service: &AliasService,
@@ -5970,7 +6002,82 @@ fn sanitize_fee_error_details(details: &mut FeeErrorDetails) -> bool {
     retain_valid_error_detail(&mut details.remediation);
     true
 }
+fn sanitize_alias_setup_report(
+    report: &mut iroha_data_model::alias_setup::AliasSetupReportV1,
+) -> bool {
+    use iroha_data_model::alias_setup::{AliasSetupReportV1, AliasSetupStatusV1};
+    if report.version != AliasSetupReportV1::VERSION
+        || report.diagnostics.is_empty()
+        || !matches!(
+            report.status,
+            AliasSetupStatusV1::Blocked | AliasSetupStatusV1::Pending
+        )
+        || report.diagnostics.windows(2).any(|pair| pair[0] > pair[1])
+    {
+        return false;
+    }
+    for diagnostic in &mut report.diagnostics {
+        if !utils::is_valid_reject_code(&diagnostic.code)
+            || !utils::is_valid_error_detail_text(&diagnostic.remediation)
+        {
+            return false;
+        }
+        for value in [
+            &mut diagnostic.resource,
+            &mut diagnostic.config_path,
+            &mut diagnostic.expected,
+            &mut diagnostic.actual,
+        ] {
+            retain_valid_error_detail(value);
+        }
+    }
+    report.diagnostics.sort();
+    true
+}
 fn sanitize_error_details(details: &mut ErrorDetails) {
+    if details
+        .alias_setup_report
+        .as_mut()
+        .is_some_and(|report| !sanitize_alias_setup_report(report))
+    {
+        details.alias_setup_report = None;
+    }
+    if details
+        .account_alias_not_found
+        .as_ref()
+        .is_some_and(|absence| {
+            absence
+                .alias
+                .parse::<iroha_data_model::alias_setup::AccountAliasName>()
+                .map_or(true, |alias| alias.to_string() != absence.alias)
+        })
+    {
+        details.account_alias_not_found = None;
+    }
+    if details
+        .account_aliases_by_account_not_found
+        .as_ref()
+        .is_some_and(|absence| {
+            if parse_exact_account_id_literal(&absence.account_id).is_err() {
+                return true;
+            }
+            match (absence.dataspace.as_deref(), absence.domain.as_deref()) {
+                (None, None) => false,
+                (None, Some(_)) => true,
+                (Some(dataspace), domain) => {
+                    iroha_data_model::alias_setup::AccountAliasName::try_new(
+                        "lookup", domain, dataspace,
+                    )
+                    .map_or(true, |alias| {
+                        alias.dataspace.as_ref() != dataspace
+                            || alias.domain.as_ref().map(AsRef::as_ref) != domain
+                    })
+                }
+            }
+        })
+    {
+        details.account_aliases_by_account_not_found = None;
+    }
     if details
         .sns_registration_not_found
         .as_ref()
@@ -6013,6 +6120,20 @@ fn sanitize_error_details(details: &mut ErrorDetails) {
     retain_valid_error_detail(&mut details.profile);
     retain_valid_error_detail(&mut details.entrypoint_hash);
     retain_valid_error_detail(&mut details.tx_hash);
+    if details
+        .pipeline_transaction_status_not_found
+        .as_ref()
+        .is_some_and(|absence| !absence.is_valid())
+    {
+        details.pipeline_transaction_status_not_found = None;
+    }
+    if details
+        .bridge_finality_attestation_tip_mismatch
+        .as_ref()
+        .is_some_and(|progress| !progress.is_valid())
+    {
+        details.bridge_finality_attestation_tip_mismatch = None;
+    }
     retain_valid_error_detail(&mut details.last_status);
     retain_valid_error_detail(&mut details.hint);
     if let Some(axt) = details.axt.as_mut() {
@@ -6093,10 +6214,52 @@ fn canonical_error_response(
         }
     }
     if let Some(details) = envelope.details.as_mut() {
+        use iroha_torii_shared::aliases::{
+            ACCOUNT_ALIAS_NOT_FOUND_CODE, ACCOUNT_ALIASES_BY_ACCOUNT_NOT_FOUND_CODE,
+            ALIAS_SETUP_PENDING_CODE, ALIAS_SETUP_REJECTED_CODE,
+        };
+        if parts.status != StatusCode::NOT_FOUND || envelope.code != ACCOUNT_ALIAS_NOT_FOUND_CODE {
+            details.account_alias_not_found = None;
+        }
+        if parts.status != StatusCode::NOT_FOUND
+            || envelope.code != ACCOUNT_ALIASES_BY_ACCOUNT_NOT_FOUND_CODE
+        {
+            details.account_aliases_by_account_not_found = None;
+        }
+        if details
+            .alias_setup_report
+            .as_ref()
+            .is_some_and(|report| match report.status {
+                iroha_data_model::alias_setup::AliasSetupStatusV1::Blocked => {
+                    !matches!(
+                        parts.status,
+                        StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN | StatusCode::CONFLICT
+                    ) || envelope.code != ALIAS_SETUP_REJECTED_CODE
+                }
+                iroha_data_model::alias_setup::AliasSetupStatusV1::Pending => {
+                    parts.status != StatusCode::SERVICE_UNAVAILABLE
+                        || envelope.code != ALIAS_SETUP_PENDING_CODE
+                }
+                iroha_data_model::alias_setup::AliasSetupStatusV1::Ready => true,
+            })
+        {
+            details.alias_setup_report = None;
+        }
         if parts.status != StatusCode::NOT_FOUND
             || envelope.code != iroha_torii_shared::sns::SNS_REGISTRATION_NOT_FOUND_CODE
         {
             details.sns_registration_not_found = None;
+        }
+        if parts.status != StatusCode::NOT_FOUND
+            || envelope.code != iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
+        {
+            details.pipeline_transaction_status_not_found = None;
+        }
+        if parts.status != StatusCode::CONFLICT
+            || envelope.code
+                != iroha_torii_shared::bridge_finality::BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE
+        {
+            details.bridge_finality_attestation_tip_mismatch = None;
         }
         sanitize_error_details(details);
     }
@@ -7262,6 +7425,10 @@ fn bridge_finality_challenge_error(message: &str) -> Error {
     ))
 }
 fn protect_bridge_finality_attestation_response(response: &mut AxResponse) {
+    response.headers_mut().insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),
@@ -10121,6 +10288,13 @@ async fn handler_accounts_onboarding_readiness(
         HeaderValue::from_static("application/json"),
     );
     Ok(response)
+}
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_accounts_faucet_policy(
+    State(app): State<SharedAppState>,
+) -> Result<impl IntoResponse, Error> {
+    routing::handle_v1_accounts_faucet_policy(app.clone()).await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -36910,7 +37084,31 @@ fn alias_setup_plan_report_response(
             remediation: remediation.into(),
         }],
     );
-    (status_code, JsonBody(report)).into_response()
+    alias_setup_report_error_response(status_code, report)
+}
+#[cfg(feature = "app_api")]
+fn alias_setup_report_error_response(
+    status_code: StatusCode,
+    report: iroha_data_model::alias_setup::AliasSetupReportV1,
+) -> AxResponse {
+    use iroha_torii_shared::aliases::{ALIAS_SETUP_PENDING_CODE, ALIAS_SETUP_REJECTED_CODE};
+    let (code, message) =
+        if report.status == iroha_data_model::alias_setup::AliasSetupStatusV1::Pending {
+            (
+                ALIAS_SETUP_PENDING_CODE,
+                "Alias planning is awaiting committed ledger state.",
+            )
+        } else {
+            (
+                ALIAS_SETUP_REJECTED_CODE,
+                "Alias planning was rejected; inspect the typed diagnostics.",
+            )
+        };
+    let envelope = ErrorEnvelope::new(code, message).with_details(ErrorDetails {
+        alias_setup_report: Some(report),
+        ..Default::default()
+    });
+    (status_code, JsonBody(envelope)).into_response()
 }
 #[cfg(feature = "app_api")]
 fn alias_setup_dependency_rank(intent: &iroha_data_model::alias_setup::AliasIntentV1) -> u8 {
@@ -37988,6 +38186,7 @@ async fn handler_alias_lookup_by_account(
         denied_routes,
         "one or more dataspace routes denied the alias-by-account lookup and no allowed route returned aliases",
         visibility.caller(),
+        &request,
         app.query_fanout_working_set_bytes,
         app.torii_proxy_max_response_bytes,
         |route| {
@@ -44537,6 +44736,7 @@ impl Torii {
             ACCOUNTS_ONBOARD_POST => onboarding_post(handler_accounts_onboard);
             ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get(handler_accounts_onboarding_readiness);
             ACCOUNTS_ONBOARDING_CURRENT_STATE_POST => limited_public_post(account_onboarding_state::handler_account_onboarding_current_state, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            ACCOUNTS_FAUCET_POLICY_GET => public_get(handler_accounts_faucet_policy);
             ACCOUNTS_FAUCET_PUZZLE_GET => public_get(handler_accounts_faucet_puzzle);
             ACCOUNTS_FAUCET_PREPARE_POST => protocol_handshake_post(handler_accounts_faucet_prepare);
             ACCOUNTS_FAUCET_POST => protocol_handshake_post(handler_accounts_faucet);

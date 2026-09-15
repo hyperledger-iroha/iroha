@@ -153,30 +153,78 @@ struct Cli {
 
 impl Cli {
     async fn run(&self, arguments: &[&str], deadline: Instant) -> Result<Value> {
-        let output = timeout_at(
-            deadline,
-            tokio::process::Command::new(&self.binary)
-                .env_clear()
-                .args(["--machine", "--config"])
-                .arg(&self.config)
-                .arg("--operator-private-key-file")
-                .arg(&self.operator)
-                .args(["taira", "dataspace-deploy"])
-                .args(arguments)
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
-        .wrap_err("native dataspace deployment CLI exceeded its fixed deadline")??;
+        let started = Instant::now();
+        let operation = arguments.first().copied().unwrap_or("unknown");
+        eprintln!(
+            "clean-client CLI {operation}: start, remaining {}ms",
+            deadline.saturating_duration_since(started).as_millis()
+        );
+        let mut command = tokio::process::Command::new(&self.binary);
+        command
+            .env_clear()
+            .args(["--machine", "--config"])
+            .arg(&self.config)
+            .arg("--operator-private-key-file")
+            .arg(&self.operator)
+            .args(["taira", "dataspace-deploy"])
+            .args(arguments)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true);
+        if matches!(arguments.first(), Some(&"apply" | &"status")) {
+            let remaining_ms = remaining_cli_budget_ms(deadline, Instant::now())?;
+            command.args(["--timeout-ms", &remaining_ms.to_string()]);
+        }
+        let child = command
+            .spawn()
+            .wrap_err("failed to start native deployment CLI")?;
+        let output = timeout_at(deadline, child.wait_with_output())
+            .await
+            .wrap_err("native dataspace deployment CLI exceeded its fixed deadline")??;
+        eprintln!(
+            "clean-client CLI {operation}: exited {} after {}ms, remaining {}ms",
+            output.status,
+            started.elapsed().as_millis(),
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+        );
+        let report = json::from_slice::<Value>(&output.stdout)
+            .wrap_err("native CLI did not return its typed JSON report");
         ensure!(
             output.status.success(),
-            "native CLI {:?} failed: stdout={} stderr={}",
-            arguments.first(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            "native CLI {operation} failed: state={:?}, verification_error={:?} (stderr is retained in the fixture log)",
+            report.as_ref().ok().and_then(|value| value.get("state")),
+            report
+                .as_ref()
+                .ok()
+                .and_then(|value| value.get("verification_error"))
         );
-        json::from_slice(&output.stdout).wrap_err("native CLI did not return its typed JSON report")
+        report
     }
+}
+
+fn remaining_cli_budget_ms(deadline: Instant, now: Instant) -> Result<u64> {
+    let remaining_ms = u64::try_from(deadline.saturating_duration_since(now).as_millis())?;
+    ensure!(
+        remaining_ms > 0,
+        "native deployment deadline exhausted before child dispatch"
+    );
+    Ok(remaining_ms)
+}
+
+#[test]
+fn remaining_cli_budget_keeps_original_deadline_and_never_rounds_up() {
+    let now = Instant::now();
+    let deadline = now + Duration::from_millis(180_000);
+    assert_eq!(remaining_cli_budget_ms(deadline, now).unwrap(), 180_000);
+    assert_eq!(
+        remaining_cli_budget_ms(deadline, now + Duration::from_micros(999)).unwrap(),
+        179_999
+    );
+    assert!(remaining_cli_budget_ms(deadline, deadline - Duration::from_micros(999)).is_err());
+    assert!(remaining_cli_budget_ms(deadline, deadline).is_err());
+    assert!(remaining_cli_budget_ms(deadline, deadline + Duration::from_secs(1)).is_err());
 }
 
 async fn drained(network: &Network, deadline: Instant) -> Result<Vec<(u64, u64, u64)>> {
@@ -339,7 +387,10 @@ fn assert_completed(report: &Value, operation: &Path, trust: &Trust) -> Result<(
         text_field(report, "state")? == "completed"
             && field(report, "deployment_complete")?.as_bool() == Some(true)
             && field(report, "verification_error")?.is_null(),
-        "native deployment did not complete: {report:?}"
+        "native deployment did not complete: state={:?}, deployment_complete={:?}, verification_error={:?}",
+        report.get("state"),
+        report.get("deployment_complete"),
+        report.get("verification_error")
     );
     let receipt = text_field(report, "completion_receipt")?;
     ensure!(
@@ -492,20 +543,12 @@ async fn clean_client_deploys_paid_dataspace_once_with_four_peer_finality() -> R
             "fixture should start from the native single-lane baseline");
         ensure!(drained(&network, deadline).await? == idle_before, "init/plan submitted a transaction");
         let operation = journal.join(OPERATION);
-        let mut completed = false;
-        let mut last_report = None;
-        for _ in 0..120 {
-            let report = cli.run(&["apply", "--journal-dir", journal.to_str().unwrap(),
-                "--operation-id", OPERATION], deadline).await
-                .wrap_err_with(|| format!("bounded apply failed; last native report: {last_report:?}"))?;
-            if field(&report, "deployment_complete")?.as_bool() == Some(true) {
-                assert_completed(&report, &operation, &trust)?; completed = true; break;
-            }
-            ensure!(text_field(&report, "state")? != "failed", "deployment transaction rejected: {report:?}");
-            last_report = Some(report);
-            sleep(Duration::from_millis(500)).await;
-        }
-        ensure!(completed, "bounded native apply sequence did not complete; last native report: {last_report:?}");
+        // Native apply owns phase observation and typed finality-progress waits.
+        // A failed proof or other verification error must not trigger a new child.
+        let report = cli.run(&["apply", "--journal-dir", journal.to_str().unwrap(),
+            "--operation-id", OPERATION], deadline).await
+            .wrap_err("single bounded native apply failed")?;
+        assert_completed(&report, &operation, &trust)?;
         let retained = retained_transactions(&operation, &network, &plan)?;
         let idle_after = drained(&network, deadline).await?;
         for command in ["apply", "status", "apply", "status"] {

@@ -20443,6 +20443,9 @@ fn durable_lane_completion_matches_finality_with_readers(
     }
     let bundle = block.execution_context();
     let ownerships = bundle.map_or(&[][..], |bundle| bundle.lane_payload_ownerships.as_slice());
+    // Both runtime and startup readers validate the exact decoded certificates, including
+    // their QC aggregates, before returning. Keep all finality/receipt identity checks below;
+    // revalidating the same owned value here repeats crypto without observing new evidence.
     let mut proposal_hashes = BTreeSet::new();
     for ownership in ownerships {
         if ownership.proposal_height != finality_artifact.height {
@@ -20456,8 +20459,6 @@ fn durable_lane_completion_matches_finality_with_readers(
         let Some(certified) = readers.certified_lane_block_artifact(&proposal)? else {
             return Ok(false);
         };
-        Kura::validate_certified_lane_block_artifact(&certified)
-            .map_err(|message| format!("durable certified lane artifact is invalid: {message}"))?;
         let Some(receipt) = readers.lane_block_application_receipt(&proposal)? else {
             return Ok(false);
         };
@@ -20512,9 +20513,6 @@ fn durable_lane_completion_matches_finality_with_readers(
         let certified = readers.certified_lane_block_artifact(proposal)?;
         match (autonomous, certified) {
             (Some(autonomous), Some(certified)) => {
-                Kura::validate_certified_lane_block_artifact(&certified).map_err(|message| {
-                    format!("durable autonomous certificate is invalid: {message}")
-                })?;
                 if autonomous.executable_payload != payload || certified.proposal != *proposal {
                     return Err(
                         "durable autonomous bundle conflicts with its finalized control anchor"
@@ -20531,11 +20529,6 @@ fn durable_lane_completion_matches_finality_with_readers(
                 else {
                     return Ok(false);
                 };
-                Kura::validate_certified_lane_block_artifact(&replica.bundle.certified).map_err(
-                    |message| {
-                        format!("canonical autonomous replica certificate is invalid: {message}")
-                    },
-                )?;
                 if replica.bundle.executable_payload() != &payload
                     || replica.bundle.certified.proposal != *proposal
                 {
@@ -27918,6 +27911,52 @@ pub(super) mod tests {
             adapter
                 .kura
                 .lane_block_application_receipt_available(&proposal)
+        );
+        // Finality consumes the exact certificate already authenticated by the strict
+        // reader. Keep that mandatory validation and avoid a second aggregate check
+        // on the same returned value. Compare with the reader boundary itself so the
+        // test also accounts for any certificate authentication required by receipts.
+        let (_, reader_validations) =
+            crate::kura::count_certified_artifact_validations_for_tests(|| {
+                let readers = DurableLaneCompletionReaders::Runtime(adapter.kura.as_ref());
+                assert!(
+                    readers
+                        .certified_lane_block_artifact(&proposal)
+                        .unwrap()
+                        .is_some()
+                );
+                assert!(
+                    readers
+                        .lane_block_application_receipt(&proposal)
+                        .unwrap()
+                        .is_some()
+                );
+            });
+        assert!(
+            reader_validations > 0,
+            "strict readers must authenticate the certificate"
+        );
+        let (complete, completion_validations) =
+            crate::kura::count_certified_artifact_validations_for_tests(|| {
+                adapter.durable_completion_matches_finality(&artifact)
+            });
+        assert!(complete.expect("exact durable completion"));
+        assert_eq!(
+            completion_validations, reader_validations,
+            "finality must not repeat certificate crypto after its strict readers"
+        );
+        crate::kura::fail_next_certified_lane_block_artifact_validation_for_tests();
+        assert!(
+            adapter
+                .durable_completion_matches_finality(&artifact)
+                .is_err(),
+            "mandatory strict-reader validation must still fail closed"
+        );
+        assert!(
+            adapter
+                .durable_completion_matches_finality(&artifact)
+                .unwrap(),
+            "a failed read must not discard or rewrite the valid durable evidence"
         );
         assert_eq!(
             adapter

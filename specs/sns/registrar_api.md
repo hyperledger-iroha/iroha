@@ -79,6 +79,16 @@ totals by payment asset, diagnostics, deadline, and a domain-separated hash of
 the canonical plan body. The planner returns a structured `409` and no partial
 executable plan if any resource conflicts.
 
+Planning failures use the standard `ErrorEnvelope` in JSON or Norito. HTTP
+`400`, `403`, and `409` with code `alias_setup_rejected` carry the native
+`AliasSetupReportV1` at `details.alias_setup_report`, with the native tagged
+`blocked` status.
+HTTP `503` with code `alias_setup_pending` carries the same report with the native tagged
+`pending` status. The report preserves its sorted diagnostics and returns
+no executable plan. Status, phase, and severity retain their native tagged
+JSON objects (for example, `{"status":"blocked","value":null}`). This applies to setup, lease-renewal, and auto-renew
+planning; request-authentication `401` remains its ordinary error envelope.
+
 Every setup plan has a finite lifetime of at most 60 seconds from its committed
 block anchor, including pure no-op and repair plans. A create quote guard with
 an earlier deadline shortens the plan lifetime; it never extends it.
@@ -188,6 +198,16 @@ flag:
 - an authenticated caller without exact alias or applicable domain/dataspace
   resolve permission receives `403` before lookup;
 - an authorized missing alias returns `404`.
+
+Optional account-alias reads require the complete typed error envelope.
+`POST /v1/aliases/resolve` returns absence only for HTTP `404`, code
+`account_alias_not_found`, and `details.account_alias_not_found.alias` equal
+to the exact canonical requested alias. `POST /v1/aliases/by-account` uses
+code `account_aliases_by_account_not_found` and the same-named detail with
+the exact canonical `account_id`, `dataspace`, and `domain` selector. Both
+filter members are required and explicitly `null` when omitted. A generic
+`404`, another code, missing fields, or a different selector remains an
+error. Neither lookup result is a cryptographic absence proof.
 
 By-account and index results filter invisible entries before totals and cursors
 are calculated, so restricted alias existence is not leaked.

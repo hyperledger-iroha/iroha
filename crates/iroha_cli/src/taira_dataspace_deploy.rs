@@ -38,7 +38,7 @@ use std::{
     fs::{self, File},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[path = "taira_dataspace_deploy_finality.rs"]
@@ -55,6 +55,7 @@ pub(crate) fn validate_deployment_trust(
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const PHASES: [&str; 3] = ["catalog", "bootstrap", "aliases"];
+const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 
 /// Plan, advance, or inspect a single durable dataspace deployment.
 #[derive(Debug, clap::Subcommand)]
@@ -63,7 +64,7 @@ pub(crate) enum Command {
     Init(InitArgs),
     /// Validate live capabilities and the exact intent, then retain an immutable plan.
     Plan(PlanArgs),
-    /// Advance from the saved plan; uncertain submissions are only observed again.
+    /// Advance the saved plan within one budget; uncertain submissions are only observed again.
     Apply(SavedArgs),
     /// Read the exact saved transactions and current observations without submitting.
     Status(SavedArgs),
@@ -121,6 +122,74 @@ pub(crate) struct SavedArgs {
     journal_dir: PathBuf,
     #[arg(long)]
     operation_id: String,
+    /// Total budget for preflight, retained phases and fresh four-validator verification.
+    #[arg(long, default_value_t = DEFAULT_OPERATION_TIMEOUT_MS,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    timeout_ms: u64,
+}
+
+fn operation_deadline(timeout_ms: u64) -> Result<Instant> {
+    require(timeout_ms > 0, "--timeout-ms must be greater than zero")?;
+    Instant::now()
+        .checked_add(Duration::from_millis(timeout_ms))
+        .ok_or_else(|| eyre!("dataspace deployment deadline overflow"))
+}
+
+fn require_operation_budget(deadline: Instant, stage: &str) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("dataspace deployment deadline elapsed during {stage}"),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn operation_poll_delay(deadline: Instant, now: Instant) -> Duration {
+    Duration::from_millis(500).min(deadline.saturating_duration_since(now))
+}
+
+fn observe_phase_until(
+    apply: bool,
+    deadline: Instant,
+    phase: &str,
+    mut observe_retained: impl FnMut() -> Result<PhaseObservationV1>,
+) -> Result<PhaseObservationV1> {
+    let stage = format!("phase {phase} observation");
+    loop {
+        require_operation_budget(deadline, &stage)?;
+        let observation = observe_retained()?;
+        require_operation_budget(deadline, &stage)?;
+        if !apply || observation.state != "pending" {
+            return Ok(observation);
+        }
+        std::thread::sleep(operation_poll_delay(deadline, Instant::now()));
+    }
+}
+
+fn complete_until(
+    apply: bool,
+    deadline: Instant,
+    report: &mut ReportV1,
+    mut verify: impl FnMut(&mut ReportV1) -> Result<()>,
+) -> Result<()> {
+    loop {
+        require_operation_budget(deadline, "four-validator verification")?;
+        verify(report)?;
+        require_operation_budget(deadline, "four-validator verification")?;
+        if !apply
+            || !matches!(
+                report.state.as_str(),
+                "verification_sync_pending" | "verification_peer_pending"
+            )
+        {
+            return Ok(());
+        }
+        // Only explicit proof-sync or validated peer progress is retryable.
+        // Malformed proofs, changed identities and other verification errors stop.
+        std::thread::sleep(operation_poll_delay(deadline, Instant::now()));
+    }
 }
 
 /// One first-release intent, expressed entirely in maintained native model types.
@@ -466,6 +535,7 @@ fn preflight<C: RunContext>(
     context: &C,
     manifest: &ManifestV1,
     require_write_permissions: bool,
+    native_client: Client,
 ) -> Result<BlockingClient> {
     require(
         !context.input_instructions()
@@ -478,7 +548,7 @@ fn preflight<C: RunContext>(
             && context.config().account == manifest.owner,
         "configured signer or NetworkId differs from the manifest",
     )?;
-    let client = BlockingClient::from_client(context.client_from_config()?)?;
+    let client = BlockingClient::from_client(native_client)?;
     client.refresh_capabilities()?;
     require(
         client
@@ -804,16 +874,14 @@ fn observe(
         peer_status: peer,
         committed: None,
     };
+    let applied_height = matching_applied_height(
+        &prepared.transaction_hash,
+        &result.global_status,
+        &result.peer_status,
+    )?;
     let mut failed = false;
-    for (value, scope) in [
-        (&result.global_status, "global"),
-        (&result.peer_status, "local"),
-    ] {
+    for value in [&result.global_status, &result.peer_status] {
         if let Some(value) = value {
-            require(
-                value.hash == prepared.transaction_hash && value.scope == scope,
-                "transaction observation changed its hash or scope",
-            )?;
             if matches!(value.status.kind.as_str(), "Rejected" | "Expired") {
                 failed = true;
             }
@@ -823,13 +891,7 @@ fn observe(
         result.state = "failed".into();
         return Ok(result);
     }
-    if matching_applied_height(
-        &prepared.transaction_hash,
-        &result.global_status,
-        &result.peer_status,
-    )?
-    .is_some()
-    {
+    if applied_height.is_some() {
         let details = client
             .get_successful_transaction_details(transaction.hash_as_entrypoint())
             .wrap_err_with(|| {
@@ -857,9 +919,11 @@ fn matching_applied_height(
     peer: &Option<PipelineTransactionStatusResponse>,
 ) -> Result<Option<u64>> {
     let mut heights = Vec::new();
+    let mut pending = false;
     for (value, scope) in [(global, "global"), (peer, "local")] {
         let Some(value) = value else {
-            return Ok(None);
+            pending = true;
+            continue;
         };
         require(
             value.hash == hash && value.scope == scope,
@@ -872,16 +936,29 @@ fn matching_applied_height(
             ),
             "unknown native pipeline status kind",
         )?;
-        if value.resolved_from != "state" || value.status.kind != "Applied" {
-            return Ok(None);
-        }
-        heights.push(
-            value
+        require(
+            matches!(value.resolved_from.as_str(), "cache" | "queue" | "state"),
+            "unknown native pipeline status source",
+        )?;
+        if value.status.kind == "Applied" {
+            let height = value
                 .status
                 .block_height
                 .filter(|height| *height > 0)
-                .ok_or_else(|| eyre!("state Applied observation has no nonzero height"))?,
-        );
+                .ok_or_else(|| eyre!("Applied observation has no nonzero height"))?;
+            if value.resolved_from == "state" {
+                heights.push(height);
+            } else {
+                pending = true;
+            }
+        } else {
+            pending = true;
+        }
+    }
+    // A lagging or absent response must never hide a malformed response from
+    // the other scope and turn a fixed binding error into a retryable wait.
+    if pending {
+        return Ok(None);
     }
     require(
         heights[0] == heights[1],
@@ -975,7 +1052,7 @@ fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
         &policies,
         deadline,
     )?;
-    let configured = preflight(context, &manifest, true)?;
+    let configured = preflight(context, &manifest, true, context.client_from_config()?)?;
     let plan = configured
         .client()
         .plan_alias_setup(&manifest.alias_request)?;
@@ -1098,7 +1175,7 @@ fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
     let manifest: ManifestV1 = json::from_slice(&bytes)?;
     let grant = manifest.validate()?;
     let id = manifest.resolved_id()?;
-    let client = preflight(context, &manifest, true)?;
+    let client = preflight(context, &manifest, true, context.client_from_config()?)?;
     let path = args.journal_dir.join(&id);
     if path.try_exists()? {
         let journal = Journal::open(&path, false)?;
@@ -1136,7 +1213,35 @@ fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
 
 fn saved<C: RunContext>(context: &mut C, args: SavedArgs, apply: bool) -> Result<()> {
     let report = run_saved(context, args, apply)?;
-    context.print_data(&report)
+    print_saved_report(&report, apply, |report| context.print_data(report))
+}
+
+fn print_saved_report(
+    report: &ReportV1,
+    apply: bool,
+    print: impl FnOnce(&ReportV1) -> Result<()>,
+) -> Result<()> {
+    print(report)?;
+    if apply
+        && !(report.state == "completed"
+            && report.deployment_complete
+            && report
+                .completion_receipt
+                .as_deref()
+                .is_some_and(|name| !name.is_empty())
+            && report.verification_error.is_none())
+    {
+        eyre::bail!(
+            "dataspace deployment {} did not complete ({}): {}",
+            report.operation_id,
+            report.state,
+            report
+                .verification_error
+                .as_deref()
+                .unwrap_or("inspect the retained operation with status")
+        );
+    }
+    Ok(())
 }
 
 /// Read-only native entry point for the anchored finality/four-peer verification layer.
@@ -1157,6 +1262,7 @@ pub(crate) fn verification_request<C: RunContext>(
         SavedArgs {
             journal_dir: journal_dir.to_owned(),
             operation_id: operation_id.into(),
+            timeout_ms: DEFAULT_OPERATION_TIMEOUT_MS,
         },
         false,
     )?
@@ -1164,6 +1270,8 @@ pub(crate) fn verification_request<C: RunContext>(
 }
 
 fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result<ReportV1> {
+    let deadline = operation_deadline(args.timeout_ms)?;
+    require_operation_budget(deadline, "open retained operation")?;
     operation_id(&args.operation_id)?;
     let journal = Journal::open(&args.journal_dir.join(&args.operation_id), false)?;
     let plan: PlanV1 = journal
@@ -1171,14 +1279,25 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
         .wrap_err("saved deployment: read plan.json")?;
     plan.verify()
         .wrap_err("saved deployment: verify retained plan")?;
+    require_operation_budget(deadline, "verify retained plan")?;
     require(
         plan.operation_id == args.operation_id,
         "operation directory contains another plan",
     )?;
-    let client = preflight(context, &plan.manifest, apply)
-        .wrap_err("saved deployment: signer and capability preflight")?;
+    let client = preflight(
+        context,
+        &plan.manifest,
+        apply,
+        context
+            .client_from_config()?
+            .with_request_deadline(deadline),
+    )
+    .wrap_err("saved deployment: signer and capability preflight")?;
+    require_operation_budget(deadline, "signer and capability preflight")?;
     let mut observations = Vec::new();
     for (phase_index, phase) in PHASES.into_iter().enumerate() {
+        require_operation_budget(deadline, &format!("phase {phase} preparation"))?;
+        eprintln!("[dataspace-deploy] phase {phase}: preparation");
         let prepared_name = format!("{phase}.prepared.json");
         let claim_name = format!("{phase}.submitted.json");
         let mut prepared: Option<PreparedV1> =
@@ -1222,6 +1341,7 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
             value
                 .verify(&plan, phase)
                 .wrap_err_with(|| format!("deployment phase {phase}: verify new preparation"))?;
+            require_operation_budget(deadline, &format!("phase {phase} retain preparation"))?;
             journal.install_json(&prepared_name, &value)?;
             prepared = Some(value);
         }
@@ -1231,6 +1351,7 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
         let transaction = prepared.verify(&plan, phase).wrap_err_with(|| {
             format!("deployment phase {phase}: verify retained preparation {prepared_name}")
         })?;
+        require_operation_budget(deadline, &format!("phase {phase} verify preparation"))?;
         let claim: Option<String> = journal.optional_json(&claim_name)?;
         if let Some(claim) = &claim {
             require(
@@ -1259,7 +1380,7 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                     .client()
                     .verify_alias_setup_plan(prepared.alias_plan.as_ref().unwrap())?;
             }
-            let deadline = transaction
+            let transaction_expiry = transaction
                 .creation_time()
                 .checked_add(
                     transaction
@@ -1268,9 +1389,10 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 )
                 .ok_or_else(|| eyre!("transaction lifetime overflow"))?;
             require(
-                SystemTime::now().duration_since(UNIX_EPOCH)? < deadline,
+                SystemTime::now().duration_since(UNIX_EPOCH)? < transaction_expiry,
                 "retained transaction expired before dispatch; it will not be replaced",
             )?;
+            require_operation_budget(deadline, &format!("phase {phase} dispatch claim"))?;
             require(
                 record_dispatch_claim(&journal, &claim_name, &prepared)?,
                 "phase was already dispatched",
@@ -1288,10 +1410,38 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 accepted: outcome.is_ok(),
                 error: outcome.err().map(|error| format!("{error:#}")),
             };
+            eprintln!(
+                "[dataspace-deploy] phase {phase}: dispatch {}",
+                if receipt.accepted {
+                    "accepted"
+                } else {
+                    "uncertain; observing retained transaction"
+                }
+            );
             journal.install_json(&format!("{phase}.submission-result.json"), &receipt)?;
         }
-        let observation = observe(client.client(), &prepared, &transaction)?;
+        eprintln!(
+            "[dataspace-deploy] phase {phase}: {}",
+            if apply {
+                "waiting for exact Applied"
+            } else {
+                "reading exact retained state"
+            }
+        );
+        // This loop only reads the exact retained transaction. It never re-enters
+        // preparation, signing, the durable dispatch claim, or submission.
+        let observation = observe_phase_until(apply, deadline, phase, || {
+            observe(client.client(), &prepared, &transaction)
+        })?;
         let advance = observation.state == "applied_verification_pending";
+        eprintln!(
+            "[dataspace-deploy] phase {phase}: {}",
+            if advance {
+                "exact Applied"
+            } else {
+                observation.state.as_str()
+            }
+        );
         observations.push(observation);
         if !advance {
             break;
@@ -1299,12 +1449,20 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
     }
     let mut report = phase_report(&plan, observations);
     if report.state == "applied_verification_pending" {
-        if let Err(error) = finality::complete(context, &plan, &journal, &mut report) {
+        eprintln!("[dataspace-deploy] starting fresh four-validator finality verification");
+        if let Err(error) = complete_until(apply, deadline, &mut report, |report| {
+            finality::complete(context, &plan, &journal, report, deadline)
+        }) {
             report.state = "applied_verification_pending".into();
             report.deployment_complete = false;
+            report.completion_receipt = None;
             report.verification_error = Some(format!("{error:#}"));
         }
     }
+    if report.deployment_complete {
+        require_operation_budget(deadline, "return completed deployment")?;
+    }
+    eprintln!("[dataspace-deploy] result: {}", report.state);
     Ok(report)
 }
 
@@ -1637,6 +1795,310 @@ mod tests {
 
     fn amount(value: u32, scale: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap()
+    }
+
+    fn pending_observation() -> PhaseObservationV1 {
+        PhaseObservationV1 {
+            phase: "aliases".into(),
+            state: "pending".into(),
+            transaction_hash: Some("ab".repeat(32)),
+            instructions: Vec::new(),
+            signed_transaction_wire_sha256: "cd".repeat(32),
+            alias_plan: None,
+            global_status: None,
+            peer_status: None,
+            committed: None,
+        }
+    }
+
+    #[test]
+    fn saved_commands_require_positive_budget_and_default_to_three_minutes() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(subcommand)]
+            command: Command,
+        }
+        for command in ["apply", "status"] {
+            let arguments = [
+                "test",
+                command,
+                "--journal-dir",
+                "/unused",
+                "--operation-id",
+                "test",
+            ];
+            let parsed = Wrapper::try_parse_from(arguments).unwrap();
+            let (Command::Apply(saved) | Command::Status(saved)) = parsed.command else {
+                panic!("saved command expected")
+            };
+            assert_eq!(saved.timeout_ms, 180_000);
+            let mut explicit = arguments.to_vec();
+            explicit.extend(["--timeout-ms", "1"]);
+            assert!(Wrapper::try_parse_from(&explicit).is_ok());
+            *explicit.last_mut().unwrap() = "0";
+            assert!(Wrapper::try_parse_from(&explicit).is_err());
+        }
+        assert!(operation_deadline(0).is_err());
+    }
+
+    #[test]
+    fn saved_apply_emits_report_before_rejecting_incomplete_success() {
+        let mut completed = phase_report(&fixture_plan(), Vec::new());
+        completed.state = "completed".into();
+        completed.deployment_complete = true;
+        completed.completion_receipt = Some("completion-test.json".into());
+        let mut variants = vec![completed.clone()];
+        for defect in 0..5 {
+            let mut report = completed.clone();
+            match defect {
+                0 => report.state = "applied_verification_pending".into(),
+                1 => report.deployment_complete = false,
+                2 => report.completion_receipt = None,
+                3 => report.completion_receipt = Some(String::new()),
+                _ => report.verification_error = Some("invalid validator proof".into()),
+            }
+            variants.push(report);
+        }
+        for (index, report) in variants.iter().enumerate() {
+            for apply in [false, true] {
+                let mut output = Vec::new();
+                let result = print_saved_report(report, apply, |value| {
+                    output.push(json::to_value(value)?);
+                    Ok(())
+                });
+                assert_eq!(output, vec![json::to_value(report).unwrap()]);
+                assert_eq!(result.is_ok(), !apply || index == 0);
+                if apply && index == 5 {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("invalid validator proof")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn saved_report_preserves_output_failure() {
+        let report = phase_report(&fixture_plan(), Vec::new());
+        for apply in [false, true] {
+            let error = print_saved_report(&report, apply, |_| {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "output closed").into())
+            })
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+        }
+    }
+
+    #[test]
+    fn saved_zero_budget_stops_before_journal_or_client_access() {
+        struct NoIoContext;
+        impl RunContext for NoIoContext {
+            fn config(&self) -> &iroha::config::Config {
+                panic!("expired operation accessed configuration")
+            }
+            fn transaction_metadata(&self) -> Option<&Metadata> {
+                panic!("expired operation accessed metadata")
+            }
+            fn input_instructions(&self) -> bool {
+                panic!("expired operation accessed instructions")
+            }
+            fn output_instructions(&self) -> bool {
+                panic!("expired operation accessed instructions")
+            }
+            fn i18n(&self) -> &iroha_i18n::Localizer {
+                panic!("expired operation accessed localization")
+            }
+            fn print_data<T: JsonSerialize + ?Sized>(&mut self, _: &T) -> Result<()> {
+                panic!("expired operation printed success")
+            }
+            fn println(&mut self, _: impl std::fmt::Display) -> Result<()> {
+                panic!("expired operation printed success")
+            }
+        }
+        for apply in [false, true] {
+            let error = run_saved(
+                &NoIoContext,
+                SavedArgs {
+                    journal_dir: PathBuf::from("/journal-must-not-be-opened"),
+                    operation_id: "deadline-test".into(),
+                    timeout_ms: 0,
+                },
+                apply,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("--timeout-ms must be greater than zero")
+            );
+        }
+    }
+
+    #[test]
+    fn expired_operation_never_observes_or_starts_completion() {
+        let deadline = Instant::now();
+        let error = observe_phase_until(true, deadline, "aliases", || {
+            panic!("expired operation read")
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert!(error.to_string().contains("phase aliases observation"));
+        let mut report = phase_report(&fixture_plan(), Vec::new());
+        assert!(
+            complete_until(true, deadline, &mut report, |_| panic!(
+                "expired completion"
+            ))
+            .is_err()
+        );
+        assert!(!report.deployment_complete);
+    }
+
+    #[test]
+    fn apply_observes_pending_until_applied_without_reentering_dispatch() {
+        let retained = pending_observation();
+        let mut observations = 0;
+        // Submission is deliberately outside the observer callback's API. A
+        // pending read must only repeat this exact retained hash and wire binding.
+        let actual =
+            observe_phase_until(true, operation_deadline(5_000).unwrap(), "aliases", || {
+                observations += 1;
+                let mut next = retained.clone();
+                if observations == 2 {
+                    next.state = "applied_verification_pending".into();
+                }
+                Ok(next)
+            })
+            .unwrap();
+        assert_eq!(observations, 2);
+        assert_eq!(actual.state, "applied_verification_pending");
+        assert_eq!(actual.transaction_hash, retained.transaction_hash);
+        assert_eq!(
+            actual.signed_transaction_wire_sha256,
+            retained.signed_transaction_wire_sha256
+        );
+    }
+
+    #[test]
+    fn status_observes_once_and_terminal_apply_does_not_retry() {
+        for (apply, state) in [(false, "pending"), (true, "failed")] {
+            let mut reads = 0;
+            let observed =
+                observe_phase_until(apply, operation_deadline(5_000).unwrap(), "aliases", || {
+                    reads += 1;
+                    assert_eq!(reads, 1);
+                    Ok(PhaseObservationV1 {
+                        state: state.into(),
+                        ..pending_observation()
+                    })
+                })
+                .unwrap();
+            assert_eq!(observed.state, state);
+            assert_eq!(reads, 1);
+        }
+    }
+
+    #[test]
+    fn phase_deadline_rejects_late_applied_and_clips_pending_sleep() {
+        let now = Instant::now();
+        assert_eq!(
+            operation_poll_delay(now + Duration::from_secs(1), now),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            operation_poll_delay(now + Duration::from_millis(10), now),
+            Duration::from_millis(10)
+        );
+        assert_eq!(operation_poll_delay(now, now), Duration::ZERO);
+        for applied in [false, true] {
+            let deadline = operation_deadline(10).unwrap();
+            let mut reads = 0;
+            let error = observe_phase_until(true, deadline, "aliases", || {
+                reads += 1;
+                if applied {
+                    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                }
+                Ok(PhaseObservationV1 {
+                    state: if applied {
+                        "applied_verification_pending"
+                    } else {
+                        "pending"
+                    }
+                    .into(),
+                    ..pending_observation()
+                })
+            })
+            .unwrap_err();
+            assert!(reads <= 1);
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::TimedOut
+            );
+        }
+    }
+
+    #[test]
+    fn completion_retries_only_explicit_sync_progress_and_status_is_one_attempt() {
+        for progress in ["verification_sync_pending", "verification_peer_pending"] {
+            for apply in [false, true] {
+                let mut report = phase_report(&fixture_plan(), Vec::new());
+                let mut attempts = 0;
+                complete_until(
+                    apply,
+                    operation_deadline(5_000).unwrap(),
+                    &mut report,
+                    |report| {
+                        attempts += 1;
+                        report.state = if attempts == 1 { progress } else { "completed" }.into();
+                        report.deployment_complete = attempts == 2;
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert_eq!(attempts, if apply { 2 } else { 1 });
+                assert_eq!(report.deployment_complete, apply);
+            }
+        }
+        let mut report = phase_report(&fixture_plan(), Vec::new());
+        let mut attempts = 0;
+        let error = complete_until(
+            true,
+            operation_deadline(5_000).unwrap(),
+            &mut report,
+            |_| {
+                attempts += 1;
+                eyre::bail!("changed validator authority")
+            },
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert!(error.to_string().contains("changed validator authority"));
+    }
+
+    #[test]
+    fn completion_deadline_rejects_a_late_success() {
+        let mut report = phase_report(&fixture_plan(), Vec::new());
+        let deadline = operation_deadline(10).unwrap();
+        let error = complete_until(true, deadline, &mut report, |report| {
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            report.state = "completed".into();
+            report.deployment_complete = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::TimedOut
+        );
     }
     fn key() -> KeyPair {
         KeyPair::try_from_seed(vec![37; 32], Algorithm::Ed25519).unwrap()
@@ -2098,6 +2560,40 @@ mod tests {
         let mut zero = peer;
         zero.as_mut().unwrap().status.block_height = Some(0);
         assert!(matching_applied_height(&hash, &global, &zero).is_err());
+        let mut queued = global.clone();
+        queued.as_mut().unwrap().status.kind = "Queued".into();
+        queued.as_mut().unwrap().status.block_height = None;
+        queued.as_mut().unwrap().resolved_from = "queue".into();
+        for global_pending in [None, queued] {
+            for field in [
+                "kind",
+                "source",
+                "scope",
+                "hash",
+                "height",
+                "missing-height",
+            ] {
+                let mut malformed = status("local");
+                let value = malformed.as_mut().unwrap();
+                match field {
+                    "kind" => value.status.kind = "Unknown".into(),
+                    "source" => value.resolved_from = "untrusted".into(),
+                    "scope" => value.scope = "global".into(),
+                    "hash" => value.hash = "cd".repeat(32),
+                    "height" => value.status.block_height = Some(0),
+                    "missing-height" => value.status.block_height = None,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    matching_applied_height(&hash, &global_pending, &malformed).is_err(),
+                    "{field}"
+                );
+            }
+            assert_eq!(
+                matching_applied_height(&hash, &global_pending, &status("local")).unwrap(),
+                None
+            );
+        }
         let report = phase_report(&fixture_plan(), Vec::new());
         assert!(!report.deployment_complete);
         assert!(

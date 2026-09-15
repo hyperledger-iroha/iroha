@@ -103,8 +103,8 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
 - `core_api::config::startup_configuration_is_read_only_on_four_validators` reads the explicit startup configuration through native operator authentication on four validators. It requires a signed POST to `/v1/configuration` to fail with HTTP 405 and `method_not_allowed`, and verifies that the complete effective configuration remains unchanged. Runtime HTTP configuration mutation is not supported.
 - Native BPNG alias bootstrap retained-Kura coverage lives in
   `tests/alias_registry_bootstrap_network.rs` in `network_functional`. It requires
-  four real NPoS validators, native paid SNS quotes/leases, future-height routing
-  activation and an exact-owner bootstrap grant, then restarts the same peers
+  four real NPoS validators, native paid SNS quotes/leases routed through the
+  universal registry from genesis and an exact-owner bootstrap grant, then restarts the same peers
   with snapshots disabled, Strict Kura and only an additive BPNG dataspace
   catalog entry. It checks exact leases, domains, parameters, balances and
   transaction results, plus original stored SignedBlock execution plans and
@@ -116,9 +116,9 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   checks the stopped Kura/CommitQC evidence for exactly one appended certified
   BPNG lane block. Missing binaries, networking or persisted evidence fail; no
   success-by-skip is accepted.
-  Its pre-activation universal-domain alias is a historical control, **not**
-  qualification of a private-to-universal routing transition; genuine historical
-  private-lane replay remains a separate release prerequisite. Ordinary
+  The first paid universal-domain alias precedes the owner bootstrap grant;
+  paid dataspace and domain leases then execute before the private catalog entry
+  exists. No routing activation parameter or migration carriers are required. Ordinary
   transaction fees are zero from the original test genesis to isolate real SNS
   lease charges, so this is not production-fee qualification. Existing-file-only
   Fast Kura inspection verifies finality without starting a writer; only the

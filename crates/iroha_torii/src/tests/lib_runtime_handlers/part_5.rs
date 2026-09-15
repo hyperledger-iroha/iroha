@@ -363,8 +363,8 @@ async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
         app.state.ivm_admission_cycle_limit().get()
     );
 }
-#[test]
-fn pipeline_status_global_read_skips_non_terminal_local_cache() {
+#[tokio::test]
+async fn pipeline_status_global_read_skips_non_terminal_local_cache() {
     let app = mk_app_state_for_tests();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x74; Hash::LENGTH]));
@@ -372,7 +372,7 @@ fn pipeline_status_global_read_skips_non_terminal_local_cache() {
         tx_hash,
         PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
     );
-    let err = execute_pipeline_status_local_read(
+    let response = execute_pipeline_status_local_read(
         &app,
         &PipelineStatusQuery {
             hash: Some(tx_hash.to_string()),
@@ -381,8 +381,75 @@ fn pipeline_status_global_read_skips_non_terminal_local_cache() {
         ResponseFormat::Json,
         None,
     )
-    .expect_err("global reads must route/fan out before accepting local queued cache");
-    assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    .expect("global local observation");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    for scope in [
+        PipelineStatusReadScope::Global,
+        PipelineStatusReadScope::Local,
+    ] {
+        for format in [ResponseFormat::Json, ResponseFormat::Norito] {
+            use axum::{Router, routing::get};
+            use tower::ServiceExt as _;
+            let response = execute_pipeline_status_local_read(
+                &app,
+                &PipelineStatusQuery {
+                    hash: Some(tx_hash.to_string()),
+                    scope: Some(scope.as_str().to_owned()),
+                },
+                format,
+                None,
+            )
+            .expect("exact absence");
+            let response = Arc::new(parking_lot::Mutex::new(Some(response)));
+            let router = Router::new()
+                .route(
+                    "/status",
+                    get(move || {
+                        let response = response.lock().take().expect("one request");
+                        async move { response }
+                    }),
+                )
+                .layer(axum::middleware::from_fn(
+                    crate::enforce_typed_error_contract,
+                ));
+            let accept = if matches!(format, ResponseFormat::Json) {
+                "application/json"
+            } else {
+                crate::utils::NORITO_MIME_TYPE
+            };
+            let response = router
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/status")
+                        .header("Accept", accept)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("middleware");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .expect("body");
+            let envelope: ErrorEnvelope = if matches!(format, ResponseFormat::Json) {
+                norito::json::from_slice(&body).expect("JSON")
+            } else {
+                norito::decode_from_bytes(&body).expect("native")
+            };
+            assert_eq!(
+                envelope.code(),
+                iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
+            );
+            assert!(
+                envelope
+                    .details
+                    .unwrap()
+                    .pipeline_transaction_status_not_found
+                    .unwrap()
+                    .matches(&tx_hash, scope.as_str())
+            );
+        }
+    }
 }
 #[test]
 fn pipeline_status_local_read_evicts_stale_queued_cache() {
@@ -393,7 +460,7 @@ fn pipeline_status_local_read_evicts_stale_queued_cache() {
         tx_hash,
         PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
     );
-    let err = execute_pipeline_status_local_read(
+    let response = execute_pipeline_status_local_read(
         &app,
         &PipelineStatusQuery {
             hash: Some(tx_hash.to_string()),
@@ -402,8 +469,8 @@ fn pipeline_status_local_read_evicts_stale_queued_cache() {
         ResponseFormat::Json,
         None,
     )
-    .expect_err("local reads must not expose stale queued cache entries");
-    assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    .expect("local absence observation");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
 }
 #[tokio::test]

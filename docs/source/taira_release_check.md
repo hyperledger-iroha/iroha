@@ -303,7 +303,10 @@ records the actual Cargo-selected native binary paths and profiles separately
 from the later Linux release artifacts.
 
 Authenticated `prepare` retains the repository's `target/` lane and its fixed
-Git-object source capture. Its explicit `--target-dir` override remains available;
+Git-object source capture. The live preparation bootstrap must match its selected
+signed source. Native qualification loads the gate from the authenticated capture,
+so unrelated edits to the checkout's development gate do not alter release test
+selection or require copying older checks into the checkout. Its explicit `--target-dir` override remains available;
 the development environment selector does not affect preparation. Checks refuse
 the exact repository `target/`, existing source capture lanes, and lanes marked
 for release. Preparation refuses the routine lane and lanes marked for development.
@@ -422,3 +425,13 @@ python3 -B -m unittest discover -s pytests/scripts -p test_taira_release_check.p
 
 Cargo compiler errors retain their rendered diagnostics while the gate consumes
 JSON artifact events; accelerator progress is also preserved.
+Each metadata, test-codegen and shipping-codegen phase reports requested and
+observed Cargo targets, including additional library tests selected by Cargo's
+package-wide `--lib` flag. Artifact counts distinguish fresh cached units,
+rebuilt units and unavailable freshness; they include dependencies and do not
+count as test passes. Running summaries continue during quiet compilation or
+linking, even without new artifact events, and end with a summary when Cargo
+exits, including failure. Unchanged counts mean no new completed artifacts have
+been observed; they do not imply a stalled compiler. Shipping binaries retain their separate
+feature graph, excluding test-only fixtures; shared source changes can require
+both graphs to rebuild in the same warm target directory.

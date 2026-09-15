@@ -389,16 +389,36 @@ fn fixed_pipeline_finality_accepts_only_state_resolved_outcomes() {
 #[test]
 fn applied_wait_status_poll_accepts_only_exact_200_or_404() {
     let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
-    assert!(
-        exact_pipeline_status_poll_has_body(200, &canonical_hash).expect("HTTP 200 has a body")
-    );
-    assert!(
-        !exact_pipeline_status_poll_has_body(404, &canonical_hash)
-            .expect("HTTP 404 is the only pending response")
-    );
+    let present = norito::json!({"status":200});
+    assert!(exact_pipeline_status_poll_has_body(&present, &canonical_hash).expect("HTTP200"));
+    let absent = norito::json!({"status":404, "content_type":"application/json; charset=utf-8", "body":{"code":"pipeline_transaction_status_not_found", "message":"Missing status.", "details":{"pipeline_transaction_status_not_found":{"hash":(canonical_hash.clone()), "scope":"global"}}}});
+    assert!(!exact_pipeline_status_poll_has_body(&absent, &canonical_hash).expect("exact absence"));
+    for (pointer, replacement) in [
+        ("/content_type", Value::from("text/plain")),
+        ("/body/code", Value::from("route_not_found")),
+        (
+            "/body/details/pipeline_transaction_status_not_found/hash",
+            Value::from(format!("{}1", "a".repeat(63))),
+        ),
+        (
+            "/body/details/pipeline_transaction_status_not_found/scope",
+            Value::from("local"),
+        ),
+        (
+            "/body/details/pipeline_transaction_status_not_found",
+            Value::Null,
+        ),
+        ("/body", Value::Null),
+    ] {
+        let mut invalid = absent.clone();
+        *invalid.pointer_mut(pointer).expect("pointer") = replacement;
+        exact_pipeline_status_poll_has_body(&invalid, &canonical_hash)
+            .expect_err("inexact404 must fail");
+    }
     for status_code in [0, 201, 202, 204, 429, 500, 503] {
-        let error = exact_pipeline_status_poll_has_body(status_code, &canonical_hash)
-            .expect_err("every other HTTP response must fail closed");
+        let invalid = norito::json!({"status":status_code});
+        let error = exact_pipeline_status_poll_has_body(&invalid, &canonical_hash)
+            .expect_err("otherstatus");
         assert!(error.contains("expected exact HTTP 200"));
     }
 }

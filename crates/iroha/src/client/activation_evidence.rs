@@ -13,6 +13,58 @@ use iroha_data_model::{
 
 const BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
+/// A request-bound observation that the selected finality tip is still changing.
+///
+/// This is progress information, not a finality proof. A bounded caller may take a
+/// fresh snapshot; unrelated HTTP errors and invalid attestations never produce it.
+#[derive(Debug, Clone)]
+pub struct BridgeFinalityAttestationTipMismatch {
+    response: iroha_torii_shared::bridge_finality::BridgeFinalityAttestationTipMismatchV1,
+}
+
+impl BridgeFinalityAttestationTipMismatch {
+    /// Validate progress against the exact request and independently selected identity.
+    ///
+    /// # Errors
+    /// Rejects malformed progress or a different height, challenge, node, or network.
+    pub fn from_response(
+        response: iroha_torii_shared::bridge_finality::BridgeFinalityAttestationTipMismatchV1,
+        height: NonZeroU64,
+        challenge: [u8; 32],
+        expected_node: &iroha_model_base::peer::PeerId,
+        network: NetworkId,
+    ) -> Result<Self> {
+        if !response.matches(height.get(), challenge, expected_node, network) {
+            return Err(eyre!(
+                "finality tip progress differs from exact request bindings"
+            ));
+        }
+        Ok(Self { response })
+    }
+
+    /// Return the exact validated request and observed height bindings.
+    #[must_use]
+    pub const fn response(
+        &self,
+    ) -> &iroha_torii_shared::bridge_finality::BridgeFinalityAttestationTipMismatchV1 {
+        &self.response
+    }
+}
+
+impl std::fmt::Display for BridgeFinalityAttestationTipMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "finality tip is changing: requested {}, applied {}, consensus status {}",
+            self.response.requested_height,
+            self.response.applied_height,
+            self.response.status_height
+        )
+    }
+}
+
+impl std::error::Error for BridgeFinalityAttestationTipMismatch {}
+
 impl Client {
     /// Fetch a canonical challenge-bound statement for an exact durable tip.
     ///
@@ -21,6 +73,8 @@ impl Client {
     /// treating this statement as chain finality.
     ///
     /// # Errors
+    /// Returns a downcastable [`BridgeFinalityAttestationTipMismatch`] only for the
+    /// canonical HTTP 409 progress envelope bound to this exact request.
     /// Rejects transport/codec failures, zero challenges, wrong node/network/height,
     /// and inconsistent or invalid node signatures.
     pub fn get_bridge_finality_attestation(
@@ -40,6 +94,50 @@ impl Client {
             self.canonical_norito_get_request(&path, BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES)
                 .header("X-Iroha-Finality-Challenge", &hex::encode(challenge)),
         )?;
+        if response.status() == StatusCode::CONFLICT {
+            use iroha_torii_shared::bridge_finality::{
+                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
+                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
+            };
+            if response.body().len() > BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES {
+                return Err(eyre!("finality tip progress exceeds its response bound"));
+            }
+            let content_type = exact_single_response_header(&response, "content-type")?;
+            if !content_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
+                return Err(eyre!("finality tip progress requires application/x-norito"));
+            }
+            let envelope: iroha_torii_shared::ErrorEnvelope = norito::decode_canonical_with_limits(
+                response.body(),
+                norito::canonical_decode_limits(response.body().len()),
+            )
+            .wrap_err("failed to decode canonical finality tip progress envelope")?;
+            if envelope.code() != BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE {
+                return Err(eyre!(
+                    "finality attestation HTTP 409 code `{}` does not establish tip progress",
+                    envelope.code()
+                ));
+            }
+            let mut details = envelope
+                .details
+                .ok_or_else(|| eyre!("finality tip progress omitted exact request bindings"))?;
+            let progress = details
+                .bridge_finality_attestation_tip_mismatch
+                .take()
+                .ok_or_else(|| eyre!("finality tip progress omitted exact request bindings"))?;
+            if !details.is_empty() {
+                return Err(eyre!(
+                    "finality tip progress carries conflicting error details"
+                ));
+            }
+            return Err(BridgeFinalityAttestationTipMismatch::from_response(
+                progress,
+                height,
+                challenge,
+                expected_node,
+                self.network_id,
+            )?
+            .into());
+        }
         let attestation: iroha_data_model::bridge::BridgeFinalityAttestationV1 =
             Self::decode_canonical_norito_response(
                 &response,

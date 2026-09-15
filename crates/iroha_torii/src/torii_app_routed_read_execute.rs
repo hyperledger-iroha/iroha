@@ -1034,6 +1034,70 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                     ToriiFanoutDiagnostics::default(),
                 );
             }
+            if matches!(endpoint, ToriiReadEndpointV1::PipelineTransactionStatusGet) {
+                let decode_plan = match torii_routed_read_request_decode_plan(app) {
+                    Ok(plan) => plan,
+                    Err(response) => return response,
+                };
+                let query = match decode_torii_proxy_string_query::<PipelineStatusQuery>(
+                    decode_plan,
+                    query_string.as_deref(),
+                ) {
+                    Ok(query) => query,
+                    Err(response) => return response,
+                };
+                let hash = match query
+                    .hash
+                    .as_deref()
+                    .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))
+                    .and_then(parse_signed_transaction_hash)
+                {
+                    Ok(hash) => hash,
+                    Err(error) => return error.into_response(),
+                };
+                if !matches!(
+                    parse_pipeline_status_scope(query.scope.as_deref()),
+                    Ok(PipelineStatusReadScope::Global)
+                ) {
+                    return conversion_error(
+                        "pipeline status fanout requires global scope".to_owned(),
+                    )
+                    .into_response();
+                }
+                let collected = match collect_torii_pipeline_status_json_payloads(
+                    &routes,
+                    &hash,
+                    app.query_fanout_working_set_bytes,
+                    app.torii_proxy_max_response_bytes,
+                    |route| {
+                        execute_torii_read_for_route(
+                            app,
+                            route,
+                            torii_read_request(
+                                endpoint,
+                                route_scope.clone(),
+                                route,
+                                path_args.clone(),
+                                query_string.clone(),
+                                body.clone(),
+                            ),
+                            proxy_memory.clone(),
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(collected) => collected,
+                    Err(response) => return response,
+                };
+                return merge_with_torii_fanout_headers(collected.diagnostics, || {
+                    merged_pipeline_status_response(
+                        collected.payloads,
+                        routed_by_for_routes(app, &routes),
+                        collected.budget,
+                    )
+                });
+            }
             let collected = match collect_torii_singleton_json_payloads(
                 &routes,
                 app.query_fanout_working_set_bytes,
@@ -1060,19 +1124,11 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                 Err(response) => return response,
             };
             merge_with_torii_fanout_headers(collected.diagnostics, || {
-                if matches!(endpoint, ToriiReadEndpointV1::PipelineTransactionStatusGet) {
-                    merged_pipeline_status_response(
-                        collected.payloads,
-                        routed_by_for_routes(app, &routes),
-                        collected.budget,
-                    )
-                } else {
-                    merged_singleton_response(
-                        collected.payloads,
-                        routed_by_for_routes(app, &routes),
-                        collected.budget,
-                    )
-                }
+                merged_singleton_response(
+                    collected.payloads,
+                    routed_by_for_routes(app, &routes),
+                    collected.budget,
+                )
             })
         }
         ToriiReadFanoutMergeV1::Account => {

@@ -1,6 +1,5 @@
 //! Signed admission, routing, and native execution regressions for additive SNS bootstrap.
-use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
-use iroha_core::{
+use crate::{
     alias_setup::{alias_intent_owner, selector_for_resolved_alias_target},
     governance::manifest::LaneManifestRegistry,
     query::store::LiveQueryStore,
@@ -14,13 +13,14 @@ use iroha_core::{
     state::{State, StateReadOnly, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
+use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     alias_setup::{
         AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasDataSpaceIntentV1,
         AliasDataspaceBootstrapGrantV1, AliasDomainIntentV1, AliasIntentV1,
-        AliasLeaseAcquisitionV1, AliasQuoteGuardV1, AliasRegistryRoutingActivationV1,
-        ResolvedAccountAliasV1, ResolvedDataSpaceV1, ResolvedDomainV1,
+        AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1,
+        ResolvedDomainV1,
     },
     isi::alias_setup::{EnsureAlias, RenewAliasLease},
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
@@ -220,12 +220,9 @@ fn assert_universal_queue_and_block(fixture: &Fixture, transaction: &AcceptedTra
         nexus.dataspace_catalog.clone(),
         nexus.lane_catalog.clone(),
     );
-    assert_eq!(
-        router
-            .try_route_plan_without_state(transaction)
-            .expect("state-less deferral"),
-        None
-    );
+    let without_state = router
+        .try_route_plan_without_state(transaction)
+        .expect("routing without state");
     let queue = router
         .try_route_plan_with_view(transaction, &view)
         .expect("queue route");
@@ -239,8 +236,14 @@ fn assert_universal_queue_and_block(fixture: &Fixture, transaction: &AcceptedTra
     .expect("block route");
     assert_eq!(
         queue, block,
-        "queue and block must use the same activation boundary"
+        "queue and block must use the universal registry"
     );
+    if let Some(without_state) = without_state {
+        assert_eq!(
+            without_state, queue,
+            "narrow routing must retain the same authority"
+        );
+    }
     assert!(
         matches!(queue, RoutingPlan::Single(_)),
         "alias-only operations must not create a private participant: {queue:?}"
@@ -266,20 +269,6 @@ fn apply(fixture: &Fixture, instructions: Vec<InstructionBox>) -> Result<(), Str
     block
         .commit_world_overlay_for_testing()
         .map_err(|error| format!("{error:?}"))
-}
-
-fn activate(fixture: &Fixture) {
-    let parameter = AliasRegistryRoutingActivationV1::new(3).into_custom_parameter();
-    apply(
-        fixture,
-        vec![SetParameter::new(Parameter::Custom(parameter)).into()],
-    )
-    .expect("governed future activation");
-    fixture
-        .state
-        .block(header(2))
-        .commit_empty_block_for_testing()
-        .expect("commit activation carrier fixture");
 }
 
 fn bootstrap_grant(fixture: &Fixture) -> InstructionBox {
@@ -343,16 +332,10 @@ fn alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal() {
     let mut fixture = fixture();
     let dataspace = ensure(&fixture, bpng_intent(&fixture.owner));
     let bpng = dataspace.intent.target().dataspace_id();
-    assert!(
-        plans(
-            &fixture,
-            &accepted(&fixture, vec![dataspace.clone().into()]),
-            2
-        )
-        .is_err(),
-        "legacy routing cannot acquire an uncatalogued dataspace"
+    assert_universal_queue_and_block(
+        &fixture,
+        &accepted(&fixture, vec![dataspace.clone().into()]),
     );
-    activate(&fixture);
     apply(&fixture, vec![bootstrap_grant(&fixture)]).expect("grant precedes the first paid lease");
     assert_universal_queue_and_block(
         &fixture,
@@ -484,40 +467,48 @@ fn alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal() {
     );
     assert_eq!(
         fixture.state.view().height(),
-        2,
+        1,
         "the original carrier history remains intact"
     );
 }
 
 #[test]
-fn alias_registry_routing_preserves_historical_route_and_fails_closed_without_height() {
+fn alias_registry_routing_is_independent_of_height_and_catalog() {
     let fixture = fixture();
-    let mut historical = ensure(&fixture, bpng_intent(&fixture.owner));
-    if let AliasIntentV1::Dataspace(intent) = &mut historical.intent {
-        intent.dataspace =
-            ResolvedDataSpaceV1::new("paynet".parse().expect("name"), PRIVATE_DATASPACE);
+    for intent in [
+        bpng_intent(&fixture.owner),
+        AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: ResolvedDataSpaceV1::new("paynet".parse().expect("name"), PRIVATE_DATASPACE),
+            owner: fixture.owner.clone(),
+        }),
+    ] {
+        let lease = ensure(&fixture, intent);
+        let transaction = accepted(&fixture, vec![lease.into()]);
+        assert_universal_queue_and_block(&fixture, &transaction);
+        let expected =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        for height in [1, 2, 3] {
+            assert_eq!(
+                plans(&fixture, &transaction, height).expect("exact height route"),
+                expected
+            );
+        }
+        let view = fixture.state.view();
+        assert_eq!(
+            evaluate_policy_plan_with_nexus_and_world_at(
+                view.nexus(),
+                &transaction,
+                view.world(),
+                0
+            )
+            .expect("height-independent registry route"),
+            expected
+        );
     }
-    let transaction = accepted(&fixture, vec![historical.into()]);
-    let legacy = plans(&fixture, &transaction, 2).expect("historical route");
-    assert_eq!(
-        legacy.coordinator_route(),
-        RoutingDecision::new(PRIVATE_LANE, PRIVATE_DATASPACE)
-    );
-    activate(&fixture);
-    assert_eq!(
-        plans(&fixture, &transaction, 2).expect("replay before activation"),
-        legacy
-    );
-    assert_universal_queue_and_block(&fixture, &transaction);
-    let view = fixture.state.view();
-    assert_eq!(
-        evaluate_policy_plan_with_nexus_and_world_at(view.nexus(), &transaction, view.world(), 0),
-        Err(RoutingResolveError::AliasRegistryRoutingHeightUnavailable)
-    );
 }
 
 #[test]
-fn alias_registry_routing_nested_walkers_keep_the_explicit_activation_height() {
+fn alias_registry_routing_nested_walkers_use_universal_registry() {
     use iroha_data_model::transaction::{ExecutableBatchItem, IvmBytecode, IvmProved};
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigProposalState, MultisigPropose,
@@ -561,7 +552,7 @@ fn alias_registry_routing_nested_walkers_keep_the_explicit_activation_height() {
             .commit_world_overlay_for_testing()
             .expect("stored proposal fixture");
     }
-    let trigger_id: TriggerId = "alias_registry_height".parse().expect("trigger id");
+    let trigger_id: TriggerId = "alias_registry_nested".parse().expect("trigger id");
     let trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
         Action::new(
@@ -612,17 +603,19 @@ fn alias_registry_routing_nested_walkers_keep_the_explicit_activation_height() {
         .into_iter()
         .map(|executable| accepted_executable(&fixture, executable))
         .collect();
-    let historical: Vec<_> = transactions
-        .iter()
-        .map(|transaction| plans(&fixture, transaction, 2).expect("legacy nested route"))
-        .collect();
-    activate(&fixture);
-    for (transaction, historical) in transactions.iter().zip(historical) {
-        assert_eq!(
-            plans(&fixture, transaction, 2).expect("historical nested route"),
-            historical
-        );
+    for transaction in &transactions {
         assert_universal_queue_and_block(&fixture, transaction);
+        for height in [1, 2, 3] {
+            let plan = plans(&fixture, transaction, height).expect("nested universal route");
+            assert_eq!(
+                plan.coordinator_route(),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+            );
+            assert!(
+                matches!(plan, RoutingPlan::Single(_)),
+                "nested aliases have no private participant"
+            );
+        }
     }
 }
 
@@ -630,7 +623,6 @@ fn alias_registry_routing_nested_walkers_keep_the_explicit_activation_height() {
 fn alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards() {
     let fixture = fixture();
     let lease = ensure(&fixture, bpng_intent(&fixture.owner));
-    activate(&fixture);
     let before = balance(&fixture, &fixture.owner);
     let mut invalid_id = lease.clone();
     if let AliasIntentV1::Dataspace(intent) = &mut invalid_id.intent {
@@ -682,7 +674,6 @@ fn alias_registry_routing_keeps_real_private_participants_in_mixed_transactions(
 
     let fixture = fixture();
     let lease = ensure(&fixture, bpng_intent(&fixture.owner));
-    activate(&fixture);
     let private_permission = Grant::account_permission(
         CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(PRIVATE_DATASPACE),
@@ -709,7 +700,7 @@ fn alias_registry_routing_keeps_real_private_participants_in_mixed_transactions(
 fn alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap() {
     // Reconstruct the original pre-lease world, not a snapshot already containing the SNS name.
     // The second independent instance has the future static catalog from startup. Both replay
-    // exactly the same governed activation, bootstrap grant, and signed lease/domain sequence.
+    // exactly the same bootstrap grant and signed lease/domain sequence.
     let original = fixture_with_expanded_catalog(false);
     let replay = fixture_with_expanded_catalog(true);
     let dataspace = ensure(&original, bpng_intent(&original.owner));
@@ -722,8 +713,6 @@ fn alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_boots
         "cold replay must start without the newly acquired lease"
     );
     let grant = bootstrap_grant(&original);
-    activate(&original);
-    activate(&replay);
     for instruction in [grant.clone(), dataspace.clone().into()] {
         assert_eq!(
             accepted(&original, vec![instruction.clone()]).entrypoint(),

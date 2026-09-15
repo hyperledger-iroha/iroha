@@ -3192,3 +3192,5 @@ async fn alias_lookup_by_account_merges_cross_dataspace_aliases_and_recomputes_t
         "merged response should include the restricted alias"
     );
 }
+
+include!("alias_error_envelopes.rs");

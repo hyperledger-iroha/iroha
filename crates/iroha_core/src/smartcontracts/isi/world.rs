@@ -324,46 +324,6 @@ pub mod isi {
             message.into().into(),
         ))
     }
-    fn validate_alias_registry_routing_activation(
-        custom: &iroha_data_model::parameter::CustomParameter,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
-
-        let Some(next) =
-            AliasRegistryRoutingActivationV1::from_custom_parameter(custom).map_err(|error| {
-                invalid_smart_contract_parameter(format!(
-                    "invalid alias registry routing activation: {error}"
-                ))
-            })?
-        else {
-            return Ok(());
-        };
-        let previous = state_transaction
-            .world
-            .parameters
-            .get()
-            .custom()
-            .get(custom.id())
-            .map(|installed| {
-                AliasRegistryRoutingActivationV1::from_custom_parameter(installed)?.ok_or_else(
-                    || {
-                        norito::json::Error::Message(
-                            "installed activation parameter identifier does not match its key"
-                                .to_owned(),
-                        )
-                    },
-                )
-            })
-            .transpose()
-            .map_err(|error| {
-                invalid_smart_contract_parameter(format!(
-                    "invalid installed alias registry routing activation: {error}"
-                ))
-            })?;
-        next.validate_installation(previous.as_ref(), state_transaction.block_height())
-            .map_err(invalid_smart_contract_parameter)
-    }
     fn validate_alias_dataspace_bootstrap_grant(
         custom: &iroha_data_model::parameter::CustomParameter,
         state_transaction: &StateTransaction<'_, '_>,
@@ -20737,7 +20697,6 @@ pub mod isi {
                         ));
                     }
                 }
-                validate_alias_registry_routing_activation(custom, state_transaction)?;
                 validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
                 validate_governed_pipeline_gas_parameter(custom)?;
                 validate_hijiri_parameters(custom, state_transaction)?;
@@ -39100,58 +39059,6 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "max clock drift is the mutable first-release Sumeragi parameter");
             let params = stx.world.parameters.get().sumeragi().clone();
             assert_eq!(params.max_clock_drift_ms(), 333);
-        });
-        world_test!(set_parameter_alias_registry_routing_activation_is_future_and_immutable {
-            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
-
-            blank_state_transaction!(state, block, state_block, stx);
-            let carrier_height = stx.block_height();
-            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
-            for invalid_height in [0, carrier_height] {
-                let invalid = AliasRegistryRoutingActivationV1::new(invalid_height)
-                    .into_custom_parameter();
-                SetParameter::new(Parameter::Custom(invalid))
-                    .expect_execute_err(&ALICE_ID, &mut stx, "activation cannot change its installation carrier");
-                assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
-            }
-            let activation = AliasRegistryRoutingActivationV1::new(carrier_height + 2);
-            let custom = activation.into_custom_parameter();
-            SetParameter::new(Parameter::Custom(custom.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "install future activation");
-            SetParameter::new(Parameter::Custom(custom.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "exact activation retry is idempotent");
-            for changed_height in [carrier_height + 1, carrier_height + 3] {
-                let changed = AliasRegistryRoutingActivationV1::new(changed_height)
-                    .into_custom_parameter();
-                let error = SetParameter::new(Parameter::Custom(changed))
-                    .expect_execute_err(&ALICE_ID, &mut stx, "installed activation cannot move in either direction");
-                assert_eq!(error, InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "alias registry routing activation is immutable once installed".into(),
-                    ),
-                ));
-                assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
-            }
-        });
-        world_test!(set_parameter_alias_registry_routing_activation_rejects_malformed_installed_state {
-            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
-
-            blank_state_transaction!(state, block, state_block, stx);
-            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
-            let malformed = iroha_data_model::parameter::CustomParameter::new(
-                parameter_id.clone(),
-                Json::from(norito::json!({"version": 1, "activation_height": 0})),
-            );
-            stx.world.parameters.get_mut().set_parameter(Parameter::Custom(malformed.clone()));
-            let valid = AliasRegistryRoutingActivationV1::new(stx.block_height() + 1)
-                .into_custom_parameter();
-            let error = SetParameter::new(Parameter::Custom(valid))
-                .expect_execute_err(&ALICE_ID, &mut stx, "malformed installed state is not silently overwritten");
-            assert!(matches!(&error,
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
-                    if reason.starts_with("invalid installed alias registry routing activation:")
-            ), "unexpected malformed activation error: {error:?}");
-            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&malformed));
         });
         world_test!(set_parameter_alias_dataspace_bootstrap_grant_is_immutable_and_requires_existing_owner {
             use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;

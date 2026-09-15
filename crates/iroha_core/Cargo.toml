@@ -352,11 +352,6 @@ name = "sccp_security"
 path = "tests/sccp_security.rs"
 required-features = ["iroha-core-tests"]
 
-[[test]]
-name = "alias_registry_routing"
-path = "tests/alias_registry_routing.rs"
-required-features = ["iroha-core-tests"]
-
 # Real Kaigi IPA proofs remain an explicit focused target under the ZK test features.
 [[test]]
 name = "kaigi_privacy"

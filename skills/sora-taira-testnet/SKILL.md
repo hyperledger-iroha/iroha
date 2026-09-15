@@ -264,7 +264,11 @@ and a populated client configuration in an owner-only runtime workspace. Pin the
 canonical Taira chain, exact genesis network identity, and address profile 369.
 Obtain the onboarding issuer, onboarding token, and faucet issuer/asset/amount
 policy independently from the operator; never trust a response to supply its own
-issuer or funding policy.
+issuer or funding policy. For public discovery, the read-only
+`iroha.accounts.faucet.policy` tool maps to `GET /v1/accounts/faucet/policy`
+and reports the enabled faucet's exact network, address profile, public authority,
+canonical asset, and amount. Compare this unsigned response with the operator's
+independent policy; it does not establish the trusted preparation inputs.
 
 Prepare a new operation in a previously absent journal directory whose parent
 already exists. For example:

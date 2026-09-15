@@ -1767,8 +1767,118 @@ fn run_lifecycle_active_height(
                 activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
                 finalized_ingress_closed = true;
             }
-            let (drained_terminal_ingress, drained_terminal_relay) = activated
-                .with_runner_runtime(
+            // Physical closure fixes a finite prefix. Keep its one-occurrence
+            // fair drain in this owned phase, as PendingKura does, instead of
+            // rerunning full lane hydration and persistence for every retirement.
+            // This phase does not cache durable readiness: the consuming rollover
+            // still reauthenticates lifecycle stores and every lane proof/receipt.
+            loop {
+                cleanup_supervisor.reap_finished();
+                if output_guard.restart_required() {
+                    return Err(V2RunnerError::RestartRequired);
+                }
+                if shutdown_signal.is_sent() {
+                    activated.into_clean_shutdown(&mut active_runner)?;
+                    return Ok(HeightRunOutcome::Shutdown);
+                }
+                let now = Instant::now();
+                liveness_watchdog.poll(now);
+                if now >= next_terminal_stall_diagnostic {
+                    next_terminal_stall_diagnostic = deadline_after(now, Duration::from_secs(30));
+                    let ingress_snapshot = receiver.snapshot_at(now);
+                    activated.log_scheduler_stall_diagnostic(
+                        &mut active_runner,
+                        producer_claim,
+                        true,
+                        finalized_ingress_closed,
+                        receiver,
+                        ingress_snapshot.oldest_age,
+                        ingress_snapshot.service_idle_age,
+                        last_advance_executor_yield
+                            .map(|(phase, reason, at)| (phase, reason, now.saturating_duration_since(at))),
+                    );
+                }
+                activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, executor, services, _local_proposal| {
+                        let _ = settle_historical_body_serve_completion(
+                            receiver,
+                            block_sync_server,
+                            services,
+                            output_guard.as_ref(),
+                        )?;
+                        retry_recovered_decision_fetch_if_due(
+                            now,
+                            &mut next_recovered_decision_fetch_retransmit,
+                            retransmit_interval,
+                            executor,
+                            services,
+                        )?;
+                        Ok::<_, V2RunnerError>(())
+                    },
+                )?;
+                let cut = terminal_finalization_cut
+                    .as_ref()
+                    .expect("physical closure retains its authenticated terminal cut");
+                let _ = activated
+                    .reconcile_decided_lane_certified_serve(
+                        &mut active_runner,
+                        cut.decided_lane_recovery_permit(),
+                    )
+                    .map_err(V2RunnerError::Service)?;
+                let _ = activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, _executor, services, _local_proposal| {
+                        reconcile_terminal_lane_output_handoffs(
+                            cut.decided_lane_recovery_permit(),
+                            &mut lane_work,
+                            services,
+                            control_queue_capacity,
+                        )
+                    },
+                )?;
+                // The ordinary lifecycle can retain exact Completion-ranked
+                // work even after its first finalization census. Preserve the
+                // sealed driver's ownership and yield rules on every drain turn;
+                // only the repeated broad lane preflight is outside this phase.
+                let drain_disposition = drain_lifecycle_v2_ingress(
+                    &mut activated,
+                    &mut active_runner,
+                    receiver,
+                    &mut lane_work,
+                    kura.as_ref(),
+                    &common_config.key_pair,
+                    block_sync_server,
+                    block_sync,
+                    &mut block_sync_request,
+                    npos_beacon,
+                    body_queue_capacity,
+                    producer_claim,
+                    terminal_finalization_cut.as_ref(),
+                )?;
+                producer_claim = drain_disposition.producer_claim();
+                if let Some(reason) = drain_disposition.advance_executor_yield() {
+                    last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));
+                }
+                if drain_disposition.requires_yield() {
+                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    continue;
+                }
+                let executor_ready = activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, executor, _services, _local_proposal| executor.ready_to_finish(),
+                );
+                if !executor_ready {
+                    output_guard.close_admission_for_restart();
+                    return Err(V2RunnerError::RestartRequired);
+                }
+                if block_sync_server.has_pending_historical_body_serve()
+                    || !activated.ready_for_finalized_rollover(&mut active_runner)?
+                {
+                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    continue;
+                }
+                let (drained_terminal_ingress, drained_terminal_relay) = activated.with_runner_runtime(
                     &mut active_runner,
                     |_owner, executor, services, _local_proposal| {
                         let drained = drain_decided_lane_recovery_ingress(
@@ -1787,35 +1897,37 @@ fn run_lifecycle_active_height(
                             executor.current_tag().view(),
                             control_queue_capacity,
                         );
-                        dispatch_lane_work_effects(
-                            &mut lane_work,
-                            services,
-                            control_queue_capacity,
-                        )?;
+                        dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
                         Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
                     },
                 )?;
-            let cut = terminal_finalization_cut
-                .as_ref()
-                .expect("rollover-ready closure authenticated the terminal cut above");
-            let _ = activated.with_runner_runtime(
-                &mut active_runner,
-                |_owner, _executor, services, _local_proposal| {
-                    reconcile_terminal_lane_output_handoffs(
-                        cut.decided_lane_recovery_permit(),
-                        &mut lane_work,
-                        services,
-                        control_queue_capacity,
-                    )
-                },
-            )?;
-            // The finite ingress prefix must drain, but delivery to every peer
-            // is not a finality condition. The consuming rollover below owns
-            // exact output until its receipt- and lane-authenticated durable
-            // reconstruction handoff succeeds. Waiting for the network here
-            // would prevent that handoff when a validator is offline.
-            if drained_terminal_ingress || drained_terminal_relay {
-                continue;
+                let cut = terminal_finalization_cut
+                    .as_ref()
+                    .expect("rollover-ready closure authenticated the terminal cut above");
+                let _ = activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, _executor, services, _local_proposal| {
+                        reconcile_terminal_lane_output_handoffs(
+                            cut.decided_lane_recovery_permit(),
+                            &mut lane_work,
+                            services,
+                            control_queue_capacity,
+                        )
+                    },
+                )?;
+                // The finite ingress prefix must drain, but delivery to every peer
+                // is not a finality condition. The consuming rollover below owns
+                // exact output until its receipt- and lane-authenticated durable
+                // reconstruction handoff succeeds. Waiting for the network here
+                // would prevent that handoff when a validator is offline.
+                if block_sync_server.has_pending_historical_body_serve() {
+                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    continue;
+                }
+                if drained_terminal_ingress || drained_terminal_relay {
+                    continue;
+                }
+                break;
             }
             receiver
                 .ensure_closed_drained_cut()

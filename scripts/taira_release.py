@@ -29,8 +29,10 @@ Preparation records the sanitized environment in a separate owner-private file.
 Resume restores those exact inputs before resolving tools, so session PATH changes
 do not invalidate successful checks. An explicit incremental-policy change still
 requires a fresh preparation; old records without an environment are not resumed.
-The active repository must remain on optimizations, and the executing controller
-sources must match the selected signed commit.
+The active repository must remain on optimizations, and the executing
+bootstrap sources must match the selected signed commit. Native qualification
+loads its gate only from the authenticated source capture; it does not import
+the mutable checkout gate.
 """
 
 from __future__ import annotations
@@ -59,7 +61,6 @@ from release_artifact_contract import (
     exclusive_output_fd, exclusive_write_bytes, stable_hash_path,
     stable_open_relative,
 )
-import taira_release_check as gate
 from taira_cargo_cache import admit_source_fingerprints, local_package_names, source_fingerprints
 
 
@@ -75,6 +76,10 @@ BUILD_SOURCES = ("scripts/taira_release.py", "scripts/taira_release_check.py",
                  "scripts/taira_cargo_cache.py",
                  "scripts/release_artifact_contract.py", "scripts/cargo_fast.sh",
                  "scripts/cargo_zigbuild_linux.sh", "scripts/zig_linux_gnu.py")
+# The native gate is authenticated with every captured build input, then loaded
+# from that capture. Only these controller files execute from the live checkout.
+BOOTSTRAP_SOURCES = tuple(path for path in BUILD_SOURCES
+                          if path != "scripts/taira_release_check.py")
 
 
 class PrepareError(RuntimeError):
@@ -272,7 +277,6 @@ def verify_controller_module_origins(root: Path) -> None:
     """Keep unrelated checkout modules outside the admitted live controller."""
     modules = {
         "release_artifact_contract": "scripts/release_artifact_contract.py",
-        "taira_release_check": "scripts/taira_release_check.py",
         "taira_cargo_cache": "scripts/taira_cargo_cache.py",
     }
     allowed = {root / "scripts/taira_release.py", *(root / path for path in modules.values())}
@@ -307,8 +311,10 @@ def verify_controller_sources(root: Path, commit: str) -> None:
             selected.append(row)
     require({row.split(b"\t", 1)[1] for row in selected} == required,
             "signed commit is missing a required build controller source")
+    bootstrap = {os.fsencode(path) for path in BOOTSTRAP_SOURCES}
+    live = [row for row in selected if row.split(b"\t", 1)[1] in bootstrap]
     try:
-        source_snapshot(root, b"\0".join(selected) + b"\0")
+        source_snapshot(root, b"\0".join(live) + b"\0")
     except (PrepareError, OSError) as error:
         raise PrepareError("build controller differs from signed commit: " + str(error)) from error
     verify_controller_module_origins(root)
@@ -932,22 +938,29 @@ def cargo_lane(root: Path, target_dir: Path, role: str):
 
 def development_check(root: Path, target: Path | None, inherited: dict[str, str],
                       *, native_check_scope: str = "basic", focused_regressions=None) -> None:
-    if focused_regressions is not None:
-        gate.focused_regression_stages(native_check_scope, focused_regressions)
-    root = real_path(root)
-    target_dir = development_target(root, target, inherited)
-    with cargo_lane(root, target_dir, "development") as lock_fd:
-        env = child_environment(inherited, target_dir)
-        env, _ = isolated_cargo_environment(root, root, env)
-        print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
-        native = native_check_environment(env, inherited)
-        if focused_regressions is None:
-            gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
-                            qualification_scope=native_check_scope)
-        else:
-            gate.run_prequalification(root, focused_regressions=focused_regressions,
-                                      environment=native, lock_fds=(lock_fd,),
-                                      qualification_scope=native_check_scope)
+    # Mutable-source diagnostics intentionally use the checkout gate. Preparation
+    # never imports this module and authenticates its captured gate separately.
+    import taira_release_check as gate
+
+    try:
+        if focused_regressions is not None:
+            gate.focused_regression_stages(native_check_scope, focused_regressions)
+        root = real_path(root)
+        target_dir = development_target(root, target, inherited)
+        with cargo_lane(root, target_dir, "development") as lock_fd:
+            env = child_environment(inherited, target_dir)
+            env, _ = isolated_cargo_environment(root, root, env)
+            print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
+            native = native_check_environment(env, inherited)
+            if focused_regressions is None:
+                gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
+                                qualification_scope=native_check_scope)
+            else:
+                gate.run_prequalification(root, focused_regressions=focused_regressions,
+                                          environment=native, lock_fds=(lock_fd,),
+                                          qualification_scope=native_check_scope)
+    except gate.CheckError as error:
+        raise PrepareError(str(error)) from error
 
 
 @contextlib.contextmanager
@@ -1201,7 +1214,7 @@ def main() -> int:
             args.target_dir = args.target_dir or args.repo_root / "target"
             prepared = prepare(args)
             print(f"[taira-release] prepared {prepared['commit']}: {args.output_dir / 'result.json'}", flush=True)
-    except (PrepareError, ReleaseArtifactError, gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (PrepareError, ReleaseArtifactError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-release] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0

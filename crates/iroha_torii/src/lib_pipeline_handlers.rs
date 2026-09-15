@@ -1564,18 +1564,48 @@ fn pipeline_status_response_with_route(
     }
     response
 }
-fn pipeline_status_not_found_error() -> Error {
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::NotFound,
-    ))
-}
-fn pipeline_status_error_is_not_found(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound
-        ))
+fn pipeline_status_not_found_response(
+    hash: &HashOf<SignedTransaction>,
+    scope: PipelineStatusReadScope,
+    format: ResponseFormat,
+) -> Response {
+    crate::utils::respond_with_status_and_format(
+        StatusCode::NOT_FOUND,
+        ErrorEnvelope::new(
+            iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+            "No transaction status is available for the exact requested hash and scope.",
+        )
+        .with_details(ErrorDetails {
+            pipeline_transaction_status_not_found: Some(
+                iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(hash, scope.as_str()),
+            ),
+            ..ErrorDetails::default()
+        }),
+        format,
     )
+}
+#[cfg(feature = "app_api")]
+async fn validate_pipeline_status_absence_response(
+    response: Response,
+    hash: &HashOf<SignedTransaction>,
+    scope: PipelineStatusReadScope,
+    maximum: usize,
+) -> Result<(), Response> {
+    let envelope = decode_torii_scoped_absence_response(response, maximum).await?;
+    if envelope.code() != iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
+        || !envelope
+            .details
+            .as_ref()
+            .and_then(|details| details.pipeline_transaction_status_not_found.as_ref())
+            .is_some_and(|absence| absence.matches(hash, scope.as_str()))
+    {
+        return Err(torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "invalid_proxy_response",
+            "pipeline status absence differs from the exact requested hash and scope",
+        ));
+    }
+    Ok(())
 }
 fn exact_transaction_details_query_hash(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
@@ -1858,7 +1888,9 @@ fn execute_pipeline_status_local_read(
             route,
         ));
     }
-    Err(pipeline_status_not_found_error())
+    Ok(pipeline_status_not_found_response(
+        &hash, read_scope, format,
+    ))
 }
 #[cfg(feature = "app_api")]
 fn pipeline_status_payload_is_authoritative_hint(
@@ -1873,8 +1905,19 @@ fn pipeline_status_payload_is_authoritative_hint(
 async fn pipeline_status_hinted_global_response(
     response: Response,
     max_response_bytes: usize,
+    hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<Response>, Response> {
-    if should_skip_singleton_routed_query_route_error(&response) {
+    if response.status() == StatusCode::NOT_FOUND {
+        validate_pipeline_status_absence_response(
+            response,
+            hash,
+            PipelineStatusReadScope::Global,
+            max_response_bytes,
+        )
+        .await?;
+        return Ok(None);
+    }
+    if torii_response_has_reject_code(&response, "route_unavailable") {
         return Ok(None);
     }
     if !response.status().is_success() {
@@ -1890,9 +1933,19 @@ async fn pipeline_status_hinted_global_response(
                 format!("failed to read hinted pipeline status response: {error}"),
             )
         })?;
-    let is_terminal = norito::json::from_slice::<PipelineTransactionStatusResponse>(&bytes)
-        .map(|payload| pipeline_status_payload_is_authoritative_hint(&payload))
-        .unwrap_or(false);
+    let is_terminal = match norito::json::from_slice::<PipelineTransactionStatusResponse>(&bytes) {
+        Ok(payload) => {
+            if payload.hash != hash.to_string() || payload.scope != "global" {
+                return Err(torii_proxy_error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "invalid_proxy_response",
+                    "hinted pipeline status differs from the exact requested hash and global scope",
+                ));
+            }
+            pipeline_status_payload_is_authoritative_hint(&payload)
+        }
+        Err(_) => false,
+    };
     let response = Response::from_parts(parts, Body::from(bytes));
     Ok(is_terminal.then_some(response))
 }
@@ -1923,14 +1976,14 @@ async fn handler_pipeline_transaction_status(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
-    match execute_pipeline_status_local_read(&app, &query, format, None) {
-        Ok(response) => return Ok(response),
-        Err(error) if pipeline_status_error_is_not_found(&error) => {}
-        Err(error) => return Err(error),
+    let local = execute_pipeline_status_local_read(&app, &query, format, None)?;
+    if local.status() != StatusCode::NOT_FOUND
+        || matches!(read_scope, PipelineStatusReadScope::Local)
+    {
+        return Ok(local);
     }
-    if matches!(read_scope, PipelineStatusReadScope::Local) {
-        return Err(pipeline_status_not_found_error());
-    }
+    // This helper emits only exact scoped absence. Global absence still needs all routes.
+    drop(local);
     #[cfg(feature = "app_api")]
     {
         let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
@@ -1950,8 +2003,12 @@ async fn handler_pipeline_transaction_status(
                 Vec::new(),
             )
             .await;
-            match pipeline_status_hinted_global_response(hinted, app.torii_proxy_max_response_bytes)
-                .await
+            match pipeline_status_hinted_global_response(
+                hinted,
+                app.torii_proxy_max_response_bytes,
+                &hash,
+            )
+            .await
             {
                 Ok(Some(hinted)) => return Ok(hinted),
                 Ok(None) => {}
@@ -1965,7 +2022,14 @@ async fn handler_pipeline_transaction_status(
         let _ = headers;
         let _ = remote_ip;
         let _ = hash;
-        Err(pipeline_status_not_found_error())
+        Ok(crate::utils::respond_with_status_and_format(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorEnvelope::new(
+                "route_unavailable",
+                "global pipeline status fanout is unavailable on this node",
+            ),
+            format,
+        ))
     }
 }
 async fn handler_pipeline_transaction_details(

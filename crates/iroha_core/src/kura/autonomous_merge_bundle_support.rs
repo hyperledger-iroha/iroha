@@ -1895,6 +1895,12 @@ impl Kura {
         artifact: &CertifiedLaneBlockArtifact,
     ) -> std::result::Result<(), &'static str> {
         #[cfg(test)]
+        CERTIFIED_ARTIFACT_VALIDATION_COUNT.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
+        #[cfg(test)]
         if FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.replace(false)) {
             return Err("injected certified lane block artifact validation failure");
         }

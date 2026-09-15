@@ -6253,6 +6253,8 @@ pub(crate) async fn handle_v1_bridge_finality(
 }
 /// GET /v1/bridge/finality/attestation/{height} — Challenge-bound node-signed
 /// finality proof for the exact durable state tip plus its committed genesis.
+/// Exact requested/applied/status height races return a selector-bound HTTP 409;
+/// missing or corrupt proofs remain fixed failures.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_attestation(
     state: Arc<CoreState>,
@@ -6268,10 +6270,19 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
         "bridge finality attestation worker failed",
         move || {
             let view = state.view();
-            let attestation = iroha_core::bridge::build_finality_attestation(
+            let status_height = status.last_committed_height;
+            let network_id = *view.network_id();
+            let node_id = PeerId::new(signer.public_key().clone());
+            let attestation = match iroha_core::bridge::build_finality_attestation(
                 &view, status, height, challenge, &signer,
-            )
-            .map_err(map_bridge_finality_attestation_error)?;
+            ) {
+                Ok(attestation) => attestation,
+                Err(err) => {
+                    return bridge_finality_attestation_error_response(
+                        err, height, status_height, challenge, node_id, network_id, format,
+                    );
+                }
+            };
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(attestation).into_response());
             }
@@ -6314,6 +6325,349 @@ fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Er
         | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. } => Error::Query(
             iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
         ),
+    }
+}
+/// Expose only exact snapshot-height races as bound progress. All proof, identity,
+/// hash, and signature failures retain their fixed error classification.
+fn bridge_finality_attestation_error_response(
+    err: iroha_core::bridge::BridgeFinalityAttestationBuildError,
+    requested_height: u64,
+    status_height: u64,
+    challenge: [u8; 32],
+    node_id: PeerId,
+    network_id: iroha_data_model::NetworkId,
+    format: crate::utils::ResponseFormat,
+) -> Result<Response> {
+    use iroha_core::bridge::BridgeFinalityAttestationBuildError as BuildError;
+    use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
+    use iroha_torii_shared::bridge_finality::{
+        BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE, BridgeFinalityAttestationTipMismatchV1,
+    };
+
+    let applied_height = match &err {
+        BuildError::HeightIsNotDurableTip {
+            requested,
+            committed,
+        } if *requested == requested_height && requested != committed => Some(*committed),
+        // Core checks requested == immutable state tip before reading either proof.
+        // This exact later error follows proof, network, node and status validation;
+        // it therefore identifies only the independently sampled status height race.
+        BuildError::InvalidBody(ValidationError::StatusHeightMismatch) => Some(requested_height),
+        _ => None,
+    };
+    if let Some(applied_height) = applied_height {
+        let progress = BridgeFinalityAttestationTipMismatchV1 {
+            requested_height,
+            applied_height,
+            status_height,
+            challenge,
+            node_id,
+            network_id,
+        };
+        if progress.is_valid() {
+            let envelope = iroha_torii_shared::ErrorEnvelope::new(
+                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
+                "Requested, applied and status tip heights differ; retry a fresh attestation within the existing deadline.",
+            ).with_details(iroha_torii_shared::ErrorDetails {
+                bridge_finality_attestation_tip_mismatch: Some(progress),
+                ..iroha_torii_shared::ErrorDetails::default()
+            });
+            return Ok(crate::utils::respond_with_status_and_format(
+                StatusCode::CONFLICT,
+                envelope,
+                format,
+            ));
+        }
+    }
+    Err(map_bridge_finality_attestation_error(err))
+}
+
+#[cfg(test)]
+mod bridge_finality_attestation_progress_tests {
+    use super::*;
+    use iroha_core::bridge::{
+        BridgeFinalityAttestationBuildError as BuildError, BridgeFinalityError,
+    };
+    use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
+    use iroha_torii_shared::{
+        ErrorEnvelope,
+        bridge_finality::{
+            BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
+            BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
+        },
+    };
+
+    fn identity() -> (PeerId, iroha_data_model::NetworkId) {
+        let key = KeyPair::try_from_seed(vec![71; 32], iroha_crypto::Algorithm::BlsNormal).unwrap();
+        (
+            PeerId::new(key.public_key().clone()),
+            routing_test_network_id(71),
+        )
+    }
+
+    #[tokio::test]
+    async fn exact_tip_snapshot_races_are_bound_negotiated_progress() {
+        for (requested, applied, status, status_race) in [
+            (10, 9, 10, false),
+            (9, 10, 10, false),
+            (10, 10, 9, true),
+            (10, 10, 11, true),
+        ] {
+            for format in [
+                crate::utils::ResponseFormat::Json,
+                crate::utils::ResponseFormat::Norito,
+            ] {
+                let (node_id, network_id) = identity();
+                let err = if status_race {
+                    BuildError::InvalidBody(ValidationError::StatusHeightMismatch)
+                } else {
+                    BuildError::HeightIsNotDurableTip {
+                        requested,
+                        committed: applied,
+                    }
+                };
+                let response = crate::finalize_bridge_finality_attestation_response(
+                    bridge_finality_attestation_error_response(
+                        err,
+                        requested,
+                        status,
+                        [7; 32],
+                        node_id.clone(),
+                        network_id,
+                        format,
+                    ),
+                );
+                assert_eq!(response.status(), StatusCode::CONFLICT);
+                assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+                assert_eq!(
+                    response.headers()[axum::http::header::CACHE_CONTROL],
+                    "no-store"
+                );
+                assert_eq!(
+                    response.headers()[axum::http::header::VARY],
+                    "X-Iroha-Finality-Challenge, Accept"
+                );
+                let expected_media = if matches!(format, crate::utils::ResponseFormat::Norito) {
+                    "application/x-norito"
+                } else {
+                    "application/json"
+                };
+                assert_eq!(
+                    response.headers()[axum::http::header::CONTENT_TYPE],
+                    expected_media
+                );
+                let bytes = axum::body::to_bytes(
+                    response.into_body(),
+                    BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
+                )
+                .await
+                .unwrap();
+                let envelope: ErrorEnvelope =
+                    if matches!(format, crate::utils::ResponseFormat::Norito) {
+                        norito::decode_canonical_with_limits(
+                            &bytes,
+                            norito::canonical_decode_limits(bytes.len()),
+                        )
+                        .unwrap()
+                    } else {
+                        norito::json::from_slice(&bytes).unwrap()
+                    };
+                assert_eq!(envelope.code, BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE);
+                let progress = envelope
+                    .details
+                    .unwrap()
+                    .bridge_finality_attestation_tip_mismatch
+                    .unwrap();
+                assert!(progress.matches(requested, [7; 32], &node_id, network_id));
+                assert_eq!(progress.applied_height, applied);
+                assert_eq!(progress.status_height, status);
+            }
+        }
+    }
+
+    #[test]
+    fn proof_identity_and_signature_failures_are_never_tip_progress() {
+        let mut failures = vec![
+            BuildError::EmptyState,
+            BuildError::HeightOverflow,
+            BuildError::InvalidSignerAlgorithm,
+            BuildError::Signing("signing failed".to_owned()),
+        ];
+        for proof_error in [
+            BridgeFinalityError::InvalidHeight(0),
+            BridgeFinalityError::FinalityArtifactNotFound(10),
+            BridgeFinalityError::FinalityArtifactRead {
+                height: 10,
+                reason: "corrupt certificate".to_owned(),
+            },
+            BridgeFinalityError::FinalityArtifactMismatch { height: 10 },
+        ] {
+            failures.push(BuildError::FinalityProof(proof_error.clone()));
+            failures.push(BuildError::GenesisFinalityProof(proof_error));
+        }
+        for error in [
+            ValidationError::ZeroChallenge,
+            ValidationError::NodeFingerprintMismatch,
+            ValidationError::StatusNodeMismatch,
+            ValidationError::InvalidStatus,
+            ValidationError::RestartRequired,
+            ValidationError::ProtocolVersionMismatch,
+            ValidationError::StatusSubjectMismatch,
+            ValidationError::StatusCommitMissing,
+            ValidationError::StatusCommitMismatch,
+            ValidationError::InvalidNodeSignature,
+        ] {
+            failures.push(BuildError::InvalidBody(error));
+        }
+        let left = HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"committed"));
+        let right = HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"foreign proof"));
+        failures.push(BuildError::FinalityTipMismatch {
+            committed_tip_hash: left,
+            proof_block_hash: right,
+        });
+        failures.push(BuildError::GenesisFinalityMismatch {
+            committed_genesis_hash: left,
+            proof_block_hash: right,
+        });
+        for error in failures {
+            let (node_id, network_id) = identity();
+            let fixed = bridge_finality_attestation_error_response(
+                error,
+                10,
+                9,
+                [7; 32],
+                node_id,
+                network_id,
+                crate::utils::ResponseFormat::Norito,
+            )
+            .expect_err("only the two exact height errors may be progress");
+            assert_ne!(fixed.into_response().status(), StatusCode::CONFLICT);
+        }
+    }
+
+    #[tokio::test]
+    async fn canonical_boundary_keeps_only_valid_tip_progress_status_and_code() {
+        use iroha_torii_shared::{
+            ErrorDetails, bridge_finality::BridgeFinalityAttestationTipMismatchV1,
+        };
+        for (status, code, applied, retained) in [
+            (
+                StatusCode::CONFLICT,
+                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
+                9,
+                true,
+            ),
+            (
+                StatusCode::NOT_FOUND,
+                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
+                9,
+                false,
+            ),
+            (StatusCode::CONFLICT, "query_validation_failed", 9, false),
+            (
+                StatusCode::CONFLICT,
+                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
+                10,
+                false,
+            ),
+        ] {
+            let (node_id, network_id) = identity();
+            let envelope =
+                ErrorEnvelope::new(code, "snapshot progress").with_details(ErrorDetails {
+                    bridge_finality_attestation_tip_mismatch: Some(
+                        BridgeFinalityAttestationTipMismatchV1 {
+                            requested_height: 10,
+                            applied_height: applied,
+                            status_height: 10,
+                            challenge: [7; 32],
+                            node_id,
+                            network_id,
+                        },
+                    ),
+                    ..ErrorDetails::default()
+                });
+            let (parts, _) = Response::builder()
+                .status(status)
+                .body(axum::body::Body::empty())
+                .unwrap()
+                .into_parts();
+            let response = crate::finalize_bridge_finality_attestation_response(Ok(
+                crate::canonical_error_response(
+                    parts,
+                    envelope,
+                    crate::utils::ResponseFormat::Norito,
+                    false,
+                ),
+            ));
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            let bytes = axum::body::to_bytes(
+                response.into_body(),
+                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
+            )
+            .await
+            .unwrap();
+            let decoded: ErrorEnvelope = norito::decode_canonical_with_limits(
+                &bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .unwrap();
+            assert_eq!(
+                decoded
+                    .details
+                    .and_then(|details| details.bridge_finality_attestation_tip_mismatch)
+                    .is_some(),
+                retained
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_height_progress_shapes_remain_fixed_errors() {
+        for (requested, applied, status, challenge) in [
+            (0, 9, 9, [7; 32]),
+            (10, 0, 10, [7; 32]),
+            (10, 9, 0, [7; 32]),
+            (10, 9, 10, [0; 32]),
+            (10, 10, 10, [7; 32]),
+        ] {
+            let (node_id, network_id) = identity();
+            assert!(
+                bridge_finality_attestation_error_response(
+                    BuildError::HeightIsNotDurableTip {
+                        requested,
+                        committed: applied
+                    },
+                    requested,
+                    status,
+                    challenge,
+                    node_id,
+                    network_id,
+                    crate::utils::ResponseFormat::Norito,
+                )
+                .is_err()
+            );
+        }
+        for error in [
+            BuildError::HeightIsNotDurableTip {
+                requested: 11,
+                committed: 9,
+            },
+            BuildError::InvalidBody(ValidationError::StatusHeightMismatch),
+        ] {
+            let (node_id, network_id) = identity();
+            assert!(
+                bridge_finality_attestation_error_response(
+                    error,
+                    10,
+                    10,
+                    [7; 32],
+                    node_id,
+                    network_id,
+                    crate::utils::ResponseFormat::Norito,
+                )
+                .is_err()
+            );
+        }
     }
 }
 fn map_bridge_finality_attestation_error(
@@ -38353,6 +38707,7 @@ pub const ENDPOINT_ACCOUNTS_ONBOARDING_CURRENT_STATE: &str =
     "/v1/accounts/onboarding/current-state";
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
 pub const ENDPOINT_ACCOUNTS_FAUCET_PREPARE: &str = "/v1/accounts/faucet/prepare";
+pub const ENDPOINT_ACCOUNTS_FAUCET_POLICY: &str = "/v1/accounts/faucet/policy";
 pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
@@ -58228,6 +58583,26 @@ impl PreparedTransactionSubmitResponseDto {
     /// Current immutable submit response schema.
     pub const SCHEMA: &'static str = "iroha.prepared-transaction-submit.v1";
 }
+/// Public faucet configuration discovery; independent clients must retain their own authority pins.
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountFaucetPolicyDto {
+    /// Explicit discovery response version.
+    pub schema: &'static str,
+    /// Network served by this Torii process.
+    pub network_id: iroha_data_model::NetworkId,
+    /// Account address network discriminant, as exposed by the faucet puzzle.
+    pub chain_discriminant: u16,
+    /// Configured canonical faucet authority, without its signer material.
+    pub authority: String,
+    /// Resolved canonical asset definition, including when configuration uses an alias.
+    pub asset_definition_id: String,
+    /// Configured positive claim quantity; this does not assert reserve sufficiency.
+    pub amount: Quantity,
+}
+impl AccountFaucetPolicyDto {
+    /// Current public faucet policy response schema.
+    pub const SCHEMA: &'static str = "iroha.accounts.faucet.policy.v1";
+}
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountFaucetPuzzleDto {
     pub algorithm: &'static str,
@@ -60697,6 +61072,31 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
             outcome,
         ),
     ))
+}
+/// Discover the configured faucet policy without preparing or submitting a transaction.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_accounts_faucet_policy(
+    app: crate::SharedAppState,
+) -> Result<impl IntoResponse> {
+    let faucet = app.account_faucet.as_ref().ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            "Account faucet disabled".into(),
+        ))
+    })?;
+    let policy = AccountFaucetPolicyDto {
+        schema: AccountFaucetPolicyDto::SCHEMA,
+        network_id: *app.state.network_id_ref(),
+        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+        authority: faucet.authority.to_string(),
+        asset_definition_id: resolve_faucet_asset_definition_id(&app, faucet)?.to_string(),
+        amount: configured_faucet_quantity(faucet)?,
+    };
+    let mut response = pretty_json_response(&policy)?;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    Ok((StatusCode::OK, response))
 }
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts_faucet_puzzle(

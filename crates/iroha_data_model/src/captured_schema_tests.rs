@@ -11,9 +11,11 @@ use std::{
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json::Value};
 use sha2::{Digest, Sha256};
 
+/// Number of retained nominal codec identities in the reviewed fixture.
+const EXPECTED_CODEC_COUNT: usize = 1_769;
 const CAPTURE_REPORT_SHA256: &str =
     "be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd";
-const FIXTURE_SHA256: &str = "c8d1e6731e5d1303414c43452b2f392e4ffc814f60da5326ed953811f2a5f27d";
+const FIXTURE_SHA256: &str = "d3e8f596c5be685b9dc6728c2ebc18ad37754ced1def954e29a7cecc64d2b4a9";
 
 fn fixture() -> &'static BTreeMap<String, Value> {
     static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
@@ -36,7 +38,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
             .get("rows")
             .and_then(Value::as_array)
             .expect("captured rows");
-        assert_eq!(rows.len(), 1_770);
+        assert_eq!(rows.len(), EXPECTED_CODEC_COUNT);
         let mut names = BTreeMap::new();
         let mut direction_counts = [0, 0, 0];
         for row in rows {
@@ -80,7 +82,7 @@ fn fixture() -> &'static BTreeMap<String, Value> {
                 "capture names must be unique"
             );
         }
-        assert_eq!(direction_counts, [1_695, 68, 7]);
+        assert_eq!(direction_counts, [1_694, 68, 7]);
         names
     })
 }
@@ -194,5 +196,5 @@ impl Case {
 
 #[test]
 fn captured_codec_fixture_is_complete() {
-    assert_eq!(fixture().len(), 1_770);
+    assert_eq!(fixture().len(), EXPECTED_CODEC_COUNT);
 }

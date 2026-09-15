@@ -25,6 +25,8 @@ SPEC = importlib.util.spec_from_file_location("taira_release", SCRIPT)
 assert SPEC and SPEC.loader
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
+# Tests that exercise development diagnostics import their mutable gate explicitly.
+import taira_release_check as development_gate
 
 
 def elf(machine=183):
@@ -86,11 +88,11 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "frozen_snapshot", side_effect=(lambda *_: snapshot(self.source)) if snapshot else (lambda *_: [])), \
              patch.object(release, "isolated_cargo_environment", side_effect=isolate or (lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), []))), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
-             patch.object(release, "captured_gate", return_value=release.gate), \
+             patch.object(release, "captured_gate", return_value=development_gate), \
              patch.object(release, "local_package_names", return_value=set()), \
              patch.object(release, "admit_source_fingerprints", side_effect=cache_admission or (lambda *_a, **_k: [])), \
              patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
-             patch.object(release.gate, "run_checks", side_effect=check) as gate, \
+             patch.object(development_gate, "run_checks", side_effect=check) as gate, \
              patch.object(release, "run_build", side_effect=wrapped_build) as compile, \
              patch.object(release, "capacity_preflight", return_value=[]), \
              contextlib.redirect_stdout(io.StringIO()):
@@ -138,7 +140,7 @@ class TairaPrepareTests(unittest.TestCase):
     def test_failed_gate_never_starts_linux_build_or_capture(self):
         with patch.object(release, "run_build") as build:
             with self.assertRaisesRegex(release.PrepareError, "fixture gate failed"):
-                self.prepare(check=release.gate.CheckError("fixture gate failed"))
+                self.prepare(check=development_gate.CheckError("fixture gate failed"))
             build.assert_not_called()
         self.assertFalse(list(self.out.glob("attempts/*/bin")))
         self.assertFalse((self.out / "result.json").exists())
@@ -192,7 +194,7 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_existing_output_and_symlink_target_fail_before_gate(self):
         self.out.mkdir()
-        with patch.object(release.gate, "run_checks") as gate:
+        with patch.object(development_gate, "run_checks") as gate:
             with self.assertRaisesRegex(release.PrepareError, "fresh"):
                 release.prepare(self.args)
             gate.assert_not_called()
@@ -366,7 +368,7 @@ class TairaPrepareTests(unittest.TestCase):
             return ["ivm"]
 
         with self.assertRaisesRegex(release.PrepareError, "fixture native failure"):
-            self.prepare(cache_admission=retire, check=release.gate.CheckError("fixture native failure"))
+            self.prepare(cache_admission=retire, check=development_gate.CheckError("fixture native failure"))
         self.assertFalse((self.out / "checks.json").exists())
         self.assertEqual((self.out / "attempts/000002/retired-checks.json").read_bytes(), old_checks)
         result, gate, _build = self.prepare()
@@ -431,7 +433,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release, "capacity_preflight", side_effect=release.PrepareError("insufficient free space")), \
-             patch.object(release.gate, "run_checks") as gate:
+             patch.object(development_gate, "run_checks") as gate:
             with self.assertRaisesRegex(release.PrepareError, "insufficient free space"):
                 release.prepare(self.args)
             gate.assert_not_called()
@@ -709,7 +711,7 @@ class TairaPrepareTests(unittest.TestCase):
         with patch.object(release, "git", side_effect=verified_git):
             yield
 
-    def prepare_controller_fixture(self, commit, *, check=None):
+    def prepare_controller_fixture(self, commit, *, check=None, native_gate_from_capture=False, through_cli=False):
         def build(_root, _command, _env, log, **_kwargs):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -718,15 +720,16 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "verify_controller_module_origins"), \
              patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
-             patch.object(release, "captured_gate", return_value=release.gate), \
+             (contextlib.nullcontext() if native_gate_from_capture else \
+              patch.object(release, "captured_gate", return_value=development_gate)), \
              patch.object(release, "local_package_names", return_value=set()), \
              patch.object(release, "admit_source_fingerprints", return_value=[]), \
              patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
-             patch.object(release.gate, "run_checks", side_effect=check), \
+             patch.object(development_gate, "run_checks", side_effect=check), \
              patch.object(release, "run_build", side_effect=build), \
              patch.object(release, "capacity_preflight", return_value=[]), \
              contextlib.redirect_stdout(io.StringIO()):
-            return release.prepare(self.args)
+            return release.main() if through_cli else release.prepare(self.args)
 
     def test_fresh_prepare_selects_signed_objects_before_unrelated_head_and_worktree_changes(self):
         commit, files = self.controller_fixture()
@@ -762,6 +765,87 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual({path: (path.read_bytes(), release.file_identity(path.lstat()))
                           for path in before}, before)
         self.assertEqual(self.fixture_git("status", "--porcelain=v1", "--untracked-files=all"), before_status)
+
+    def test_prepare_cli_does_not_import_a_mutable_gate_with_side_effects(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        for name in ("taira_release.py", "taira_cargo_cache.py", "release_artifact_contract.py"):
+            (scripts / name).write_bytes((SCRIPT.parent / name).read_bytes())
+        marker = self.root / "mutable-gate-executed"
+        (scripts / "taira_release_check.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+            "raise RuntimeError('mutable gate executed before preparation')\n")
+        arguments = [sys.executable, "-B", str(scripts / "taira_release.py"), "prepare",
+                     "--repo-root", str(self.root), "--target-dir", str(self.target),
+                     "--expected-commit", "not-a-commit", "--expected-signer", "A" * 40,
+                     "--output-dir", str(self.target / "not-created"), "--zig", str(self.zig),
+                     "--zig-sha256", self.args.zig_sha256,
+                     "--cargo-zigbuild", str(self.zigbuild),
+                     "--cargo-zigbuild-sha256", self.args.cargo_zigbuild_sha256]
+        result = subprocess.run(arguments, cwd="/", capture_output=True, text=True, timeout=10,
+                                env=release.child_environment(dict(os.environ), self.target))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected commit must be a full lowercase Git object ID", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.out.exists())
+
+    def test_prepare_uses_the_signed_gate_despite_divergent_live_gate_and_keeps_failure_fixed(self):
+        self.controller_fixture()
+        relative = "scripts/taira_release_check.py"
+        selected_code = (
+            "import json\nfrom pathlib import Path\n"
+            "class CheckError(RuntimeError): pass\n"
+            "def run_checks(root, **kwargs):\n"
+            "    target = Path(kwargs['environment']['CARGO_TARGET_DIR'])\n"
+            "    (target / 'selected-gate.json').write_text(json.dumps({\n"
+            "        'source': str(root), 'commit': kwargs['source_commit'],\n"
+            "        'scope': kwargs['qualification_scope']}))\n"
+            "    if (target / 'fail-selected-gate').exists():\n"
+            "        raise CheckError('captured native gate refused fixture')\n"
+        ).encode()
+        (self.root / relative).write_bytes(selected_code)
+        self.fixture_git("add", "--", relative)
+        commit = self.commit_controller_fixture("selected native gate fixture")
+        self.args.expected_commit = commit
+        marker = self.root / "live-gate-executed"
+        live_code = (f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+                     "raise AssertionError('live gate executed')\n").encode()
+        (self.root / relative).write_bytes(live_code)
+        index_before = (self.root / ".git/index").read_bytes()
+        result = self.prepare_controller_fixture(commit, native_gate_from_capture=True)
+        source = Path(result["source_root"])
+        self.assertEqual((source / relative).read_bytes(), selected_code)
+        observed = json.loads((self.target / "selected-gate.json").read_text())
+        self.assertEqual(observed, {"source": str(source), "commit": commit, "scope": "basic"})
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.root / relative).read_bytes(), live_code)
+        self.assertEqual((self.root / ".git/index").read_bytes(), index_before)
+        self.out = self.target / "prepared-failure"
+        self.args.output_dir = self.out
+        (self.target / "fail-selected-gate").touch()
+        self.args.command = "prepare"
+        output = io.StringIO()
+        with patch.object(release, "parser", return_value=types.SimpleNamespace(parse_args=lambda: self.args)), \
+             contextlib.redirect_stderr(output):
+            self.assertEqual(self.prepare_controller_fixture(
+                commit, native_gate_from_capture=True, through_cli=True), 1)
+        self.assertEqual(output.getvalue(), "[taira-release] FAIL: captured native gate refused fixture\n")
+        self.assertFalse((self.out / "checks.json").exists())
+        self.assertFalse((self.out / "result.json").exists())
+        self.assertFalse(list(self.out.glob("attempts/*/bin")))
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.root / relative).read_bytes(), live_code)
+
+    def test_missing_signed_native_gate_is_rejected_before_capture(self):
+        self.controller_fixture()
+        self.fixture_git("update-index", "--force-remove", "scripts/taira_release_check.py")
+        commit = self.commit_controller_fixture("missing selected gate fixture")
+        self.args.expected_commit = commit
+        with self.fixture_signature(commit), \
+             patch.object(release, "verify_controller_module_origins"), \
+             self.assertRaisesRegex(release.PrepareError, "missing a required build controller source"):
+            release.verify_signed_source(self.root, commit, self.args.expected_signer)
 
     def test_controller_drift_is_rejected_before_capture_even_when_staged_or_hidden(self):
         commit, files = self.controller_fixture()
@@ -819,7 +903,7 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_controller_module_origins_reject_shadow_package(self):
         modules = {}
-        for name in ("release_artifact_contract", "taira_release_check", "taira_cargo_cache"):
+        for name in ("release_artifact_contract", "taira_cargo_cache"):
             module = types.ModuleType(name)
             module.__file__ = str(self.root / "scripts" / (name + ".py"))
             module.__spec__ = importlib.util.spec_from_file_location(name, module.__file__)
@@ -1140,6 +1224,14 @@ class TairaPrepareTests(unittest.TestCase):
             (self.root / "scripts/taira_release_check.py").write_text("raise RuntimeError('mutable gate must not execute')")
             selected = release.captured_gate(source, before)
             self.assertEqual(selected.SELECTION, ("captured regression",))
+            captured = source / "scripts/taira_release_check.py"
+            marker = self.target / "altered-captured-gate-executed"
+            captured.chmod(0o600)
+            captured.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+            captured.chmod(0o400)
+            with self.assertRaisesRegex(release.PrepareError, "captured native gate changed"):
+                release.captured_gate(source, before)
+            self.assertFalse(marker.exists())
 
     def test_isolated_cargo_ignores_home_and_ancestor_configuration(self):
         self.source.mkdir()
@@ -1304,7 +1396,7 @@ class TairaPrepareTests(unittest.TestCase):
                 with release.cargo_lane(repo, routine, "development"):
                     self.fail("must not admit competing check")
         with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
-             patch.object(release.gate, "run_checks", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+             patch.object(development_gate, "run_checks", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
             release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad", "CARGO_INCREMENTAL": "0"})
         with self.assertRaises(OSError):
             os.fstat(descriptors[0])
@@ -1321,7 +1413,7 @@ class TairaPrepareTests(unittest.TestCase):
         argv = ["taira_release_check.py", "--repo-root", str(repo), "--target-dir", str(routine)]
         with patch.dict(sys.modules, {"taira_release": release}), patch.object(release.sys, "argv", argv), \
              patch.object(release, "development_check") as check:
-            self.assertEqual(release.gate.main(), 0)
+            self.assertEqual(development_gate.main(), 0)
         self.assertEqual(check.call_args.args[:2], (repo, routine))
 
     def test_focused_prequalification_keeps_development_lock_and_sanitized_environment(self):
@@ -1340,8 +1432,8 @@ class TairaPrepareTests(unittest.TestCase):
                 with release.cargo_lane(repo, routine, "development"):
                     self.fail("prequalification must hold the shared development lane")
         with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
-             patch.object(release.gate, "run_prequalification", side_effect=diagnostic) as prequalify, \
-             patch.object(release.gate, "run_checks") as qualify, contextlib.redirect_stdout(io.StringIO()):
+             patch.object(development_gate, "run_prequalification", side_effect=diagnostic) as prequalify, \
+             patch.object(development_gate, "run_checks") as qualify, contextlib.redirect_stdout(io.StringIO()):
             release.development_check(repo, None, {"PRIVATE_KEY": "never forward", "RUSTFLAGS": "bad"},
                                       focused_regressions=focused)
         prequalify.assert_called_once()
@@ -1354,17 +1446,41 @@ class TairaPrepareTests(unittest.TestCase):
     def test_invalid_focus_stops_before_target_or_tool_setup(self):
         repo, routine = self.development_paths()
         with patch.object(release, "isolated_cargo_environment") as tools, \
-             patch.object(release.gate, "run_prequalification") as prequalify:
-            with self.assertRaises(release.gate.CheckError):
+             patch.object(development_gate, "run_prequalification") as prequalify:
+            with self.assertRaises(release.PrepareError):
                 release.development_check(repo, routine, {}, focused_regressions=("core=*",))
         tools.assert_not_called()
         prequalify.assert_not_called()
         self.assertFalse((routine / ".taira-build-lane").exists())
 
+    def test_development_gate_failures_keep_nonzero_cli_status_and_exact_diagnostics(self):
+        repo, routine = self.development_paths()
+        focus = "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
+        for focused, entrypoint in ((False, "release"), (True, "release"),
+                                    (False, "gate"), (True, "gate")):
+            argv = (["taira_release.py", "check"] if entrypoint == "release" else ["taira_release_check.py"])
+            argv.extend(["--repo-root", str(repo), "--target-dir", str(routine)])
+            if focused:
+                argv.extend(["--focus-regression", focus])
+            output = io.StringIO()
+            method = "run_prequalification" if focused else "run_checks"
+            with self.subTest(focused=focused, entrypoint=entrypoint), \
+                 patch.dict(sys.modules, {"taira_release": release}), \
+                 patch.object(release.sys, "argv", argv), \
+                 patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                 patch.object(development_gate, method, side_effect=development_gate.CheckError("exact development refusal")) as run, \
+                 contextlib.redirect_stderr(output), contextlib.redirect_stdout(io.StringIO()):
+                main = release.main if entrypoint == "release" else development_gate.main
+                self.assertEqual(main(), 1)
+            run.assert_called_once()
+            prefix = "taira-release" if entrypoint == "release" else "taira-check"
+            self.assertEqual(output.getvalue(), f"[{prefix}] FAIL: exact development refusal\n")
+            self.assertFalse((routine / "checks.json").exists())
+
     def test_prequalification_cannot_use_the_authenticated_release_target(self):
         repo, _ = self.development_paths()
         with patch.object(release, "isolated_cargo_environment") as tools, \
-             patch.object(release.gate, "run_prequalification") as prequalify:
+             patch.object(development_gate, "run_prequalification") as prequalify:
             with self.assertRaisesRegex(release.PrepareError, "authenticated release lane"):
                 release.development_check(repo, repo / "target", {}, focused_regressions=(
                     "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay",))

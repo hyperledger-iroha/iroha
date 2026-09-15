@@ -2,8 +2,8 @@
 //!
 //! This isolated network uses the native SNS policy, signed planner and paid
 //! leases. Ordinary transaction fees are zero from genesis to isolate lease
-//! accounting; this is not production-fee qualification. The historical alias
-//! is a universal-domain control, NOT private-to-universal transition evidence.
+//! accounting; this is not production-fee qualification. Paid alias routing
+//! uses the universal registry from genesis, before any private catalog entry.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
 use iroha_model_base::domain::DomainId;
@@ -45,8 +45,7 @@ use iroha_data_model::{
     alias_setup::{
         ALIAS_LEASE_YEAR_MS, AliasDataSpaceIntentV1, AliasDataspaceBootstrapGrantV1,
         AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanDispositionV1,
-        AliasQuoteGuardV1, AliasRegistryRoutingActivationV1, AliasSetupPlanRequestV1,
-        ResolvedDomainV1,
+        AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDomainV1,
     },
     block::{
         SignedBlock,
@@ -1014,19 +1013,10 @@ struct LedgerSnapshot {
 fn ledger_snapshot(
     client: &Client,
     expectations: &[LeaseExpectation],
-    activation: AliasRegistryRoutingActivationV1,
     grant: &AliasDataspaceBootstrapGrantV1,
     transactions: &[SignedTransaction],
 ) -> Result<LedgerSnapshot> {
     let parameters: Parameters = client.client().query_single(FindParameters::new())?;
-    let custom = parameters
-        .custom()
-        .get(&AliasRegistryRoutingActivationV1::parameter_id())
-        .ok_or_else(|| eyre!("routing activation parameter missing"))?;
-    ensure!(
-        AliasRegistryRoutingActivationV1::from_custom_parameter(custom)? == Some(activation),
-        "routing activation changed"
-    );
     let custom = parameters
         .custom()
         .get(&grant.parameter_id()?)
@@ -1124,7 +1114,6 @@ fn ledger_snapshot(
 async fn wait_for_snapshot(
     client: &Client,
     expectations: &[LeaseExpectation],
-    activation: AliasRegistryRoutingActivationV1,
     grant: &AliasDataspaceBootstrapGrantV1,
     transactions: &[SignedTransaction],
     expected: Option<&LedgerSnapshot>,
@@ -1135,10 +1124,8 @@ async fn wait_for_snapshot(
         let expectations = expectations.to_vec();
         let grant = grant.clone();
         let transactions = transactions.to_vec();
-        let observed = read(move || {
-            ledger_snapshot(&client, &expectations, activation, &grant, &transactions)
-        })
-        .await;
+        let observed =
+            read(move || ledger_snapshot(&client, &expectations, &grant, &transactions)).await;
         match observed {
             Ok(snapshot) if expected.is_none_or(|expected| expected == &snapshot) => {
                 return Ok(snapshot);
@@ -2181,13 +2168,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     );
     let read_client = authority.clone();
     let baseline_leases = read(move || {
-        let params: Parameters = read_client.client().query_single(FindParameters::new())?;
-        ensure!(
-            !params
-                .custom()
-                .contains_key(&AliasRegistryRoutingActivationV1::parameter_id()),
-            "history must begin before routing activation is installed"
-        );
         [SnsNamespacePath::Domain, SnsNamespacePath::Dataspace]
             .into_iter()
             .map(|namespace| {
@@ -2220,20 +2200,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         "history.universal",
     )
     .await?;
-    let activation = AliasRegistryRoutingActivationV1::new(
-        height(authority)
-            .await?
-            .checked_add(24)
-            .ok_or_else(|| eyre!("activation height overflow"))?,
-    );
-    let installed = submit(
-        authority,
-        transaction(
-            authority,
-            SetParameter::new(Parameter::Custom(activation.into_custom_parameter())),
-        ),
-    )
-    .await?;
     let granted = submit(
         authority,
         transaction(
@@ -2242,30 +2208,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         ),
     )
     .await?;
-    let deadline = Instant::now() + ADVANCE_TIMEOUT;
-    for index in 0..32 {
-        if height(authority).await? >= activation.activation_height {
-            break;
-        }
-        ensure!(
-            Instant::now() < deadline && index < 31,
-            "future activation did not become effective within bounded real consensus progress"
-        );
-        // Real signed transactions, never empty height carriers. QueuePlan can
-        // consume multiple carriers; do not assume one transaction = one block.
-        submit(
-            authority,
-            transaction(
-                authority,
-                Log::new(Level::INFO, format!("alias-bootstrap-activation-{index}")),
-            ),
-        )
-        .await?;
-    }
-    ensure!(
-        height(authority).await? >= activation.activation_height,
-        "routing activation not reached"
-    );
     let (dataspace, dataspace_lease) = acquire(
         &payer,
         AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
@@ -2284,21 +2226,12 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     )
     .await?;
     let leases = vec![historical_lease, dataspace_lease, domain_lease];
-    let mut transactions = vec![historical, installed, granted, dataspace, domain];
-    let expected =
-        wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
+    let mut transactions = vec![historical, granted, dataspace, domain];
+    let expected = wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &expected.balances, &leases)?;
     let mut original_lanes = Vec::new();
     for client in &clients {
-        wait_for_snapshot(
-            client,
-            &leases,
-            activation,
-            &grant,
-            &transactions,
-            Some(&expected),
-        )
-        .await?;
+        wait_for_snapshot(client, &leases, &grant, &transactions, Some(&expected)).await?;
         original_lanes.push(observe_catalog_expansion(client, false).await?);
     }
     let initial_prefix = common_retained_prefix(&clients).await?;
@@ -2326,21 +2259,17 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         ensure!(
             execution_height(history, &transactions[0])?
                 < execution_height(history, &transactions[1])?,
-            "historical alias did not precede activation installation"
+            "the first paid universal alias must precede the owner bootstrap grant"
         );
         ensure!(
-            execution_height(history, &transactions[1])? < activation.activation_height,
-            "activation was not installed at a genuinely future height"
+            execution_height(history, &transactions[1])?
+                < execution_height(history, &transactions[2])?,
+            "owner grant must precede first paid dataspace lease"
         );
         ensure!(
             execution_height(history, &transactions[2])?
                 < execution_height(history, &transactions[3])?,
-            "owner grant must precede first paid dataspace lease"
-        );
-        ensure!(
-            execution_height(history, &transactions[3])? >= activation.activation_height
-                && execution_height(history, &transactions[4])? >= activation.activation_height,
-            "BPNG aliases did not execute under active registry routing"
+            "paid dataspace lease must precede its domain lease"
         );
         ensure!(
             evidence.certified_bpng_lane == CertifiedBpngLaneEvidence::absent(),
@@ -2362,15 +2291,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     for ((client, retained), original_lanes) in
         clients.iter().zip(&initial_evidence).zip(&original_lanes)
     {
-        wait_for_snapshot(
-            client,
-            &leases,
-            activation,
-            &grant,
-            &transactions,
-            Some(&expected),
-        )
-        .await?;
+        wait_for_snapshot(client, &leases, &grant, &transactions, Some(&expected)).await?;
         ensure!(
             &observe_catalog_expansion(client, true).await? == original_lanes,
             "dataspace-only restart changed a lane or its incarnation commitment"
@@ -2563,7 +2484,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None).await?;
     }
     let before_second_restart =
-        wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
+        wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &before_second_restart.balances, &leases)?;
     let pre_restart_prefix = common_retained_prefix(&clients).await?;
     ensure!(
@@ -2630,7 +2551,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         wait_for_snapshot(
             client,
             &leases,
-            activation,
             &grant,
             &transactions,
             Some(&before_second_restart),
@@ -2703,7 +2623,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .await?;
     }
     let after_successor =
-        wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
+        wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &after_successor.balances, &leases)?;
     let after_restart_prefix = common_retained_prefix(&clients).await?;
     ensure!(

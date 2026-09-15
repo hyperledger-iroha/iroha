@@ -2448,6 +2448,7 @@ async fn disabled_faucet_tools_are_omitted_and_rejected_at_runtime() {
     state.mcp.profile = ToriiMcpProfile::Writer;
     state.mcp_tools = std::sync::Arc::new(vec![
         iroha_health_tool(),
+        iroha_accounts_faucet_policy_tool(),
         iroha_accounts_faucet_prepare_tool(),
         iroha_accounts_faucet_submit_tool(),
     ]);
@@ -2460,6 +2461,7 @@ async fn disabled_faucet_tools_are_omitted_and_rejected_at_runtime() {
         vec!["iroha.health"]
     );
     for name in [
+        "iroha.accounts.faucet.policy",
         "iroha.accounts.faucet.prepare",
         "iroha.accounts.faucet.submit",
     ] {
@@ -3021,4 +3023,67 @@ fn manual_descriptor_loader_accepts_content_updates_and_preserves_policy() {
     );
     let oversized = vec![b' '; MANUAL_STATIC_TOOL_ASSET_MAX_BYTES + 1];
     assert!(std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&oversized)).is_err());
+}
+
+#[test]
+fn faucet_policy_tool_is_read_only_and_runtime_gated() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::ReadOnly;
+    let tools = build_tool_specs(&cfg);
+    let policy = tools
+        .iter()
+        .find(|tool| tool.name == "iroha.accounts.faucet.policy")
+        .expect("compiled faucet policy discovery tool");
+    let (effect, method, path) = policy.route_backing().expect("route-backed policy");
+    assert_eq!(effect, ToolEffect::Read);
+    assert_eq!(method, &Method::GET);
+    assert_eq!(path, "/v1/accounts/faucet/policy");
+    assert!(is_tool_allowed_by_policy(&cfg, policy));
+    assert!(validate_tool_arguments(policy, &Map::new()).is_ok());
+    for field in ["authority", "private_key", "amount", "body", "url"] {
+        let mut arguments = Map::new();
+        arguments.insert(field.to_owned(), Value::String("untrusted".to_owned()));
+        assert!(
+            validate_tool_arguments(policy, &arguments).is_err(),
+            "{field}"
+        );
+    }
+    let mut app = mk_app_state_for_tests();
+    assert!(!tool_is_runtime_available(&app, policy));
+    std::sync::Arc::get_mut(&mut app)
+        .expect("unique app state")
+        .account_faucet = Some(test_faucet_runtime_config());
+    assert!(tool_is_runtime_available(&app, policy));
+}
+
+#[tokio::test]
+async fn faucet_policy_tool_dispatches_only_get_without_body() {
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let route_seen = std::sync::Arc::clone(&seen);
+    let router =
+        axum::Router::new().fallback_service(tower::service_fn(move |request: Request<Body>| {
+            let seen = std::sync::Arc::clone(&route_seen);
+            async move {
+                assert_eq!(request.method(), Method::GET);
+                assert_eq!(request.uri().path(), "/v1/accounts/faucet/policy");
+                assert!(request.uri().query().is_none());
+                let bytes = axum::body::to_bytes(request.into_body(), 1)
+                    .await
+                    .expect("empty discovery request");
+                assert!(bytes.is_empty());
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::NO_CONTENT)
+                        .body(Body::empty())
+                        .expect("response"),
+                )
+            }
+        }));
+    let app = mk_app_state_for_tests();
+    let _owner = app.mcp_dispatch_router.install(router);
+    dispatch_iroha_accounts_faucet_policy(&app, &HeaderMap::new(), &Map::new())
+        .await
+        .expect("read-only policy dispatch");
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

@@ -53,6 +53,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import uuid
@@ -467,7 +468,6 @@ CORE_STAGES += (("durable output capacity and strict handoff", (
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output",
     "sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically",
     "sumeragi::v2_worker::tests::prepared_historical_body_retries_after_exact_output_capacity_rejection",
-    "sumeragi::v2_worker::tests::prepared_historical_body_capacity_recovers_from_applied_finality_without_peer_delivery",
     "sumeragi::v2_worker::tests::applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output",
     "sumeragi::v2_worker::tests::applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate",
     "sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate",
@@ -853,6 +853,9 @@ CORE_ADMISSION_STARTUP_STAGES += (("terminal validation history and shared outco
 CORE_ADMISSION_STARTUP_STAGES += (("atomic committed catalog authority and preserved history", (
     "lane_consensus::tests::canonical_recovery_restores_only_an_exact_complete_drained_handoff",
     "sumeragi::v2_lane_work::tests::canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement",
+    "kura::tests::consensus_certificate_read_rejects_occupied_corruption_without_repair",
+    "sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants",
+    "kura::tests::canonical_autonomous_replica_corruption_and_wrong_context_fail_closed",
     "state::runtime_configuration_tests::runtime_nexus_setter_preserves_configured_dataspaces_and_rejects_post_genesis_drift",
     "state::runtime_configuration_tests::runtime_nexus_setter_requires_exact_protected_dataspace_projection",
     "state::runtime_catalog_tests::runtime_catalog_preflight_preserves_prior_additions_and_rejects_replacement",
@@ -937,6 +940,26 @@ CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred s
     "block::tests::parallel_account_profile_preserves_delegated_metadata_results",
     "block::tests::parallel_account_profile_rejects_foreign_permission_payloads",
 )),)
+
+CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and replay", (
+    "queue::router::alias_registry_routing_tests::alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal",
+    "queue::router::alias_registry_routing_tests::alias_registry_routing_is_independent_of_height_and_catalog",
+    "queue::router::alias_registry_routing_tests::alias_registry_routing_nested_walkers_use_universal_registry",
+    "queue::router::alias_registry_routing_tests::alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards",
+    "queue::router::alias_registry_routing_tests::alias_registry_routing_keeps_real_private_participants_in_mixed_transactions",
+    "queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap",
+    "queue::router::tests::alias_registry_routing_is_unconditional_for_queue_and_replay",
+)), )
+
+CORE_ADMISSION_STARTUP_STAGES += (("finite closed ingress and fresh finalized handoff", (
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_closed_drained_cut_rejects_each_stale_lane_account",
+    "sumeragi::v2_runner::tests::finalized_closed_prefix_retires_historical_lane_certificate_without_adapter_admission",
+    "sumeragi::v2_worker::tests::prepared_historical_body_capacity_recovers_from_applied_finality_without_peer_delivery",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_terminal_apply_store_join_rejects_store_drift",
+    "sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff",
+)), )
 
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
@@ -1049,7 +1072,9 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::file_backed_genesis_keeps_fresh_preexecution_validation",
 )),)
 
-NETWORK_OBSERVATION_STAGES = (("complete bounded effective permission observation", (
+NETWORK_OBSERVATION_STAGES = (("inherited native deployment deadline", (
+    "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
+)), ("complete bounded effective permission observation", (
     "runtime_catalog_transition::permission_page_tests::permission_page_requires_complete_short_fanout",
     "runtime_catalog_transition::permission_page_tests::permission_page_rejects_saturation_and_duplicate_items",
     "runtime_catalog_transition::permission_page_tests::permission_page_preserves_failure_context_and_rejects_invalid_metadata",
@@ -1117,6 +1142,26 @@ TORII_SHARED_STAGES = (('strict native SNS missing-registration DTO', (
     'sns::tests::missing_registration_response_requires_exact_fields_and_selector',
 )), )
 
+STAGES += (("bounded native deployment and concurrent validator completion", (
+    "taira_dataspace_deploy::finality::tests::deployment_peer_reads_overlap_and_preserve_input_order",
+    "taira_dataspace_deploy::finality::tests::deployment_peer_reads_reject_non_four_cardinality_before_dispatch",
+    "taira_dataspace_deploy::finality::tests::deployment_peer_reads_join_all_workers_and_report_first_error",
+    "taira_dataspace_deploy::finality::tests::deployment_peer_reads_inherit_configured_address_profile",
+    "taira_dataspace_deploy::finality::tests::deployment_peer_reads_recover_worker_panic_after_joining_all",
+    "taira_dataspace_deploy::finality::tests::deployment_carrier_results_require_exact_bytes_before_publication",
+    "taira_dataspace_deploy::finality::tests::deployment_peer_progress_requires_valid_complete_status_pair",
+    "taira_dataspace_deploy::finality::tests::deployment_peer_progress_retries_only_pending_or_newer_carrier",
+    "taira_dataspace_deploy::finality::tests::deployment_peer_progress_never_masks_fixed_worker_errors",
+    "taira_dataspace_deploy::tests::saved_commands_require_positive_budget_and_default_to_three_minutes",
+    "taira_dataspace_deploy::tests::saved_zero_budget_stops_before_journal_or_client_access",
+    "taira_dataspace_deploy::tests::expired_operation_never_observes_or_starts_completion",
+    "taira_dataspace_deploy::tests::apply_observes_pending_until_applied_without_reentering_dispatch",
+    "taira_dataspace_deploy::tests::status_observes_once_and_terminal_apply_does_not_retry",
+    "taira_dataspace_deploy::tests::phase_deadline_rejects_late_applied_and_clips_pending_sleep",
+    "taira_dataspace_deploy::tests::completion_retries_only_explicit_sync_progress_and_status_is_one_attempt",
+    "taira_dataspace_deploy::tests::completion_deadline_rejects_a_late_success",
+)), )
+
 CLIENT_STAGES += (("challenge-bound public finality attestations", (
     'client::evidence_http_tests::bridge_finality_attestation_reader_binds_exact_request_headers_and_signed_body',
     'client::evidence_http_tests::bridge_finality_attestation_reader_rejects_wrong_bindings_and_invalid_http_body',
@@ -1126,6 +1171,65 @@ STAGES += (("native public deployment profile export", (
     'taira_public_reset::deployment_profile::tests::deployment_profile_binds_native_genesis_and_ordered_inventory_peers',
     'taira_public_reset::deployment_profile::tests::deployment_profile_rejects_genesis_artifact_peer_and_slot_substitution',
     'taira_public_reset::deployment_profile::tests::deployment_profile_command_parses_without_private_or_runtime_arguments',
+)), )
+
+CLIENT_STAGES += (("strict scoped pipeline and alias client responses", (
+    'client::evidence_http_tests::get_transaction_status_response_global_sets_global_scope',
+    'client::evidence_http_tests::pipeline_status_404_returns_none_from_exact_global_query',
+    'client::transaction_wait_tests::transaction_wait_timeout_identifies_the_exact_pending_transaction',
+    'client::tests::typed_account_alias_reads_map_not_found_to_none',
+)), )
+
+TORII_UNIT_STAGES += (("complete typed pipeline and alias HTTP errors", (
+    'tests_runtime_handlers::pipeline_status_global_read_skips_non_terminal_local_cache',
+    'torii_routed_read_tests::pipeline_status_fanout_requires_exact_scoped_absence',
+    'openapi::tests::pipeline_status_openapi_exposes_only_the_exact_first_release_scope',
+    'mcp::tests::canonical_paths_and_status::applied_wait_status_poll_accepts_only_exact_200_or_404',
+    'tests::alias_error_envelopes_preserve_reports_and_exact_absence_through_middleware',
+    'tests::alias_account_absence_requires_complete_scoped_fanout',
+    'openapi::tests::alias_errors_openapi_match_native_reports_and_bound_absence',
+)), )
+
+TORII_SHARED_STAGES += (("strict scoped read error details", (
+    'tests::pipeline_transaction_status_roundtrip_is_status_only',
+    'aliases::tests::alias_error_details_roundtrip_and_reject_unknown_fields',
+)), )
+
+CLIENT_STAGES += (("one absolute transaction wait deadline and fixed failure evidence", (
+    'client::transaction_wait_tests::wait_for_transaction_applied_rejects_fixed_failures',
+    'client::transaction_wait_tests::transaction_wait_zero_timeout_never_dispatches_an_initial_read',
+    'client::transaction_wait_tests::transaction_wait_unrepresentable_deadline_fails_before_dispatch',
+    'client::transaction_wait_tests::transaction_wait_expired_context_deadline_cannot_be_extended',
+    'client::transaction_wait_tests::transaction_wait_late_http_status_is_unresolved_in_both_transports',
+    'client::transaction_wait_tests::transaction_wait_retries_spend_one_remaining_http_budget',
+    'client::transaction_wait_tests::transaction_wait_outcome_admission_rechecks_deadline_after_decoding',
+    'client::transaction_wait_tests::transaction_wait_async_deadline_retires_the_pending_status_future',
+)), )
+
+STAGES += (("native deployment completion exit contract and exact tip progress", (
+    "taira_dataspace_deploy::tests::saved_apply_emits_report_before_rejecting_incomplete_success",
+    "taira_dataspace_deploy::tests::saved_report_preserves_output_failure",
+    "taira_dataspace_deploy::finality::tests::deployment_attestation_progress_retries_only_exact_sdk_type",
+    "taira_dataspace_deploy::finality::tests::deployment_attestation_progress_joins_all_peers_and_preserves_fixed_errors",
+)), )
+
+CLIENT_STAGES += (("request-bound finality attestation tip progress", (
+    "client::evidence_http_tests::bridge_finality_attestation_reader_preserves_only_bound_typed_tip_progress",
+    "client::evidence_http_tests::bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress",
+    "client::evidence_http_tests::bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_http",
+)), )
+
+TORII_UNIT_STAGES += (("native finality attestation tip progress and public contract", (
+    "routing::bridge_finality_attestation_progress_tests::exact_tip_snapshot_races_are_bound_negotiated_progress",
+    "routing::bridge_finality_attestation_progress_tests::proof_identity_and_signature_failures_are_never_tip_progress",
+    "routing::bridge_finality_attestation_progress_tests::canonical_boundary_keeps_only_valid_tip_progress_status_and_code",
+    "routing::bridge_finality_attestation_progress_tests::invalid_height_progress_shapes_remain_fixed_errors",
+    "openapi::tests::finality_attestation_tip_progress_openapi_matches_native_bindings",
+    "openapi::tests::compact_finality_app_contracts::bridge_finality_operations_describe_durable_v2_evidence",
+)), )
+
+TORII_SHARED_STAGES += (("strict finality attestation tip progress details", (
+    "bridge_finality::tests::tip_mismatch_requires_exact_selector_and_real_height_progress",
 )), )
 
 HARNESS_TARGETS = {
@@ -1329,8 +1433,102 @@ def compile_test_harnesses(root: Path, env: dict[str, str], *,
     return _build_harnesses(root, command, env, harnesses, lock_fds)
 
 
+CARGO_PROGRESS_INTERVAL_SECONDS = 30
+
+
+class CargoBuildProgress:
+    """Describe observed Cargo work without changing selection or qualification."""
+
+    def __init__(self, phase: str, requested: set[tuple[str, str]], *, test_profile: bool):
+        self._lock = threading.RLock()
+        self.phase = phase
+        self.requested = requested
+        self.test_profile = test_profile
+        self.units: dict[str, bool | None] = {}
+        self.targets: set[tuple[str, str]] = set()
+        self.started = self.last_report = time.monotonic()
+        print(f"[taira-cargo] {phase}: {len(requested)} requested targets "
+              + ", ".join(f"{kind}:{name}" for kind, name in sorted(requested))
+              + "; Cargo also resolves dependencies and implicit targets", flush=True)
+
+    def observe(self, line: str) -> None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
+            return
+        target, profile = event.get("target"), event.get("profile")
+        if not isinstance(target, dict) or not isinstance(profile, dict):
+            return
+        name, kinds = target.get("name"), target.get("kind")
+        if (not isinstance(name, str) or not isinstance(kinds, list)
+                or not all(isinstance(kind, str) for kind in kinds)):
+            return
+        # Include profile/features/output identity so distinct compilation units
+        # remain distinct, while repeated reports of one artifact do not inflate work.
+        identity = json.dumps({key: event.get(key) for key in
+                               ("package_id", "target", "profile", "features", "filenames", "executable")},
+                              sort_keys=True)
+        fresh = event.get("fresh")
+        if type(fresh) is not bool:
+            fresh = None
+        with self._lock:
+            previous = self.units.get(identity)
+            if identity not in self.units or previous is None or fresh is False:
+                self.units[identity] = fresh
+            if profile.get("test") is self.test_profile:
+                for kind in kinds:
+                    if (self.test_profile and kind in {"lib", "bin", "test", "example", "bench"}
+                            or not self.test_profile and kind == "bin"):
+                        self.targets.add((kind, name))
+            now = time.monotonic()
+            if now - self.last_report >= CARGO_PROGRESS_INTERVAL_SECONDS:
+                self.report("running", now=now)
+
+    def report(self, state: str, *, now: float | None = None) -> None:
+        with self._lock:
+            now = time.monotonic() if now is None else now
+            self.last_report = now
+            counts = {"fresh": 0, "rebuilt": 0, "unknown": 0}
+            for fresh in self.units.values():
+                counts["fresh" if fresh is True else "rebuilt" if fresh is False else "unknown"] += 1
+            print("[taira-cargo] " + json.dumps({
+                "phase": self.phase, "state": state, "elapsed_seconds": round(now - self.started, 1),
+                "requested_targets": [f"{kind}:{name}" for kind, name in sorted(self.requested)],
+                "observed_targets": [f"{kind}:{name}" for kind, name in sorted(self.targets)],
+                "additional_targets": [f"{kind}:{name}" for kind, name in sorted(self.targets - self.requested)],
+                "observed_artifact_units": counts,
+            }, sort_keys=True), flush=True)
+
+    @contextlib.contextmanager
+    def heartbeat(self):
+        """Report elapsed work during quiet compilation without requiring a Cargo event."""
+        stopped = threading.Event()
+
+        def report_while_running():
+            while not stopped.wait(CARGO_PROGRESS_INTERVAL_SECONDS):
+                with self._lock:
+                    now = time.monotonic()
+                    if now - self.last_report >= CARGO_PROGRESS_INTERVAL_SECONDS:
+                        self.report("running", now=now)
+
+        reporter = threading.Thread(target=report_while_running, name="taira-cargo-progress", daemon=True)
+        reporter.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            reporter.join()
+
+
 def native_harness_selection(harnesses: tuple[str, ...]) -> list[str]:
-    """Share the exact package/target/default-feature union for check and build."""
+    """Share the package/target/default-feature union for check and build.
+
+    Cargo applies --lib to every selected package; requested harnesses are the
+    qualification census, not an exact count of compiler targets. Progress uses
+    artifact events to expose the additional targets without changing this graph.
+    """
     if not harnesses or len(harnesses) != len(set(harnesses)):
         raise CheckError("native test batch requires distinct harness selections")
     packages: list[str] = []
@@ -1366,14 +1564,17 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
                *selection, "--profile", "test", "--message-format=json-render-diagnostics"]
-    print(f"[taira-prequalify] metadata check for {len(harnesses)} native test harnesses", flush=True)
+    progress = CargoBuildProgress("test metadata", {
+        (HARNESS_TARGETS[harness][2], HARNESS_TARGETS[harness][1]) for harness in harnesses
+    }, test_profile=True)
     started = time.monotonic()
     observed = set()
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child, progress.heartbeat():
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
+            progress.observe(line)
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -1388,6 +1589,7 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
                     observed.add(harness)
         code = child.wait()
     elapsed = time.monotonic() - started
+    progress.report(f"Cargo exited {code}")
     if code:
         raise CheckError(f"native test metadata check failed (exit {code}, {elapsed:.1f}s)")
     missing = [harness for harness in harnesses if harness not in observed]
@@ -1400,15 +1602,18 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
 def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
                      harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> NativeArtifactCopies:
     label = "; ".join(HARNESS_TARGETS[harness][0] for harness in harnesses)
-    print(f"[taira-check] build {label} test harness", flush=True)
+    progress = CargoBuildProgress("test codegen", {
+        (HARNESS_TARGETS[harness][2], HARNESS_TARGETS[harness][1]) for harness in harnesses
+    }, test_profile=True)
     started = time.monotonic()
     artifacts: dict[str, set[str]] = {harness: set() for harness in harnesses}
     records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child, progress.heartbeat():
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
+            progress.observe(line)
             for harness in harnesses:
                 artifact = test_artifact(line, harness=harness)
                 if artifact is not None:
@@ -1420,6 +1625,7 @@ def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
                     records[harness] = record
         code = child.wait()
     elapsed = time.monotonic() - started
+    progress.report(f"Cargo exited {code}")
     if code:
         raise CheckError(f"{label} build failed (exit {code}, {elapsed:.1f}s)")
     for harness, executables in artifacts.items():
@@ -2103,15 +2309,19 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
                "--message-format=json-render-diagnostics"]
-    print("[taira-check] build native network binaries", flush=True)
+    print("[taira-check] build native network binaries with the shipping feature graph; "
+          "test-only fixture features remain excluded", flush=True)
+    progress = CargoBuildProgress("shipping codegen", {("bin", name) for name in expected},
+                                  test_profile=False)
     started = time.monotonic()
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child, progress.heartbeat():
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
+            progress.observe(line)
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -2134,6 +2344,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                 records[selection] = record
                 print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
         code = child.wait()
+    progress.report(f"Cargo exited {code}")
     if code or set(artifacts) != set(expected):
         raise CheckError(f"native network build did not produce every required executable artifact (exit {code})")
     print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
@@ -2404,11 +2615,12 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     _, complete_selections, _ = native_harness_plan(scoped, shipping)
     if not set(focused).issubset(complete_selections):
         raise CheckError("focused regression lacks its selected native compile target")
-    # This mutable diagnostic cannot publish qualification evidence. Keep its
-    # compile boundary as narrow as its explicit tests; prepare owns the full graph.
+    # This mutable diagnostic cannot publish qualification evidence. Request only
+    # configuration and focused harnesses; Cargo can add implicit targets within
+    # their shared package graph. Prepare owns the complete qualification graph.
     selections = tuple(name for name in complete_selections
                        if name == "config" or name in focused)
-    print(f"[taira-prequalify] check and compile {len(selections)} focused native harnesses; "
+    print(f"[taira-prequalify] request {len(selections)} focused native harnesses; "
           "execute configuration plus explicit focused regressions", flush=True)
     check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
     with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
@@ -2580,7 +2792,7 @@ def main() -> int:
             options["focused_regressions"] = tuple(args.focus_regression)
         release.development_check(args.repo_root, args.target_dir, dict(os.environ), **options)
     except (CheckError, release.PrepareError, release.ReleaseArtifactError,
-            release.gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
+            OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-check] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0

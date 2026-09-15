@@ -487,11 +487,12 @@ fn bridge_finality_operations_describe_durable_v2_evidence() {
     let challenge = operation_parameter(operation, "X-Iroha-Finality-Challenge", path);
     assert_eq!(challenge.get("in").and_then(Value::as_str), Some("header"));
     assert_eq!(challenge.get("required").and_then(Value::as_bool), Some(true));
-    for status in ["200", "400", "404", "406", "503"] {
+    for status in ["200", "400", "404", "406", "409", "503"] {
         let headers = operation_responses(operation, path).get(status).and_then(|response| response.get("headers")).and_then(Value::as_object).unwrap_or_else(|| panic!("{status} headers"));
         let constant = |name| headers.get(name).and_then(|header| header.get("schema")).and_then(|schema| schema.get("const")).and_then(Value::as_str);
         assert_eq!(constant("Cache-Control"), Some("no-store"));
         assert_eq!(constant("Vary"), Some("X-Iroha-Finality-Challenge, Accept"));
+        assert_eq!(constant("X-Content-Type-Options"), Some("nosniff"));
     }
 }
 

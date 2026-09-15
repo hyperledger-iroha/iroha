@@ -2848,7 +2848,10 @@ async fn merged_pipeline_status_response_prefers_state_failure_over_cached_appli
 fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
     crate::utils::respond_with_format(
         PipelineTransactionStatusResponse::new(
-            "abc".to_owned(),
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                [0x51; Hash::LENGTH],
+            ))
+            .to_string(),
             PipelineTransactionStatus {
                 kind: kind.to_owned(),
                 block_height: Some(7),
@@ -2863,9 +2866,15 @@ fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
 async fn pipeline_status_hint_ignores_non_terminal_successes() {
     for kind in ["Queued", "Approved", "Committed"] {
         let response = pipeline_status_hint_response(kind, "cache");
-        let hinted = pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
-            .await
-            .expect("hint classifier should not fail");
+        let hinted = pipeline_status_hinted_global_response(
+            response,
+            ROUTED_READ_TEST_BODY_BYTES,
+            &HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                [0x51; Hash::LENGTH],
+            )),
+        )
+        .await
+        .expect("hint classifier should not fail");
         assert!(
             hinted.is_none(),
             "global status must fan out instead of trusting hinted {kind} state"
@@ -2876,9 +2885,15 @@ async fn pipeline_status_hint_ignores_non_terminal_successes() {
 async fn pipeline_status_hint_ignores_cached_terminal_statuses() {
     for kind in ["Applied", "Rejected", "Expired"] {
         let response = pipeline_status_hint_response(kind, "cache");
-        let hinted = pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
-            .await
-            .expect("hint classifier should not fail");
+        let hinted = pipeline_status_hinted_global_response(
+            response,
+            ROUTED_READ_TEST_BODY_BYTES,
+            &HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                [0x51; Hash::LENGTH],
+            )),
+        )
+        .await
+        .expect("hint classifier should not fail");
         assert!(
             hinted.is_none(),
             "global status must fan out instead of trusting hinted cached {kind}"
@@ -2889,10 +2904,16 @@ async fn pipeline_status_hint_ignores_cached_terminal_statuses() {
 async fn pipeline_status_hint_allows_authoritative_terminal_statuses() {
     for (kind, resolved_from) in [("Applied", "state"), ("Rejected", "state")] {
         let response = pipeline_status_hint_response(kind, resolved_from);
-        let hinted = pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
-            .await
-            .expect("hint classifier should not fail")
-            .expect("authoritative hinted status may short-circuit");
+        let hinted = pipeline_status_hinted_global_response(
+            response,
+            ROUTED_READ_TEST_BODY_BYTES,
+            &HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                [0x51; Hash::LENGTH],
+            )),
+        )
+        .await
+        .expect("hint classifier should not fail")
+        .expect("authoritative hinted status may short-circuit");
         let body = axum::body::to_bytes(hinted.into_body(), usize::MAX)
             .await
             .expect("hinted body should be readable");
@@ -2908,10 +2929,33 @@ async fn pipeline_status_hint_ignores_malformed_success() {
         .status(StatusCode::OK)
         .body(Body::from(br#"{"status":{"kind":"Queued"}"#.as_slice()))
         .expect("malformed JSON response");
-    let hinted = pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
-        .await
-        .expect("malformed hinted success should fall through to fanout");
+    let hinted = pipeline_status_hinted_global_response(
+        response,
+        ROUTED_READ_TEST_BODY_BYTES,
+        &HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH])),
+    )
+    .await
+    .expect("malformed hinted success should fall through to fanout");
     assert!(hinted.is_none());
+    let hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    let absence = pipeline_status_not_found_response(
+        &hash,
+        PipelineStatusReadScope::Global,
+        ResponseFormat::Json,
+    );
+    assert!(
+        pipeline_status_hinted_global_response(absence, ROUTED_READ_TEST_BODY_BYTES, &hash)
+            .await
+            .expect("exact hinted absence continues fanout")
+            .is_none()
+    );
+    let generic =
+        torii_proxy_error_response(StatusCode::NOT_FOUND, "route_not_found", "wrong route");
+    let error = pipeline_status_hinted_global_response(generic, ROUTED_READ_TEST_BODY_BYTES, &hash)
+        .await
+        .expect_err("generic hinted 404 is not absence");
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2981,4 +3025,220 @@ async fn merged_space_directory_bindings_response_unions_accounts_and_omits_sing
     );
     assert_eq!(dataspaces[1]["dataspace_id"].as_u64(), Some(7));
     assert_eq!(dataspaces[1]["dataspace_alias"].as_str(), Some("ops"));
+}
+
+#[tokio::test]
+async fn pipeline_status_fanout_requires_exact_scoped_absence() {
+    let routes = [
+        RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+        RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+    ];
+    let hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    // The route-hint fast path must enforce the same exact selector as fanout.
+    for (actual_hash, scope) in [
+        (hash.to_string(), "global"),
+        (
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                [0x53; Hash::LENGTH],
+            ))
+            .to_string(),
+            "global",
+        ),
+        (hash.to_string(), "local"),
+    ] {
+        let correct = actual_hash == hash.to_string() && scope == "global";
+        let response = crate::utils::respond_with_format(
+            PipelineTransactionStatusResponse::new(
+                actual_hash,
+                PipelineTransactionStatus {
+                    kind: "Applied".into(),
+                    block_height: Some(7),
+                },
+                scope.into(),
+                "state".into(),
+            ),
+            ResponseFormat::Json,
+        );
+        let hinted =
+            pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES, &hash)
+                .await;
+        if correct {
+            assert!(hinted.expect("exact authoritative hint").is_some());
+        } else {
+            assert_eq!(
+                hinted.expect_err("hint selector mismatch").status(),
+                StatusCode::BAD_GATEWAY
+            );
+        }
+    }
+    for case in 0..12_u8 {
+        let result = collect_torii_pipeline_status_json_payloads(
+            &routes,
+            &hash,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            move |route| async move {
+                if route == routes[0] {
+                    return pipeline_status_not_found_response(
+                        &hash,
+                        PipelineStatusReadScope::Global,
+                        ResponseFormat::Json,
+                    );
+                }
+                match case {
+                    0 => pipeline_status_not_found_response(
+                        &hash,
+                        PipelineStatusReadScope::Global,
+                        ResponseFormat::Json,
+                    ),
+                    1 => torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "route_unavailable",
+                        "peer offline",
+                    ),
+                    2 => torii_proxy_error_response(
+                        StatusCode::NOT_FOUND,
+                        "route_not_found",
+                        "wrong route",
+                    ),
+                    3 => pipeline_status_not_found_response(
+                        &hash,
+                        PipelineStatusReadScope::Local,
+                        ResponseFormat::Json,
+                    ),
+                    4 => pipeline_status_not_found_response(
+                        &HashOf::from_untyped_unchecked(Hash::prehashed([0x53; Hash::LENGTH])),
+                        PipelineStatusReadScope::Global,
+                        ResponseFormat::Json,
+                    ),
+                    5 => Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .header("content-type", "text/plain")
+                        .body(Body::from("missing"))
+                        .expect("response"),
+                    6 => Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .expect("response"),
+                    7 => {
+                        let mut response = pipeline_status_not_found_response(
+                            &hash,
+                            PipelineStatusReadScope::Global,
+                            ResponseFormat::Json,
+                        );
+                        response
+                            .headers_mut()
+                            .append("content-type", HeaderValue::from_static("application/json"));
+                        response
+                    }
+                    8 => pipeline_status_not_found_response(
+                        &hash,
+                        PipelineStatusReadScope::Global,
+                        ResponseFormat::Norito,
+                    ),
+                    9 => {
+                        let mut response = pipeline_status_not_found_response(
+                            &hash,
+                            PipelineStatusReadScope::Global,
+                            ResponseFormat::Json,
+                        );
+                        *response.status_mut() = StatusCode::FORBIDDEN;
+                        response
+                    }
+                    10 => crate::utils::respond_with_format(
+                        PipelineTransactionStatusResponse::new(
+                            hash.to_string(),
+                            iroha_torii_shared::PipelineTransactionStatus {
+                                kind: "Applied".to_owned(),
+                                block_height: Some(7),
+                            },
+                            "global".to_owned(),
+                            "state".to_owned(),
+                        ),
+                        ResponseFormat::Json,
+                    ),
+                    _ => {
+                        let mut response = pipeline_status_not_found_response(
+                            &hash,
+                            PipelineStatusReadScope::Global,
+                            ResponseFormat::Json,
+                        );
+                        response.headers_mut().remove("content-type");
+                        response
+                    }
+                }
+            },
+        )
+        .await;
+        if case == 10 {
+            let collected = result.expect("knownpositive");
+            assert_eq!(collected.payloads.len(), 1);
+            continue;
+        }
+        let response = result.expect_err("no positive or malformed shard");
+        assert_eq!(
+            response.status(),
+            match case {
+                0 => StatusCode::NOT_FOUND,
+                1 => StatusCode::SERVICE_UNAVAILABLE,
+                9 => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_GATEWAY,
+            },
+            "case {case}"
+        );
+        if case == 0 {
+            validate_pipeline_status_absence_response(
+                response,
+                &hash,
+                PipelineStatusReadScope::Global,
+                4096,
+            )
+            .await
+            .expect("complete exactabsence");
+        }
+    }
+    let positive = collect_torii_pipeline_status_json_payloads(
+        &routes,
+        &hash,
+        routed_read_test_working_set_bytes(),
+        ROUTED_READ_TEST_BODY_BYTES,
+        move |route| async move {
+            if route == routes[0] {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "offline",
+                )
+            } else {
+                crate::utils::respond_with_format(
+                    PipelineTransactionStatusResponse::new(
+                        hash.to_string(),
+                        iroha_torii_shared::PipelineTransactionStatus {
+                            kind: "Applied".to_owned(),
+                            block_height: Some(7),
+                        },
+                        "global".to_owned(),
+                        "state".to_owned(),
+                    ),
+                    ResponseFormat::Json,
+                )
+            }
+        },
+    )
+    .await
+    .expect("existing knownpositive semantics");
+    assert_eq!(positive.payloads.len(), 1);
+    assert_eq!(positive.diagnostics.unavailable_routes, 1);
+    let empty = collect_torii_pipeline_status_json_payloads(
+        &[],
+        &hash,
+        routed_read_test_working_set_bytes(),
+        ROUTED_READ_TEST_BODY_BYTES,
+        |_| async { unreachable!() },
+    )
+    .await
+    .expect_err("no routes unavailable");
+    assert_eq!(empty.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

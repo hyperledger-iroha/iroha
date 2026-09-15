@@ -141,6 +141,7 @@ is a closed record whose optional members have these meanings:
 | `profile`, `chain_discriminant` | selected network-profile context |
 | `entrypoint_hash` | canonical transaction-entrypoint identity for admission and durability outcomes |
 | `tx_hash`, `last_status` | signed-transaction/finality context |
+| `bridge_finality_attestation_tip_mismatch` | exact requested/applied/status heights and challenge/node/network bindings for finality snapshot progress |
 | `hint` | human-readable remediation hint, not a stable SDK discriminator |
 | `axt` | typed AXT rejection record |
 
@@ -412,6 +413,32 @@ optional block height, requested scope, and resolution source. It never returns
 rejection reasons or diagnostics, trigger completions, batch-transfer receipts,
 account identities, amounts, or instruction payloads, and the handler does not
 perform a second Kura lookup to hydrate those details.
+
+Pipeline absence is scoped and typed. HTTP `404` is pending only when the
+`ErrorEnvelope` has code `pipeline_transaction_status_not_found` and
+`details.pipeline_transaction_status_not_found` contains the exact requested
+canonical `hash` and `scope` (`local` or `global`; omission requests `global`).
+JSON and Norito carry the same envelope. A global `404` requires exact typed
+absence from every authoritative shard. An unavailable shard returns `503`
+with code `route_unavailable`; generic, malformed, or selector-mismatched
+`404` responses remain failures and never establish global absence. A successful
+status must also bind the exact hash and requested scope. Cache and queue
+observations are progress hints, not proof of Applied execution.
+
+`GET /v1/bridge/finality/attestation/{height}` returns HTTP `409` only for
+an exact requested/applied tip mismatch or an exact independently sampled
+status-height mismatch. Its negotiated JSON or canonical Norito `ErrorEnvelope`
+has code `bridge_finality_attestation_tip_mismatch` and the sole details member
+`bridge_finality_attestation_tip_mismatch`. That closed record carries positive
+`requested_height`, `applied_height`, and `status_height` values which are not
+all equal, the exact nonzero `challenge`, configured `node_id`, and genesis-derived
+`network_id`. A client must validate every selector binding before retrying a
+fresh attestation within its existing deadline. This unsigned progress observation
+never authenticates finality. Missing or corrupt genesis/tip proofs, invalid
+identity/network/signature bindings, and status subject or CommitQC mismatches
+remain fixed failures. Generic `404`/`409`, malformed payloads, or mixed error
+details do not establish progress. Every response is `no-store`, carries `X-Content-Type-Options: nosniff`,
+and varies by `X-Iroha-Finality-Challenge, Accept`.
 
 Exact committed details use `POST /v1/pipeline/transactions/details`. The body
 is a canonical `SignedQuery` containing `FindTransactions` with exactly one

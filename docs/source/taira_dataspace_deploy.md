@@ -113,11 +113,23 @@ operation ID. If `operation_id` is null, the ID derives from the canonical
 intent and checked NetworkId;
 reordering the two alias intents does not generate another identity.
 
-`apply` resumes from the saved plan. It can advance through already applied
-phases and submit the next phase. If that transaction is still pending, it
-returns the current observations. Run `apply` again with the same operation ID
-to observe it and, once applied, advance. There is no polling loop and no
-transport retry implemented by this controller.
+`apply` resumes from the saved plan and waits for each retained transaction
+before advancing to the next phase. It polls the exact signed transaction using
+the same client and journal; observation never signs or submits a replacement.
+A pending operation can be resumed with the same operation ID.
+Phase and finality transitions appear on stderr; machine stdout remains one
+typed result. `apply` exits successfully only after authenticated completion
+with a named receipt. An incomplete result is printed before the command exits
+with an error, so automation can retain the report without mistaking it for a
+successful deployment. `status` reports an inspected operation's pending state
+without treating that state as a command failure.
+
+`apply` and `status` accept `--timeout-ms` (default `180000`). Each invocation
+creates one absolute deadline shared by its preflight, HTTP reads and proof
+verification. Pending-phase sleeps consume that same budget. The CLI checks
+the deadline before first dispatch and before admitting completion, so an
+expired budget cannot authorize a new submission or a late success. A caller
+with a broader workflow deadline must pass only its remaining milliseconds.
 
 `status` submits no ledger transactions. It can retain verified proofs, canonical
 carrier bytes and completion receipts in the local journal. It can inspect a
@@ -210,13 +222,26 @@ the same nonzero height, plus successful authenticated details containing the
 same native signed transaction bytes. These observations are labeled
 `applied_verification_pending`. `deployment_complete` remains false until the
 native completion layer validates independently anchored finality, the exact
-execution commitment/inclusion, and all four validators' state. A moving tip
-or unavailable proof keeps the phase observations and returns the actionable
+execution commitment/inclusion, and all four validators' state. An unavailable
+or invalid proof keeps the phase observations and returns the actionable
 `verification_error` field; subsequent status/apply resumes verification.
 The bounded proof synchronization layer can return `verification_sync_pending`
 while retaining its verified cache, without submitting another transaction.
+An authenticated peer still catching up, or a carrier newer than its captured
+tip, yields `verification_peer_pending`. The same pending result covers an
+exact HTTP 409 `bridge_finality_attestation_tip_mismatch`: the requested,
+applied and consensus-decision heights differ. The SDK requires
+the response to bind the request's height, challenge, node and network. This
+unsigned progress response never proves finality. Generic 404s, mixed error
+details and invalid attestations remain errors. Apply retries only explicit
+progress outcomes within its deadline; other verification errors stop the call.
 A successful completion names its immutable `completion_receipt`; exact verified
 canonical carrier bytes are retained beside the proof cache and per-peer receipt.
+Independent peer reads run in a bounded four-worker group. One coordinator
+verifies the successor chain and owns journal publication. Completion requires
+all four peer checks. Each later completion uses a fresh challenge and fresh
+validator state; a saved completion receipt alone cannot establish current
+success.
 
 The typed `VerificationRequestV1` carries the original catalog/overlay
 baseline, expected additions and grant, paid alias intent, each retained wire

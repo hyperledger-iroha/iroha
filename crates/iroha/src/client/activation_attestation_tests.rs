@@ -227,3 +227,202 @@ fn bridge_finality_attestation_reader_rejects_wrong_bindings_and_invalid_http_bo
         assert!(result.is_err(), "invalid response must fail");
     }
 }
+
+fn client_tip_progress_fixture()
+-> iroha_torii_shared::bridge_finality::BridgeFinalityAttestationTipMismatchV1 {
+    let key = KeyPair::try_from_seed(vec![96; 32], Algorithm::Ed25519).expect("reporter key");
+    iroha_torii_shared::bridge_finality::BridgeFinalityAttestationTipMismatchV1 {
+        requested_height: 10,
+        applied_height: 9,
+        status_height: 10,
+        challenge: [17; 32],
+        node_id: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+        network_id: client_with_base_url(base_url()).network_id,
+    }
+}
+
+fn client_tip_progress_envelope(
+    progress: iroha_torii_shared::bridge_finality::BridgeFinalityAttestationTipMismatchV1,
+) -> iroha_torii_shared::ErrorEnvelope {
+    iroha_torii_shared::ErrorEnvelope::new(
+        iroha_torii_shared::bridge_finality::BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
+        "tip is changing",
+    )
+    .with_details(iroha_torii_shared::ErrorDetails {
+        bridge_finality_attestation_tip_mismatch: Some(progress),
+        ..iroha_torii_shared::ErrorDetails::default()
+    })
+}
+
+#[test]
+fn bridge_finality_attestation_reader_preserves_only_bound_typed_tip_progress() {
+    for (requested, applied, status) in [(10, 9, 10), (9, 10, 10), (10, 10, 9)] {
+        let mut progress = client_tip_progress_fixture();
+        progress.requested_height = requested;
+        progress.applied_height = applied;
+        progress.status_height = status;
+        let response = mk_response(
+            StatusCode::CONFLICT,
+            norito::to_bytes(&client_tip_progress_envelope(progress.clone())).expect("wire"),
+            Some(APPLICATION_NORITO),
+        );
+        let (result, requests) = capture_requests(response, |transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_bridge_finality_attestation(
+                NonZeroU64::new(requested).unwrap(),
+                progress.challenge,
+                &progress.node_id,
+            )
+        });
+        assert_eq!(requests.len(), 1, "one-shot reader does not poll");
+        assert_eq!(
+            requests[0].url.path(),
+            format!("/v1/bridge/finality/attestation/{requested}")
+        );
+        let error = result.expect_err("a changing tip is not finality evidence");
+        let typed = error
+            .downcast_ref::<BridgeFinalityAttestationTipMismatch>()
+            .expect("exact typed progress");
+        assert_eq!(typed.response(), &progress);
+        assert!(typed.to_string().contains("finality tip is changing"));
+    }
+}
+
+#[test]
+fn bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress() {
+    let valid = client_tip_progress_fixture();
+    let mut cases = Vec::new();
+    let mut changed = valid.clone();
+    changed.requested_height = 11;
+    cases.push(changed);
+    let mut changed = valid.clone();
+    changed.challenge = [18; 32];
+    cases.push(changed);
+    let mut changed = valid.clone();
+    changed.challenge = [0; 32];
+    cases.push(changed);
+    let mut changed = valid.clone();
+    changed.node_id = iroha_model_base::peer::PeerId::new(
+        KeyPair::try_from_seed(vec![97; 32], Algorithm::Ed25519)
+            .expect("other reporter")
+            .public_key()
+            .clone(),
+    );
+    cases.push(changed);
+    let mut changed = valid.clone();
+    changed.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"foreign finality progress network",
+    )));
+    cases.push(changed);
+    for (requested, applied, status) in [(0, 9, 10), (10, 0, 10), (10, 9, 0), (10, 10, 10)] {
+        let mut changed = valid.clone();
+        changed.requested_height = requested;
+        changed.applied_height = applied;
+        changed.status_height = status;
+        cases.push(changed);
+    }
+    for progress in cases {
+        let response = mk_response(
+            StatusCode::CONFLICT,
+            norito::to_bytes(&client_tip_progress_envelope(progress)).expect("wire"),
+            Some(APPLICATION_NORITO),
+        );
+        let (result, _) = capture_request(response, |transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_bridge_finality_attestation(
+                NonZeroU64::new(valid.requested_height).unwrap(),
+                valid.challenge,
+                &valid.node_id,
+            )
+        });
+        let error = result.expect_err("malformed or foreign progress must fail");
+        assert!(
+            error
+                .downcast_ref::<BridgeFinalityAttestationTipMismatch>()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_http() {
+    use iroha_torii_shared::bridge_finality::BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES;
+    let progress = client_tip_progress_fixture();
+    let envelope = client_tip_progress_envelope(progress.clone());
+    let wire = norito::to_bytes(&envelope).expect("wire");
+    let mut wrong_code = envelope.clone();
+    wrong_code.code = "query_validation_failed".into();
+    let mut missing_details = envelope.clone();
+    missing_details.details = None;
+    let mut wrong_details = envelope.clone();
+    wrong_details.details = Some(iroha_torii_shared::ErrorDetails::default());
+    let mut mixed_details = envelope.clone();
+    mixed_details.details.as_mut().unwrap().reject_code = Some("invalid_finality_proof".into());
+    let mut trailing = wire.clone();
+    trailing.push(0);
+    let mut duplicate_type =
+        mk_response(StatusCode::CONFLICT, wire.clone(), Some(APPLICATION_NORITO));
+    duplicate_type.headers_mut().append(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static(APPLICATION_NORITO),
+    );
+    let mut responses = vec![duplicate_type];
+    for status in [
+        StatusCode::NOT_FOUND,
+        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::OK,
+    ] {
+        responses.push(mk_response(status, wire.clone(), Some(APPLICATION_NORITO)));
+    }
+    for body in [
+        Vec::new(),
+        trailing,
+        vec![0; BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES + 1],
+        norito::to_bytes(&wrong_code).expect("wire"),
+        norito::to_bytes(&missing_details).expect("wire"),
+        norito::to_bytes(&wrong_details).expect("wire"),
+        norito::to_bytes(&mixed_details).expect("wire"),
+        b"query_validation_failed: Query not found in the live query store.".to_vec(),
+    ] {
+        responses.push(mk_response(
+            StatusCode::CONFLICT,
+            body,
+            Some(APPLICATION_NORITO),
+        ));
+    }
+    for content_type in [
+        None,
+        Some(APPLICATION_JSON),
+        Some("application/x-norito; arbitrary=1"),
+    ] {
+        responses.push(mk_response(
+            StatusCode::CONFLICT,
+            wire.clone(),
+            content_type,
+        ));
+    }
+    responses.push(mk_response(
+        StatusCode::CONFLICT,
+        norito::json::to_json(&envelope).expect("json").into_bytes(),
+        Some(APPLICATION_JSON),
+    ));
+    for response in responses {
+        let (result, _) = capture_request(response, |transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_bridge_finality_attestation(
+                NonZeroU64::new(progress.requested_height).unwrap(),
+                progress.challenge,
+                &progress.node_id,
+            )
+        });
+        let error = result.expect_err("only canonical bound HTTP409 is progress");
+        assert!(
+            error
+                .downcast_ref::<BridgeFinalityAttestationTipMismatch>()
+                .is_none()
+        );
+    }
+}

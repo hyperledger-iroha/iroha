@@ -11,6 +11,10 @@ use iroha_model_base::topology::DataSpaceId;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Public account-bootstrap network and signing policy.
 pub mod account_capabilities;
+/// Typed account-alias absence selectors and planning error codes.
+pub mod aliases;
+/// Exact progress bindings for challenge-bound finality attestation reads.
+pub mod bridge_finality;
 /// Canonical bounded signing preimage shared by request-witness signers and verifiers.
 pub mod canonical_request_witness;
 /// Canonical node configuration snapshots and operator update records.
@@ -698,6 +702,15 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
+    /// Exact scoped pipeline-status absence for its named HTTP 404 error.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_transaction_status_not_found: Option<PipelineTransactionStatusNotFoundV1>,
+    /// Exact height snapshot mismatch for a challenge-bound finality attestation.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub bridge_finality_attestation_tip_mismatch:
+        Option<bridge_finality::BridgeFinalityAttestationTipMismatchV1>,
     /// Last observed transaction status when a finality wait failed.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -714,6 +727,18 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fee: Option<FeeErrorDetails>,
+    /// Native alias planning report for a rejected or pending plan.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub alias_setup_report: Option<iroha_data_model::alias_setup::AliasSetupReportV1>,
+    /// Exact alias selector that was absent from authoritative ledger state.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub account_alias_not_found: Option<aliases::AccountAliasNotFoundV1>,
+    /// Exact account and optional scope filters whose account lookup was absent.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub account_aliases_by_account_not_found: Option<aliases::AccountAliasesByAccountNotFoundV1>,
     /// Exact missing SNS registration selector for `sns_registration_not_found` HTTP 404.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -735,10 +760,15 @@ impl ErrorDetails {
             && self.chain_discriminant.is_none()
             && self.entrypoint_hash.is_none()
             && self.tx_hash.is_none()
+            && self.pipeline_transaction_status_not_found.is_none()
+            && self.bridge_finality_attestation_tip_mismatch.is_none()
             && self.last_status.is_none()
             && self.hint.is_none()
             && self.axt.is_none()
             && self.fee.is_none()
+            && self.alias_setup_report.is_none()
+            && self.account_alias_not_found.is_none()
+            && self.account_aliases_by_account_not_found.is_none()
             && self.sns_registration_not_found.is_none()
     }
 }
@@ -792,6 +822,56 @@ pub fn network_profile_names() -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+/// Stable code for exact scoped pipeline transaction status absence.
+pub const PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE: &str =
+    "pipeline_transaction_status_not_found";
+/// Maximum complete scoped pipeline status absence envelope size.
+pub const PIPELINE_TRANSACTION_STATUS_NOT_FOUND_MAX_BYTES: usize = 4096;
+/// Exact lookup identity for absent pipeline status; not proof of ledger non-inclusion.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::PipelineTransactionStatusNotFoundV1")]
+pub struct PipelineTransactionStatusNotFoundV1 {
+    /// Canonical lowercase signed-transaction hash requested by the caller.
+    pub hash: String,
+    /// Exact lookup scope: `local` or `global`.
+    pub scope: String,
+}
+impl PipelineTransactionStatusNotFoundV1 {
+    /// Construct the exact public lookup identity.
+    #[must_use]
+    pub fn new(
+        hash: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        scope: &str,
+    ) -> Self {
+        Self {
+            hash: hash.to_string(),
+            scope: scope.to_owned(),
+        }
+    }
+    /// Require a canonical native hash and one supported scope.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        matches!(self.scope.as_str(), "local" | "global")
+            && self
+                .hash
+                .parse::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>()
+                .is_ok_and(|hash| hash.to_string() == self.hash)
+    }
+    /// Bind this observation to the caller's exact hash and scope.
+    #[must_use]
+    pub fn matches(
+        &self,
+        hash: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        scope: &str,
+    ) -> bool {
+        matches!(scope, "local" | "global") && self.scope == scope && self.hash == hash.to_string()
+    }
+}
+
 /// Canonical Torii error envelope returned for HTTP API failures.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 #[norito(deny_unknown_fields)]
@@ -2221,6 +2301,57 @@ mod tests {
     }
     #[test]
     fn pipeline_transaction_status_roundtrip_is_status_only() {
+        use crate::{
+            PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE, PipelineTransactionStatusNotFoundV1,
+        };
+        let hash=iroha_crypto::HashOf::<iroha_data_model::transaction::SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xab;iroha_crypto::Hash::LENGTH]));
+        for scope in ["local", "global"] {
+            let absence = PipelineTransactionStatusNotFoundV1::new(&hash, scope);
+            assert!(absence.is_valid());
+            assert!(absence.matches(&hash, scope));
+            assert!(!absence.matches(&hash, if scope == "local" { "global" } else { "local" }));
+            let envelope = ErrorEnvelope::new(
+                PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                "Missing status.",
+            )
+            .with_details(ErrorDetails {
+                pipeline_transaction_status_not_found: Some(absence.clone()),
+                ..ErrorDetails::default()
+            });
+            assert!(!envelope.details.as_ref().unwrap().is_empty());
+            let json = norito::json::to_vec(&envelope).expect("JSON");
+            let wire = norito::to_bytes(&envelope).expect("native");
+            for decoded in [
+                norito::json::from_slice::<ErrorEnvelope>(&json).expect("JSONdecode"),
+                norito::decode_from_bytes::<ErrorEnvelope>(&wire).expect("native decode"),
+            ] {
+                assert_eq!(decoded.code(), PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE);
+                assert_eq!(
+                    decoded
+                        .details
+                        .unwrap()
+                        .pipeline_transaction_status_not_found,
+                    Some(absence.clone())
+                );
+            }
+        }
+        for invalid in [
+            r#"{}"#,
+            r#"{"hash":"abc","scope":"global","extra":0}"#,
+            r#"{"hash":"abc","scope":"global","scope":"local"}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<PipelineTransactionStatusNotFoundV1>(invalid).is_err()
+            );
+        }
+        assert!(
+            !PipelineTransactionStatusNotFoundV1 {
+                hash: hash.to_string().to_uppercase(),
+                scope: "global".to_owned()
+            }
+            .is_valid()
+        );
+        assert!(!PipelineTransactionStatusNotFoundV1::new(&hash, "other").is_valid());
         let payload = PipelineTransactionStatusResponse::new(
             "ab".repeat(32),
             PipelineTransactionStatus {

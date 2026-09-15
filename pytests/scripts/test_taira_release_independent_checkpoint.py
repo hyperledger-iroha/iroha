@@ -14,7 +14,7 @@ from unittest.mock import patch
 import test_taira_release as existing
 
 release = existing.release
-gate = release.gate
+gate = existing.development_gate
 
 
 class IndependentCheckpointTests(unittest.TestCase):

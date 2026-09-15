@@ -1170,6 +1170,15 @@ mod tests {
         );
     }
     #[test]
+    fn account_faucet_policy_is_public_read_only_discovery() {
+        let route = application_api::ACCOUNTS_FAUCET_POLICY_GET;
+        assert_eq!(route.path(), "/v1/accounts/faucet/policy");
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::Public);
+        assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+    }
+    #[test]
     fn account_faucet_claim_is_an_authenticated_protocol_mutation() {
         let route = application_api::ACCOUNTS_FAUCET_POST;
         assert_eq!(route.effect(), RouteEffect::Mutation);

@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 805
+EXPECTED_REGRESSION_COUNT = 874
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -98,12 +98,87 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_both_scopes_require_geometry_writer_and_profile_recovery(self):
         required = {
             "client": (
+                "client::evidence_http_tests::bridge_finality_attestation_reader_preserves_only_bound_typed_tip_progress",
+                "client::evidence_http_tests::bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress",
+                "client::evidence_http_tests::bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_http",
                 "client::tests::decode_parameters_response_parses_json_payload",
+                "client::evidence_http_tests::get_transaction_status_response_global_sets_global_scope",
+                "client::evidence_http_tests::pipeline_status_404_returns_none_from_exact_global_query",
+                "client::transaction_wait_tests::transaction_wait_timeout_identifies_the_exact_pending_transaction",
+                "client::transaction_wait_tests::wait_for_transaction_applied_rejects_fixed_failures",
+                "client::transaction_wait_tests::transaction_wait_zero_timeout_never_dispatches_an_initial_read",
+                "client::transaction_wait_tests::transaction_wait_unrepresentable_deadline_fails_before_dispatch",
+                "client::transaction_wait_tests::transaction_wait_expired_context_deadline_cannot_be_extended",
+                "client::transaction_wait_tests::transaction_wait_late_http_status_is_unresolved_in_both_transports",
+                "client::transaction_wait_tests::transaction_wait_retries_spend_one_remaining_http_budget",
+                "client::transaction_wait_tests::transaction_wait_outcome_admission_rechecks_deadline_after_decoding",
+                "client::transaction_wait_tests::transaction_wait_async_deadline_retires_the_pending_status_future",
+                "client::tests::typed_account_alias_reads_map_not_found_to_none",
+            ),
+            "torii-unit": (
+                "routing::bridge_finality_attestation_progress_tests::exact_tip_snapshot_races_are_bound_negotiated_progress",
+                "routing::bridge_finality_attestation_progress_tests::proof_identity_and_signature_failures_are_never_tip_progress",
+                "routing::bridge_finality_attestation_progress_tests::canonical_boundary_keeps_only_valid_tip_progress_status_and_code",
+                "routing::bridge_finality_attestation_progress_tests::invalid_height_progress_shapes_remain_fixed_errors",
+                "openapi::tests::finality_attestation_tip_progress_openapi_matches_native_bindings",
+                "openapi::tests::compact_finality_app_contracts::bridge_finality_operations_describe_durable_v2_evidence",
+                "tests_runtime_handlers::pipeline_status_global_read_skips_non_terminal_local_cache",
+                "torii_routed_read_tests::pipeline_status_fanout_requires_exact_scoped_absence",
+                "openapi::tests::pipeline_status_openapi_exposes_only_the_exact_first_release_scope",
+                "mcp::tests::canonical_paths_and_status::applied_wait_status_poll_accepts_only_exact_200_or_404",
+                "tests::alias_error_envelopes_preserve_reports_and_exact_absence_through_middleware",
+                "tests::alias_account_absence_requires_complete_scoped_fanout",
+                "openapi::tests::alias_errors_openapi_match_native_reports_and_bound_absence",
+            ),
+            "torii-shared": (
+                "bridge_finality::tests::tip_mismatch_requires_exact_selector_and_real_height_progress",
+                "tests::pipeline_transaction_status_roundtrip_is_status_only",
+                "aliases::tests::alias_error_details_roundtrip_and_reject_unknown_fields",
             ),
             "cli": (
+                "taira_dataspace_deploy::tests::saved_apply_emits_report_before_rejecting_incomplete_success",
+                "taira_dataspace_deploy::tests::saved_report_preserves_output_failure",
+                "taira_dataspace_deploy::finality::tests::deployment_attestation_progress_retries_only_exact_sdk_type",
+                "taira_dataspace_deploy::finality::tests::deployment_attestation_progress_joins_all_peers_and_preserves_fixed_errors",
                 "taira_dataspace_deploy::tests::journal_rejects_links_replacement_and_incomplete_records",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_reads_overlap_and_preserve_input_order",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_reads_reject_non_four_cardinality_before_dispatch",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_reads_join_all_workers_and_report_first_error",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_reads_inherit_configured_address_profile",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_reads_recover_worker_panic_after_joining_all",
+                "taira_dataspace_deploy::finality::tests::deployment_carrier_results_require_exact_bytes_before_publication",
+                "taira_dataspace_deploy::tests::status_requires_exact_global_and_peer_state_applied",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_progress_requires_valid_complete_status_pair",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_progress_retries_only_pending_or_newer_carrier",
+                "taira_dataspace_deploy::finality::tests::deployment_peer_progress_never_masks_fixed_worker_errors",
+                "taira_dataspace_deploy::tests::saved_commands_require_positive_budget_and_default_to_three_minutes",
+                "taira_dataspace_deploy::tests::saved_zero_budget_stops_before_journal_or_client_access",
+                "taira_dataspace_deploy::tests::expired_operation_never_observes_or_starts_completion",
+                "taira_dataspace_deploy::tests::apply_observes_pending_until_applied_without_reentering_dispatch",
+                "taira_dataspace_deploy::tests::status_observes_once_and_terminal_apply_does_not_retry",
+                "taira_dataspace_deploy::tests::phase_deadline_rejects_late_applied_and_clips_pending_sleep",
+                "taira_dataspace_deploy::tests::completion_retries_only_explicit_sync_progress_and_status_is_one_attempt",
+                "taira_dataspace_deploy::tests::completion_deadline_rejects_a_late_success",
             ),
             "core": (
+                "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age",
+                "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence",
+                "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_closed_drained_cut_rejects_each_stale_lane_account",
+                "sumeragi::v2_runner::tests::finalized_closed_prefix_retires_historical_lane_certificate_without_adapter_admission",
+                "sumeragi::v2_worker::tests::prepared_historical_body_capacity_recovers_from_applied_finality_without_peer_delivery",
+                "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_terminal_apply_store_join_rejects_store_drift",
+                "sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff",
+                "kura::tests::consensus_certificate_read_rejects_occupied_corruption_without_repair",
+                "sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants",
+                "kura::tests::canonical_autonomous_replica_corruption_and_wrong_context_fail_closed",
+                "sumeragi::v2_lane_work::tests::canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement",
+                "queue::router::alias_registry_routing_tests::alias_registry_routing_paid_post_genesis_dataspace_domain_and_renewal",
+                "queue::router::alias_registry_routing_tests::alias_registry_routing_is_independent_of_height_and_catalog",
+                "queue::router::alias_registry_routing_tests::alias_registry_routing_nested_walkers_use_universal_registry",
+                "queue::router::alias_registry_routing_tests::alias_registry_routing_does_not_bypass_id_owner_quote_or_catalog_guards",
+                "queue::router::alias_registry_routing_tests::alias_registry_routing_keeps_real_private_participants_in_mixed_transactions",
+                "queue::router::alias_registry_routing_tests::alias_registry_routing_cold_replay_with_expanded_catalog_preserves_paid_bootstrap",
+                "queue::router::tests::alias_registry_routing_is_unconditional_for_queue_and_replay",
                 "kura::tests::startup_replay_geometry_transition_preserves_shared_binding_for_added_lane",
                 "kura::tests::startup_replay_geometry_transition_rejects_checkpoint_and_manifest_drift",
                 "kura::tests::startup_replay_geometry_transition_rejects_restored_lane_sidecar_drift",
@@ -117,6 +192,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
                 "block::tests::parallel_account_profile_preserves_delegated_metadata_results",
                 "block::tests::parallel_account_profile_rejects_foreign_permission_payloads",
+            ),
+            "network": (
+                "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
             ),
             "test-network": (
                 "tests::profile_account_defaults_materialize_selected_chain_before_root_parse",
@@ -137,7 +215,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 624)
+        self.assertEqual(gate.selected_regression_count(), 694)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -231,6 +309,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertTrue(full["proof-flows"])
         self.assertEqual(basic["network"], gate.BASIC_NETWORK_STAGES)
         basic_network = [
+            "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
             "runtime_catalog_transition::permission_page_tests::permission_page_requires_complete_short_fanout",
             "runtime_catalog_transition::permission_page_tests::permission_page_rejects_saturation_and_duplicate_items",
             "runtime_catalog_transition::permission_page_tests::permission_page_preserves_failure_context_and_rejects_invalid_metadata",
@@ -1517,6 +1596,154 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
         fixture.assert_not_called()
 
 
+class CargoBuildProgressTests(unittest.TestCase):
+    @staticmethod
+    def event(name, kind="lib", *, test=True, fresh=True, features=None):
+        return {"reason": "compiler-artifact", "package_id": f"path+file:///source#{name}@1",
+                "target": {"name": name, "kind": [kind]}, "profile": {"test": test},
+                "features": features or [], "filenames": [f"/warm/{name}"],
+                "executable": f"/warm/{name}" if test or kind == "bin" else None, "fresh": fresh}
+
+    @staticmethod
+    def reports(output):
+        return [json.loads(line.removeprefix("[taira-cargo] "))
+                for line in output.getvalue().splitlines() if line.startswith("[taira-cargo] {")]
+
+    def test_observed_extra_tests_and_cache_counts_do_not_inflate_on_duplicate_events(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            progress = gate.CargoBuildProgress("test codegen", {("lib", "iroha_core")}, test_profile=True)
+            events = [self.event("iroha_core", fresh=False), self.event("iroha_core", fresh=False),
+                      self.event("iroha_config"), self.event("iroha_test_network"),
+                      self.event("dependency", test=False), self.event("unknown", test=False, fresh=None)]
+            for event in events:
+                progress.observe(json.dumps(event))
+            progress.report("Cargo exited 0")
+        report = self.reports(output)[-1]
+        self.assertEqual(report["requested_targets"], ["lib:iroha_core"])
+        self.assertEqual(report["observed_targets"], ["lib:iroha_config", "lib:iroha_core", "lib:iroha_test_network"])
+        self.assertEqual(report["additional_targets"], ["lib:iroha_config", "lib:iroha_test_network"])
+        self.assertEqual(report["observed_artifact_units"], {"fresh": 3, "rebuilt": 1, "unknown": 1})
+        self.assertNotIn("PASS", output.getvalue())
+
+    def test_distinct_feature_and_profile_units_stay_distinct_and_rebuild_wins_repeated_freshness(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            progress = gate.CargoBuildProgress("test metadata", {("lib", "model")}, test_profile=True)
+            original = self.event("model", features=["test-fixtures"])
+            for event in (original, original | {"fresh": False}, original,
+                          self.event("model", features=["privacy-exact12-conformance"]),
+                          self.event("model", test=False, features=["test-fixtures"]),
+                          self.event("other", test=False, fresh=1)):
+                progress.observe(json.dumps(event))
+            progress.report("Cargo exited 101")
+        report = self.reports(output)[-1]
+        self.assertEqual(report["observed_artifact_units"], {"fresh": 2, "rebuilt": 1, "unknown": 1})
+        self.assertEqual(report["state"], "Cargo exited 101")
+        self.assertNotIn("PASS", output.getvalue())
+
+    def test_diagnostics_and_nonartifact_events_are_not_work_and_running_output_is_throttled(self):
+        output = io.StringIO()
+        with patch.object(gate.time, "monotonic", return_value=100) as clock, contextlib.redirect_stdout(output):
+            progress = gate.CargoBuildProgress("test codegen", {("lib", "core")}, test_profile=True)
+            for line in ("compiler output\n", "[]", "null", '{"reason":"build-finished","success":false}',
+                         '{"reason":"compiler-artifact","target":null}'):
+                progress.observe(line)
+            self.assertEqual(progress.units, {})
+            progress.observe(json.dumps(self.event("dependency", test=False)))
+            self.assertEqual(self.reports(output), [])
+            clock.return_value = 130
+            progress.observe(json.dumps(self.event("core")))
+            self.assertEqual(len(self.reports(output)), 1)
+            clock.return_value = 131
+            progress.observe(json.dumps(self.event("extra")))
+            self.assertEqual(len(self.reports(output)), 1)
+            progress.report("Cargo exited 0")
+        self.assertEqual([r["state"] for r in self.reports(output)], ["running", "Cargo exited 0"])
+        self.assertEqual(self.reports(output)[-1]["elapsed_seconds"], 31)
+
+    def test_shipping_target_observations_exclude_test_binary_and_build_script(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            progress = gate.CargoBuildProgress("shipping codegen", {("bin", "iroha3d")}, test_profile=False)
+            for event in (self.event("iroha3d", "bin", test=False, fresh=False),
+                          self.event("iroha", "bin", test=True),
+                          self.event("build-script-build", "custom-build", test=False)):
+                progress.observe(json.dumps(event))
+            progress.report("Cargo exited 0")
+        report = self.reports(output)[-1]
+        self.assertEqual(report["observed_targets"], ["bin:iroha3d"])
+        self.assertEqual(report["observed_artifact_units"], {"fresh": 2, "rebuilt": 1, "unknown": 0})
+
+
+class CargoQuietBuildProgressTests(unittest.TestCase):
+    def setUp(self):
+        isolate_shipping_fixture(self)
+
+    def test_quiet_real_children_report_before_output_and_preserve_all_phase_outcomes(self):
+        real_popen = subprocess.Popen
+        phases = (
+            ("test metadata", lambda: gate.check_test_harnesses(Path("/frozen"), {"CARGO": "/unused"}, harnesses=("config",)),
+             [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
+            ("test codegen", lambda: gate.compile_test_harnesses(Path("/frozen"), {"CARGO": "/unused"}, harnesses=("config",)),
+             [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
+            ("shipping codegen", lambda: gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/unused"}, ()),
+             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha")]),
+        )
+        for phase, operation, events in phases:
+            for code in (0, 101):
+                with self.subTest(phase=phase, code=code):
+                    read_fd, release_fd = os.pipe()
+
+                    class ReleaseOnProgress(io.StringIO):
+                        released = False
+
+                        def write(self, text):
+                            count = super().write(text)
+                            if not self.released and text.startswith("[taira-cargo] {"):
+                                report = json.loads(text.removeprefix("[taira-cargo] "))
+                                if report["state"] == "running":
+                                    self.released = True
+                                    os.write(release_fd, b"x")
+                            return count
+
+                    output = ReleaseOnProgress()
+                    # The child stays silent until the progress reporter releases
+                    # it. A bounded child deadline makes the old event-only runner
+                    # fail this test instead of hanging it.
+                    source = ("import os,select,sys; "
+                              f"ready=select.select([{read_fd}],[],[],3)[0]; "
+                              "sys.exit(98) if not ready else None; "
+                              f"os.read({read_fd},1); "
+                              f"print({chr(10).join(json.dumps(event) for event in events)!r}); "
+                              f"sys.exit({code})")
+
+                    def quiet_child(_command, **kwargs):
+                        kwargs["pass_fds"] = (*kwargs["pass_fds"], read_fd)
+                        return real_popen([sys.executable, "-c", source], **kwargs)
+
+                    try:
+                        with patch.object(gate, "CARGO_PROGRESS_INTERVAL_SECONDS", 0.01), \
+                             patch.object(gate.subprocess, "Popen", side_effect=quiet_child), \
+                             patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows) as isolate, \
+                             contextlib.redirect_stdout(output):
+                            if code:
+                                with self.assertRaisesRegex(gate.CheckError, "exit 101"):
+                                    operation()
+                                isolate.assert_not_called()
+                            else:
+                                operation()
+                        self.assertTrue(output.released)
+                        reports = CargoBuildProgressTests.reports(output)
+                        self.assertEqual(reports[0]["phase"], phase)
+                        self.assertEqual(reports[0]["state"], "running")
+                        self.assertEqual(reports[0]["observed_artifact_units"], {"fresh": 0, "rebuilt": 0, "unknown": 0})
+                        self.assertEqual(reports[-1]["state"], f"Cargo exited {code}")
+                    finally:
+                        os.close(read_fd)
+                        os.close(release_fd)
+
+
 class NativeTestBatchBuildTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
@@ -1588,6 +1815,44 @@ class NativeTestBatchBuildTests(unittest.TestCase):
                 with self.assertRaises(gate.CheckError):
                     gate.compile_test_harnesses(Path("/frozen"), self.env, harnesses=names)
                 spawn.assert_not_called()
+
+    def test_metadata_and_codegen_report_implicit_targets_without_selecting_their_artifacts(self):
+        names = ("config", "core", "network")
+        events = [CargoBuildProgressTests.event(gate.HARNESS_TARGETS[name][1],
+                  gate.HARNESS_TARGETS[name][2], fresh=False) for name in names]
+        events += [CargoBuildProgressTests.event(name) for name in ("iroha_config", "iroha_test_network")]
+        lines = "\n".join(json.dumps(event) for event in events)
+        for operation, phase in ((gate.check_test_harnesses, "test metadata"),
+                                 (gate.compile_test_harnesses, "test codegen")):
+            output = io.StringIO()
+            with self.subTest(phase=phase), patch.object(gate.subprocess, "Popen", return_value=self.process(lines)), \
+                 patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows), \
+                 contextlib.redirect_stdout(output):
+                result = operation(Path("/frozen"), self.env, harnesses=names)
+            if result is not None:
+                self.assertEqual(set(result), set(names))
+            report = CargoBuildProgressTests.reports(output)[-1]
+            self.assertEqual(report["phase"], phase)
+            self.assertEqual(len(report["requested_targets"]), 3)
+            self.assertEqual(len(report["observed_targets"]), 5)
+            self.assertEqual(report["additional_targets"], ["lib:iroha_config", "lib:iroha_test_network"])
+            self.assertEqual(report["observed_artifact_units"], {"fresh": 2, "rebuilt": 3, "unknown": 0})
+
+    def test_shipping_failure_still_reports_work_without_returning_test_artifacts(self):
+        events = [CargoBuildProgressTests.event(name, "bin", test=False, fresh=False)
+                  for name in ("iroha3d", "iroha")]
+        events += [CargoBuildProgressTests.event("unexpected", "bin", test=True)]
+        output = io.StringIO()
+        with patch.object(gate.subprocess, "Popen", return_value=self.process(
+                "\n".join(json.dumps(event) for event in events), 101)), \
+             patch.object(gate, "isolate_native_artifacts") as isolate, contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(gate.CheckError, "exit 101"):
+                gate.compile_network_binaries(Path("/frozen"), self.env, ())
+        isolate.assert_not_called()
+        report = CargoBuildProgressTests.reports(output)[-1]
+        self.assertEqual(report["phase"], "shipping codegen")
+        self.assertEqual(report["observed_targets"], ["bin:iroha", "bin:iroha3d"])
+        self.assertEqual(report["state"], "Cargo exited 101")
 
     def test_incomplete_ambiguous_wrong_profile_or_shared_artifacts_fail_closed(self):
         good = "".join(self.artifact(name) for name in self.names)

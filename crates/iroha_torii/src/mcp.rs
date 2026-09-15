@@ -1136,6 +1136,9 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_onboard_plan_tool());
     tools.push(iroha_accounts_onboard_prepare_tool());
     tools.push(iroha_accounts_onboard_submit_tool());
+    if paths.contains_key("/v1/accounts/faucet/policy") {
+        tools.push(iroha_accounts_faucet_policy_tool());
+    }
     if paths.contains_key("/v1/accounts/faucet/prepare")
         && paths.contains_key("/v1/accounts/faucet")
     {
@@ -1356,7 +1359,9 @@ fn visible_tools_for_policy<'a>(
 fn tool_is_runtime_available(app: &SharedAppState, tool: &ToolSpec) -> bool {
     if matches!(
         tool.name.as_str(),
-        "iroha.accounts.faucet.prepare" | "iroha.accounts.faucet.submit"
+        "iroha.accounts.faucet.policy"
+            | "iroha.accounts.faucet.prepare"
+            | "iroha.accounts.faucet.submit"
     ) {
         #[cfg(feature = "app_api")]
         return app.account_faucet.is_some();
@@ -1574,6 +1579,7 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
             | "iroha.vpn.sessions.get"
             | "iroha.vpn.receipts.list"
             | "iroha.health"
+            | "iroha.accounts.faucet.policy"
             | "iroha.parameters.get"
             | "iroha.node.capabilities"
             | "iroha.node.query_projection_checkpoint"
@@ -3065,6 +3071,12 @@ async fn handle_named_tool_call(
         }
         "iroha.accounts.onboard.prepare" => {
             match dispatch_iroha_accounts_onboard_prepare(&app, inbound_headers, arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.faucet.policy" => {
+            match dispatch_iroha_accounts_faucet_policy(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5425,6 +5437,7 @@ declare_mcp_dispatch_wrappers! {
     direct_get {
         dispatch_iroha_vpn_profile => "/v1/vpn/profile";
         dispatch_iroha_health => "/health";
+        dispatch_iroha_accounts_faucet_policy => "/v1/accounts/faucet/policy";
         dispatch_iroha_parameters_get => "/v1/parameters";
         dispatch_iroha_node_capabilities => "/v1/node/capabilities";
         dispatch_iroha_node_query_projection_checkpoint => "/v1/node/query/projection/checkpoint";
@@ -7989,11 +8002,7 @@ async fn wait_for_transaction_applied(
             status_accept,
         )
         .await?;
-        let status_code = status_result
-            .get("status")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        if exact_pipeline_status_poll_has_body(status_code, tx_hash)? {
+        if exact_pipeline_status_poll_has_body(&status_result, tx_hash)? {
             let status = decode_exact_global_pipeline_status(&status_result, tx_hash)?;
             let kind = status.status.kind.as_str();
             last_kind = Some(kind.to_owned());
@@ -8028,12 +8037,60 @@ async fn wait_for_transaction_applied(
         "timed out waiting for state-resolved Applied after {timeout_ms}ms for `{tx_hash}`{last_kind}"
     ))
 }
-fn exact_pipeline_status_poll_has_body(status_code: u64, tx_hash: &str) -> Result<bool, String> {
+fn exact_pipeline_status_poll_has_body(
+    status_result: &Value,
+    tx_hash: &str,
+) -> Result<bool, String> {
+    let status_code = status_result
+        .get("status")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     match status_code {
         200 => Ok(true),
-        404 => Ok(false),
+        404 => {
+            let content_type = status_result
+                .get("content_type")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !content_type
+                .split(';')
+                .next()
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+            {
+                return Err("pipeline status absence requires application/json".to_owned());
+            }
+            let body = status_result
+                .get("body")
+                .ok_or_else(|| "pipeline status absence omitted its body".to_owned())?;
+            let _bounded = json::to_json_bounded_boxed(
+                body,
+                iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_MAX_BYTES,
+            )
+            .map_err(|error| format!("pipeline status absence exceeds its JSON bound: {error}"))?;
+            let envelope: iroha_torii_shared::ErrorEnvelope = json::from_value(body.clone())
+                .map_err(|error| {
+                    format!("invalid pipeline status absence ErrorEnvelope: {error}")
+                })?;
+            let hash = canonical_transaction_hash(tx_hash)?;
+            let expected = hash
+                .parse::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>()
+                .map_err(|error| format!("invalid requested transaction hash: {error}"))?;
+            if envelope.code() != iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
+                || !envelope
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.pipeline_transaction_status_not_found.as_ref())
+                    .is_some_and(|absence| absence.matches(&expected, "global"))
+            {
+                return Err(
+                    "HTTP 404 does not establish exact global transaction status absence"
+                        .to_owned(),
+                );
+            }
+            Ok(false)
+        }
         status_code => Err(format!(
-            "transaction `{tx_hash}` status poll returned HTTP {status_code}; expected exact HTTP 200 with a status payload or HTTP 404 while pending"
+            "transaction `{tx_hash}` status poll returned HTTP {status_code}; expected exact HTTP 200 with a status payload or typed scoped HTTP 404 while pending"
         )),
     }
 }
@@ -9501,6 +9558,11 @@ const INLINE_PURPOSE_BUILT_DISPATCH_ROUTES: &[(&str, &str, &str)] = &[
     ("iroha.vpn.receipts.list", "GET", "/v1/vpn/receipts"),
     ("iroha.vpn.receipts.submit", "POST", "/v1/vpn/receipts"),
     ("iroha.health", "GET", "/health"),
+    (
+        "iroha.accounts.faucet.policy",
+        "GET",
+        "/v1/accounts/faucet/policy",
+    ),
     ("iroha.parameters.get", "GET", "/v1/parameters"),
     ("iroha.node.capabilities", "GET", "/v1/node/capabilities"),
     (
@@ -10038,6 +10100,13 @@ fn account_faucet_tool_input_schema(path: &str) -> Value {
     );
     schema.insert("properties".to_owned(), Value::Object(properties));
     Value::Object(schema)
+}
+fn iroha_accounts_faucet_policy_tool() -> ToolSpec {
+    simple_manual_get_tool(
+        "iroha.accounts.faucet.policy",
+        "Read the enabled faucet's public network, address profile, authority, asset and amount policy. This unsigned discovery response must be checked against an independently trusted operator policy before preparing or submitting funding.",
+        "/v1/accounts/faucet/policy",
+    )
 }
 fn iroha_accounts_faucet_prepare_tool() -> ToolSpec {
     ToolSpec::route(

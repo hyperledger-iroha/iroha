@@ -164,6 +164,50 @@
         ],
         "type": "object"
       },
+      "AccountAliasNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Typed absence detail for the exact requested canonical account alias. The enclosing HTTP404 and account_alias_not_found code are checked separately.",
+        "properties": {
+          "alias": {
+            "description": "Exact canonical requested account alias.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "type": "object"
+      },
+      "AccountAliasesByAccountNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Typed absence detail for the complete canonical account and optional namespace filters. Both nullable filters are required; omitted filters are explicit null. The enclosing HTTP404 and account_aliases_by_account_not_found code are checked separately.",
+        "properties": {
+          "account_id": {
+            "description": "Exact canonical requested account identifier.",
+            "type": "string"
+          },
+          "dataspace": {
+            "description": "Exact canonical requested dataspace filter, or null when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "domain": {
+            "description": "Exact canonical requested domain filter, or null when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "account_id",
+          "dataspace",
+          "domain"
+        ],
+        "type": "object"
+      },
       "AccountAssetListItem": {
         "additionalProperties": true,
         "properties": {
@@ -350,6 +394,42 @@
           "account_id",
           "pow_anchor_height",
           "pow_nonce_hex"
+        ],
+        "type": "object"
+      },
+      "AccountFaucetPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "asset_definition_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "chain_discriminant": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "schema": {
+            "const": "iroha.accounts.faucet.policy.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "network_id",
+          "chain_discriminant",
+          "authority",
+          "asset_definition_id",
+          "amount"
         ],
         "type": "object"
       },
@@ -3117,6 +3197,61 @@
         ],
         "type": "object"
       },
+      "AliasSetupDiagnosticV1": {
+        "additionalProperties": false,
+        "description": "One native secret-free diagnostic. Nullable context fields default to null when omitted; report diagnostics are sorted by their canonical native field order.",
+        "properties": {
+          "actual": {
+            "description": "Redacted actual value, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "description": "Stable machine-readable diagnostic code.",
+            "type": "string"
+          },
+          "config_path": {
+            "description": "Associated configuration path, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected": {
+            "description": "Redacted expected value, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "$ref": "#/components/schemas/AliasSetupValidationPhaseV1"
+          },
+          "remediation": {
+            "description": "Human-readable corrective action.",
+            "type": "string"
+          },
+          "resource": {
+            "description": "Canonical resource text, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AliasSetupSeverityV1"
+          }
+        },
+        "required": [
+          "phase",
+          "code",
+          "severity",
+          "remediation"
+        ],
+        "type": "object"
+      },
       "AliasSetupPlanRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -3147,17 +3282,12 @@
           "diagnostics": {
             "description": "Deterministically sorted, secret-free diagnostics with phase, stable code, severity, resource, expected/actual values, and remediation.",
             "items": {
-              "$ref": "#/components/schemas/JsonValue"
+              "$ref": "#/components/schemas/AliasSetupDiagnosticV1"
             },
             "type": "array"
           },
           "status": {
-            "enum": [
-              "ready",
-              "pending",
-              "blocked"
-            ],
-            "type": "string"
+            "$ref": "#/components/schemas/AliasSetupStatusV1"
           },
           "version": {
             "enum": [
@@ -3170,6 +3300,74 @@
           "version",
           "status",
           "diagnostics"
+        ],
+        "type": "object"
+      },
+      "AliasSetupSeverityV1": {
+        "additionalProperties": false,
+        "description": "Native tagged severity value; unit variants require an explicit null value.",
+        "properties": {
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "severity",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AliasSetupStatusV1": {
+        "additionalProperties": false,
+        "description": "Native tagged status value; unit variants require an explicit null value.",
+        "properties": {
+          "status": {
+            "enum": [
+              "ready",
+              "pending",
+              "blocked"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "status",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AliasSetupValidationPhaseV1": {
+        "additionalProperties": false,
+        "description": "Native tagged phase value; unit variants require an explicit null value.",
+        "properties": {
+          "phase": {
+            "enum": [
+              "config",
+              "catalog",
+              "bootstrap",
+              "world_state",
+              "planning"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "phase",
+          "value"
         ],
         "type": "object"
       },
@@ -4847,6 +5045,49 @@
           "genesis_finality_proof",
           "status",
           "finality_proof"
+        ],
+        "type": "object"
+      },
+      "BridgeFinalityAttestationTipMismatchV1": {
+        "additionalProperties": false,
+        "description": "Unsigned, selector-bound HTTP 409 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
+        "properties": {
+          "applied_height": {
+            "description": "Applied immutable state-view tip.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "challenge": {
+            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "node_id": {
+            "description": "Configured canonical PeerId of the node which would sign a successful attestation.",
+            "type": "string"
+          },
+          "requested_height": {
+            "description": "Exact requested attestation height.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status_height": {
+            "description": "Durable decision height in independently captured reducer status.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested_height",
+          "applied_height",
+          "status_height",
+          "challenge",
+          "node_id",
+          "network_id"
         ],
         "type": "object"
       },
@@ -8840,6 +9081,12 @@
       "ErrorDetails": {
         "additionalProperties": false,
         "properties": {
+          "account_alias_not_found": {
+            "$ref": "#/components/schemas/AccountAliasNotFoundV1"
+          },
+          "account_aliases_by_account_not_found": {
+            "$ref": "#/components/schemas/AccountAliasesByAccountNotFoundV1"
+          },
           "actual": {
             "description": "Actual field value, status, profile, or discriminant.",
             "maxLength": 1024,
@@ -8847,8 +9094,14 @@
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
           },
+          "alias_setup_report": {
+            "$ref": "#/components/schemas/AliasSetupReportV1"
+          },
           "axt": {
             "$ref": "#/components/schemas/AxtErrorDetails"
+          },
+          "bridge_finality_attestation_tip_mismatch": {
+            "$ref": "#/components/schemas/BridgeFinalityAttestationTipMismatchV1"
           },
           "chain_discriminant": {
             "description": "I105 chain discriminant involved in the error.",
@@ -8907,6 +9160,9 @@
             "minLength": 1,
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
+          },
+          "pipeline_transaction_status_not_found": {
+            "$ref": "#/components/schemas/PipelineTransactionStatusNotFoundV1"
           },
           "profile": {
             "description": "Network profile involved in the error.",
@@ -25771,11 +26027,37 @@
         ],
         "type": "object"
       },
+      "PipelineTransactionStatusNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Typed absence detail for the exact requested transaction hash and read scope. The enclosing HTTP404 and pipeline_transaction_status_not_found code are checked separately.",
+        "properties": {
+          "hash": {
+            "description": "Exact canonical requested signed transaction hash (64 lowercase hexadecimal digits with the Iroha hash marker set).",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Exact read scope applied by Torii.",
+            "enum": [
+              "local",
+              "global"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash",
+          "scope"
+        ],
+        "type": "object"
+      },
       "PipelineTransactionStatusResponse": {
         "additionalProperties": false,
         "properties": {
           "hash": {
-            "description": "Canonical signed transaction hash (hex, lowercase).",
+            "description": "Exact canonical requested signed transaction hash (64 lowercase hexadecimal digits with the Iroha hash marker set).",
             "maxLength": 64,
             "minLength": 64,
             "pattern": "^[0-9a-f]{63}[13579bdf]$",
@@ -51896,6 +52178,52 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/accounts/faucet/policy": {
+      "get": {
+        "description": "Return the configured faucet public policy for this exact network and address profile. The authority, resolved canonical asset definition and exact Quantity amount are discovery data, not a signature or independent funding authority pin. Compare them with an independently trusted operator policy before preparation or submission. This read neither signs nor submits a transaction and requires no new block.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountFaucetPolicy"
+                }
+              }
+            },
+            "description": "Current enabled faucet public policy.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Do not retain policy responses as current authority.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account faucet is disabled."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read the enabled faucet public policy.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_faucet_policy_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/accounts/faucet/prepare": {
       "post": {
         "description": "Validate one solved proof-of-work claim and current faucet state without mutation, then quote and sign one authenticated exact transaction envelope.",
@@ -54778,11 +55106,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Malformed or unsupported lifecycle planning request.",
+            "description": "Malformed or unsupported lifecycle planning request. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -54831,15 +55164,45 @@
               }
             }
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks the ownership or permission required by the requested plan. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "409": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned.",
+            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -54855,11 +55218,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "A committed planning anchor is not yet available.",
+            "description": "A committed planning anchor is not yet available. ErrorEnvelope code alias_setup_pending carries the native report at details.alias_setup_report with status pending. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55061,9 +55429,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             },
-            "description": "Account alias list not found.",
+            "description": "Only ErrorEnvelope code account_aliases_by_account_not_found with details.account_aliases_by_account_not_found matching the exact requested canonical account_id, dataspace, and domain (both nullable filters are required) denotes absence. HTTP404 alone, generic errors, and mismatched selectors never establish absence.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55247,11 +55620,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Malformed or unsupported lifecycle planning request.",
+            "description": "Malformed or unsupported lifecycle planning request. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55300,15 +55678,45 @@
               }
             }
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks the ownership or permission required by the requested plan. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "409": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned.",
+            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55324,11 +55732,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "A committed planning anchor is not yet available.",
+            "description": "A committed planning anchor is not yet available. ErrorEnvelope code alias_setup_pending carries the native report at details.alias_setup_report with status pending. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55530,9 +55943,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             },
-            "description": "Alias not found.",
+            "description": "Only ErrorEnvelope code account_alias_not_found with details.account_alias_not_found matching the exact requested canonical alias denotes absence. HTTP404 alone, generic errors, and mismatched selectors never establish absence.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55941,11 +56359,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Malformed or empty setup intent.",
+            "description": "Malformed or empty setup intent. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55994,15 +56417,45 @@
               }
             }
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks the ownership or permission required by the requested plan. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "409": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Live state, mapping, or guarded quote conflicts with the requested intent. No partial executable plan is returned.",
+            "description": "Live state, mapping, or guarded quote conflicts with the requested intent. No partial executable plan is returned. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -56018,11 +56471,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "A committed planning anchor is not yet available.",
+            "description": "A committed planning anchor is not yet available. ErrorEnvelope code alias_setup_pending carries the native report at details.alias_setup_report with status pending. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -56692,7 +57150,7 @@
     },
     "/v1/bridge/finality/attestation/{height}": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. The requested height must equal the immutable state-view tip. Responses are never cacheable.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. The requested height must equal the immutable state-view tip. Responses are never cacheable. Exact positive requested, applied, or independently sampled status height disagreement returns typed HTTP 409 progress. Progress is unsigned and never replaces successful attestation authentication.",
         "operationId": "bridgeFinalityAttestation",
         "parameters": [
           {
@@ -56750,6 +57208,13 @@
                   "const": "X-Iroha-Finality-Challenge, Accept",
                   "type": "string"
                 }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
               }
             }
           },
@@ -56776,6 +57241,13 @@
                   "const": "X-Iroha-Finality-Challenge, Accept",
                   "type": "string"
                 }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
               }
             }
           },
@@ -56787,7 +57259,7 @@
                 }
               }
             },
-            "description": "Requested height is not the exact durable tip or finality is unavailable.",
+            "description": "Committed genesis or requested finality proof is missing, or the state has no applied genesis. This is a fixed failure; HTTP 404 alone never means snapshot progress.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -56800,6 +57272,13 @@
                 "description": "The response varies by challenge and representation.",
                 "schema": {
                   "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
                   "type": "string"
                 }
               }
@@ -56828,6 +57307,51 @@
                   "const": "X-Iroha-Finality-Challenge, Accept",
                   "type": "string"
                 }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Exact requested/applied tip mismatch or exact status-height mismatch. ErrorEnvelope code bridge_finality_attestation_tip_mismatch carries only details.bridge_finality_attestation_tip_mismatch, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. All heights must be positive and not all equal; the challenge must be nonzero. Clients require the exact requested height, challenge, configured node identity and network before retrying a fresh attestation within the existing deadline. This unsigned observation is not finality proof. Generic 409 or 404 responses, missing/corrupt proofs, and identity, subject, CommitQC or signature failures are fixed errors.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
               }
             }
           },
@@ -56852,6 +57376,13 @@
                 "description": "The response varies by challenge and representation.",
                 "schema": {
                   "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
                   "type": "string"
                 }
               }
@@ -81443,7 +81974,22 @@
                 }
               }
             },
-            "description": "Pipeline status not found; Torii has no cached entry for the hash yet."
+            "description": "Only HTTP404 with ErrorEnvelope code pipeline_transaction_status_not_found and details.pipeline_transaction_status_not_found containing the exact requested canonical hash and scope denotes pending absence. Global absence requires typed selector-bound absence from every authoritative shard; HTTP404 alone never establishes absence."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "An authoritative shard is unavailable; ErrorEnvelope code route_unavailable denotes an incomplete global observation. An unavailable shard never counts as absence."
           }
         },
         "security": [

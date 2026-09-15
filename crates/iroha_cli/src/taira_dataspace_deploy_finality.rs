@@ -17,6 +17,69 @@ use std::{
 };
 
 const MAX_NEW_PROOFS: usize = 128;
+const VERIFICATION_PEERS: usize = 4;
+
+/// Run one read-only job per selected validator and join every job before returning.
+/// Results and errors follow the configured peer order, independently of scheduling.
+fn read_four_peers<T: Sync, R: Send>(
+    inputs: &[T],
+    discriminant: u16,
+    read: impl Fn(usize, &T) -> Result<R> + Sync,
+) -> Result<Vec<R>> {
+    require(
+        inputs.len() == VERIFICATION_PEERS,
+        "verification requires exactly four peer read jobs",
+    )?;
+    std::thread::scope(|scope| {
+        let read = &read;
+        let handles = inputs
+            .iter()
+            .enumerate()
+            .map(|(index, input)| {
+                std::thread::Builder::new()
+                    .name(format!("dpn-finality-peer-{index}"))
+                    .spawn_scoped(scope, move || {
+                        // Account JSON codecs use a thread-local profile, not inherited state.
+                        let _profile =
+                            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                                discriminant,
+                            );
+                        read(index, input)
+                    })
+            })
+            .collect::<Vec<_>>();
+        // Collect all joined results first: short-circuiting here could abandon a panicked
+        // scoped worker and lose the deterministic first peer error.
+        let results = handles
+            .into_iter()
+            .enumerate()
+            .map(|(index, handle)| {
+                let result = match handle {
+                    Ok(handle) => handle
+                        .join()
+                        .unwrap_or_else(|_| Err(eyre!("validator read worker panicked"))),
+                    Err(error) => Err(error.into()),
+                };
+                result.wrap_err_with(|| format!("validator {} verification failed", index + 1))
+            })
+            .collect::<Vec<_>>();
+        results.into_iter().collect()
+    })
+}
+
+fn peer_clients<C: RunContext>(context: &C, trust: &TrustV1) -> Result<Vec<Client>> {
+    trust
+        .peers
+        .iter()
+        .map(|peer| {
+            let mut config = context.config().clone();
+            config.torii_api_url = peer.torii_origin.parse()?;
+            let mut builder = Client::builder(config);
+            builder.operator_key_pair = context.operator_key_pair().cloned();
+            builder.build().map_err(Into::into)
+        })
+        .collect()
+}
 
 /// Public target profile selected independently of the server's proof responses.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -179,20 +242,22 @@ pub(super) fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Re
     let authority = manifest.finality.authority(manifest.network_id)?;
     let challenge: [u8; 32] = rand::random();
     require(challenge != [0; 32], "random finality challenge is zero")?;
-    for peer in &manifest.finality.peers {
-        let mut config = context.config().clone();
-        config.torii_api_url = peer.torii_origin.parse()?;
-        let mut builder = Client::builder(config);
-        builder.operator_key_pair = context.operator_key_pair().cloned();
-        let client = builder.build()?;
-        let height = NonZeroU64::new(client.get_sumeragi_status()?.last_committed_height)
-            .ok_or_else(|| eyre!("validator has no durable tip"))?;
-        let attestation =
-            client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
-        validate_attestation(&authority, peer, challenge, &attestation)?;
-        attestation.body.finality_proof.finality_artifact.verify()?;
-        client.get_lane_lifecycle_status()?.validate()?;
-    }
+    let clients = peer_clients(context, &manifest.finality)?;
+    read_four_peers(
+        &clients,
+        context.config().account_chain_discriminant,
+        |index, client| {
+            let peer = &manifest.finality.peers[index];
+            let height = NonZeroU64::new(client.get_sumeragi_status()?.last_committed_height)
+                .ok_or_else(|| eyre!("validator has no durable tip"))?;
+            let attestation =
+                client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
+            validate_attestation(&authority, peer, challenge, &attestation)?;
+            attestation.body.finality_proof.finality_artifact.verify()?;
+            client.get_lane_lifecycle_status()?.validate()?;
+            Ok(())
+        },
+    )?;
     Ok(())
 }
 
@@ -296,13 +361,216 @@ fn namespace_matches(plan: &PlanV1, client: &Client) -> Result<()> {
     Ok(())
 }
 
-/// Read-only finality synchronization and final observations. No transaction is created here.
+struct VerifiedPeer {
+    receipt: PeerReceipt,
+    // At most one bounded canonical wire per retained phase height.
+    wires: BTreeMap<u64, Vec<u8>>,
+}
+
+/// Compare all freshly authenticated carrier bytes before the coordinator publishes any.
+fn consistent_carriers<'a>(
+    peers: impl IntoIterator<Item = &'a BTreeMap<u64, Vec<u8>>>,
+) -> Result<BTreeMap<u64, &'a [u8]>> {
+    let mut carriers = BTreeMap::new();
+    for peer in peers {
+        for (&height, wire) in peer {
+            if let Some(existing) = carriers.insert(height, wire.as_slice()) {
+                require(
+                    existing == wire,
+                    "validators returned different canonical carrier bytes",
+                )?;
+            }
+        }
+    }
+    Ok(carriers)
+}
+
+/// A successful read may prove that a peer needs a fresh snapshot; this is not an error.
+/// Keeping progress outside `Err` prevents it from hiding a fixed failure on another peer.
+enum PeerRead<T> {
+    Verified(T),
+    Pending,
+}
+
+/// Only the SDK's exact request-bound tip mismatch admits a fresh snapshot.
+/// Classify inside each worker so a pending peer cannot hide another peer's error.
+fn peer_attestation_progress<T>(read: Result<T>) -> Result<PeerRead<T>> {
+    match read {
+        Ok(value) => Ok(PeerRead::Verified(value)),
+        Err(error) => {
+            if let Some(progress) =
+                error.downcast_ref::<iroha::client::BridgeFinalityAttestationTipMismatch>()
+            {
+                eprintln!(
+                    "dataspace deploy: validator {} finality pending: {progress}",
+                    progress.response().node_id
+                );
+                Ok(PeerRead::Pending)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+fn peer_carrier_progress(
+    state: &str,
+    hash: &str,
+    global: &Option<PipelineTransactionStatusResponse>,
+    peer: &Option<PipelineTransactionStatusResponse>,
+    captured_tip: u64,
+) -> Result<PeerRead<u64>> {
+    // Validate both supplied responses before interpreting absence or a pending state.
+    let carrier = matching_applied_height(hash, global, peer)?;
+    match state {
+        "pending" => {
+            require(
+                carrier.is_none(),
+                "pending observation already has an Applied carrier",
+            )?;
+            Ok(PeerRead::Pending)
+        }
+        "applied_verification_pending" => {
+            let carrier = carrier.ok_or_else(|| eyre!("missing exact carrier height"))?;
+            if carrier > captured_tip {
+                Ok(PeerRead::Pending)
+            } else {
+                Ok(PeerRead::Verified(carrier))
+            }
+        }
+        _ => Err(eyre!(
+            "one validator has not applied the exact retained deployment transaction"
+        )),
+    }
+}
+
+struct PeerVerification<'a> {
+    authority: &'a Authority,
+    plan: &'a PlanV1,
+    prepared: &'a [(PreparedV1, SignedTransaction)],
+    proofs: &'a BTreeMap<u64, BridgeFinalityProof>,
+    challenge: [u8; 32],
+    deadline: std::time::Instant,
+}
+
+fn verify_peer_state(
+    client: &Client,
+    peer: &PeerV1,
+    before: &BridgeFinalityAttestationV1,
+    verification: &PeerVerification<'_>,
+) -> Result<PeerRead<Box<VerifiedPeer>>> {
+    let &PeerVerification {
+        authority,
+        plan,
+        prepared,
+        proofs,
+        challenge,
+        deadline,
+    } = verification;
+    require_operation_budget(deadline, "verifying validator state")?;
+    let height = before.body.finality_proof.block_header.height();
+    require(
+        proofs.get(&height.get()) == Some(&before.body.finality_proof),
+        "peer durable tip differs from the independently verified successor chain",
+    )?;
+    let mut transactions = Vec::new();
+    let mut carriers = Vec::new();
+    let mut wires = BTreeMap::new();
+    for (prepared, transaction) in prepared {
+        require_operation_budget(deadline, "verifying retained transaction carrier")?;
+        let observed = observe(client, prepared, transaction)?;
+        let carrier_height = match peer_carrier_progress(
+            &observed.state,
+            &prepared.transaction_hash,
+            &observed.global_status,
+            &observed.peer_status,
+            height.get(),
+        )? {
+            PeerRead::Verified(height) => height,
+            PeerRead::Pending => {
+                require_operation_budget(deadline, "validator deployment state is pending")?;
+                return Ok(PeerRead::Pending);
+            }
+        };
+        let proof = proofs
+            .get(&carrier_height)
+            .ok_or_else(|| eyre!("transaction carrier is ahead of the verified peer tip"))?;
+        let committed = &observed
+            .committed
+            .as_ref()
+            .ok_or_else(|| eyre!("missing committed transaction"))?
+            .transaction;
+        require(
+            committed.block_hash() == &proof.block_header.hash(),
+            "transaction carrier differs from authenticated finality",
+        )?;
+        let wire = client.get_canonical_executed_block_wire(
+            NonZeroU64::new(carrier_height).unwrap(),
+            committed,
+            &proof.finality_artifact.commit_qc.execution_commitment,
+        )?;
+        carriers.push(CarrierReceipt {
+            height: carrier_height,
+            file: format!("carrier-{carrier_height:020}.nrt"),
+            wire_sha256: digest(&wire),
+        });
+        if let Some(existing) = wires.get(&carrier_height) {
+            require(
+                existing == &wire,
+                "verified phases returned different canonical carrier bytes",
+            )?;
+        } else {
+            wires.insert(carrier_height, wire);
+        }
+        require_operation_budget(deadline, "verified retained transaction carrier")?;
+        transactions.push(observed);
+    }
+    physical_matches(plan, client)?;
+    require(
+        bootstrap_present(plan, client)?,
+        "one validator omits the exact bootstrap grant",
+    )?;
+    namespace_matches(plan, client)?;
+    let after = match peer_attestation_progress(client.get_bridge_finality_attestation(
+        height,
+        challenge,
+        &peer.peer_id,
+    ))? {
+        PeerRead::Verified(attestation) => attestation,
+        PeerRead::Pending => {
+            require_operation_budget(deadline, "validator finality tip is changing")?;
+            return Ok(PeerRead::Pending);
+        }
+    };
+    validate_attestation(authority, peer, challenge, &after)?;
+    require(
+        after.body.finality_proof == before.body.finality_proof,
+        "validator tip changed while reading deployment state; rerun status",
+    )?;
+    require_operation_budget(deadline, "verified validator state")?;
+    Ok(PeerRead::Verified(Box::new(VerifiedPeer {
+        receipt: PeerReceipt {
+            peer_id: peer.peer_id.clone(),
+            height: height.get(),
+            block_hash: after.body.finality_proof.block_header.hash(),
+            attestation: after,
+            transactions,
+            carriers,
+        },
+        wires,
+    })))
+}
+
+/// Read-only finality synchronization and fresh observations from all four validators.
+/// The caller alone advances the authenticated proof chain and publishes journal evidence.
 pub(super) fn complete<C: RunContext>(
     context: &C,
     plan: &PlanV1,
     journal: &Journal,
     report: &mut ReportV1,
+    deadline: std::time::Instant,
 ) -> Result<()> {
+    require_operation_budget(deadline, "starting finality verification")?;
     require(
         report.verification.transactions.len() == PHASES.len()
             && report
@@ -316,144 +584,158 @@ pub(super) fn complete<C: RunContext>(
     let authority = trust.authority(plan.manifest.network_id)?;
     let challenge: [u8; 32] = rand::random();
     require(challenge != [0; 32], "random finality challenge is zero")?;
+    let clients = peer_clients(context, trust)?
+        .into_iter()
+        .map(|client| client.with_request_deadline(deadline))
+        .collect::<Vec<_>>();
+    let discriminant = context.config().account_chain_discriminant;
+    let tips = read_four_peers(&clients, discriminant, |index, client| {
+        require_operation_budget(deadline, "reading validator finality tip")?;
+        let peer = &trust.peers[index];
+        let height = NonZeroU64::new(client.get_sumeragi_status()?.last_committed_height)
+            .ok_or_else(|| eyre!("validator has no durable tip"))?;
+        let before = match peer_attestation_progress(client.get_bridge_finality_attestation(
+            height,
+            challenge,
+            &peer.peer_id,
+        ))? {
+            PeerRead::Verified(attestation) => attestation,
+            PeerRead::Pending => {
+                require_operation_budget(deadline, "validator finality tip is changing")?;
+                return Ok(PeerRead::Pending);
+            }
+        };
+        validate_attestation(&authority, peer, challenge, &before)?;
+        require_operation_budget(deadline, "verified validator finality tip")?;
+        Ok(PeerRead::Verified(before))
+    })?;
+    require_operation_budget(deadline, "read validator finality tips")?;
+    let Some(tips) = tips
+        .into_iter()
+        .map(|peer| match peer {
+            PeerRead::Verified(value) => Some(value),
+            PeerRead::Pending => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        report.state = "verification_peer_pending".into();
+        return Ok(());
+    };
+    let (source_index, source_tip) = tips
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, tip)| tip.body.finality_proof.block_header.height())
+        .ok_or_else(|| eyre!("missing validator tips"))?;
+    let source = &clients[source_index];
     let mut proofs = BTreeMap::<u64, BridgeFinalityProof>::new();
     let mut verifier = None::<BridgeFinalityVerifier>;
     let mut new_proofs = 0_usize;
-    let mut receipts = Vec::new();
-    for peer in &trust.peers {
-        let mut config = context.config().clone();
-        config.torii_api_url = peer.torii_origin.parse()?;
-        let mut builder = Client::builder(config);
-        builder.operator_key_pair = context.operator_key_pair().cloned();
-        let client = builder.build()?;
-        let height = client.get_sumeragi_status()?.last_committed_height;
-        let height =
-            NonZeroU64::new(height).ok_or_else(|| eyre!("validator has no durable tip"))?;
-        let before = client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
-        validate_attestation(&authority, peer, challenge, &before)?;
-        let mut next = proofs.last_key_value().map_or(1, |(height, _)| height + 1);
-        while next <= height.get() {
-            let name = format!("proof-{next:020}.json");
-            let cached: Option<BridgeFinalityProof> = journal.optional_json(&name)?;
-            let fresh = cached.is_none();
-            let proof = if let Some(proof) = cached {
-                proof
-            } else {
-                if new_proofs == MAX_NEW_PROOFS {
-                    report.state = "verification_sync_pending".into();
-                    return Ok(());
-                }
-                new_proofs += 1;
-                if next == 1 {
-                    before.body.genesis_finality_proof.clone()
-                } else {
-                    let mut trial = verifier
-                        .clone()
-                        .ok_or_else(|| eyre!("missing genesis verifier"))?;
-                    client.get_next_bridge_finality_proof(
-                        NonZeroU64::new(next).unwrap(),
-                        &mut trial,
-                    )?
-                }
-            };
-            require(
-                proof.block_header.height().get() == next,
-                "retained proof cache has a missing or reordered height",
-            )?;
-            authority.roster(&proof)?;
+    for next in 1..=source_tip.body.finality_proof.block_header.height().get() {
+        require_operation_budget(deadline, "synchronizing authenticated finality proofs")?;
+        let name = format!("proof-{next:020}.json");
+        let cached: Option<BridgeFinalityProof> = journal.optional_json(&name)?;
+        let fresh = cached.is_none();
+        let mut verified_successor = None;
+        let proof = if let Some(proof) = cached {
+            proof
+        } else {
+            if new_proofs == MAX_NEW_PROOFS {
+                report.state = "verification_sync_pending".into();
+                return Ok(());
+            }
+            new_proofs += 1;
             if next == 1 {
-                verifier = Some(authority.anchor(&proof)?);
+                source_tip.body.genesis_finality_proof.clone()
             } else {
-                verifier
-                    .as_mut()
-                    .ok_or_else(|| eyre!("missing genesis verifier"))?
-                    .verify(&proof)?;
+                let mut trial = verifier
+                    .clone()
+                    .ok_or_else(|| eyre!("missing genesis verifier"))?;
+                let proof = source
+                    .get_next_bridge_finality_proof(NonZeroU64::new(next).unwrap(), &mut trial)?;
+                verified_successor = Some(trial);
+                proof
             }
-            if fresh {
-                journal.install_json(&name, &proof)?;
-            }
-            proofs.insert(next, proof);
-            next = next
-                .checked_add(1)
-                .ok_or_else(|| eyre!("finality height overflow"))?;
-        }
+        };
         require(
-            proofs.get(&height.get()) == Some(&before.body.finality_proof),
-            "peer durable tip differs from the independently verified successor chain",
+            proof.block_header.height().get() == next,
+            "retained proof cache has a missing or reordered height",
         )?;
-        let mut transactions = Vec::new();
-        let mut carriers = Vec::new();
-        for phase in PHASES {
+        authority.roster(&proof)?;
+        if next == 1 {
+            verifier = Some(authority.anchor(&proof)?);
+        } else if let Some(advanced) = verified_successor {
+            // The native reader already verified this exact successor. Admit its advanced
+            // verifier only after the same requested-height and independent-roster checks.
+            verifier = Some(advanced);
+        } else {
+            verifier
+                .as_mut()
+                .ok_or_else(|| eyre!("missing genesis verifier"))?
+                .verify(&proof)?;
+        }
+        require_operation_budget(deadline, "verified authenticated finality proof")?;
+        if fresh {
+            journal.install_json(&name, &proof)?;
+        }
+        proofs.insert(next, proof);
+    }
+    require_operation_budget(deadline, "verified authenticated finality chain")?;
+    let prepared = PHASES
+        .iter()
+        .map(|phase| {
+            require_operation_budget(deadline, "verifying retained deployment transaction")?;
             let prepared: PreparedV1 = journal.read_json(&format!("{phase}.prepared.json"))?;
             let transaction = prepared.verify(plan, phase)?;
-            let observed = observe(&client, &prepared, &transaction)?;
+            Ok((prepared, transaction))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // A previous completion receipt never replaces fresh peer state or the new challenge.
+    let verification = PeerVerification {
+        authority: &authority,
+        plan,
+        prepared: &prepared,
+        proofs: &proofs,
+        challenge,
+        deadline,
+    };
+    let verified = read_four_peers(&clients, discriminant, |index, client| {
+        verify_peer_state(client, &trust.peers[index], &tips[index], &verification)
+    })?;
+    require_operation_budget(deadline, "verified all validator states")?;
+    let Some(verified) = verified
+        .into_iter()
+        .map(|peer| match peer {
+            PeerRead::Verified(value) => Some(value),
+            PeerRead::Pending => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        report.state = "verification_peer_pending".into();
+        return Ok(());
+    };
+    let carriers = consistent_carriers(verified.iter().map(|peer| &peer.wires))?;
+    let maximum =
+        iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1;
+    for (height, wire) in carriers {
+        require_operation_budget(deadline, "publishing verified carrier evidence")?;
+        let file = format!("carrier-{height:020}.nrt");
+        if let Some(existing) = journal.read_optional_bounded(&file, maximum)? {
             require(
-                observed.state == "applied_verification_pending",
-                "one validator has not applied the exact retained deployment transaction",
+                existing == wire,
+                "verified carrier bytes differ from retained evidence",
             )?;
-            let carrier_height = matching_applied_height(
-                &prepared.transaction_hash,
-                &observed.global_status,
-                &observed.peer_status,
-            )?
-            .ok_or_else(|| eyre!("missing exact carrier height"))?;
-            let proof = proofs
-                .get(&carrier_height)
-                .ok_or_else(|| eyre!("transaction carrier is ahead of the verified peer tip"))?;
-            let committed = &observed
-                .committed
-                .as_ref()
-                .ok_or_else(|| eyre!("missing committed transaction"))?
-                .transaction;
-            require(
-                committed.block_hash() == &proof.block_header.hash(),
-                "transaction carrier differs from authenticated finality",
-            )?;
-            let wire = client.get_canonical_executed_block_wire(
-                NonZeroU64::new(carrier_height).unwrap(),
-                committed,
-                &proof.finality_artifact.commit_qc.execution_commitment,
-            )?;
-            let maximum =
-                iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1;
-            let file = format!("carrier-{carrier_height:020}.nrt");
-            if let Some(existing) = journal.read_optional_bounded(&file, maximum)? {
-                require(
-                    existing == wire,
-                    "verified carrier bytes differ from retained evidence",
-                )?;
-            } else {
-                journal.install_bounded(&file, &wire, maximum)?;
-            }
-            carriers.push(CarrierReceipt {
-                height: carrier_height,
-                file,
-                wire_sha256: digest(&wire),
-            });
-            transactions.push(observed);
+        } else {
+            journal.install_bounded(&file, wire, maximum)?;
         }
-        physical_matches(plan, &client)?;
-        require(
-            bootstrap_present(plan, &client)?,
-            "one validator omits the exact bootstrap grant",
-        )?;
-        namespace_matches(plan, &client)?;
-        let after = client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
-        validate_attestation(&authority, peer, challenge, &after)?;
-        require(
-            after.body.finality_proof == before.body.finality_proof,
-            "validator tip changed while reading deployment state; rerun status",
-        )?;
-        receipts.push(PeerReceipt {
-            peer_id: peer.peer_id.clone(),
-            height: height.get(),
-            block_hash: after.body.finality_proof.block_header.hash(),
-            attestation: after,
-            transactions,
-            carriers,
-        });
     }
-    require(receipts.len() == 4, "four validator receipts are required")?;
+    let receipts = verified
+        .into_iter()
+        .map(|peer| peer.receipt)
+        .collect::<Vec<_>>();
+    require(
+        receipts.len() == VERIFICATION_PEERS,
+        "four validator receipts are required",
+    )?;
     let completion = CompletionV1 {
         schema_version: 1,
         operation_id: plan.operation_id.clone(),
@@ -463,7 +745,9 @@ pub(super) fn complete<C: RunContext>(
         peers: receipts,
     };
     let receipt_name = format!("completion-{}.json", hex::encode(challenge));
+    require_operation_budget(deadline, "publishing completion receipt")?;
     journal.install_json(&receipt_name, &completion)?;
+    require_operation_budget(deadline, "published completion receipt")?;
     report.completion_receipt = Some(receipt_name);
     report.deployment_complete = true;
     report.state = "completed".into();
