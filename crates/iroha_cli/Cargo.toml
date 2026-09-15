@@ -73,6 +73,7 @@ ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"
 iroha_service_model = { workspace = true }
 soranet_incentives = { workspace = true }
 iroha = { workspace = true }
+iroha_wallet = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_sccp = { workspace = true }
 iroha_primitives = { workspace = true }

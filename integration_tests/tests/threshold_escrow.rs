@@ -14,7 +14,7 @@ use iroha::{
 };
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::{
-    asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
+    asset::CanTransferAsset, smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -511,7 +511,7 @@ fn threshold_state_paths() -> [&'static str; 9] {
 }
 #[tokio::test]
 async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -805,7 +805,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
 }
 #[tokio::test]
 async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
-    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let register_permission: Permission = CanManageSmartContractCode.into();
     let admin_permission = Permission::new("Admin".to_owned(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)

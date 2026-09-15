@@ -98,7 +98,7 @@ fn install_trigger_contract(
     .execute(authority, state_transaction)
     .expect("register trigger contract subject");
     let deployment_permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(deployment_permission, authority.clone())
         .execute(authority, state_transaction)
         .expect("grant trigger contract deployment permission");

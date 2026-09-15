@@ -115,7 +115,7 @@ use iroha_core::{
 };
 use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
 use iroha_executor_data_model::permission::{
-    governance::CanProposeContractDeployment, smart_contract::CanRegisterSmartContractCode,
+    governance::CanProposeContractDeployment, smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::peer::PeerId;
 use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode};
@@ -1061,7 +1061,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 .write(["gov", "parliament_timed_ovn", "max_corpus_entries"], 8_i64);
         })
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanRegisterSmartContractCode),
+            Permission::from(CanManageSmartContractCode),
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(

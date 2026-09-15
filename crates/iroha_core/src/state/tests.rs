@@ -40840,7 +40840,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
@@ -41311,7 +41311,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant contract deployment permission");
@@ -41605,7 +41605,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             contract_address.clone(),
             ALICE_ID.clone(),
         );
-        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode .into() };
+        let_row! { deployment_permission: Permission = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode .into() };
         Grant::account_permission(deployment_permission, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant alias-transfer callback deployment permission");

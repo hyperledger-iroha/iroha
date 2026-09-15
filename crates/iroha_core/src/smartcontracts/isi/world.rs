@@ -70,7 +70,7 @@ pub mod isi {
         peer::CanManageLaneRelayEmergency,
         sccp::CanProposeSccpRouteGovernance,
         settlement::CanExecuteSettlement,
-        smart_contract::CanRegisterSmartContractCode,
+        smart_contract::CanManageSmartContractCode,
         trigger::CanRegisterGlobalDataTrigger,
     };
     use iroha_model_base::domain::DomainId;
@@ -1322,11 +1322,22 @@ pub mod isi {
         }
         Ok(false)
     }
+    fn ensure_contract_artifact_creation_authority(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        // Transaction admission independently enforces signed fees before any artifact effect.
+        state_transaction
+            .world
+            .account(authority)
+            .map(|_| ())
+            .map_err(Error::from)
+    }
     fn ensure_contract_artifact_authority(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let required: Permission = CanRegisterSmartContractCode.into();
+        let required: Permission = CanManageSmartContractCode.into();
         if !has_exact_permission(&state_transaction.world, authority, &required) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("not permitted: {}", required.name()).into(),
@@ -7901,7 +7912,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             register_verified_contract_code_bytes(
                 authority,
                 *self.code_hash(),
@@ -7916,7 +7927,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -8041,7 +8052,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -16873,7 +16884,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_artifact_authority(authority, state_transaction)?;
+            ensure_contract_artifact_creation_authority(authority, state_transaction)?;
             let manifest = self.manifest().clone();
             let Some(key @ Hash { .. }) = manifest.code_hash else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -16906,16 +16917,17 @@ pub mod isi {
                 &manifest,
             )?;
             if let Some(existing) = state_transaction.world.contract_manifests.get(&key) {
-                if existing == &manifest {
+                // Identical artifact content is shareable across independently signed deployments.
+                // Keep the first immutable provenance rather than replacing it with a later signer.
+                if existing.signature_payload() == manifest.signature_payload() {
                     return Ok(());
                 }
                 return Err(InstructionExecutionError::InvariantViolation(
                     "different contract manifest already stored for this code_hash".into(),
                 ));
             }
-            // A code hash has one immutable manifest. In particular, a later submitter cannot
-            // re-sign the same bytecode with a broader entrypoint/trigger surface and change the
-            // behavior of an already reviewed active instance.
+            // A code hash has one immutable manifest and first-publisher provenance. Later valid
+            // signatures over the same content reuse it; they cannot broaden its public surface.
             state_transaction
                 .world
                 .contract_manifests
@@ -25960,7 +25972,7 @@ pub mod isi {
             account: &AccountId,
         ) {
             let permission: Permission =
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                     .into();
             Grant::account_permission(permission, account.clone())
                 .execute(account, state_transaction)
@@ -30374,51 +30386,6 @@ seiyaku GovernanceLifecycle {
                     .contract_instances
                     .get(&stub_payload.contract_address)
                     .is_none()
-            );
-        });
-        world_test!(contract_manifest_is_immutable_for_registered_code_hash {
-            blank_test_state_transaction!(state, block, stx);
-            bootstrap_alice_account(&mut stx);
-            let signer_one = checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let signer_two = checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let members = vec![
-                MultisigMember::new(signer_one.public_key().clone(), 1)
-                    .expect("first manifest signer"),
-                MultisigMember::new(signer_two.public_key().clone(), 1)
-                    .expect("second manifest signer"),
-            ];
-            let authority = AccountId::new_multisig(
-                MultisigPolicy::new(1, members).expect("manifest registrar multisig policy"),
-            );
-            Register::account(Account::new(authority.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register manifest authority");
-            grant_contract_lifecycle_authority(&mut stx, &authority);
-            let (artifact, unsigned_manifest) = minimal_contract_artifact();
-            let code_hash = unsigned_manifest.code_hash.expect("manifest code hash");
-            stx.world.contract_code.insert(code_hash, artifact);
-            let first_manifest = unsigned_manifest
-                .clone()
-                .try_signed(&signer_one)
-                .expect("first signed manifest");
-            smart_contract_code::RegisterSmartContractCode {
-                manifest: first_manifest.clone(),
-            }
-            .expect_execute(&authority, &mut stx, "first manifest registration");
-            smart_contract_code::RegisterSmartContractCode {
-                manifest: first_manifest.clone(),
-            }
-            .expect_execute(&authority, &mut stx, "identical manifest registration is idempotent");
-            let differently_signed_manifest = unsigned_manifest
-                .try_signed(&signer_two)
-                .expect("second signed manifest");
-            let err = smart_contract_code::RegisterSmartContractCode {
-                manifest: differently_signed_manifest,
-            }
-            .expect_execute_err(&authority, &mut stx, "same code hash cannot acquire a different manifest");
-            assert_contains!(format!("{err:?}"), "different contract manifest already stored for this code_hash", "unexpected manifest replacement error: {err:?}",);
-            assert_eq!(
-                stx.world.contract_manifests.get(&code_hash),
-                Some(&first_manifest),
             );
         });
         world_test!(ensure_manifest_signature_rejects_malformed_ed25519_signature_r {
@@ -40760,338 +40727,7 @@ seiyaku GovernanceLifecycle {
             }
             endorsement
         }
-        world_test!(contract_binding_mutations_require_runtime_lifecycle_authority {
-            blank_test_state_transaction!(state, block, stx);
-            Register::account(Account::new(ALICE_ID.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "seed authority");
-            let attacker = AccountId::new(checked_keypair().public_key().clone());
-            Register::account(Account::new(attacker.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "seed unprivileged attacker");
-            let protected = iroha_data_model::parameter::custom::CustomParameter::new(
-                iroha_data_model::parameter::custom::CustomParameterId(
-                    "gov_protected_namespaces".parse().expect("parameter id"),
-                ),
-                Json::new(vec!["dataspace:1".to_owned()]),
-            );
-            stx.world
-                .parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(protected));
-            let (program, manifest) = minimal_contract_artifact();
-            let code_hash = manifest.code_hash.expect("manifest code hash");
-            let register_bytes = scode::RegisterSmartContractBytes {
-                code_hash,
-                code: program,
-            };
-            let error = register_bytes
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "raw bytecode registration requires runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(stx.world.contract_code.get(&code_hash).is_none());
-            Grant::account_permission(
-                Permission::new(
-                    "CanRegisterSmartContractCode".to_owned(),
-                    Json::from(norito::json!({ "scope": "wrong" })),
-                ),
-                attacker.clone(),
-            )
-            .expect_execute(&attacker, &mut stx, "store adversarial same-name permission payload");
-            let error = register_bytes
-                .clone()
-                .execute(&attacker, &mut stx)
-                .expect_err(
-                    "a malformed same-name permission must not authorize bytecode mutation",
-                );
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(
-                stx.world.contract_code.get(&code_hash).is_none(),
-                "malformed same-name permission must apply no bytecode mutation"
-            );
-            let upload_hash = Hash::new(b"unprivileged pending upload");
-            let upload = scode::UploadSmartContractCodeChunk {
-                code_hash: upload_hash,
-                total_size: 3,
-                chunk_index: 0,
-                chunk_count: 1,
-                chunk: vec![1, 2, 3],
-            };
-            let error = upload
-                .expect_execute_err(&attacker, &mut stx, "chunk upload requires exact runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            let attacker_upload_key =
-                SmartContractCodeUploadKey::new(attacker.clone(), upload_hash);
-            assert!(
-                stx.world
-                    .contract_code_uploads
-                    .get(&attacker_upload_key)
-                    .is_none(),
-                "rejected chunk upload must not create a descriptor"
-            );
-            assert!(
-                stx.world
-                    .contract_code_upload_chunks
-                    .iter()
-                    .all(|(key, _)| &key.upload != &attacker_upload_key),
-                "rejected chunk upload must not stage bytes"
-            );
-            let error = scode::FinalizeSmartContractCodeUpload {
-                code_hash: upload_hash,
-                total_size: 3,
-                chunk_count: 1,
-            }
-            .expect_execute_err(&attacker, &mut stx, "upload finalization requires exact runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(
-                stx.world
-                    .contract_code_uploads
-                    .get(&attacker_upload_key)
-                    .is_none(),
-                "rejected finalization must not create staging"
-            );
-            stx.world.contract_code_uploads.insert(
-                attacker_upload_key.clone(),
-                SmartContractCodeUploadDescriptor {
-                    total_size: 3,
-                    chunk_count: 1,
-                },
-            );
-            stx.world.contract_code_upload_chunks.insert(
-                SmartContractCodeUploadChunkKey::new(attacker_upload_key.clone(), 0),
-                vec![1, 2, 3],
-            );
-            scode::CancelSmartContractCodeUpload {
-                code_hash: upload_hash,
-            }
-            .expect_execute(&attacker, &mut stx, "the upload owner may clean up staging without deploy permission");
-            assert!(
-                stx.world
-                    .contract_code_uploads
-                    .get(&attacker_upload_key)
-                    .is_none()
-            );
-            assert!(
-                stx.world
-                    .contract_code_upload_chunks
-                    .iter()
-                    .all(|(key, _)| &key.upload != &attacker_upload_key)
-            );
-            grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
-            register_bytes
-                .clone()
-                .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode registration");
-            let remove_bytes = scode::RemoveSmartContractBytes {
-                code_hash,
-                reason: Some("permission regression fixture".to_owned()),
-            };
-            let error = remove_bytes
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "raw bytecode removal requires runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(stx.world.contract_code.get(&code_hash).is_some());
-            remove_bytes
-                .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode removal");
-            assert!(stx.world.contract_code.get(&code_hash).is_none());
-            register_bytes
-                .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode re-registration");
-            let register_manifest = scode::RegisterSmartContractCode {
-                manifest: manifest.signed(&ALICE_KEYPAIR),
-            };
-            let error = register_manifest
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "raw manifest registration requires runtime lifecycle authority");
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
-            assert!(stx.world.contract_manifests.get(&code_hash).is_none());
-            register_manifest
-                .expect_execute(&ALICE_ID, &mut stx, "authorized manifest registration");
-            let contract_address = ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                    .parse()
-                    .expect("canonical test network id"),
-                &ALICE_ID,
-                0,
-                DataSpaceId::UNIVERSAL,
-            )
-            .expect("contract address");
-            let contract_subject = contract_address.subject_id();
-            Register::account(Account::new(contract_subject.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "seed contract subject");
-            stx.world.contract_subject_bindings.insert(
-                contract_address.clone(),
-                crate::smartcontracts::code::ContractSubjectBinding::new_direct(
-                    &contract_address,
-                    ALICE_ID.clone(),
-                ),
-            );
-            stx.world
-                .contract_subject_addresses
-                .insert(contract_subject.clone(), contract_address.clone());
-            let activate = scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 1,
-                code_hash,
-            };
-            let removed_subject = stx
-                .world
-                .accounts
-                .remove(contract_subject.clone())
-                .expect("remove contract subject for corruption regression");
-            let missing_subject_activation = activate
-                .clone()
-                .expect_execute_err(&ALICE_ID, &mut stx, "activation must reject a missing contract subject");
-            assert_contains!(
-                missing_subject_activation.to_string(),
-                &format!(
-                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
-                )
-            );
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none(),
-                "missing-subject activation rejection must not mutate the instance registry"
-            );
-            stx.world
-                .accounts
-                .insert(contract_subject.clone(), removed_subject);
-            let error = activate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not pre-bind another account's address");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none(),
-                "rejected first binding must not mutate the instance registry"
-            );
-            activate
-                .clone()
-                .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may activate verified code");
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash)
-            );
-            assert_eq!(
-                stx.world
-                    .contract_subject_bindings
-                    .get(&contract_address)
-                    .expect("active lifecycle")
-                    .lifecycle
-                    .active_code_hash,
-                Some(code_hash)
-            );
-            assert!(
-                stx.world.account(&contract_subject).is_ok(),
-                "contract subject account remains available",
-            );
-            let deactivate = scode::DeactivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 2,
-                reason: Some("adversarial ABA attempt".to_owned()),
-            };
-            let lifecycle_before_missing_subject = stx
-                .world
-                .contract_subject_bindings
-                .get(&contract_address)
-                .expect("active lifecycle")
-                .lifecycle
-                .clone();
-            let removed_subject = stx
-                .world
-                .accounts
-                .remove(contract_subject.clone())
-                .expect("remove active contract subject for corruption regression");
-            let missing_subject_deactivation = deactivate
-                .clone()
-                .expect_execute_err(&ALICE_ID, &mut stx, "deactivation must reject a missing contract subject");
-            assert_contains!(
-                missing_subject_deactivation.to_string(),
-                &format!(
-                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
-                )
-            );
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash),
-                "missing-subject deactivation rejection must preserve the active instance"
-            );
-            assert_eq!(
-                stx.world
-                    .contract_subject_bindings
-                    .get(&contract_address)
-                    .expect("retained lifecycle")
-                    .lifecycle,
-                lifecycle_before_missing_subject,
-                "missing-subject deactivation rejection must preserve lifecycle state"
-            );
-            stx.world
-                .accounts
-                .insert(contract_subject.clone(), removed_subject);
-            let error = deactivate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not begin an ABA rebind");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash),
-                "rejected deactivation must preserve the live binding"
-            );
-            let active_activate = scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 2,
-                code_hash,
-            };
-            let error = active_activate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "even an idempotent binding request requires lifecycle authority");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            deactivate
-                .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may deactivate an instance");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none()
-            );
-            let deactivated_lifecycle = &stx
-                .world
-                .contract_subject_bindings
-                .get(&contract_address)
-                .expect("retained inactive lifecycle")
-                .lifecycle;
-            assert!(deactivated_lifecycle.active_code_hash.is_none());
-            assert_eq!(deactivated_lifecycle.revision, 3);
-            let reactivate = scode::ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                expected_revision: 3,
-                code_hash,
-            };
-            let error = reactivate
-                .clone()
-                .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not complete an ABA rebind");
-            assert_contains!(format!("{error:?}"), "current account owner");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&contract_address)
-                    .is_none()
-            );
-            reactivate
-                .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may reactivate verified code");
-            assert_eq!(
-                stx.world.contract_instances.get(&contract_address),
-                Some(&code_hash)
-            );
-            let reactivated_lifecycle = &stx
-                .world
-                .contract_subject_bindings
-                .get(&contract_address)
-                .expect("reactivated lifecycle")
-                .lifecycle;
-            assert_eq!(reactivated_lifecycle.active_code_hash, Some(code_hash));
-            assert_eq!(reactivated_lifecycle.revision, 4);
-        });
+        include!("world_public_artifact_tests.rs");
         world_test!(native_upload_finalization_enforces_live_cycle_ceiling_and_retains_staging {
             blank_test_state_transaction!(state, block, stx);
             Register::account(Account::new(ALICE_ID.clone()))
@@ -41175,7 +40811,7 @@ seiyaku GovernanceLifecycle {
             }
             .expect_execute(&ALICE_ID, &mut stx, "register verified manifest");
             let artifact_permission: Permission =
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                     .into();
             assert!(
                 stx.world
@@ -41190,9 +40826,10 @@ seiyaku GovernanceLifecycle {
             .expect_execute_err(
                 &ALICE_ID,
                 &mut stx,
-                "revoked artifact capability must still deny bytecode registration",
+                "invalid artifact must remain rejected for an ordinary registered developer",
             );
-            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
+            assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
+            assert!(stx.world.contract_code.get(&unregistered_hash).is_none());
             stx.apply();
             let mut stx = block.transaction();
             let network_id = *stx.network_id();

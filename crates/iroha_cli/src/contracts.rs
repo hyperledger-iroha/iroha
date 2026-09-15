@@ -2624,7 +2624,7 @@ mod tests {
         let mut world = World::with([fixture_domain], [account], []);
         let mut permissions = Permissions::new();
         assert!(permissions.insert(Permission::new(
-            "CanRegisterSmartContractCode".to_owned(),
+            "CanManageSmartContractCode".to_owned(),
             iroha_primitives::json::Json::new(()),
         )));
         assert!(permissions.insert(Permission::new(

@@ -22861,7 +22861,7 @@ seiyaku Callee {
         let mut permissions = Permissions::new();
         assert!(
             permissions.insert(
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                     .into(),
             )
         );
@@ -23252,7 +23252,7 @@ seiyaku Callee {
                 let mut permissions = Permissions::new();
                 assert!(
                     permissions.insert(
-                        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                             .into(),
                     )
                 );

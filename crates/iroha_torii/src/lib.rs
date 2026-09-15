@@ -10100,6 +10100,25 @@ async fn handler_accounts_onboarding_readiness(
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_accounts_faucet_policy(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, Error> {
+    if uri.query().is_some() || !body.is_empty() {
+        return Err(Error::AppQueryValidation {
+            code: "account_faucet_policy_request_unsupported",
+            message: "Faucet policy discovery accepts no query parameters or body.".to_owned(),
+        });
+    }
+    check_access(&app, &headers, Some(remote.ip()), "v1/accounts/faucet/policy").await?;
+    routing::handle_v1_accounts_faucet_policy(app).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_accounts_faucet_puzzle(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
@@ -44446,6 +44465,7 @@ impl Torii {
             ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get(handler_accounts_onboarding_readiness);
             ACCOUNTS_ONBOARDING_CURRENT_STATE_POST => limited_public_post(account_onboarding_state::handler_account_onboarding_current_state, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             ACCOUNTS_FAUCET_PUZZLE_GET => public_get(handler_accounts_faucet_puzzle);
+            ACCOUNTS_FAUCET_POLICY_GET => limited_public_get(handler_accounts_faucet_policy, 0);
             ACCOUNTS_FAUCET_PREPARE_POST => protocol_handshake_post(handler_accounts_faucet_prepare);
             ACCOUNTS_FAUCET_POST => protocol_handshake_post(handler_accounts_faucet);
             ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => canonical_signature_get(handler_account_aliases);

@@ -11,6 +11,7 @@ use iroha_model_base::topology::DataSpaceId;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Public account-bootstrap network and signing policy.
 pub mod account_capabilities;
+pub mod account_faucet_policy;
 /// Canonical bounded signing preimage shared by request-witness signers and verifiers.
 pub mod canonical_request_witness;
 /// Canonical node configuration snapshots and operator update records.
@@ -202,7 +203,7 @@ impl FeeQuoteResponse {
                 "fee quote changed the draft payer, sponsor revision, or gas bound".to_owned(),
             );
         }
-        self.validate_semantics(payload)
+        self.validate_for_authority(payload.authority())
     }
 
     /// Validate this quote against a payload containing the exact quoted intent.
@@ -215,10 +216,20 @@ impl FeeQuoteResponse {
         if &self.intent != payload.fee_payment_intent() {
             return Err("fee quote intent differs from the signed payload".to_owned());
         }
-        self.validate_semantics(payload)
+        self.validate_for_authority(payload.authority())
     }
 
-    fn validate_semantics(&self, payload: &TransactionPayload) -> Result<(), String> {
+    /// Validate standalone quoted fee terms for one exact transaction authority.
+    ///
+    /// This checks component maxima, payer identity, sponsor revision and capacity consistency.
+    /// Signing still requires the draft or signed-payload validator to bind the executable intent.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed quote or an inconsistent payer or capacity.
+    pub fn validate_for_authority(
+        &self,
+        authority: &iroha_data_model::account::AccountId,
+    ) -> Result<(), String> {
         self.intent
             .validate()
             .map_err(|error| format!("invalid fee quote intent: {error}"))?;
@@ -247,7 +258,7 @@ impl FeeQuoteResponse {
                     FeeQuoteDecision::Accepted {
                         debit_source: FeeDebitSource::Account(account),
                         program_revision: None,
-                    } if account == payload.authority() => {}
+                    } if account == authority => {}
                     _ => {
                         return Err(
                             "authority-paid fee quote has an inconsistent admission decision"
@@ -518,6 +529,8 @@ pub mod uri {
     pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
     /// Accounts: public bootstrap network identity and explicit signing default.
     pub const ACCOUNTS_CAPABILITIES: &str = "/v1/accounts/capabilities";
+    /// Accounts: public operator-configured faucet issuer and exact issuance policy.
+    pub const ACCOUNTS_FAUCET_POLICY: &str = "/v1/accounts/faucet/policy";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Node: latest persisted query projection checkpoint descriptor
@@ -1378,6 +1391,26 @@ mod tests {
         assert!(
             quote.validate_for_signed_payload(payload).is_err(),
             "signed-payload validator accepted {case}"
+        );
+    }
+    #[test]
+    fn fee_quote_standalone_authority_validation_matches_payload_semantics() {
+        let (payload, quote) = authority_fee_quote_fixture();
+        quote
+            .validate_for_authority(payload.authority())
+            .expect("matching authority quote");
+        let foreign = AccountId::new(checked_test_keypair(0x36).public_key().clone());
+        assert!(quote.validate_for_authority(&foreign).is_err());
+        let (payload, quote, _, _) = sponsored_fee_quote_fixture();
+        quote
+            .validate_for_authority(payload.authority())
+            .expect("matching sponsor quote");
+        let mut malformed = quote;
+        malformed.capacities.clear();
+        assert!(
+            malformed
+                .validate_for_authority(payload.authority())
+                .is_err()
         );
     }
     #[test]

@@ -180,10 +180,10 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
         .execute(&authority, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
+        .expect("grant CanManageSmartContractCode");
     let enact_perm: permission::Permission =
         iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
     Grant::account_permission(enact_perm, authority.clone())
@@ -331,10 +331,10 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
         .execute(&authority, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
+        .expect("grant CanManageSmartContractCode");
     Register::account(Account::new(contract_subject))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
@@ -424,10 +424,10 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
         .execute(&authority, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
+        .expect("grant CanManageSmartContractCode");
     let enact_perm: permission::Permission =
         iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
     Grant::account_permission(enact_perm, authority.clone())
@@ -642,10 +642,10 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
         .execute(&authority, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
+        .expect("grant CanManageSmartContractCode");
     let enact_perm: permission::Permission =
         iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
     Grant::account_permission(enact_perm, authority.clone())
@@ -812,10 +812,10 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
         .execute(&authority, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
+        .expect("grant CanManageSmartContractCode");
     let enact_perm: permission::Permission =
         iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
     Grant::account_permission(enact_perm, authority.clone())
@@ -886,10 +886,10 @@ fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(register_perm, authority.clone())
         .execute(&authority, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
+        .expect("grant CanManageSmartContractCode");
     let enact_perm: permission::Permission =
         iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
     Grant::account_permission(enact_perm, authority.clone())

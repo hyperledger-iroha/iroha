@@ -24074,7 +24074,7 @@ mod multisig_selector_tests {
         MultisigProposalValue, MultisigPropose, MultisigSpec,
     };
     use iroha_executor_data_model::permission::{
-        governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
+        governance::CanEnactGovernance, smart_contract::CanManageSmartContractCode,
     };
     use iroha_primitives::const_vec::ConstVec;
     use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
@@ -24608,10 +24608,10 @@ mod multisig_selector_tests {
             0,
         ));
         let mut stx = block.transaction();
-        let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
+        let register_permission: permission::Permission = CanManageSmartContractCode.into();
         Grant::account_permission(register_permission, authority.clone())
             .execute(authority, &mut stx)
-            .expect("grant CanRegisterSmartContractCode");
+            .expect("grant CanManageSmartContractCode");
         let enact_permission: permission::Permission = CanEnactGovernance.into();
         Grant::account_permission(enact_permission, authority.clone())
             .execute(authority, &mut stx)
@@ -49662,7 +49662,7 @@ mod validation_fee_torii_ingress_tests {
         ));
         let mut stx = block.transaction();
         let register_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         Grant::account_permission(register_permission, authority.clone())
             .execute(authority, &mut stx)
@@ -60698,6 +60698,39 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         ),
     ))
 }
+/// Advertise the operator's exact faucet issuer, asset and amount before account registration.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_accounts_faucet_policy(
+    app: crate::SharedAppState,
+) -> Result<impl IntoResponse> {
+    use iroha_torii_shared::account_faucet_policy::{
+        ACCOUNT_FAUCET_POLICY_MAX_BYTES, AccountFaucetAdvertisement,
+    };
+    let faucet = app.account_faucet.as_ref().ok_or(Error::AppServiceUnavailable {
+        code: "account_faucet_disabled",
+        message: "This network does not provide a testnet faucet.".to_owned(),
+    })?;
+    let policy = AccountFaucetAdvertisement {
+        schema_version: 1,
+        network_id: *app.state.network_id_ref(),
+        network_prefix: iroha_data_model::account::address::chain_discriminant(),
+        authority: faucet.authority.clone(),
+        asset_definition_id: resolve_faucet_asset_definition_id(&app, faucet)?,
+        amount: configured_faucet_quantity(faucet)?,
+    };
+    let bytes = norito::json::to_vec(&policy).map_err(|source| Error::SerializationFailure {
+        context: "account_faucet_policy",
+        source: Box::new(source),
+    })?;
+    if bytes.len() > ACCOUNT_FAUCET_POLICY_MAX_BYTES {
+        return Err(Error::AppServiceUnavailable {
+            code: "account_faucet_policy_invalid",
+            message: "Configured faucet policy exceeds the public representation bound.".to_owned(),
+        });
+    }
+    Ok(([(header::CONTENT_TYPE, "application/json")], bytes))
+}
+
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts_faucet_puzzle(
     app: crate::SharedAppState,

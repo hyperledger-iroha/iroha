@@ -185,6 +185,54 @@ impl ClientQueryRequestHead {
         Ok(query.encode_versioned())
     }
 }
+/// Decode only Torii's canonical query absence/expiry envelope; ingress failures are not state.
+fn decode_query_absence(response: &http::Response<Vec<u8>>) -> QueryError {
+    let invalid = || {
+        QueryError::Other(eyre!(
+            "query absence/expiry requires a bounded canonical Torii query-validation envelope"
+        ))
+    };
+    let content_type_values = response.headers().get_all(CONTENT_TYPE);
+    let mut content_types = content_type_values.iter();
+    let media_type = content_types.next().map(|value| value.as_bytes());
+    if content_types.next().is_some()
+        || response.body().is_empty()
+        || response.body().len() > 64 * 1024
+    {
+        return invalid();
+    }
+    let envelope = match media_type {
+        Some(value) if value == APPLICATION_NORITO.as_bytes() => {
+            let Ok(envelope) = norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                response.body(),
+                norito::canonical_decode_limits(response.body().len()),
+            ) else {
+                return invalid();
+            };
+            envelope
+        }
+        Some(b"application/json") => {
+            let Ok(envelope) = json::from_slice::<ErrorEnvelope>(response.body()) else {
+                return invalid();
+            };
+            if json::to_vec(&envelope).ok().as_ref() != Some(response.body()) {
+                return invalid();
+            }
+            envelope
+        }
+        _ => return invalid(),
+    };
+    if envelope.code() != "query_validation_failed" {
+        return invalid();
+    }
+    let reason = match response.status() {
+        StatusCode::NOT_FOUND => QueryExecutionFail::NotFound,
+        StatusCode::GONE => QueryExecutionFail::Expired,
+        _ => return invalid(),
+    };
+    QueryError::Validation(ValidationFail::QueryFailed(reason))
+}
+
 /// Decode a raw response from the node's query endpoint
 fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryResponse> {
     match resp.status() {
@@ -208,26 +256,15 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
             }
             decode_query_response_body(body)
         }
+        StatusCode::NOT_FOUND | StatusCode::GONE => Err(decode_query_absence(resp)),
         StatusCode::BAD_REQUEST
         | StatusCode::UNAUTHORIZED
         | StatusCode::FORBIDDEN
-        | StatusCode::GONE
-        | StatusCode::NOT_FOUND
         | StatusCode::UNPROCESSABLE_ENTITY => {
             let body = resp.body();
             match norito::decode_from_bytes::<ValidationFail>(body) {
                 Ok(fail) => Err(QueryError::Validation(fail)),
                 Err(decode_err) => {
-                    if resp.status() == StatusCode::GONE {
-                        return Err(QueryError::Validation(ValidationFail::QueryFailed(
-                            QueryExecutionFail::Expired,
-                        )));
-                    }
-                    if resp.status() == StatusCode::NOT_FOUND {
-                        return Err(QueryError::Validation(ValidationFail::QueryFailed(
-                            QueryExecutionFail::NotFound,
-                        )));
-                    }
                     let report = ResponseReport::with_msg("Query failed", resp).map_or_else(
                         |_| {
                             Report::new(decode_err).wrap_err(
@@ -504,28 +541,118 @@ mod tests {
         assert!(super::validate_fetch_size(DEFAULT_FETCH_SIZE).is_ok());
     }
     #[test]
-    fn garbled_not_found_is_treated_as_missing() {
+    fn only_canonical_query_envelopes_can_prove_absence_or_expiry() {
+        for status in [StatusCode::NOT_FOUND, StatusCode::GONE] {
+            let body = norito::to_bytes(&ErrorEnvelope::new(
+                "query_validation_failed",
+                "missing or expired",
+            ))
+            .unwrap();
+            let response = http::Response::builder()
+                .status(status)
+                .header(CONTENT_TYPE, APPLICATION_NORITO)
+                .body(body.clone())
+                .unwrap();
+            let error = super::decode_query_response(&response).unwrap_err();
+            assert!(matches!(
+                (status, error),
+                (
+                    StatusCode::NOT_FOUND,
+                    QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::NotFound
+                    ))
+                ) | (
+                    StatusCode::GONE,
+                    QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::Expired
+                    ))
+                )
+            ));
+            let json_body = json::to_vec(&ErrorEnvelope::new(
+                "query_validation_failed",
+                "missing or expired",
+            ))
+            .unwrap();
+            let response = http::Response::builder()
+                .status(status)
+                .header(CONTENT_TYPE, "application/json")
+                .body(json_body.clone())
+                .unwrap();
+            assert!(matches!(
+                (status, super::decode_query_response(&response)),
+                (
+                    StatusCode::NOT_FOUND,
+                    Err(QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::NotFound
+                    )))
+                ) | (
+                    StatusCode::GONE,
+                    Err(QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::Expired
+                    )))
+                )
+            ));
+            let mut noncanonical_json = json_body;
+            noncanonical_json.push(b' ');
+            let response = http::Response::builder()
+                .status(status)
+                .header(CONTENT_TYPE, "application/json")
+                .body(noncanonical_json)
+                .unwrap();
+            assert!(matches!(
+                super::decode_query_response(&response),
+                Err(QueryError::Other(_))
+            ));
+            let mut trailing = body.clone();
+            trailing.push(0);
+            for invalid in [
+                vec![],
+                b"<html>missing route</html>".to_vec(),
+                body[..body.len() - 1].to_vec(),
+                trailing,
+                norito::to_bytes(&ErrorEnvelope::new("route_unavailable", "missing route"))
+                    .unwrap(),
+            ] {
+                let response = http::Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, APPLICATION_NORITO)
+                    .body(invalid)
+                    .unwrap();
+                assert!(matches!(
+                    super::decode_query_response(&response),
+                    Err(QueryError::Other(_))
+                ));
+            }
+            for content_type in ["text/html", "application/json"] {
+                let response = http::Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, content_type)
+                    .body(body.clone())
+                    .unwrap();
+                assert!(matches!(
+                    super::decode_query_response(&response),
+                    Err(QueryError::Other(_))
+                ));
+            }
+        }
+    }
+    #[test]
+    fn garbled_not_found_is_a_protocol_failure() {
         let resp = http::Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(vec![0xff, 0x00, 0x01])
             .expect("response");
         let err = super::decode_query_response(&resp).expect_err("expected validation error");
-        assert!(matches!(
-            err,
-            QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
-        ));
+        assert!(matches!(err, QueryError::Other(_)));
     }
     #[test]
-    fn garbled_gone_is_treated_as_expired() {
+    fn garbled_gone_is_a_protocol_failure() {
         let resp = http::Response::builder()
             .status(StatusCode::GONE)
             .body(b"query_validation_failed: The stored cursor has expired".to_vec())
             .expect("response");
         let err = super::decode_query_response(&resp).expect_err("expected validation error");
-        assert!(matches!(
-            err,
-            QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Expired))
-        ));
+        assert!(matches!(err, QueryError::Other(_)));
     }
 }
 impl Client {

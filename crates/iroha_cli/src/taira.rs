@@ -31,7 +31,6 @@ use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse, mc
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use reqwest::blocking::Client as HttpClient;
-use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -44,16 +43,11 @@ use std::{
 };
 use url::Url;
 use zeroize::Zeroizing;
-#[path = "taira_faucet_pow.rs"]
-mod faucet_pow;
+#[path = "taira_doctor_accounts.rs"]
+mod doctor_accounts;
 #[path = "taira_onboarding.rs"]
 mod onboarding;
-#[cfg(test)]
-use faucet_pow::{
-    FAUCET_PUZZLE_V1_FIELDS, build_faucet_challenge, leading_zero_bits, required_nullable_str,
-    solve_faucet_pow, solve_faucet_puzzle, validate_exact_faucet_puzzle_shape,
-};
-use faucet_pow::{solve_account_faucet_claim, validate_taira_puzzle_identity};
+use iroha_wallet::faucet_pow::{solve_account_faucet_claim, validate_puzzle_identity};
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
 const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
@@ -78,8 +72,6 @@ const INROU_PUBLIC_DISCOVERY_CONTENT_CID_HEADER: &str = "sora-content-cid";
 const INROU_CANARY_SERVICE_PORT_V1: u64 = 8_787;
 const WRITE_CANARY_MUTATION_KIND: &str = "write_canary";
 const WRITE_CANARY_OPERATION: &str = "final_canary";
-const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
 const MCP_ACCEPT: &str = "application/json, text/event-stream";
 const MCP_CLIENT_NAME: &str = "iroha-taira-doctor";
 const MCP_CLIENT_VERSION: &str = "1";
@@ -2605,7 +2597,8 @@ fn preflight_taira_network_identity(public_root: &str, config: &Config) -> Resul
         .body
         .as_ref()
         .ok_or_else(|| eyre!("Taira network-identity preflight returned a non-JSON puzzle"))?;
-    validate_taira_puzzle_identity(body, &config.network_id).map(|_| ())
+    validate_puzzle_identity(body, &config.network_id, config.account_chain_discriminant)
+        .map(|_| ())
 }
 #[derive(Debug)]
 struct HttpJson {
@@ -2675,6 +2668,7 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
             collect_time_warnings(result.body.as_ref(), &mut warnings);
         }
     }
+    doctor_accounts::append_checks(&public_root, &mut checks, &mut failures)?;
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
     let mcp_get = http_json(&http, reqwest::Method::GET, mcp_url.as_str(), None)?;
     let mcp_get_ok = mcp_get.status == 405;
@@ -2777,6 +2771,7 @@ pub(super) fn doctor_expected_checks(
         .filter(|(name, _, _, _)| scope.includes_route(name))
         .map(|(name, _, _, statuses)| (*name, u64::from(statuses[0]), route_check_detail(statuses)))
         .collect::<Vec<_>>();
+    checks.extend(doctor_accounts::EXPECTED);
     checks.extend([
         ("mcp_get", 405, None),
         ("mcp_discovery", 200, None),
@@ -5489,6 +5484,7 @@ fn prepare_faucet_operation(
         public_root,
         &signer.account_id,
         &canary_config.network_id,
+        canary_config.account_chain_discriminant,
         deadline,
     )?;
     let public_binding = binding.faucet_binding(&claim)?;
@@ -7775,6 +7771,7 @@ fn compact_json(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     include!("taira_canary_deadline_tests.rs");
+    include!("taira_doctor_accounts_tests.rs");
     use super::*;
     use clap::Parser as _;
     use iroha_i18n::{Bundle, Language, Localizer};
@@ -9822,6 +9819,8 @@ mod tests {
     }
     fn doctor_mock_response(request: &MockRequest, omit_tool: Option<&str>) -> MockResponse {
         match (request.method.as_str(), path_only(&request.path)) {
+            ("GET", "/v1/accounts/capabilities") => doctor_account_tests::capability_response(),
+            ("GET", "/v1/accounts/faucet/policy") => doctor_account_tests::faucet_response(),
             ("GET", "/status") => MockResponse::json(
                 200,
                 norito::json!({
@@ -13001,222 +13000,6 @@ mod tests {
         assert!(format!("{invalid_fee:#}").contains("/v1/fees/quote"));
         let route = hint_submit_error(eyre!("route_unavailable"));
         assert!(format!("{route:#}").contains("ingress or lane routing"));
-    }
-    #[test]
-    fn leading_zero_bits_counts_prefix() {
-        assert_eq!(leading_zero_bits(&[0x00, 0x0f]), 12);
-        assert_eq!(leading_zero_bits(&[0x80]), 0);
-        assert_eq!(leading_zero_bits(&[0x40]), 1);
-    }
-    fn faucet_puzzle_fixture(network_id: &NetworkId) -> Value {
-        norito::json!({
-            "algorithm": FAUCET_POW_ALGORITHM,
-            "network_id": (network_id.to_string()),
-            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
-            "difficulty_bits": 1,
-            "anchor_height": 7,
-            "anchor_block_hash_hex": ("11".repeat(32)),
-            "challenge_salt_hex": null,
-            "scrypt_log_n": 1,
-            "scrypt_r": 1,
-            "scrypt_p": 1,
-            "max_anchor_age_blocks": 16
-        })
-    }
-    #[test]
-    fn faucet_challenge_matches_python_fixture_shape() {
-        let network_id = crate::fallback_config().network_id;
-        let challenge = build_faucet_challenge(
-            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            &network_id,
-            7,
-            &"11".repeat(32),
-            Some(&"22".repeat(32)),
-        )
-        .expect("challenge");
-        assert_eq!(challenge.len(), 32);
-        assert_ne!(challenge, [0_u8; 32]);
-    }
-
-    #[test]
-    fn faucet_challenge_rejects_noncanonical_anchor_hash_hex() {
-        let network_id = crate::fallback_config().network_id;
-        let _error = build_faucet_challenge(
-            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            &network_id,
-            7,
-            &"AA".repeat(32),
-            Some(&"22".repeat(32)),
-        )
-        .expect_err("uppercase anchor hash must fail before proof-of-work");
-    }
-    #[test]
-    fn faucet_challenge_matches_v1_preimage_vector() {
-        let genesis_hash =
-            hex::decode("32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149")
-                .expect("decode fixture genesis hash")
-                .try_into()
-                .expect("fixture genesis hash is exactly 32 bytes");
-        let network_id = NetworkId::from_genesis_hash(
-            iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed(genesis_hash)),
-        );
-        let challenge = build_faucet_challenge(
-            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-            &network_id,
-            68,
-            "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef",
-            None,
-        )
-        .expect("V1 faucet challenge");
-        assert_eq!(
-            hex::encode(challenge),
-            "21e547302359214b28f0d1e0b04b6aeaf62a0e597dbad018d93ab0ce6af81a05"
-        );
-    }
-    #[test]
-    fn solve_faucet_puzzle_rejects_pre_release_algorithm_label() {
-        let network_id = crate::fallback_config().network_id;
-        let mut puzzle = faucet_puzzle_fixture(&network_id);
-        puzzle.as_object_mut().expect("puzzle object").insert(
-            "algorithm".to_owned(),
-            Value::from("scrypt-leading-zero-bits-v2"),
-        );
-        let error = solve_faucet_puzzle(
-            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            &network_id,
-            &puzzle,
-            Instant::now() + Duration::from_secs(5),
-        )
-        .expect_err("pre-release faucet algorithm must fail closed");
-        let message = format!("{error:#}");
-        assert!(message.contains("scrypt-leading-zero-bits-v2"));
-        assert!(message.contains(FAUCET_POW_ALGORITHM));
-    }
-    #[test]
-    fn faucet_challenge_rejects_same_label_different_genesis_replay() {
-        let first_network = crate::fallback_config().network_id;
-        let second_network =
-            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
-                iroha_crypto::Hash::new(b"foreign-faucet-genesis"),
-            ));
-        let account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-        let first = build_faucet_challenge(
-            account_id,
-            &first_network,
-            7,
-            &"11".repeat(32),
-            Some(&"22".repeat(32)),
-        )
-        .expect("first challenge");
-        let second = build_faucet_challenge(
-            account_id,
-            &second_network,
-            7,
-            &"11".repeat(32),
-            Some(&"22".repeat(32)),
-        )
-        .expect("second challenge");
-        assert_ne!(first, second);
-    }
-    #[test]
-    fn solve_faucet_puzzle_rejects_zero_difficulty() {
-        let network_id = crate::fallback_config().network_id;
-        let mut puzzle = faucet_puzzle_fixture(&network_id);
-        puzzle
-            .as_object_mut()
-            .expect("puzzle object")
-            .insert("difficulty_bits".to_owned(), Value::from(0_u64));
-        let error = solve_faucet_puzzle(
-            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            &network_id,
-            &puzzle,
-            Instant::now() + Duration::from_secs(5),
-        )
-        .expect_err("zero-difficulty faucet puzzle must fail closed");
-        assert!(format!("{error:#}").contains("difficulty_bits must be positive"));
-    }
-    #[test]
-    fn solve_faucet_puzzle_requires_the_exact_v1_field_set() {
-        let network_id = crate::fallback_config().network_id;
-        let canonical = faucet_puzzle_fixture(&network_id);
-        validate_exact_faucet_puzzle_shape(&canonical).expect("exact V1 puzzle field set");
-        assert_eq!(
-            required_nullable_str(&canonical, "challenge_salt_hex")
-                .expect("explicit nullable salt"),
-            None
-        );
-
-        for field in FAUCET_PUZZLE_V1_FIELDS {
-            let mut missing = canonical.clone();
-            missing
-                .as_object_mut()
-                .expect("puzzle object")
-                .remove(field);
-            let error = solve_faucet_puzzle(
-                "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                &network_id,
-                &missing,
-                Instant::now() + Duration::from_secs(5),
-            )
-            .expect_err("omitted exact puzzle field must fail closed");
-            assert!(format!("{error:#}").contains("exact V1 field set"));
-        }
-
-        let mut unknown = canonical.clone();
-        unknown
-            .as_object_mut()
-            .expect("puzzle object")
-            .insert("legacy_salt".to_owned(), Value::Null);
-        assert!(
-            solve_faucet_puzzle(
-                "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                &network_id,
-                &unknown,
-                Instant::now() + Duration::from_secs(5),
-            )
-            .is_err(),
-            "unknown puzzle fields must fail closed"
-        );
-
-        let mut malformed = canonical;
-        malformed
-            .as_object_mut()
-            .expect("puzzle object")
-            .insert("challenge_salt_hex".to_owned(), Value::from(false));
-        assert!(required_nullable_str(&malformed, "challenge_salt_hex").is_err());
-    }
-    #[test]
-    fn taira_puzzle_identity_requires_the_exact_network_and_discriminant() {
-        let network_id = crate::fallback_config().network_id;
-        let canonical = norito::json!({
-            "network_id": (network_id.to_string()),
-            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
-        });
-        assert_eq!(
-            validate_taira_puzzle_identity(&canonical, &network_id)
-                .expect("canonical Taira puzzle identity"),
-            network_id
-        );
-
-        let foreign_network =
-            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
-                iroha_crypto::Hash::new(b"foreign-taira-genesis"),
-            ));
-        let foreign = norito::json!({
-            "network_id": (foreign_network.to_string()),
-            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
-        });
-        let network_error = validate_taira_puzzle_identity(&foreign, &network_id)
-            .expect_err("a foreign network identity must fail before publication");
-        assert!(format!("{network_error:#}").contains("does not match configured network"));
-
-        let wrong_discriminant = norito::json!({
-            "network_id": (network_id.to_string()),
-            "chain_discriminant": (DEFAULT_CHAIN_DISCRIMINANT + 1),
-        });
-        let discriminant_error = validate_taira_puzzle_identity(&wrong_discriminant, &network_id)
-            .expect_err("a foreign chain discriminant must fail before publication");
-        assert!(format!("{discriminant_error:#}").contains("does not match Taira"));
     }
     #[test]
     fn resolve_canary_signer_derives_account() {

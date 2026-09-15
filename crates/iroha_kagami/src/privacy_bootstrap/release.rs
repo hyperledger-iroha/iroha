@@ -508,9 +508,9 @@ fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<
             "registered_before_alias_intents": true,
             "unregistered_after_alias_intents": true,
         },
-        "contract_deployment_permission_grant": {
+        "contract_code_management_permission_grant": {
             "account_id": (api_signer),
-            "permission": "CanRegisterSmartContractCode",
+            "permission": "CanManageSmartContractCode",
             "payload": null,
         },
         "dpn_permission_grants": [
@@ -1716,6 +1716,9 @@ fn render_release_genesis_v1(
         CHAIN_DISCRIMINANT_V1,
         "Taira genesis",
     )?;
+    let _address_profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        u16::try_from(CHAIN_DISCRIMINANT_V1).expect("fixed Taira discriminant fits u16"),
+    );
     let transactions = root
         .get("transactions")
         .and_then(JsonValue::as_array)
@@ -1804,17 +1807,9 @@ fn render_release_genesis_v1(
     {
         bail!("Taira genesis final transaction is not instruction-only");
     }
-    let rendered = json_pretty_bytes_v1(&genesis, "Taira privacy release genesis")?;
-    validate_genesis_manifest_json(bytes)
-        .wrap_err("Taira release genesis exceeds fixed resource bounds")?;
-    if nevo_review.is_none() && rendered != bytes {
-        bail!("Taira release genesis changed while proving that privacy activation is absent");
-    }
-    Ok(if nevo_review.is_some() {
-        bytes.to_vec()
-    } else {
-        rendered
-    })
+    // Both branches proved the exact source image; no genesis field was edited.
+    // Preserve its reviewed digest instead of normalizing incidental JSON formatting.
+    Ok(bytes.to_vec())
 }
 fn registered_account_id_v1(instruction: &JsonValue) -> Option<&str> {
     instruction
@@ -2612,8 +2607,35 @@ mod tests {
         }
     }
     #[test]
+    fn nevo_genesis_render_uses_pinned_address_profile_and_restores_the_caller() {
+        let _caller = iroha_data_model::account::address::ChainDiscriminantGuard::enter(753);
+        let rendered = render_release_genesis_v1(CANONICAL_GENESIS_TEMPLATE_V1, None)
+            .expect("Taira genesis decoding uses its verified profile, not the caller profile");
+        assert_eq!(rendered, CANONICAL_GENESIS_TEMPLATE_V1);
+        let mut empty: JsonValue = norito::json::from_slice(CANONICAL_GENESIS_TEMPLATE_V1)
+            .expect("parse pinned source for the rejected candidate");
+        empty
+            .as_object_mut()
+            .expect("genesis object")
+            .insert("transactions".to_owned(), JsonValue::Array(Vec::new()));
+        let empty = json_pretty_bytes_v1(&empty, "empty candidate").expect("encode candidate");
+        assert!(
+            render_release_genesis_v1(&empty, None)
+                .expect_err("empty transaction list must fail after entering its declared profile")
+                .to_string()
+                .contains("no transactions")
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
+    }
+    #[test]
     fn reviewed_nevo_genesis_carries_exact_ephemeral_alias_authority() {
         let (genesis, _) = nevo_fixture_v1();
+        let _address_profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            u16::try_from(CHAIN_DISCRIMINANT_V1).expect("fixed Taira discriminant fits u16"),
+        );
         let genesis_json: JsonValue =
             norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");
         let instruction_values = genesis_json

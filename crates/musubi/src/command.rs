@@ -32,9 +32,7 @@ use crate::{
         PackageError, package_layout_for_member, plan_package, publication_claim,
         publication_manifest_toml, semantic_release_manifest,
     },
-    publication_runtime::{
-        load_bound_production_publication_runtime_v1, load_production_publication_runtime_v1,
-    },
+    publication_runtime::load_bound_production_publication_runtime_v1,
     publish::{
         PublicationAdvanceV1, PublicationBackendError, PublicationEngine, PublicationError,
         PublicationJournalStore, PublicationOperationIdV1, PublicationRequestV1,
@@ -95,6 +93,12 @@ use network::{NetworkCommandArgs, run_network};
 #[path = "command_deploy.rs"]
 mod deploy;
 use deploy::{DeployArgs, ViewArgs, run_deploy, run_view};
+#[path = "command_wallet.rs"]
+mod wallet;
+use wallet::{WalletArgs, run_wallet};
+#[path = "command_registry_config.rs"]
+mod registry_config;
+use registry_config::NetworkArgs;
 #[cfg(test)]
 use scaffold::{PackageLibrarySource, initialize_package_files, prepare_existing_package_library};
 
@@ -138,6 +142,8 @@ struct Cli {
 }
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Create a wallet, obtain testnet XOR, inspect balances and send fee-paying transactions.
+    Wallet(WalletArgs),
     /// Build and deploy one contract through a recoverable native transaction plan.
     Deploy(DeployArgs),
     /// Query a deployed contract view using the selected package network binding.
@@ -190,6 +196,7 @@ enum Command {
 impl Command {
     const fn name(&self) -> &'static str {
         match self {
+            Self::Wallet(_) => "wallet",
             Self::Deploy(_) => "deploy",
             Self::View(_) => "view",
             Self::Network(_) => "network",
@@ -340,12 +347,6 @@ struct PackageArgs {
 #[derive(Args, Clone, Debug, Default)]
 struct RegistryReadArgs {
     /// Native client configuration for network identity, address profile and authenticated reads.
-    #[arg(long, value_name = "PATH")]
-    config: Option<PathBuf>,
-}
-#[derive(Args, Clone, Debug, Default)]
-struct NetworkArgs {
-    /// Explicit platform Iroha client configuration path.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 }
@@ -702,6 +703,7 @@ fn dispatch(
     progress: &mut dyn FnMut(&str),
 ) -> CommandResult {
     match command {
+        Command::Wallet(args) => run_wallet(manifest_path, args, progress),
         Command::Deploy(args) => run_deploy(manifest_path, args, progress),
         Command::View(args) => run_view(manifest_path, args),
         Command::Network(args) => run_network(manifest_path, args),
@@ -2456,7 +2458,7 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
             )
             .with_context("operation_id", operation_id.to_string()));
         }
-        return resume_publication(args, operation_id);
+        return resume_publication(explicit_manifest, args, operation_id);
     }
     if args.mode.effective_offline() {
         return Err(Diagnostic::new(
@@ -2475,16 +2477,17 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     };
     let lock_path = workspace.root().join(PUBLICATION_LOCK_PATH);
     let previous = read_optional_publication_lock(&workspace)?;
+    let config_image = args.network.workspace_image(Some(workspace.root()))?;
     let graph = resolve_and_persist_graph(
         &workspace,
         &selected_names,
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
-            config_image: None,
+            config_image: Some(config_image),
             expected_network_id: None,
             mode: args.mode,
-            config: args.network.config.as_deref(),
+            config: None,
             fresh_only: true,
             purpose: GraphPurposeV1::Publication,
             requested_chain_discriminant: None,
@@ -2755,8 +2758,7 @@ fn recover_publication_sidecars_at(
     let layout = package_layout_for_member(workspace.root(), member);
     let plan = plan_package(&layout, &manifest, &verification_lock)
         .map_err(|error| package_diagnostic(&error))?;
-    let config_image = RegistryPublicConfigImageV1::load(args.network.config.as_deref())
-        .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
+    let config_image = args.network.workspace_image(Some(workspace.root()))?;
     let account_chain_discriminant = config_image
         .account_chain_discriminant()
         .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
@@ -2844,15 +2846,20 @@ fn recover_publication_sidecars_at(
         operation_id,
     ))
 }
-fn resume_publication(args: &PublishArgs, operation_id: PublicationOperationIdV1) -> CommandResult {
+fn resume_publication(
+    explicit_manifest: Option<&Path>,
+    args: &PublishArgs,
+    operation_id: PublicationOperationIdV1,
+) -> CommandResult {
     let state_root = publication_state_root()?;
     let store = PublicationJournalStore::open(&state_root)
         .map_err(|error| publication_diagnostic(&error))?;
     let journal = store
         .load(operation_id)
         .map_err(|error| publication_diagnostic(&error))?;
-    let loaded = load_production_publication_runtime_v1(
-        args.network.config.as_deref(),
+    let image = args.network.publication_image(explicit_manifest)?;
+    let loaded = load_bound_production_publication_runtime_v1(
+        &image.provenance(),
         validate_resumable_publication_car,
     )
     .map_err(publication_configuration_diagnostic)?;
@@ -3147,7 +3154,11 @@ fn publication_configuration_diagnostic(
         },
     )
     .with_context("publication_code", error.code());
-    if error.code() == "MUSUBI_PUBLICATION_CONFIG_CHANGED" {
+    if error.code() == "MUSUBI_DEFAULT_WALLET_UNAVAILABLE" {
+        diagnostic.with_help(
+            "create the default signer with `musubi wallet create`, select --wallet/--wallet-dir, or supply --config; publication storage routing and provider policy remain separate native configuration",
+        )
+    } else if error.code() == "MUSUBI_PUBLICATION_CONFIG_CHANGED" {
         diagnostic.with_help(
             "rerun publish so dependency resolution and authenticated publication use one configuration image",
         )
@@ -3283,7 +3294,7 @@ fn run_release_yank(args: &ReleaseMutationArgs, yanked: bool) -> CommandResult {
         .parse()
         .expect("built-in Musubi reason is valid")
     });
-    let signer = RegistrySigningClientV1::load(args.network.config.as_deref())
+    let signer = RegistrySigningClientV1::load(Some(&args.network.config_path()?))
         .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
     let transaction_hash = signer
         .submit_v1(SetMusubiReleaseYankV1::new(
@@ -3330,12 +3341,12 @@ fn run_owner(args: &OwnerArgs) -> CommandResult {
             }
             let role = owner_role(*role, *permissions)?;
             let invite_id = parse_invite_id(invitation)?;
-            let reader = RegistryReadClientV1::load(network.config.as_deref())
+            let reader = RegistryReadClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let package = reader
                 .resolve_selector(package)
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
-            let signer = RegistrySigningClientV1::load(network.config.as_deref())
+            let signer = RegistrySigningClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let account = signer
                 .parse_account_id(account)
@@ -3374,12 +3385,12 @@ fn run_owner(args: &OwnerArgs) -> CommandResult {
         } => {
             require_nonzero_revision(*expected_revision, "expected governance revision")?;
             let role = owner_role(*role, *permissions)?;
-            let reader = RegistryReadClientV1::load(network.config.as_deref())
+            let reader = RegistryReadClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let package = reader
                 .resolve_selector(package)
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
-            let signer = RegistrySigningClientV1::load(network.config.as_deref())
+            let signer = RegistrySigningClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let account = signer
                 .parse_account_id(account)
@@ -3405,12 +3416,12 @@ fn run_owner(args: &OwnerArgs) -> CommandResult {
         } => {
             require_nonzero_revision(*expected_revision, "expected governance revision")?;
             let invite_id = parse_invite_id(invitation)?;
-            let reader = RegistryReadClientV1::load(network.config.as_deref())
+            let reader = RegistryReadClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let package = reader
                 .resolve_selector(package)
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
-            let signer = RegistrySigningClientV1::load(network.config.as_deref())
+            let signer = RegistrySigningClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let transaction_hash = signer
                 .submit_v1(AcceptMusubiPackageMaintainerV1 {
@@ -3440,12 +3451,12 @@ fn run_owner(args: &OwnerArgs) -> CommandResult {
             network,
         } => {
             require_nonzero_revision(*expected_revision, "expected governance revision")?;
-            let reader = RegistryReadClientV1::load(network.config.as_deref())
+            let reader = RegistryReadClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let package = reader
                 .resolve_selector(package)
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
-            let signer = RegistrySigningClientV1::load(network.config.as_deref())
+            let signer = RegistrySigningClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             match (account.as_deref(), invitation.as_deref()) {
                 (Some(account), None) => {
@@ -3656,7 +3667,7 @@ fn run_alias(args: &AliasArgs) -> CommandResult {
             let target = registry
                 .resolve_selector(package)
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
-            let signer = RegistrySigningClientV1::load(network.config.as_deref())
+            let signer = RegistrySigningClientV1::load(Some(&network.config_path()?))
                 .map_err(|error| registry_diagnostic(error, ErrorCode::Governance))?;
             let transaction_hash = signer
                 .submit_v1(RegisterMusubiAliasV1::new(
@@ -3716,7 +3727,7 @@ fn run_alias(args: &AliasArgs) -> CommandResult {
     }
 }
 fn load_registry_reader(network: &NetworkArgs) -> Result<RegistryReadClientV1, Diagnostic> {
-    RegistryReadClientV1::load(network.config.as_deref())
+    RegistryReadClientV1::load(Some(&network.config_path()?))
         .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))
 }
 fn registry_json<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> Result<Value, Diagnostic> {
@@ -3738,8 +3749,15 @@ fn registry_diagnostic(error: RegistryErrorV1, fallback: ErrorCode) -> Diagnosti
             | crate::registry::RegistryFailureClassV1::StaleCursor,
         ) => fallback,
     };
-    Diagnostic::new(code, "Musubi registry operation failed")
-        .with_context("registry_code", error.code())
+    let diagnostic = Diagnostic::new(code, "Musubi registry operation failed")
+        .with_context("registry_code", error.code());
+    if error.code() == "MUSUBI_DEFAULT_WALLET_UNAVAILABLE" {
+        diagnostic.with_help(
+            "create the default signer with `musubi wallet create`, select --wallet/--wallet-dir, or supply an explicit native --config",
+        )
+    } else {
+        diagnostic
+    }
 }
 fn run_update(explicit_manifest: Option<&Path>, args: &UpdateArgs) -> CommandResult {
     let manifest_path = project_manifest_path(explicit_manifest)?;

@@ -16,6 +16,7 @@ use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{path::Path, time::Duration};
 use url::Url;
 mod user;
+mod private_key_file;
 use crate::secrecy::SecretString;
 pub use user::{
     AliasCache, MusubiFetch as MusubiFetchConfig,

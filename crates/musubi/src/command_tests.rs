@@ -570,6 +570,7 @@ fn recovery_publish_args(
         },
         network: NetworkArgs {
             config: Some(config.to_path_buf()),
+            ..NetworkArgs::default()
         },
         detach: false,
         resume: None,
@@ -1128,7 +1129,27 @@ fn top_level_and_nested_command_inventory_is_exact() {
             [
                 "add", "alias", "build", "cache", "check", "deploy", "fetch", "info", "init",
                 "metadata", "network", "new", "owner", "package", "publish", "remove", "search",
-                "test", "tree", "unyank", "update", "versions", "view", "yank",
+                "test", "tree", "unyank", "update", "versions", "view", "wallet", "yank",
+            ]
+            .map(str::to_owned)
+        )
+    );
+    let wallet = command
+        .get_subcommands()
+        .find(|command| command.get_name() == "wallet")
+        .expect("wallet command");
+    assert_eq!(
+        command_names(wallet),
+        BTreeSet::from_iter(
+            [
+                "balance",
+                "create",
+                "fund",
+                "import",
+                "list",
+                "namespace",
+                "send",
+                "show"
             ]
             .map(str::to_owned)
         )
@@ -1184,6 +1205,18 @@ fn retired_commands_and_subcommands_are_rejected() {
 #[test]
 fn argv_has_no_secret_or_arbitrary_cache_source_controls() {
     let options = command_long_options(&Cli::command());
+    assert!(options.contains("private-key-file"));
+    assert!(
+        Cli::try_parse_from([
+            "musubi",
+            "wallet",
+            "import",
+            "--private-key",
+            "inline-secret"
+        ])
+        .is_err(),
+        "wallet import accepts only a private file path, never an inline signing key"
+    );
     for secret_fragment in [
         "authorization",
         "credential",
@@ -1197,6 +1230,8 @@ fn argv_has_no_secret_or_arbitrary_cache_source_controls() {
         assert!(
             options
                 .iter()
+                // This exact option names a held owner-private file; it cannot carry key bytes.
+                .filter(|option| option.as_str() != "private-key-file")
                 .all(|option| !option.contains(secret_fragment)),
             "secret-bearing --*{secret_fragment}* option is reachable"
         );

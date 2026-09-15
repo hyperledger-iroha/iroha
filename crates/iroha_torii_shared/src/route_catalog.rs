@@ -3959,6 +3959,7 @@ pub mod application_api {
         ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get("application.accounts_onboarding_readiness_get", "/v1/accounts/onboarding/readiness");
         ACCOUNTS_ONBOARDING_CURRENT_STATE_POST => app_post("application.accounts_onboarding_current_state_post", "/v1/accounts/onboarding/current-state");
         ACCOUNTS_FAUCET_PUZZLE_GET => app_get("application.accounts_faucet_puzzle_get", "/v1/accounts/faucet/puzzle");
+        ACCOUNTS_FAUCET_POLICY_GET => app_get("application.accounts_faucet_policy_get", "/v1/accounts/faucet/policy");
         ACCOUNTS_FAUCET_PREPARE_POST => faucet_protocol_compute_post("application.accounts_faucet_prepare_post", "/v1/accounts/faucet/prepare");
         ACCOUNTS_FAUCET_POST => faucet_protocol_mutation_post("application.accounts_faucet_post", "/v1/accounts/faucet");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => account_read_sdk_get("application.accounts_by_account_id_aliases_get", "/v1/accounts/{account_id}/aliases");

@@ -140,7 +140,7 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
     ));
     let mut transaction = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(permission, authority.clone())
         .execute(&authority, &mut transaction)
         .expect("grant contract lifecycle authority");

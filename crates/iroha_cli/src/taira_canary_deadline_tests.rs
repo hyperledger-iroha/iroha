@@ -207,7 +207,7 @@ fn final_canary_submit_verifies_exact_proof_without_replaying_post() {
 }
 
 #[test]
-fn faucet_preparation_deadline_stops_http_and_cpu_work_before_dispatch() {
+fn faucet_preparation_deadline_stops_http_before_dispatch() {
     let expired = Instant::now();
     let config = crate::fallback_config();
     let server = spawn_mock_http(1, |_| panic!("expired preparation must not fetch a puzzle"));
@@ -215,14 +215,12 @@ fn faucet_preparation_deadline_stops_http_and_cpu_work_before_dispatch() {
         &server.base_url,
         &config.account,
         &config.network_id,
+        config.account_chain_discriminant,
         expired,
     )
     .unwrap_err();
     assert!(prepared_request_timed_out(&error));
     assert!(finish_mock(server).is_empty());
-    let params = ScryptParams::new(1, 1, 1, 32).unwrap();
-    let error = solve_faucet_pow(&[0; 32], &params, 1, expired).unwrap_err();
-    assert!(prepared_request_timed_out(&error));
     assert!(!prepared_request_timed_out(&eyre!(
         "malformed authenticated proof"
     )));

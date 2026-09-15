@@ -505,7 +505,7 @@ pub(crate) fn with_validation_fee_payout_state_at_height(
     let mut block = state.block(header);
     let mut state_tx = block.transaction();
     let deployment_permission: iroha_data_model::permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     crate::smartcontracts::Execute::execute(
         iroha_data_model::isi::Grant::account_permission(deployment_permission, deployer.clone()),
         &deployer,
@@ -611,7 +611,7 @@ fn install_active_bound_validation_fee_policy(
     use iroha_data_model::smart_contract::ContractAddress;
     use iroha_model_base::topology::DataSpaceId;
     let deployment_permission: iroha_data_model::permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     crate::smartcontracts::Execute::execute(
         iroha_data_model::isi::Grant::account_permission(deployment_permission, deployer.clone()),
         deployer,

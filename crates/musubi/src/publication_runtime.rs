@@ -25,7 +25,7 @@ use crate::{
     registry::{
         PlatformConfigProvenanceV1, PublicationRuntimeServicesV1, RegistryFailureClassV1,
         RegistryReadClientV1, RegistrySigningClientV1, RegistryTerminalTransactionStateV1,
-        RegistryTransactionStateV1,
+        RegistryTransactionStateV1, selected_client_config_path_v1,
     },
 };
 use iroha_data_model::{
@@ -65,7 +65,6 @@ use std::{
     time::Duration,
 };
 use url::Url;
-const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
 const MAX_CLIENT_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_DELEGATION_BYTES: u64 = 256 * 1024;
 const MAX_DELEGATION_BYTES_USIZE: usize = 256 * 1024;
@@ -1747,7 +1746,10 @@ impl<V> LoadedProductionPublicationRuntimeV1<V> {
         (self.signing, self.services, self.bindings)
     }
 }
-/// Load the production runtime exclusively from an explicit or platform `client.toml`.
+/// Load the production runtime from an explicit native config or the default wallet's client file.
+///
+/// Wallet custody supplies the signer. Publication storage routing and provider policy remain
+/// explicit native publication configuration and are never inferred from a wallet or endpoint.
 ///
 /// # Errors
 ///
@@ -1760,16 +1762,8 @@ pub fn load_production_publication_runtime_v1<V>(
 where
     V: PublicationCleanPackageValidatorV1,
 {
-    let selected = config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
-    let config_path = if selected.is_absolute() {
-        selected
-    } else {
-        std::env::current_dir()
-            .map_err(|_| {
-                ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
-            })?
-            .join(selected)
-    };
+    let config_path = selected_client_config_path_v1(config)
+        .map_err(|error| ProductionPublicationConfigurationErrorV1::new(error.code()))?;
     let config_bytes = read_bounded_platform_config_v1(&config_path).map_err(|_| {
         ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_CONFIG_INVALID")
     })?;

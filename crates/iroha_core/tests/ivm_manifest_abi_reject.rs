@@ -44,7 +44,7 @@ fn minimal_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
             return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                 nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
             }),
-            permission: Some("CanRegisterSmartContractCode".to_owned()),
+            permission: Some("CanManageSmartContractCode".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -162,8 +162,8 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    // Grant CanRegisterSmartContractCode to the authority
-    let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+    // Grant CanManageSmartContractCode to the authority
+    let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
@@ -240,7 +240,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     // Grant permission
-    let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+    let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
@@ -328,7 +328,7 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     // Grant permission
-    let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+    let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
@@ -399,7 +399,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+    let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
@@ -488,7 +488,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+    let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)

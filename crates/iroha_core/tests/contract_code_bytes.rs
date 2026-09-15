@@ -112,7 +112,7 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
@@ -179,7 +179,7 @@ fn register_contract_code_bytes_respects_size_cap() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
@@ -236,7 +236,7 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
@@ -372,7 +372,7 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
@@ -552,7 +552,7 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     let code_hash = iroha_crypto::Hash::new(b"authorization-owned-upload");
     let upload = UploadSmartContractCodeChunk {
         code_hash,
@@ -639,7 +639,7 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
@@ -814,7 +814,7 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");

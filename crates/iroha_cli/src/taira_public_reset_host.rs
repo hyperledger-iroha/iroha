@@ -22751,6 +22751,26 @@ time.sleep(30)
             error.to_string(),
             "Taira doctor report scope does not match signed qualification"
         );
+        let mut without_wallet = canonical.clone();
+        without_wallet
+            .get_mut("checks")
+            .and_then(norito::json::Value::as_array_mut)
+            .unwrap()
+            .retain(|check| {
+                !matches!(
+                    check["name"].as_str(),
+                    Some("account_capabilities" | "account_faucet_policy")
+                )
+            });
+        assert!(
+            validate_doctor_report(
+                &without_wallet,
+                public_root,
+                crate::taira::DoctorScope::Basic
+            )
+            .is_err(),
+            "a report omitting wallet prerequisites cannot qualify deployment"
+        );
         let mut sparse = canonical.clone();
         sparse
             .as_object_mut()

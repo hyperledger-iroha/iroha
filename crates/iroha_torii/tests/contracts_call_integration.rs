@@ -58,7 +58,7 @@ fn grant_contract_operator_permissions(
     use iroha_executor_data_model::permission::{
         account::{AccountAliasPermissionScope, CanManageAccountAlias},
         governance::CanEnactGovernance,
-        smart_contract::CanRegisterSmartContractCode,
+        smart_contract::CanManageSmartContractCode,
     };
 
     let height = u64::try_from(state.view().height())
@@ -74,9 +74,9 @@ fn grant_contract_operator_permissions(
     );
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    Grant::account_permission(CanRegisterSmartContractCode, authority.clone())
+    Grant::account_permission(CanManageSmartContractCode, authority.clone())
         .execute(authority, &mut transaction)
-        .expect("grant CanRegisterSmartContractCode");
+        .expect("grant CanManageSmartContractCode");
     Grant::account_permission(CanEnactGovernance, authority.clone())
         .execute(authority, &mut transaction)
         .expect("grant CanEnactGovernance");

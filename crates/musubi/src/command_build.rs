@@ -79,7 +79,11 @@ pub(super) fn run_build(
             human.push_str(&render_artifact(artifact));
         }
         if let [artifact] = execution.artifacts.as_slice() {
-            human.push_str(&deployment_next_step(&network, artifact));
+            human.push_str(&deployment_next_step(
+                workspace.root_manifest_path(),
+                &network,
+                artifact,
+            ));
         }
         data.insert(
             "artifacts".to_owned(),
@@ -111,23 +115,49 @@ pub(super) fn run_build(
 }
 
 fn deployment_next_step(
+    manifest: &Path,
     network: &network::SelectedNetwork,
     artifact: &CompilerArtifactV1,
 ) -> String {
     let key = network::contract_key(&artifact.package, &artifact.target);
+    let invocation = format!(
+        "musubi --manifest-path {}",
+        quote_cli_argument(&manifest.display().to_string())
+    );
+    let client = network.config.as_ref().map(|path| {
+        format!(
+            " --config {}",
+            quote_cli_argument(&path.display().to_string())
+        )
+    });
     if network.network_id.is_some()
         && network.fee_payment.is_some()
         && network.contracts.contains_key(&key)
     {
         format!(
-            "Next: musubi deploy --network {} --package {} --contract {}\n",
+            "Next: {invocation} deploy --network {}{} --package {} --contract {}\n",
             network.name,
+            client.unwrap_or_default(),
             quote_cli_argument(&artifact.package.to_string()),
             quote_cli_argument(&artifact.target)
         )
     } else {
+        let (setup, client) = match client {
+            Some(client) => (
+                "Bind an alias in a domain owned by the selected account; the existing fee policy is retained.\n".to_owned(),
+                client,
+            ),
+            None if network.name == "taira" => (
+                "For a new Taira account, run `musubi wallet create`, `musubi wallet fund`, and `musubi wallet namespace <your-domain>`.\n".to_owned(),
+                " --wallet default".to_owned(),
+            ),
+            None => (
+                format!("Select a funded wallet for {} and acquire a domain for that account.\n", network.name),
+                " --wallet <wallet-for-network>".to_owned(),
+            ),
+        };
         format!(
-            "Next: configure deployment with `musubi network configure {} --config <client.toml> --fee-payer authority --package {} --contract {} --alias <name::domain>`\n",
+            "{setup}Next: {invocation} network configure {}{client} --package {} --contract {} --alias <name::your-domain>\n",
             network.name,
             quote_cli_argument(&artifact.package.to_string()),
             quote_cli_argument(&artifact.target)
@@ -431,7 +461,24 @@ mod tests {
         );
         let dir = tempfile::tempdir().expect("workspace");
         let mut network = network::select_network(dir.path(), None, None, None).expect("network");
-        assert!(deployment_next_step(&network, &artifact).contains("network configure taira"));
+        let manifest = dir.path().join("Musubi.toml");
+        let unbound = deployment_next_step(&manifest, &network, &artifact);
+        for expected in [
+            "musubi wallet create",
+            "musubi wallet fund",
+            "musubi wallet namespace <your-domain>",
+            "network configure taira --wallet default",
+            "--alias <name::your-domain>",
+        ] {
+            assert!(unbound.contains(expected), "missing {expected}: {unbound}");
+        }
+        assert!(!unbound.contains("<client.toml>"));
+        assert!(!unbound.contains("--fee-payer"));
+        network.name = "custom".to_owned();
+        let custom = deployment_next_step(&manifest, &network, &artifact);
+        assert!(custom.contains("--wallet <wallet-for-network>"));
+        assert!(!custom.contains("musubi wallet fund"));
+        network.name = "taira".to_owned();
         network.network_id = Some(iroha_data_model::NetworkId::from_genesis_hash(
             iroha::crypto::HashOf::from_untyped_unchecked(iroha::crypto::Hash::new(
                 b"test genesis",
@@ -441,13 +488,22 @@ mod tests {
             Vec::new(),
             None,
         ));
+        network.config = Some(PathBuf::from("/runtime/selected wallet/client.toml"));
+        let missing_alias = deployment_next_step(&manifest, &network, &artifact);
+        assert!(missing_alias.contains("--config '/runtime/selected wallet/client.toml'"));
+        assert!(missing_alias.contains("existing fee policy is retained"));
+        assert!(!missing_alias.contains("--wallet default"));
+        assert!(!missing_alias.contains("--fee-payer"));
         network.contracts.insert(
             network::contract_key(&artifact.package, &artifact.target),
             "coffee-club::universal".parse().expect("alias"),
         );
         assert_eq!(
-            deployment_next_step(&network, &artifact),
-            "Next: musubi deploy --network taira --package demo/coffee-club --contract coffee-club\n"
+            deployment_next_step(&manifest, &network, &artifact),
+            format!(
+                "Next: musubi --manifest-path {} deploy --network taira --config '/runtime/selected wallet/client.toml' --package demo/coffee-club --contract coffee-club\n",
+                quote_cli_argument(&manifest.display().to_string())
+            )
         );
     }
 }

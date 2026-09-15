@@ -159,14 +159,14 @@ fn contract_lifecycle_instructions_reach_core_dispatch() {
 #[test]
 fn sponsored_registration_uses_ordinary_authorized_grant() {
     use iroha_executor_data_model::permission::smart_contract::{
-        CanManageSmartContractCodeRegistrars, CanRegisterSmartContractCode,
+        CanGrantSmartContractCodeManagement, CanManageSmartContractCode,
     };
     let authority = account(1);
     let builder = account(2);
     let key_pair = KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519).expect("key");
     let instructions: Vec<InstructionBox> = vec![
         Register::account(Account::new(builder.clone())).into(),
-        Grant::account_permission(CanRegisterSmartContractCode, builder).into(),
+        Grant::account_permission(CanManageSmartContractCode, builder).into(),
     ];
     let transaction = TransactionBuilder::new(
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -178,8 +178,8 @@ fn sponsored_registration_uses_ordinary_authorized_grant() {
     .with_instructions(instructions)
     .sign(key_pair.private_key());
     for (held, expected) in [
-        (Permission::from(CanRegisterSmartContractCode), false),
-        (Permission::from(CanManageSmartContractCodeRegistrars), true),
+        (Permission::from(CanManageSmartContractCode), false),
+        (Permission::from(CanGrantSmartContractCodeManagement), true),
     ] {
         let old = crate::permission::test_override::replace_permissions(vec![held]);
         let mut executor = TestExecutor::non_genesis(authority.clone());
@@ -190,13 +190,13 @@ fn sponsored_registration_uses_ordinary_authorized_grant() {
     }
 }
 #[test]
-fn upload_prefix_cannot_self_grant_registrar_permission() {
-    use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+fn upload_prefix_cannot_self_grant_code_management_permission() {
+    use iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let authority = account(1);
     let key_pair = KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519).expect("key");
     let instructions: Vec<InstructionBox> = vec![
         Register::account(Account::new(authority.clone())).into(),
-        Grant::account_permission(CanRegisterSmartContractCode, authority.clone()).into(),
+        Grant::account_permission(CanManageSmartContractCode, authority.clone()).into(),
         UploadSmartContractCodeChunk {
             code_hash: Hash::new(b"no special bootstrap permission"),
             total_size: 1,
@@ -216,12 +216,12 @@ fn upload_prefix_cannot_self_grant_registrar_permission() {
     .with_instructions(instructions)
     .sign(key_pair.private_key());
     let old = crate::permission::test_override::replace_permissions(vec![
-        CanRegisterSmartContractCode.into(),
+        CanManageSmartContractCode.into(),
     ]);
     let mut executor = TestExecutor::non_genesis(authority);
     visit_transaction(&mut executor, &transaction);
     let verdict = executor.verdict().clone();
     crate::permission::test_override::replace_permissions(old);
     assert!(matches!(verdict, Err(ValidationFail::NotPermitted(message))
-        if message.contains("CanManageSmartContractCodeRegistrars")));
+        if message.contains("CanGrantSmartContractCodeManagement")));
 }

@@ -635,7 +635,7 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
             norito::json!({ "referendum_id": "any" }),
         );
         let register_contract: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                 .into();
         let mut world_block = world.block();
         let mut world_tx = world_block.transaction_without_telemetry(LaneConfig::default(), 0);

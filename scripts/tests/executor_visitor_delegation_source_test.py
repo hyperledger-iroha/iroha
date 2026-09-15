@@ -46,7 +46,7 @@ EXPECTED_PERMISSION_PROVIDERS = (
     ("query", "CanReadRestrictedDataspace", "OnlyGenesis::from"),
     ("query", "CanReadAllLedgerData", "OnlyGenesis::from"),
     ("executor", "CanUpgradeExecutor", "OnlyGenesis::from"),
-    ("smart_contract", "CanRegisterSmartContractCode", "OnlyGenesis::from"),
+    ("smart_contract", "CanGrantSmartContractCodeManagement", "OnlyGenesis::from"),
     ("settlement", "CanManageFxCorridors", "OnlyGenesis::from"),
     ("peer", "CanManagePeers", "OnlyGenesis::from"),
     ("peer", "CanManageLaneRelayEmergency", "OnlyGenesis::from"),

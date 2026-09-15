@@ -681,8 +681,8 @@ pub struct ContractCodeRecord {
 }
 /// Register a smart contract manifest on-chain via the canonical ISI.
 ///
-/// The authority must hold `CanRegisterSmartContractCode`. This permission only
-/// registers an artifact; it cannot create a contract address. Namespaces listed
+/// Any registered authority may publish an exact artifact manifest signed by its own key.
+/// Publication pays normal transaction fees and cannot create a contract address. Namespaces listed
 /// in `gov_protected_namespaces` remain deployable only through Parliament.
 /// The manifest must include `code_hash` and `abi_hash`, and the corresponding
 /// bytecode must already be stored as a verified self-describing artifact.
@@ -709,7 +709,7 @@ pub fn register_manifest(
 ///
 /// The helper verifies the self-describing `CNTR` artifact, uses its canonical
 /// artifact hash, and submits the [`RegisterSmartContractBytes`] instruction.
-/// The authority must hold `CanRegisterSmartContractCode`.
+/// The authority must be registered; normal transaction fee admission applies.
 ///
 /// # Errors
 ///
@@ -1156,7 +1156,7 @@ mod tests {
         let mut permissions = permission::Permissions::new();
         assert!(
             permissions.insert(
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode
                     .into(),
             )
         );

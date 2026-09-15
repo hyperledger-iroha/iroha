@@ -31,6 +31,8 @@ use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
+#[path = "accounts_faucet_policy_tests.rs"]
+mod policy_tests;
 struct FaucetTestContext {
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
@@ -46,6 +48,7 @@ struct FaucetTestContext {
     pow_scrypt_r: u32,
     pow_scrypt_p: u32,
     pow_max_anchor_age_blocks: u64,
+    _data_dir: tempfile::TempDir,
 }
 fn checked_faucet_account_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -104,6 +107,28 @@ fn build_faucet_test_context_with_registration(
     register_user: bool,
 ) -> FaucetTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let data_dir = tempfile::tempdir().expect("isolated faucet Torii persistence");
+    cfg.torii.data_dir = data_dir
+        .path()
+        .canonicalize()
+        .expect("canonical fixture directory");
+    cfg.torii.sorafs_storage.data_dir = cfg.torii.data_dir.join("sorafs");
+    cfg.torii.sorafs_discovery.replay_checkpoint_path =
+        cfg.torii.data_dir.join("provider-replay.to");
+    cfg.torii.da_ingest.replay_cache_store_dir = cfg.torii.data_dir.join("da-replay");
+    cfg.torii.da_ingest.manifest_store_dir = cfg.torii.data_dir.join("da-manifests");
+    cfg.torii.sorafs_gc.state_dir = Some(cfg.torii.sorafs_storage.data_dir.join("gc"));
+    cfg.torii.sorafs_por.state_dir = cfg.torii.sorafs_storage.data_dir.join("por");
+    cfg.torii.sorafs_por.drand.state_path = cfg
+        .torii
+        .sorafs_por
+        .state_dir
+        .join(iroha_config::parameters::defaults::sorafs::por::DRAND_STATE_FILE);
+    cfg.torii.sorafs_por.vrf_state_path = cfg
+        .torii
+        .sorafs_por
+        .state_dir
+        .join(iroha_config::parameters::defaults::sorafs::por::VRF_STATE_FILE);
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -277,6 +302,7 @@ fn build_faucet_test_context_with_registration(
         pow_scrypt_r,
         pow_scrypt_p,
         pow_max_anchor_age_blocks,
+        _data_dir: data_dir,
     }
 }
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
@@ -467,6 +493,7 @@ fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
 #[tokio::test]
 async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -519,6 +546,7 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
 #[tokio::test]
 async fn accounts_faucet_registers_missing_account_before_transfer() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -672,6 +700,7 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
 #[tokio::test]
 async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -724,6 +753,7 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
 #[tokio::test]
 async fn accounts_faucet_allows_repeated_claims_for_same_account() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -780,6 +810,7 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
 #[tokio::test]
 async fn accounts_faucet_accepts_alias_selector_config() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,
@@ -1016,6 +1047,7 @@ async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_re
 #[tokio::test]
 async fn accounts_faucet_puzzle_exposes_current_anchor() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         pow_difficulty_bits,
@@ -1102,6 +1134,7 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
 #[tokio::test]
 async fn accounts_faucet_rejects_missing_pow_when_required() {
     let FaucetTestContext {
+        _data_dir,
         app,
         user_id,
         queue,
@@ -1157,6 +1190,7 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
 #[tokio::test]
 async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
     let FaucetTestContext {
+        _data_dir,
         app,
         state,
         queue,

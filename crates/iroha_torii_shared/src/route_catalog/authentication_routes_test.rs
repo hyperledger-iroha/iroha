@@ -600,7 +600,7 @@ named_route_policy_test!(zk_compute_routes_require_exact_account_authentication,
 
 named_route_policy_test!(account_and_node_bootstrap_capabilities_are_public, {
     assert_route_policies(
-        [application_api::ACCOUNTS_CAPABILITIES_GET],
+        [application_api::ACCOUNTS_CAPABILITIES_GET, application_api::ACCOUNTS_FAUCET_POLICY_GET],
         RoutePolicyExpectation {
             projections: Some(RouteProjections::OPENAPI_AND_SDK),
             openapi: Some(true),
