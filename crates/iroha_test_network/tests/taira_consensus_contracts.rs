@@ -42,7 +42,10 @@ async fn validator_status_until(
     timeout_at(deadline, async {
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            ensure!(!remaining.is_zero(), "validator status observation exceeded its deadline");
+            ensure!(
+                !remaining.is_zero(),
+                "validator status observation exceeded its deadline"
+            );
             let mut builder = client.to_builder();
             builder.torii_request_timeout =
                 iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
@@ -54,7 +57,8 @@ async fn validator_status_until(
                         status: 503,
                         retry_after,
                         body,
-                    } = &error else {
+                    } = &error
+                    else {
                         return Err(error.into());
                     };
                     // Torii negotiates typed errors in both JSON and Norito.
@@ -64,7 +68,12 @@ async fn validator_status_until(
                     if !envelope.is_some_and(|error| error.code == "status_metrics_unavailable") {
                         return Err(error.into());
                     }
-                    sleep(retry_after.unwrap_or_default().max(Duration::from_millis(200))).await;
+                    sleep(
+                        retry_after
+                            .unwrap_or_default()
+                            .max(Duration::from_millis(200)),
+                    )
+                    .await;
                 }
             }
         }
@@ -460,7 +469,10 @@ async fn public_transaction_sequence_reaches_applied(universal_route: bool) -> R
 mod status_observation_tests {
     use super::*;
     use iroha::http::{HttpTransport, Response, TransportFuture, TransportRequest};
-    use std::{collections::VecDeque, sync::{Arc, Mutex}};
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
 
     #[derive(Debug)]
     struct StatusTransport {
@@ -477,11 +489,22 @@ mod status_observation_tests {
             Box::pin(async move {
                 assert_eq!(request.method, iroha::http::Method::GET);
                 assert_eq!(request.url.path(), "/status");
-                assert!(request.body.is_empty(), "the observation must not submit work");
-                self.request_budgets.lock().unwrap().push(request.timeout.unwrap());
-                let (status, body, retry_after) = self.responses.lock().unwrap()
-                    .pop_front().expect("unexpected status retry");
-                let mut response = Response::builder().status(status)
+                assert!(
+                    request.body.is_empty(),
+                    "the observation must not submit work"
+                );
+                self.request_budgets
+                    .lock()
+                    .unwrap()
+                    .push(request.timeout.unwrap());
+                let (status, body, retry_after) = self
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("unexpected status retry");
+                let mut response = Response::builder()
+                    .status(status)
                     .header("content-type", "application/json");
                 if let Some(retry_after) = retry_after {
                     response = response.header("retry-after", retry_after);
@@ -511,10 +534,15 @@ mod status_observation_tests {
             sorafs_anonymity_policy: Default::default(),
             sorafs_rollout_phase: Default::default(),
         };
-        iroha::client::Client::builder(config).http_transport(transport).build().unwrap()
+        iroha::client::Client::builder(config)
+            .http_transport(transport)
+            .build()
+            .unwrap()
     }
 
-    fn transport(responses: impl IntoIterator<Item = (u16, Vec<u8>, Option<&'static str>)>) -> Arc<StatusTransport> {
+    fn transport(
+        responses: impl IntoIterator<Item = (u16, Vec<u8>, Option<&'static str>)>,
+    ) -> Arc<StatusTransport> {
         Arc::new(StatusTransport {
             responses: Mutex::new(responses.into_iter().collect()),
             request_budgets: Mutex::new(Vec::new()),
@@ -524,7 +552,10 @@ mod status_observation_tests {
     #[tokio::test]
     async fn status_observation_retries_typed_busy_json_and_norito_with_remaining_budget() {
         let envelope = iroha_torii_shared::ErrorEnvelope::new("status_metrics_unavailable", "busy");
-        let status = iroha_torii_shared::status::Status { blocks: 4, ..Default::default() };
+        let status = iroha_torii_shared::status::Status {
+            blocks: 4,
+            ..Default::default()
+        };
         let transport = transport([
             (503, json::to_vec(&envelope).unwrap(), None),
             (503, norito::to_bytes(&envelope).unwrap(), None),
@@ -532,12 +563,17 @@ mod status_observation_tests {
         ]);
         let client = client(transport.clone());
         let budget = Duration::from_secs(5);
-        let observed = validator_status_until(&client, Instant::now() + budget).await.unwrap();
+        let observed = validator_status_until(&client, Instant::now() + budget)
+            .await
+            .unwrap();
         assert_eq!(observed.blocks, 4);
         let budgets = transport.request_budgets.lock().unwrap();
         assert_eq!(budgets.len(), 3);
         assert!(budgets[0] <= budget);
-        assert!(budgets.windows(2).all(|pair| pair[1] < pair[0]), "retries must not renew the caller's deadline");
+        assert!(
+            budgets.windows(2).all(|pair| pair[1] < pair[0]),
+            "retries must not renew the caller's deadline"
+        );
     }
 
     #[tokio::test]
@@ -545,29 +581,52 @@ mod status_observation_tests {
         let envelope = iroha_torii_shared::ErrorEnvelope::new("status_metrics_unavailable", "busy");
         let transport = transport([(503, json::to_vec(&envelope).unwrap(), Some("60"))]);
         let client = client(transport.clone());
-        let result = tokio::time::timeout(Duration::from_secs(2), validator_status_until(
-            &client, Instant::now() + Duration::from_millis(80),
-        )).await.expect("Retry-After must remain bounded by the existing deadline");
-        assert!(result.unwrap_err().to_string().contains("exceeded its deadline"));
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            validator_status_until(&client, Instant::now() + Duration::from_millis(80)),
+        )
+        .await
+        .expect("Retry-After must remain bounded by the existing deadline");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeded its deadline")
+        );
         assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn status_observation_propagates_auth_other_service_and_decode_failures() {
         for (status, body) in [
-            (401, br#"{"code":"operator_signature_missing","message":"unauthorized"}"#.to_vec()),
-            (503, br#"{"code":"another_service_unavailable","message":"unavailable"}"#.to_vec()),
+            (
+                401,
+                br#"{"code":"operator_signature_missing","message":"unauthorized"}"#.to_vec(),
+            ),
+            (
+                503,
+                br#"{"code":"another_service_unavailable","message":"unavailable"}"#.to_vec(),
+            ),
             (503, b"malformed service error".to_vec()),
             (200, b"malformed status".to_vec()),
         ] {
             let transport = transport([(status, body, None)]);
             let client = client(transport.clone());
             let error = validator_status_until(&client, Instant::now() + Duration::from_secs(5))
-                .await.unwrap_err();
+                .await
+                .unwrap_err();
             if status == 200 {
-                assert!(matches!(error.downcast_ref::<iroha::Error>(), Some(iroha::Error::Decode { operation: "diagnostic.status", .. })));
+                assert!(matches!(
+                    error.downcast_ref::<iroha::Error>(),
+                    Some(iroha::Error::Decode {
+                        operation: "diagnostic.status",
+                        ..
+                    })
+                ));
             } else {
-                assert!(matches!(error.downcast_ref::<iroha::Error>(), Some(iroha::Error::Http { operation: "diagnostic.status", status: actual, .. }) if *actual == status));
+                assert!(
+                    matches!(error.downcast_ref::<iroha::Error>(), Some(iroha::Error::Http { operation: "diagnostic.status", status: actual, .. }) if *actual == status)
+                );
             }
             assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
         }

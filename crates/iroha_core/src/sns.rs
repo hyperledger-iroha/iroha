@@ -1912,11 +1912,9 @@ fn record_or_not_found(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
 ) -> Result<NameRecordV1, SnsError> {
-    record_by_selector(world, selector)?.ok_or_else(|| {
-        SnsError::RegistrationNotFound {
-            suffix_id: selector.suffix_id,
-            label: selector.normalized_label().to_owned(),
-        }
+    record_by_selector(world, selector)?.ok_or_else(|| SnsError::RegistrationNotFound {
+        suffix_id: selector.suffix_id,
+        label: selector.normalized_label().to_owned(),
     })
 }
 fn policy_or_not_found(

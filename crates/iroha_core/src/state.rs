@@ -30045,6 +30045,7 @@ impl State {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
         crate::sns::try_seed_default_namespace_policies(&mut world, &nexus.fees.fee_asset_id)
             .expect("pre-genesis test world must use current SNS namespace policies");
         let kura_config = iroha_config::parameters::actual::Kura {
@@ -30116,6 +30117,7 @@ impl State {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
         let configured_lane_catalog = nexus.configured_lane_catalog.clone();
         self.prepare_configured_primary_geometry_anchor(&configured_lane_catalog)
             .expect("anchor configured primary geometry for pre-genesis fixture");
@@ -44910,9 +44912,9 @@ impl State {
     /// Install Nexus configuration sourced from this process's validated startup configuration.
     ///
     /// Unlike [`Self::set_nexus`], this is the single boundary allowed to establish the immutable
-    /// configured lane-catalog baseline. Snapshot/runtime topology is still supplied through
-    /// `lane_catalog`; callers must retain the process-configured value in
-    /// `configured_lane_catalog`.
+    /// configured lane and dataspace catalog baselines. Snapshot/runtime topology is supplied
+    /// through `lane_catalog` and `dataspace_catalog`; callers must retain the process-configured
+    /// values in `configured_lane_catalog` and `configured_dataspace_catalog`.
     ///
     /// # Errors
     ///

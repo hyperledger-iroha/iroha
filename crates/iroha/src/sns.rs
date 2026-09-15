@@ -86,8 +86,7 @@ fn name_selector(namespace: SnsNamespacePath, literal: &str) -> Result<NameSelec
             })
         }
         SnsNamespacePath::Domain => {
-            let domain =
-                iroha_model_base::domain::DomainId::parse_fully_qualified(literal.trim())?;
+            let domain = iroha_model_base::domain::DomainId::parse_fully_qualified(literal.trim())?;
             Ok(NameSelectorV1::new(
                 namespace.suffix_id(),
                 domain.to_string(),

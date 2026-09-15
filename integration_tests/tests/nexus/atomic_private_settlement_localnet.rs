@@ -1519,27 +1519,51 @@ fn proof_manifest(
     Ok(manifest)
 }
 
-/// Spawn all three local proof jobs, then join all owners before ordinal reduction.
+/// The three bounded client phases that own one job per participant leg.
+#[derive(Clone, Copy, Debug)]
+enum SmokeLegJobPhaseV1 {
+    Proof,
+    AvailabilityCertification,
+    RestrictedUpload,
+}
+
+impl SmokeLegJobPhaseV1 {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Proof => "proof",
+            Self::AvailabilityCertification => "availability certification",
+            Self::RestrictedUpload => "restricted upload",
+        }
+    }
+}
+
+/// Spawn all three phase jobs, then join all owners before ordinal reduction.
 ///
-/// The three orchestration threads share the process-wide Rayon pool. They do
-/// not create per-leg pools or change the configured eight-worker kernel bound.
-fn collect_three_smoke_leg_jobs_v1<T, R, F>(jobs: [T; 3], prepare: F) -> Result<Vec<R>>
+/// Proof jobs share the process-wide eight-worker Rayon pool. Network jobs use
+/// the same immutable SDK client and retain sequential requests within each leg.
+/// The caller owns the phase span and must join this phase before starting the next.
+fn collect_three_smoke_phase_jobs_v1<T, R, F>(
+    phase: SmokeLegJobPhaseV1,
+    jobs: [T; 3],
+    run: F,
+) -> Result<Vec<R>>
 where
     T: Send,
     R: Send,
     F: Fn(usize, T) -> Result<R> + Sync,
 {
-    collect_three_smoke_leg_jobs_with_builders_v1(jobs, prepare, |ordinal| {
+    collect_three_smoke_phase_jobs_with_builders_v1(phase, jobs, run, |ordinal| {
         Ok(thread::Builder::new()
-            .name(format!("aps-proof-leg-{ordinal}"))
+            .name(format!("aps-{}-leg-{ordinal}", phase.label()))
             .stack_size(TEST_STACK_BYTES))
     })
 }
 
 /// The builder factory permits deterministic launch-failure ownership controls.
-fn collect_three_smoke_leg_jobs_with_builders_v1<T, R, F, B>(
+fn collect_three_smoke_phase_jobs_with_builders_v1<T, R, F, B>(
+    phase: SmokeLegJobPhaseV1,
     jobs: [T; 3],
-    prepare: F,
+    run: F,
     mut builder: B,
 ) -> Result<Vec<R>>
 where
@@ -1550,7 +1574,7 @@ where
 {
     let diagnostic_context = SmokeDiagnosticScopeV1::capture();
     thread::scope(|scope| {
-        let prepare = &prepare;
+        let run = &run;
         let mut ordinal = 0;
         let children = jobs.map(|job| {
             let index = ordinal;
@@ -1559,22 +1583,24 @@ where
             let child = builder(index).and_then(|builder| {
                 builder.spawn_scoped(scope, move || {
                     let _diagnostics = SmokeDiagnosticScopeV1::install(context);
-                    prepare(index, job)
+                    run(index, job)
                 })
             });
             (index, child)
         });
         // Array::map performs every join before Result collection can return.
-        // Preserve each proof error and choose the first ordinal error only
+        // Preserve each operation error and choose the first ordinal error only
         // after every initiated worker has physically finished.
         let joined = children.map(|(ordinal, child)| match child {
             Ok(child) => child.join().unwrap_or_else(|_| {
                 Err(eyre!(
-                    "private-settlement proof leg {ordinal} worker panicked"
+                    "private-settlement {} leg {ordinal} worker panicked",
+                    phase.label()
                 ))
             }),
-            Err(_) => Err(eyre!(
-                "private-settlement proof leg {ordinal} worker could not start"
+            Err(error) => Err(eyre!(
+                "private-settlement {} leg {ordinal} worker could not start: {error}",
+                phase.label()
             )),
         });
         joined.into_iter().collect()
@@ -2408,113 +2434,261 @@ fn observe_smoke_diagnostic_milestone_v1(phase: SmokeDiagnosticPhaseV1, height: 
 
 #[test]
 fn smoke_three_leg_jobs_overlap_and_reduce_reverse_completion_in_ordinal_order() {
-    use std::collections::BTreeSet;
-    use std::sync::{Mutex, mpsc};
-    let (started_tx, started_rx) = mpsc::channel();
-    let (finished_tx, finished_rx) = mpsc::channel();
-    let (release_tx, release_rx): (Vec<_>, Vec<_>) = (0..3).map(|_| mpsc::channel()).unzip();
-    let release_rx = release_rx.into_iter().map(Mutex::new).collect::<Vec<_>>();
-    let timeout = Duration::from_secs(5);
-    let results = thread::scope(|scope| {
-        let controller = scope.spawn(move || {
-            let started = (0..3)
-                .map(|_| {
-                    started_rx
+    for phase in [
+        SmokeLegJobPhaseV1::Proof,
+        SmokeLegJobPhaseV1::AvailabilityCertification,
+        SmokeLegJobPhaseV1::RestrictedUpload,
+    ] {
+        use std::collections::BTreeSet;
+        use std::sync::{Mutex, mpsc};
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let (release_tx, release_rx): (Vec<_>, Vec<_>) = (0..3).map(|_| mpsc::channel()).unzip();
+        let release_rx = release_rx.into_iter().map(Mutex::new).collect::<Vec<_>>();
+        let timeout = Duration::from_secs(5);
+        let results = thread::scope(|scope| {
+            let controller = scope.spawn(move || {
+                let started = (0..3)
+                    .map(|_| {
+                        started_rx
+                            .recv_timeout(timeout)
+                            .expect("all three jobs overlap")
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(started, BTreeSet::from([0, 1, 2]));
+                for ordinal in (0..3).rev() {
+                    release_tx[ordinal].send(()).expect("release live worker");
+                    assert_eq!(
+                        finished_rx.recv_timeout(timeout).expect("worker completed"),
+                        ordinal
+                    );
+                }
+            });
+            let results =
+                collect_three_smoke_phase_jobs_v1(phase, [10, 20, 30], |ordinal, value| {
+                    started_tx.send(ordinal).expect("controller observes job");
+                    release_rx[ordinal]
+                        .lock()
+                        .expect("receiver lock")
                         .recv_timeout(timeout)
-                        .expect("all three jobs overlap")
-                })
-                .collect::<BTreeSet<_>>();
-            assert_eq!(started, BTreeSet::from([0, 1, 2]));
-            for ordinal in (0..3).rev() {
-                release_tx[ordinal].send(()).expect("release live worker");
-                assert_eq!(
-                    finished_rx.recv_timeout(timeout).expect("worker completed"),
-                    ordinal
-                );
-            }
+                        .expect("controller releases job");
+                    finished_tx
+                        .send(ordinal)
+                        .expect("controller observes finish");
+                    Ok(value)
+                });
+            controller.join().expect("controller joined");
+            results.expect("all proof owners joined")
         });
-        let results = collect_three_smoke_leg_jobs_v1([10, 20, 30], |ordinal, value| {
-            started_tx.send(ordinal).expect("controller observes job");
-            release_rx[ordinal]
-                .lock()
-                .expect("receiver lock")
-                .recv_timeout(timeout)
-                .expect("controller releases job");
-            finished_tx
-                .send(ordinal)
-                .expect("controller observes finish");
-            Ok(value)
-        });
-        controller.join().expect("controller joined");
-        results.expect("all proof owners joined")
-    });
-    assert_eq!(results, [10, 20, 30]);
+        assert_eq!(results, [10, 20, 30]);
+    }
 }
 
 #[test]
 fn smoke_three_leg_jobs_join_all_before_returning_first_ordinal_proof_error() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let finished = AtomicUsize::new(0);
-    let result = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| -> Result<usize> {
-        finished.fetch_or(1 << ordinal, Ordering::SeqCst);
-        if ordinal < 2 {
-            Err(eyre!("proof error at ordinal {ordinal}"))
-        } else {
-            Ok(ordinal)
-        }
-    });
-    assert_eq!(finished.load(Ordering::SeqCst), 0b111);
-    assert_eq!(result.unwrap_err().to_string(), "proof error at ordinal 0");
+    for phase in [
+        SmokeLegJobPhaseV1::Proof,
+        SmokeLegJobPhaseV1::AvailabilityCertification,
+        SmokeLegJobPhaseV1::RestrictedUpload,
+    ] {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let finished = AtomicUsize::new(0);
+        let result =
+            collect_three_smoke_phase_jobs_v1(phase, [0, 1, 2], |ordinal, _| -> Result<usize> {
+                finished.fetch_or(1 << ordinal, Ordering::SeqCst);
+                if ordinal < 2 {
+                    Err(eyre!("proof error at ordinal {ordinal}"))
+                } else {
+                    Ok(ordinal)
+                }
+            });
+        assert_eq!(finished.load(Ordering::SeqCst), 0b111);
+        assert_eq!(result.unwrap_err().to_string(), "proof error at ordinal 0");
+    }
 }
 
 #[test]
 fn smoke_three_leg_jobs_join_every_owner_after_worker_panic() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    struct Finished<'a>(&'a AtomicUsize, usize);
-    impl Drop for Finished<'_> {
-        fn drop(&mut self) {
-            self.0.fetch_or(1 << self.1, Ordering::SeqCst);
+    for phase in [
+        SmokeLegJobPhaseV1::Proof,
+        SmokeLegJobPhaseV1::AvailabilityCertification,
+        SmokeLegJobPhaseV1::RestrictedUpload,
+    ] {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Finished<'a>(&'a AtomicUsize, usize);
+        impl Drop for Finished<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_or(1 << self.1, Ordering::SeqCst);
+            }
         }
+        let finished = AtomicUsize::new(0);
+        let result = collect_three_smoke_phase_jobs_v1(phase, [0, 1, 2], |ordinal, _| {
+            let _finished = Finished(&finished, ordinal);
+            assert_ne!(ordinal, 0, "intentional proof worker panic");
+            Ok(ordinal)
+        });
+        assert_eq!(finished.load(Ordering::SeqCst), 0b111);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!("private-settlement {} leg 0 worker panicked", phase.label())
+        );
     }
-    let finished = AtomicUsize::new(0);
-    let result = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
-        let _finished = Finished(&finished, ordinal);
-        assert_ne!(ordinal, 0, "intentional proof worker panic");
-        Ok(ordinal)
-    });
-    assert_eq!(finished.load(Ordering::SeqCst), 0b111);
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "private-settlement proof leg 0 worker panicked"
-    );
 }
 
 #[test]
 fn smoke_three_leg_jobs_attempt_all_launches_and_join_after_launch_failure() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let attempted = AtomicUsize::new(0);
-    let finished = AtomicUsize::new(0);
-    let result = collect_three_smoke_leg_jobs_with_builders_v1(
-        [0, 1, 2],
-        |ordinal, _| {
-            finished.fetch_or(1 << ordinal, Ordering::SeqCst);
-            Ok(ordinal)
-        },
-        |ordinal| {
-            attempted.fetch_or(1 << ordinal, Ordering::SeqCst);
-            if ordinal == 1 {
-                Err(std::io::Error::other("controlled builder failure"))
-            } else {
-                Ok(thread::Builder::new())
+    for phase in [
+        SmokeLegJobPhaseV1::Proof,
+        SmokeLegJobPhaseV1::AvailabilityCertification,
+        SmokeLegJobPhaseV1::RestrictedUpload,
+    ] {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let attempted = AtomicUsize::new(0);
+        let finished = AtomicUsize::new(0);
+        let result = collect_three_smoke_phase_jobs_with_builders_v1(
+            phase,
+            [0, 1, 2],
+            |ordinal, _| {
+                finished.fetch_or(1 << ordinal, Ordering::SeqCst);
+                Ok(ordinal)
+            },
+            |ordinal| {
+                attempted.fetch_or(1 << ordinal, Ordering::SeqCst);
+                if ordinal == 1 {
+                    Err(std::io::Error::other("controlled builder failure"))
+                } else {
+                    Ok(thread::Builder::new())
+                }
+            },
+        );
+        assert_eq!(attempted.load(Ordering::SeqCst), 0b111);
+        assert_eq!(finished.load(Ordering::SeqCst), 0b101);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            format!(
+                "private-settlement {} leg 1 worker could not start: controlled builder failure",
+                phase.label()
+            )
+        );
+    }
+}
+
+#[test]
+fn smoke_network_leg_jobs_preserve_phase_barrier_and_endpoint_order() {
+    use std::sync::Mutex;
+
+    // These are scheduling tokens, not availability certificates or HTTP samples.
+    // The compile-time bounds also check the actual immutable worker captures.
+    fn require_send_sync<T: Send + Sync>() {}
+    require_send_sync::<SdkClient>();
+    require_send_sync::<CommitteeEndpoints>();
+    require_send_sync::<PrivateSettlementProvisionalLegMaterialV1>();
+    require_send_sync::<PrivateSettlementLegUploadRequestV1>();
+
+    let certification_calls: [Mutex<Vec<usize>>; 3] =
+        std::array::from_fn(|_| Mutex::new(Vec::new()));
+    let certificates = collect_three_smoke_phase_jobs_v1(
+        SmokeLegJobPhaseV1::AvailabilityCertification,
+        [10, 20, 30],
+        |ordinal, value| {
+            for endpoint in 0..4 {
+                certification_calls[ordinal].lock().unwrap().push(endpoint);
             }
+            Ok((ordinal, value))
         },
-    );
-    assert_eq!(attempted.load(Ordering::SeqCst), 0b111);
-    assert_eq!(finished.load(Ordering::SeqCst), 0b101);
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "private-settlement proof leg 1 worker could not start"
-    );
+    )
+    .expect("all certificate jobs joined");
+    assert_eq!(certificates, [(0, 10), (1, 20), (2, 30)]);
+    for calls in &certification_calls {
+        assert_eq!(*calls.lock().unwrap(), [0, 1, 2, 3]);
+    }
+
+    let upload_calls: [Mutex<Vec<(usize, i32, usize)>>; 3] =
+        std::array::from_fn(|_| Mutex::new(Vec::new()));
+    let uploaded = collect_three_smoke_phase_jobs_v1(
+        SmokeLegJobPhaseV1::RestrictedUpload,
+        std::array::from_fn(|ordinal| &certificates[ordinal]),
+        |ordinal, certificate| {
+            // Upload cannot observe any incomplete certificate leg, even when
+            // the network jobs run in a different order from the manifest.
+            for calls in &certification_calls {
+                assert_eq!(*calls.lock().unwrap(), [0, 1, 2, 3]);
+            }
+            assert_eq!(certificate.0, ordinal);
+            for endpoint in 0..4 {
+                upload_calls[ordinal].lock().unwrap().push((
+                    certificate.0,
+                    certificate.1,
+                    endpoint,
+                ));
+            }
+            Ok(*certificate)
+        },
+    )
+    .expect("all upload jobs joined");
+    assert_eq!(uploaded, certificates);
+    for (ordinal, calls) in upload_calls.iter().enumerate() {
+        assert_eq!(
+            *calls.lock().unwrap(),
+            (0..4)
+                .map(|endpoint| (ordinal, certificates[ordinal].1, endpoint))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn smoke_network_leg_jobs_preserve_error_details_and_phase_context() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let _scope = SmokeDiagnosticScopeV1::start();
+    let workflow = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    for (phase, timing_phase) in [
+        (
+            SmokeLegJobPhaseV1::AvailabilityCertification,
+            SmokeDiagnosticPhaseV1::AvailabilityCertification,
+        ),
+        (
+            SmokeLegJobPhaseV1::RestrictedUpload,
+            SmokeDiagnosticPhaseV1::RestrictedUpload,
+        ),
+    ] {
+        let timing = SmokeDiagnosticSpanV1::start(timing_phase, None);
+        let context = SmokeDiagnosticScopeV1::capture().unwrap();
+        let next_span = context.next_span.load(Ordering::Relaxed);
+        let finished = AtomicUsize::new(0);
+        let error = collect_three_smoke_phase_jobs_v1(phase, [0, 1, 2], |ordinal, _| {
+            let child = SmokeDiagnosticScopeV1::capture().unwrap();
+            assert_eq!(child.origin, context.origin);
+            assert_eq!(child.active, context.active);
+            assert!(std::sync::Arc::ptr_eq(&child.next_span, &context.next_span));
+            finished.fetch_or(1 << ordinal, Ordering::SeqCst);
+            if ordinal < 2 {
+                return Err(std::io::Error::other(format!(
+                    "bounded endpoint failure at leg {ordinal}: HTTP 413"
+                ))
+                .into());
+            }
+            Ok(ordinal)
+        })
+        .unwrap_err();
+        assert_eq!(finished.load(Ordering::SeqCst), 0b111);
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().to_string(),
+            "bounded endpoint failure at leg 0: HTTP 413"
+        );
+        assert_eq!(context.next_span.load(Ordering::Relaxed), next_span);
+        assert_eq!(
+            SmokeDiagnosticScopeV1::capture().unwrap().active,
+            context.active
+        );
+        timing.complete();
+        assert_eq!(
+            SmokeDiagnosticScopeV1::capture().unwrap().active,
+            [workflow.event.unwrap().span]
+        );
+    }
+    workflow.complete();
 }
 
 #[test]
@@ -2525,33 +2699,34 @@ fn smoke_worker_diagnostics_share_origin_ids_and_parent_without_sharing_stacks()
     let workflow = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
     let original = SmokeDiagnosticScopeV1::capture().unwrap();
     let parent = workflow.event.unwrap().span;
-    let results = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
-        let context = SmokeDiagnosticScopeV1::capture().unwrap();
-        assert_eq!(context.origin, original.origin);
-        assert!(Arc::ptr_eq(&context.next_span, &original.next_span));
-        assert_eq!(context.active, [parent]);
-        let leg = SmokeDiagnosticSpanV1::start(
-            SmokeDiagnosticPhaseV1::ClientLegConstruction,
-            Some(ordinal),
-        );
-        let witness = SmokeDiagnosticSpanV1::start(
-            SmokeDiagnosticPhaseV1::WitnessAndCapsulePreparation,
-            Some(ordinal),
-        );
-        let leg_event = leg.event.unwrap();
-        let witness_event = witness.event.unwrap();
-        assert_eq!(leg_event.parent, parent);
-        assert_eq!(witness_event.parent, leg_event.span);
-        witness.complete();
-        assert_eq!(
-            SmokeDiagnosticScopeV1::capture().unwrap().active,
-            [parent, leg_event.span]
-        );
-        leg.complete();
-        assert_eq!(SmokeDiagnosticScopeV1::capture().unwrap().active, [parent]);
-        Ok([leg_event.span, witness_event.span])
-    })
-    .expect("joined diagnostic jobs");
+    let results =
+        collect_three_smoke_phase_jobs_v1(SmokeLegJobPhaseV1::Proof, [0, 1, 2], |ordinal, _| {
+            let context = SmokeDiagnosticScopeV1::capture().unwrap();
+            assert_eq!(context.origin, original.origin);
+            assert!(Arc::ptr_eq(&context.next_span, &original.next_span));
+            assert_eq!(context.active, [parent]);
+            let leg = SmokeDiagnosticSpanV1::start(
+                SmokeDiagnosticPhaseV1::ClientLegConstruction,
+                Some(ordinal),
+            );
+            let witness = SmokeDiagnosticSpanV1::start(
+                SmokeDiagnosticPhaseV1::WitnessAndCapsulePreparation,
+                Some(ordinal),
+            );
+            let leg_event = leg.event.unwrap();
+            let witness_event = witness.event.unwrap();
+            assert_eq!(leg_event.parent, parent);
+            assert_eq!(witness_event.parent, leg_event.span);
+            witness.complete();
+            assert_eq!(
+                SmokeDiagnosticScopeV1::capture().unwrap().active,
+                [parent, leg_event.span]
+            );
+            leg.complete();
+            assert_eq!(SmokeDiagnosticScopeV1::capture().unwrap().active, [parent]);
+            Ok([leg_event.span, witness_event.span])
+        })
+        .expect("joined diagnostic jobs");
     let ids = results.into_iter().flatten().collect::<BTreeSet<_>>();
     assert_eq!(ids, BTreeSet::from([2, 3, 4, 5, 6, 7]));
     assert_eq!(SmokeDiagnosticScopeV1::capture().unwrap().active, [parent]);
@@ -2563,7 +2738,7 @@ fn smoke_worker_diagnostics_share_origin_ids_and_parent_without_sharing_stacks()
 #[test]
 fn smoke_worker_diagnostics_remain_disabled_without_parent_scope() {
     assert!(SmokeDiagnosticScopeV1::capture().is_none());
-    collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+    collect_three_smoke_phase_jobs_v1(SmokeLegJobPhaseV1::Proof, [0, 1, 2], |ordinal, _| {
         assert!(SmokeDiagnosticScopeV1::capture().is_none());
         let span = SmokeDiagnosticSpanV1::start(
             SmokeDiagnosticPhaseV1::ClientLegConstruction,
@@ -2619,7 +2794,7 @@ fn smoke_shared_span_counter_exhaustion_never_reuses_identity() {
     context
         .next_span
         .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
-    collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+    collect_three_smoke_phase_jobs_v1(SmokeLegJobPhaseV1::Proof, [0, 1, 2], |ordinal, _| {
         let span = SmokeDiagnosticSpanV1::start(
             SmokeDiagnosticPhaseV1::ClientLegConstruction,
             Some(ordinal),
@@ -2952,27 +3127,34 @@ fn run_n3_real_process_smoke() -> Result<()> {
         .collect::<Result<Vec<_>>>()?
         .try_into()
         .map_err(|_| eyre!("exactly three proof jobs are required"))?;
-    let prepared = collect_three_smoke_leg_jobs_v1(jobs, |ordinal, (leg, authority_digest)| {
-        let leg_timing = SmokeDiagnosticSpanV1::start(
-            SmokeDiagnosticPhaseV1::ClientLegConstruction,
-            Some(ordinal),
-        );
-        let prepared = prepare_leg(ordinal, leg, &manifest, authority_digest)?;
-        leg_timing.complete();
-        Ok(prepared)
-    })?;
+    let prepared = collect_three_smoke_phase_jobs_v1(
+        SmokeLegJobPhaseV1::Proof,
+        jobs,
+        |ordinal, (leg, authority_digest)| {
+            let leg_timing = SmokeDiagnosticSpanV1::start(
+                SmokeDiagnosticPhaseV1::ClientLegConstruction,
+                Some(ordinal),
+            );
+            let prepared = prepare_leg(ordinal, leg, &manifest, authority_digest)?;
+            leg_timing.complete();
+            Ok(prepared)
+        },
+    )?;
     let materials = provisional_materials(manifest, &prepared, &committees)?;
     let availability_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AvailabilityCertification, None);
-    let certificates = materials
-        .iter()
-        .zip(&committees)
-        .map(|(material, committee)| {
-            sponsor
-                .client()
-                .certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // Borrow the immutable SDK context, without capturing the blocking runtime
+    // or rebuilding its transport/signing configuration for individual legs.
+    let client = sponsor.client();
+    let certification_jobs =
+        std::array::from_fn(|ordinal| (&materials[ordinal], &committees[ordinal]));
+    let certificates = collect_three_smoke_phase_jobs_v1(
+        SmokeLegJobPhaseV1::AvailabilityCertification,
+        certification_jobs,
+        |_, (material, committee)| {
+            client.certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
+        },
+    )?;
     availability_timing.complete();
     let mut final_manifest = materials[0].manifest.clone();
     for (ordinal, certificate) in certificates.iter().enumerate() {
@@ -2981,28 +3163,33 @@ fn run_n3_real_process_smoke() -> Result<()> {
     final_manifest.validate()?;
     let upload_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::RestrictedUpload, None);
-    for (ordinal, ((material, certificate), committee)) in materials
-        .iter()
-        .zip(&certificates)
-        .zip(&committees)
-        .enumerate()
-    {
-        let request = PrivateSettlementLegUploadRequestV1 {
-            manifest: final_manifest.clone(),
-            audit_policy: material.audit_policy.clone(),
-            committee_authority: material.committee_authority.clone(),
-            payload: material.payload_with_certificate(certificate.clone()),
-        };
-        for endpoint in &committee.endpoints {
-            let response = sponsor
-                .client()
-                .upload_private_settlement_leg_to_v1(endpoint, &request)?;
-            ensure!(
-                usize::from(response.leg_ordinal) == ordinal,
-                "upload ordinal substitution"
-            );
-        }
-    }
+    let upload_jobs = std::array::from_fn(|ordinal| {
+        (
+            &materials[ordinal],
+            &certificates[ordinal],
+            &committees[ordinal],
+        )
+    });
+    collect_three_smoke_phase_jobs_v1(
+        SmokeLegJobPhaseV1::RestrictedUpload,
+        upload_jobs,
+        |ordinal, (material, certificate, committee)| {
+            let request = PrivateSettlementLegUploadRequestV1 {
+                manifest: final_manifest.clone(),
+                audit_policy: material.audit_policy.clone(),
+                committee_authority: material.committee_authority.clone(),
+                payload: material.payload_with_certificate(certificate.clone()),
+            };
+            for endpoint in &committee.endpoints {
+                let response = client.upload_private_settlement_leg_to_v1(endpoint, &request)?;
+                ensure!(
+                    usize::from(response.leg_ordinal) == ordinal,
+                    "upload ordinal substitution"
+                );
+            }
+            Ok(())
+        },
+    )?;
     upload_timing.complete();
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "collecting")?;
     let state = capture_fault_state_snapshot(&network, "smoke-collecting")?;

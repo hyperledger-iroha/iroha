@@ -964,6 +964,111 @@ state_test! { sync privacy_action_budget_accepts_exact_byte_boundary_and_rejects
         .expect("reservation must agree with successful boundary preflight");
     assert_eq!(transaction.privacy_budget_for_testing(), (1, max, 1, max));
 }
+fn nondefault_pre_genesis_dataspace_fixture(
+    configured: bool,
+) -> iroha_config::parameters::actual::Nexus {
+    let secondary = LaneConfig {
+        id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(7),
+        alias: "fixture-dataspace".to_owned(),
+        ..LaneConfig::default()
+    };
+    let catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), secondary])
+        .expect("two configured lanes");
+    let dataspaces = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: DataSpaceId::new(7),
+            alias: "fixture-dataspace".to_owned(),
+            description: Some("nondefault physical test dataspace".to_owned()),
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("two configured dataspaces");
+    let mut nexus = iroha_config::parameters::actual::Nexus {
+        lane_config: RuntimeLaneConfig::from_catalog(&catalog),
+        lane_catalog: catalog,
+        dataspace_catalog: dataspaces,
+        ..Default::default()
+    };
+    if configured {
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    } else {
+        assert_ne!(nexus.configured_dataspace_catalog, nexus.dataspace_catalog);
+    }
+    nexus
+}
+
+fn assert_pre_genesis_dataspace_fixture(
+    state: &State,
+    requested: &iroha_config::parameters::actual::Nexus,
+) {
+    let installed = state.nexus_snapshot();
+    assert_eq!(installed.lane_catalog, requested.lane_catalog);
+    assert_eq!(installed.configured_lane_catalog, requested.lane_catalog);
+    assert_eq!(installed.dataspace_catalog, requested.dataspace_catalog);
+    assert_eq!(
+        installed.configured_dataspace_catalog,
+        requested.dataspace_catalog
+    );
+    assert_eq!(installed.routing_policy, requested.routing_policy);
+    assert_eq!(
+        state.view().world().dataspace_catalog(),
+        &requested.dataspace_catalog
+    );
+    assert_eq!(state.committed_height(), 0);
+    assert_eq!(
+        state
+            .kura
+            .exact_durable_blocks_count()
+            .expect("durable height"),
+        0
+    );
+    assert!(
+        runtime_catalog_from_world(&state.world.view())
+            .expect("protected overlay")
+            .is_none()
+    );
+    assert_eq!(state.lane_incarnations_snapshot().len(), 2);
+}
+
+state_test! { large_stack pre_genesis_constructor_retains_nondefault_dataspace_baseline
+    for configured in [false, true] {
+        let requested = nondefault_pre_genesis_dataspace_fixture(configured);
+        let state = State::new_with_pre_genesis_nexus_for_testing(
+            World::default(),
+            requested.clone(),
+            LiveQueryStore::start_test(),
+        );
+        assert_pre_genesis_dataspace_fixture(&state, &requested);
+    }
+}
+
+state_test! { large_stack pre_genesis_installer_retains_nondefault_dataspace_baseline
+    for configured in [false, true] {
+        let requested = nondefault_pre_genesis_dataspace_fixture(configured);
+        let directory = tempfile::tempdir().expect("isolated Kura directory");
+        let kura_config = strict_kura_config_for_testing(directory.path().join("kura"));
+        let (kura, _) = Kura::new_with_configured_lane_catalog(
+            &kura_config,
+            &requested.lane_config,
+            &requested.lane_catalog,
+        )
+        .expect("configured Kura");
+        let mut state = State::try_new(
+            World::default(),
+            kura,
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("empty configured State");
+        state.install_pre_genesis_nexus_for_testing(requested.clone());
+        assert_pre_genesis_dataspace_fixture(&state, &requested);
+    }
+}
+
 #[test]
 fn test_nexus_fixture_constructor_opens_custom_primary_without_archiving_default_segment() {
     let_row! { custom_primary = LaneConfig { alias: "custom-primary".to_owned(), ..LaneConfig::default() } };
