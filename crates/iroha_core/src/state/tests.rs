@@ -8274,13 +8274,14 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
     }
     let_row! { active_lanes = [MergeLaneBinding { lane_id, dataspace_id, lane_config_hash: Hash::new(b"historical-lane-config"), incarnation, activation_height: 1, }] };
     state
-        .validate_merge_lane_drain_certificate_payload(
+        .validate_merge_lane_drain_certificate_structure(
             std::slice::from_ref(&certificate),
             3,
             &active_lanes,
-            false,
         )
-        .expect("historical recovery accepts the exact frontier before retirement");
+        .expect("historical certificate structure remains valid before retirement");
+    State::lane_drain_frontier_from_replay_state(&state.view(), certificate.body.final_frontier)
+        .expect("ordered replay accepts the exact replicated frontier");
     let mut mismatched_body = certificate.body.clone();
     mismatched_body.final_frontier = LaneDrainFrontierV1::ordinary(
         lane_id,
@@ -8291,12 +8292,10 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
     );
     let_row! { mismatched_votes = keypairs .iter() .map(|keypair| { crate::lane_consensus::LaneDrainVoteV1::new_signed( mismatched_body.clone(), PeerId::new(keypair.public_key().clone()), keypair.private_key(), ) .expect("structurally valid mismatched drain vote") }) .collect::<Vec<_>>() };
     let_row! { mismatched_certificate = crate::lane_consensus::aggregate_lane_drain_votes( mismatched_body, certificate.validator_set.clone(), &mismatched_votes, ) .expect("aggregate mismatched drain certificate") };
-    let_row! { error = state .validate_merge_lane_drain_certificate_payload( std::slice::from_ref(&mismatched_certificate), 3, &active_lanes, false, ) .expect_err("global admission must reject a signed frontier drift") };
-    assert!(matches!(
-        error,
-        MergeLedgerCommitError::ExecutionBatchInvalid(reason)
-            if reason.contains("exact globally applied frontier")
-    ));
+    let_row! { error = State::lane_drain_frontier_from_replay_state(&state.view(), mismatched_certificate.body.final_frontier)
+        .expect_err("ordered replay rejects a signed frontier drift") };
+    assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(reason)
+        if reason.contains("exact replicated frontier")));
     {
         let mut world = state.world.block();
         State::prune_lane_lifecycle_world_block_state_for_lanes(
@@ -8315,13 +8314,14 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
         "retirement cleanup must retain the replicated historical frontier"
     );
     state
-        .validate_merge_lane_drain_certificate_payload(
+        .validate_merge_lane_drain_certificate_structure(
             std::slice::from_ref(&certificate),
             3,
             &active_lanes,
-            false,
         )
-        .expect("restart-style historical validation survives lane cleanup");
+        .expect("historical certificate structure survives lane cleanup");
+    State::lane_drain_frontier_from_replay_state(&state.view(), certificate.body.final_frontier)
+        .expect("retirement cleanup retains the replicated historical frontier");
 }
 state_test! { sync autoscale_cooldown_active_suppresses_repeated_transitions
     assert!(!autoscale_cooldown_active(0, 128, 1));
@@ -9035,6 +9035,35 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     ));
     let qc = merge_qc_for_candidate(&state, &candidate, &unrelated_keypairs, &[0, 1, 2]);
     let entry = merge_entry_from_candidate(candidate.clone(), qc);
+    // Kura supplies this typed carrier only after retained global finality has
+    // authenticated it. Recovery must not ask a pre-replay World for the later
+    // drain intent; ordered replay performs that separate state-dependent check.
+    let mut before_replay = blank_test_state();
+    before_replay.network_id = state.network_id;
+    assert!(before_replay.pending_autoscale_lane_drain_body().is_none());
+    let historical_carrier = crate::kura::MergeLedgerCarrierRecord {
+        version: 1,
+        entry_hash: entry.canonical_hash(),
+        epoch_id: entry.epoch_id,
+        block_height: entry.merge_qc.carrier_height,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"authenticated-drain-carrier")),
+    };
+    before_replay.validate_historical_merge_lane_drain_certificate(
+        HistoricalMergeDrainAuthority { entry: &entry, carrier: &historical_carrier },
+    ).expect("exact historical certificate admission does not consult pre-replay intent");
+    for attack in ["entry", "height", "epoch", "version"] {
+        let mut changed = historical_carrier;
+        match attack {
+            "entry" => changed.entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign-drain-entry")),
+            "height" => changed.block_height += 1,
+            "epoch" => changed.epoch_id += 1,
+            "version" => changed.version += 1,
+            _ => unreachable!(),
+        }
+        assert!(before_replay.validate_historical_merge_lane_drain_certificate(
+            HistoricalMergeDrainAuthority { entry: &entry, carrier: &changed },
+        ).is_err(), "historical drain must reject {attack}");
+    }
     state
         .validate_certified_merge_entry_for_global_order(&entry, ConsensusMode::Permissioned)
         .expect("certificate-only drain entry is globally admissible");
@@ -10914,7 +10943,7 @@ state_test! { sync replay_geometry_live_failure_preserves_state_kura_and_nexus_e
     ] {
         REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.set(failure_index));
         REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(|observed| observed.set(false));
-        let_row! { error = apply_replay_geometry_receipts(&state, &geometry) .expect_err("injected live geometry failure must reject before publication") };
+        let_row! { error = apply_replay_geometry_receipts(&state, &geometry, None) .expect_err("injected live geometry failure must reject before publication") };
         assert!(format!("{error:#}").contains("injected replay publication geometry failure"));
         assert_eq!(
             REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(std::cell::Cell::get),

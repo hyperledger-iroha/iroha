@@ -621,7 +621,13 @@ mod tests {
     fn occupied_runtime_accepts_split_source_and_configuration_binding() {
         let inventory = sample_inventory_fixture();
         let validator = split_validator();
-        validate_validator(&validator, &validator.slug, &inventory.revision).unwrap();
+        validate_validator(
+            &validator,
+            &validator.slug,
+            &inventory.revision,
+            inventory.qualification_scope,
+        )
+        .unwrap();
         let prior = validator.admitted_release().unwrap();
         assert_ne!(
             prior.artifact("iroha3d").unwrap().source_commit,
@@ -637,7 +643,13 @@ mod tests {
         );
         let encoded = json::to_json(&validator).unwrap();
         let decoded: ValidatorV1 = json::from_str(&encoded).unwrap();
-        validate_validator(&decoded, &decoded.slug, &inventory.revision).unwrap();
+        validate_validator(
+            &decoded,
+            &decoded.slug,
+            &inventory.revision,
+            inventory.qualification_scope,
+        )
+        .unwrap();
         assert_eq!(encoded, json::to_json(&decoded).unwrap());
     }
 

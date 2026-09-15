@@ -5971,6 +5971,20 @@ fn sanitize_fee_error_details(details: &mut FeeErrorDetails) -> bool {
     true
 }
 fn sanitize_error_details(details: &mut ErrorDetails) {
+    if details
+        .sns_registration_not_found
+        .as_ref()
+        .is_some_and(|absence| {
+            !matches!(
+                absence.suffix_id,
+                iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID
+                    | iroha_data_model::sns::DOMAIN_NAME_SUFFIX_ID
+                    | iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID
+            ) || !utils::is_valid_error_detail_text(&absence.label)
+        })
+    {
+        details.sns_registration_not_found = None;
+    }
     retain_valid_error_detail(&mut details.layer);
     if details
         .reject_code
@@ -6079,6 +6093,11 @@ fn canonical_error_response(
         }
     }
     if let Some(details) = envelope.details.as_mut() {
+        if parts.status != StatusCode::NOT_FOUND
+            || envelope.code != iroha_torii_shared::sns::SNS_REGISTRATION_NOT_FOUND_CODE
+        {
+            details.sns_registration_not_found = None;
+        }
         sanitize_error_details(details);
     }
     if envelope

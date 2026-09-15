@@ -8930,6 +8930,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "sns_registration_not_found": {
+            "$ref": "#/components/schemas/SnsRegistrationNotFoundV1"
+          },
           "tx_hash": {
             "description": "Signed transaction hash involved in finality/status failures.",
             "maxLength": 1024,
@@ -35714,12 +35717,8 @@
       },
       "SnsRegistrationNotFoundV1": {
         "additionalProperties": false,
-        "description": "Authoritative lookup result for an absent SNS registration. The discriminator and canonical suffix_id/label must match the requested selector. This response is not a cryptographic proof of ledger state.",
+        "description": "Typed selector detail in ErrorEnvelope.details.sns_registration_not_found when the sole outer error code is sns_registration_not_found. The canonical suffix_id and label must match the exact requested selector. This response is not a cryptographic proof of ledger state.",
         "properties": {
-          "code": {
-            "const": "sns.registration_not_found",
-            "type": "string"
-          },
           "label": {
             "description": "Exact canonical label of the requested registration.",
             "type": "string"
@@ -35732,7 +35731,6 @@
           }
         },
         "required": [
-          "code",
           "suffix_id",
           "label"
         ],
@@ -84537,16 +84535,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SnsRegistrationNotFoundV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               },
-              "text/plain": {
+              "application/x-norito": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Only application/json with code sns.registration_not_found and the exact requested suffix_id and canonical label denotes an absent registration. Other not-found errors are text/plain and must remain errors; HTTP 404 alone does not establish registration absence."
+            "description": "Only the ErrorEnvelope code sns_registration_not_found with details.sns_registration_not_found containing the exact requested suffix_id and canonical label denotes an absent registration. JSON and Norito responses use the same ErrorEnvelope. Other errors remain errors; HTTP 404 alone does not establish registration absence. This unsigned response is not a cryptographic proof of ledger state."
           }
         },
         "security": [

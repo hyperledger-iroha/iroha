@@ -22,6 +22,102 @@ fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
         std::panic::resume_unwind(payload);
     }
 }
+#[test]
+fn replay_uncached_da_prefix_keeps_shared_journal_unchanged_until_publication() {
+    run_replay_validation_test_on_stack("replay-private-da-journal", || {
+        for corrupt_later_checkpoint in [false, true] {
+            let fixture = super::strict_replay_tests::StrictReplayFixture::new().into_two_block();
+            let kura = &fixture.first.kura;
+            if corrupt_later_checkpoint {
+                let forged_checkpoint = Hash::new(b"private DA late replay checkpoint mismatch");
+                assert_ne!(forged_checkpoint, fixture.second_checkpoint_hash);
+                let manifest = crate::kura::CommitManifest::new(
+                    2,
+                    fixture.second_block.hash(),
+                    None,
+                    None,
+                    forged_checkpoint,
+                    None,
+                )
+                .with_authenticated_v2_commit_authority(&fixture.second_artifact);
+                kura.overwrite_commit_manifest_without_binding_for_tests(&manifest)
+                    .expect("retain correlated later manifest corruption");
+                kura.overwrite_wsv_checkpoint_without_validation_for_tests(
+                    2,
+                    forged_checkpoint,
+                    Some(&manifest),
+                )
+                .expect("retain later checkpoint corruption");
+            }
+            fixture
+                .first
+                .materialized_state
+                .persist_da_shard_cursor_journal();
+            let journal_path = fixture
+                .first
+                .materialized_state
+                .da_shard_cursor_journal_path();
+            let journal_before = std::fs::read(&journal_path).expect("native live DA journal");
+            let metadata_before = std::fs::metadata(&journal_path).expect("DA journal metadata");
+            let assert_journal_unchanged = || {
+                assert_eq!(std::fs::read(&journal_path).unwrap(), journal_before);
+                let after = std::fs::metadata(&journal_path).unwrap();
+                assert_eq!(
+                    after.modified().unwrap(),
+                    metadata_before.modified().unwrap()
+                );
+                assert_eq!(after.len(), metadata_before.len());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt as _;
+                    assert_eq!(
+                        (after.dev(), after.ino(), after.ctime(), after.ctime_nsec()),
+                        (
+                            metadata_before.dev(),
+                            metadata_before.ino(),
+                            metadata_before.ctime(),
+                            metadata_before.ctime_nsec()
+                        )
+                    );
+                }
+            };
+            let state = fixture.first.replay_state(Arc::clone(kura));
+            *state.da_indexes_hydrated.write() = None;
+            let state_before = crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state);
+            let bundle = super::ReplayBundle::load(kura, &state, 1, 2)
+                .expect("bind exact two-block replay inputs");
+            let mut isolated = super::isolated_state_for_replay_prevalidation(&state, kura)
+                .expect("hydrate only the isolated initial prefix");
+            assert_eq!(*isolated.da_indexes_hydrated.read(), Some(Ok(())));
+            assert!(state.da_indexes_hydrated.read().is_none());
+            assert_journal_unchanged();
+            let mut geometry = Vec::new();
+            let replay = super::replay_blocks_from_kura_range_inner(
+                &bundle,
+                &mut isolated,
+                &TimeSource::new_fixed(Duration::ZERO),
+                &mut geometry,
+            );
+            if corrupt_later_checkpoint {
+                let error = replay.expect_err("reject the later exact WSV checkpoint mismatch");
+                assert!(
+                    format!("{error:#}").contains("block #2 WSV checkpoint mismatch"),
+                    "unexpected replay rejection: {error:#}"
+                );
+            } else {
+                replay.expect("the complete private replay range remains executable");
+                assert_eq!(isolated.committed_height(), 2);
+            }
+            assert_journal_unchanged();
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_bytes_for_tests(&state),
+                state_before
+            );
+            assert_eq!(state.committed_height(), 0);
+            assert!(state.da_indexes_hydrated.read().is_none());
+        }
+    });
+}
 fn new_genesis_account(
     account_id: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::account::NewAccount {

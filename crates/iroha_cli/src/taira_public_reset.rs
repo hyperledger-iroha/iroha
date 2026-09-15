@@ -1698,7 +1698,12 @@ fn validate_inventory_for_controller(
     let mut build_fingerprint = None;
     let mut config_fingerprint = None;
     for (validator, expected_slug) in inventory.validators.iter().zip(VALIDATOR_SLUGS) {
-        validate_validator(validator, expected_slug, &inventory.revision)?;
+        validate_validator(
+            validator,
+            expected_slug,
+            &inventory.revision,
+            inventory.qualification_scope,
+        )?;
         if !hostnames.insert(validator.endpoint.hostname.clone()) {
             return Err(eyre!("validator hostnames must be distinct"));
         }
@@ -1723,9 +1728,13 @@ fn validate_inventory_for_controller(
     let mut client_accounts = BTreeSet::new();
     let mut client_peers = BTreeSet::new();
     let mut probe_origins = BTreeSet::new();
+    let mut public_origins = BTreeSet::new();
     let mut client_placement_targets = BTreeSet::new();
     for (client, expected_slug) in inventory.validator_clients.iter().zip(VALIDATOR_SLUGS) {
-        let expected_origin = format!("https://{expected_slug}.sora.org/");
+        validate_validator_public_origin(&client.torii_origin)?;
+        if !public_origins.insert(&client.torii_origin) {
+            return Err(eyre!("validator public Torii origins must be distinct"));
+        }
         validate_candidate_probe_origin(&client.probe_origin)?;
         if !probe_origins.insert(&client.probe_origin) {
             return Err(eyre!(
@@ -1733,7 +1742,6 @@ fn validate_inventory_for_controller(
             ));
         }
         if client.slug != expected_slug
-            || client.torii_origin != expected_origin
             || client.account_id.is_empty()
             || client.peer_id.is_empty()
             || !client_accounts.insert(client.account_id.clone())
@@ -2072,11 +2080,16 @@ fn source_closure_sha256(manifest: &SourceManifestV1) -> String {
     hex::encode(digest.finalize())
 }
 
-fn validate_validator(validator: &ValidatorV1, slug: &str, revision: &RevisionV1) -> Result<()> {
+fn validate_validator(
+    validator: &ValidatorV1,
+    slug: &str,
+    revision: &RevisionV1,
+    scope: QualificationScopeV1,
+) -> Result<()> {
     if validator.slug != slug {
         return Err(eyre!("validator order is canonical; expected `{slug}`"));
     }
-    validate_platform(&validator.platform, true)?;
+    validate_platform(&validator.platform, scope.includes_inrou().then_some(12))?;
     for (label, value) in [
         ("validator node fingerprint", &validator.node_fingerprint),
         ("validator build fingerprint", &validator.build_fingerprint),
@@ -2195,7 +2208,7 @@ fn validate_edge(edge: &EdgeV1, revision: &RevisionV1) -> Result<()> {
         validate_lower_hex("edge rollback CLI SHA-256", &release.cli_sha256, 64)?;
         validate_lower_hex("edge rollback config SHA-256", &release.config_sha256, 64)?;
     }
-    validate_platform(&edge.platform, false)?;
+    validate_platform(&edge.platform, Some(0))?;
     validate_endpoint(&edge.endpoint, &edge.service_root, revision)?;
     validate_artifacts(
         &edge.artifacts,
@@ -2222,15 +2235,47 @@ fn validate_edge(edge: &EdgeV1, revision: &RevisionV1) -> Result<()> {
     Ok(())
 }
 
-fn validate_platform(platform: &PlatformV1, require_kvm: bool) -> Result<()> {
+fn validate_platform(platform: &PlatformV1, required_kvm_api_version: Option<u32>) -> Result<()> {
     if platform.os != "linux" || platform.arch != "aarch64" {
         return Err(eyre!("public Taira hosts must be Linux/AArch64"));
     }
-    if (require_kvm && platform.kvm_api_version != 12)
-        || (!require_kvm && platform.kvm_api_version != 0)
+    // Core validators report observed KVM availability without requiring a guest runtime.
+    if !matches!(platform.kvm_api_version, 0 | 12)
+        || required_kvm_api_version.is_some_and(|required| platform.kvm_api_version != required)
     {
         return Err(eyre!(
-            "validators require KVM API 12 and the edge must declare KVM API 0"
+            "core validators may declare KVM API 0 or 12, full_inrou validators require 12, and the edge requires 0"
+        ));
+    }
+    Ok(())
+}
+
+/// Public validator routing is selected by the reviewed inventory, independently
+/// of role slugs. Preserve the signed request path by admitting HTTPS roots only.
+fn validate_validator_public_origin(origin: &str) -> Result<()> {
+    let url = url::Url::parse(origin).wrap_err("validator public Torii origin is invalid")?;
+    let Some(url::Host::Domain(host)) = url.host() else {
+        return Err(eyre!(
+            "validator public Torii origin requires a DNS hostname"
+        ));
+    };
+    validate_hostname(host).wrap_err("validator public Torii hostname is invalid")?;
+    if host.split('.').any(|label| {
+        label.is_empty() || label.len() > 63 || label.starts_with('-') || label.ends_with('-')
+    }) || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+        || url.port() == Some(0)
+        || url.as_str() != origin
+    {
+        return Err(eyre!(
+            "validator public Torii origin must be one canonical HTTPS DNS root without credentials, query, fragment, or path prefix"
         ));
     }
     Ok(())
@@ -6007,7 +6052,32 @@ mod executor_model {
                 "core rejects an Inrou stage hash"
             );
             core.inrou_stage_tree_sha256 = None;
-            validate_inventory(&core).expect("core has no Inrou inputs");
+            validate_inventory(&core).expect("core accepts validators reporting KVM API 12");
+            let mut no_kvm_core = core.clone();
+            for validator in &mut no_kvm_core.validators {
+                validator.platform.kvm_api_version = 0;
+            }
+            validate_inventory(&no_kvm_core).expect("all four core validators may run without KVM");
+            for index in 0..full.validators.len() {
+                let mut no_kvm_full = full.clone();
+                no_kvm_full.validators[index].platform.kvm_api_version = 0;
+                assert!(
+                    validate_inventory(&no_kvm_full).is_err(),
+                    "every full_inrou validator requires KVM API 12"
+                );
+            }
+            let mut unknown_kvm_core = no_kvm_core.clone();
+            unknown_kvm_core.validators[0].platform.kvm_api_version = 11;
+            assert!(
+                validate_inventory(&unknown_kvm_core).is_err(),
+                "core still rejects unsupported observed KVM API versions"
+            );
+            let mut kvm_edge = no_kvm_core.clone();
+            kvm_edge.edge.platform.kvm_api_version = 12;
+            assert!(
+                validate_inventory(&kvm_edge).is_err(),
+                "the edge must still declare KVM API 0"
+            );
             for inventory in [&core, &full] {
                 let encoded = json::to_value(inventory).expect("typed inventory");
                 for field in ["inrou_canary", "inrou_stage_tree_sha256"] {
@@ -6677,8 +6747,13 @@ mod executor_model {
                     }
                     _ => unreachable!("closed validator-fingerprint fixture field"),
                 };
-                let error = validate_validator(&validator, VALIDATOR_SLUGS[0], &inventory.revision)
-                    .expect_err("an unmarked validator fingerprint must fail admission");
+                let error = validate_validator(
+                    &validator,
+                    VALIDATOR_SLUGS[0],
+                    &inventory.revision,
+                    inventory.qualification_scope,
+                )
+                .expect_err("an unmarked validator fingerprint must fail admission");
                 assert!(format!("{error:#}").contains(expected_label));
             }
         }
@@ -8685,6 +8760,64 @@ mod executor_model {
             assert!(journal.state.edge_touched);
             assert!(journal.state.edge_rollback_complete);
             assert_eq!(journal.state.status, "rolled_back");
+        }
+
+        #[test]
+        fn validator_public_origins_require_distinct_canonical_https_roots() {
+            let mut inventory = sample_inventory();
+            validate_inventory(&inventory).expect("existing canonical HTTPS roots");
+            for (index, client) in inventory.validator_clients.iter_mut().enumerate() {
+                client.torii_origin = format!("https://test.example.org:{}/", 8443 + index);
+            }
+            validate_inventory(&inventory)
+                .expect("four authenticated peers on distinct HTTPS ports");
+            let mut duplicate = inventory.clone();
+            duplicate.validator_clients[1].torii_origin =
+                duplicate.validator_clients[0].torii_origin.clone();
+            assert!(
+                validate_inventory(&duplicate)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("origins must be distinct")
+            );
+            for field in ["account", "peer"] {
+                let mut duplicate = inventory.clone();
+                if field == "account" {
+                    duplicate.validator_clients[1].account_id =
+                        duplicate.validator_clients[0].account_id.clone();
+                } else {
+                    duplicate.validator_clients[1].peer_id =
+                        duplicate.validator_clients[0].peer_id.clone();
+                }
+                assert!(validate_inventory(&duplicate).is_err(), "{field}");
+            }
+            for origin in [
+                "http://test.example.org:8443/",
+                "https://test.example.org:0/",
+                "https://test.example.org:443/",
+                "https://test.example.org:8443",
+                "https://TEST.example.org:8443/",
+                "https://user@test.example.org:8443/",
+                "https://user:secret@test.example.org:8443/",
+                "https://test.example.org:8443/?query=1",
+                "https://test.example.org:8443/#fragment",
+                "https://test.example.org:8443/validator-1/",
+                "https://test.example.org:8443/%2f",
+                "https://127.0.0.1:8443/",
+                "https://[::1]:8443/",
+                "https://localhost:8443/",
+                "https://test.local:8443/",
+                "https://test..example.org:8443/",
+                "https://-test.example.org:8443/",
+            ] {
+                assert!(
+                    validate_validator_public_origin(origin).is_err(),
+                    "{origin}"
+                );
+                let mut invalid = inventory.clone();
+                invalid.validator_clients[0].torii_origin = origin.to_owned();
+                assert!(validate_inventory(&invalid).is_err(), "{origin}");
+            }
         }
 
         #[test]

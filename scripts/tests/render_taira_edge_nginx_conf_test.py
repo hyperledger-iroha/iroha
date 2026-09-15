@@ -175,7 +175,7 @@ def test_validator_values_require_exact_canonical_spelling(tmp_path: Path) -> No
         (
             'torii_public_address = "https://taira-validator-1.sora.org"',
             'torii_public_address = "https://taira-validator-1.sora.org:443"',
-            "explicit port",
+            "exact canonical spelling",
         ),
         (
             'torii_public_address = "https://taira-validator-1.sora.org"',
@@ -444,7 +444,7 @@ def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> No
 
     rendered = MODULE.render_edge_nginx_conf(
         validators,
-        public_upstream_host="taira-validator-3.sora.org",
+        public_upstream_validator="taira-validator-3",
     )
     public_upstream = rendered.split(
         "upstream taira_public_edge_upstream {", 1
@@ -476,10 +476,10 @@ def test_render_edge_nginx_conf_rejects_unknown_public_validator() -> None:
     try:
         MODULE.render_edge_nginx_conf(
             validators,
-            public_upstream_host="not-a-validator.sora.org",
+            public_upstream_validator="not-a-validator",
         )
     except ValueError as error:
-        assert "must match a validator hostname" in str(error)
+        assert "must match an exact validator slug" in str(error)
     else:  # pragma: no cover
         raise AssertionError("accepted an unknown canonical public validator")
 
@@ -798,3 +798,123 @@ def test_checked_in_example_matches_rendered_example_roster() -> None:
 
     assert validators[0].upstream_address == "127.0.0.1:29080"
     assert checked_in.rstrip("\n") == rendered.rstrip("\n")
+
+
+def _shared_host_roster(path: Path) -> None:
+    _write_roster(path)
+    text = path.read_text(encoding="utf-8")
+    for index in range(1, 5):
+        text = text.replace(
+            f'https://taira-validator-{index}.sora.org"',
+            f'https://test.example.org:{8442 + index}"',
+        )
+    path.write_text(text, encoding="utf-8")
+
+
+def test_shared_hostname_ports_bind_distinct_tls_listeners_and_exact_upstreams(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_host_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    assert [(row.validator_host, row.https_port) for row in validators] == [
+        ("test.example.org", port) for port in range(8443, 8447)
+    ]
+    rendered = MODULE.render_edge_nginx_conf(
+        validators, public_host="test.example.org", public_upstream_validator="taira-validator-3"
+    )
+    http = rendered.split("  listen 80;", 1)[1].split("\n}", 1)[0]
+    names = next(line for line in http.splitlines() if "server_name" in line)
+    assert names.split().count("test.example.org") == 1
+    for index, port in enumerate(range(8443, 8447), start=1):
+        server = rendered.split(f"  listen {port} ssl;", 1)[1].split("\n}", 1)[0]
+        assert f"  listen [::]:{port} ssl;" in server
+        assert "  server_name test.example.org;" in server
+        assert f"proxy_pass http://taira_validator_{index}_upstream;" in server
+        assert "ssl_certificate /etc/letsencrypt/live/" in server
+        assert "proxy_set_header Host $host;" in server
+        assert "rewrite " not in server
+        assert "proxy_pass http://taira_validator_" in server
+    public = rendered.split("upstream taira_public_edge_upstream {", 1)[1].split("}", 1)[0]
+    assert "server 127.0.0.1:18082 max_fails=1 fail_timeout=5s;" in public
+
+
+def test_validator_listener_rejects_duplicates_reserved_ports_and_edge_collisions(tmp_path: Path) -> None:
+    from dataclasses import replace
+    roster = tmp_path / "roster.toml"
+    _shared_host_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    invalid = [
+        replace(validators[0], https_port=80),
+        replace(validators[0], https_port=0),
+        replace(validators[0], https_port=65536),
+        replace(validators[0], https_port=True),
+    ]
+    for hostname in [
+        "taira.sora.org", "taira-explorer.sora.org", "mon.taira.sora.net",
+        "app.mon.taira.sora.net", "nested.app.mon.taira.sora.net",
+        "site.sorafs.taira.sora.org",
+    ]:
+        invalid.append(replace(validators[0], validator_host=hostname, https_port=443))
+    for first in invalid:
+        try:
+            MODULE.render_edge_nginx_conf([first, *validators[1:]])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted colliding or invalid listener {first!r}")
+    duplicate = replace(validators[1], https_port=validators[0].https_port)
+    try:
+        MODULE.render_edge_nginx_conf([validators[0], duplicate, *validators[2:]])
+    except ValueError as error:
+        assert "listener" in str(error) and "duplicated" in str(error)
+    else:
+        raise AssertionError("accepted the same hostname and effective port twice")
+    text = roster.read_text(encoding="utf-8").replace(":8444", ":8443", 1)
+    roster.write_text(text, encoding="utf-8")
+    try:
+        MODULE.load_edge_validators(roster)
+    except ValueError as error:
+        assert "listener" in str(error) and "duplicated" in str(error)
+    else:
+        raise AssertionError("accepted duplicate roster listeners")
+
+
+def test_validator_listener_origins_reject_noncanonical_ports_and_signed_path_rewrites(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    for origin in [
+        "https://test.example.org:0", "https://test.example.org:80",
+        "https://test.example.org:443", "https://test.example.org:08443",
+        "https://test.example.org:65536", "https://test.example.org:8443/",
+        "https://test.example.org:8443/validator-1", "https://user@test.example.org:8443",
+        "https://test.example.org:8443?query=1", "https://test.example.org:8443#fragment",
+        "https://127.0.0.1:8443", "https://0177.0.0.1:8443", "https://0x7f.0.0.1:8443",
+        "https://localhost:8443", "https://test.local:8443",
+    ]:
+        _shared_host_roster(roster)
+        roster.write_text(roster.read_text(encoding="utf-8").replace(
+            "https://test.example.org:8443", origin, 1), encoding="utf-8")
+        try:
+            MODULE.load_edge_validators(roster)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted noncanonical public listener origin {origin!r}")
+
+
+def test_main_selects_same_host_upstream_by_exact_validator_slug(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    output = tmp_path / "edge.conf"
+    _shared_host_roster(roster)
+    assert MODULE.main([
+        "--roster", str(roster), "--output", str(output),
+        "--public-upstream-validator", "taira-validator-3",
+    ]) == 0
+    rendered = output.read_text(encoding="utf-8")
+    public = rendered.split("upstream taira_public_edge_upstream {", 1)[1].split("}", 1)[0]
+    assert "server 127.0.0.1:18082 max_fails=1 fail_timeout=5s;" in public
+    try:
+        MODULE.main(["--roster", str(roster), "--output", str(output),
+                     "--public-upstream-host", "test.example.org"])
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("accepted removed ambiguous hostname selector")

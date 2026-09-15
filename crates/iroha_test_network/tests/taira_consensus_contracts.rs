@@ -22,6 +22,9 @@ use std::{
 };
 use tokio::time::{Instant, sleep, timeout_at};
 
+#[cfg(unix)]
+#[path = "support/dataspace_deploy_cli.rs"]
+mod dataspace_deploy_cli;
 #[path = "support/multiroute.rs"]
 mod multiroute;
 #[path = "support/runtime_catalog_transition.rs"]

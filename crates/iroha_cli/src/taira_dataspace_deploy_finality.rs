@@ -187,7 +187,8 @@ pub(super) fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Re
         let client = builder.build()?;
         let height = NonZeroU64::new(client.get_sumeragi_status()?.last_committed_height)
             .ok_or_else(|| eyre!("validator has no durable tip"))?;
-        let attestation = client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
+        let attestation =
+            client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
         validate_attestation(&authority, peer, challenge, &attestation)?;
         attestation.body.finality_proof.finality_artifact.verify()?;
         client.get_lane_lifecycle_status()?.validate()?;

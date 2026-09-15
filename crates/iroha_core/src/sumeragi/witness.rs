@@ -1,4 +1,4 @@
-//! Global, per-block witness recorder for SBV‑AM (prototype).
+//! Guard-owned, per-block execution witness recorder.
 //!
 //! Records observed reads (pre-values) and writes (post-values) during execution.
 //! Keys are encoded deterministically with a tag and ID strings. Values are the
@@ -47,6 +47,7 @@ struct WitnessOverlayFrame {
 }
 /// Exclusive access guard for the global execution witness recorder.
 ///
+/// Recording and capture mutation belong to the thread holding this guard.
 /// Dropping the guard clears any unfinished capture so early validation returns
 /// or panics cannot leak stale witness records into the next block.
 pub struct ExecWitnessGuard {
@@ -55,11 +56,15 @@ pub struct ExecWitnessGuard {
 impl Drop for ExecWitnessGuard {
     fn drop(&mut self) {
         clear_block();
+        EXEC_WITNESS_OWNER.with(|owner| owner.set(false));
     }
 }
 static SLOT: OnceLock<Mutex<BlockWitness>> = OnceLock::new();
 static EXEC_WITNESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 thread_local! {
+    // ExecWitnessGuard is !Send and serializes ownership. Only its thread may mutate SLOT;
+    // detached execution workers return their results for application on that thread.
+    static EXEC_WITNESS_OWNER: Cell<bool> = const { Cell::new(false) };
     static WITNESS_RECORDING_SUPPRESSION_DEPTH: Cell<u32> = const { Cell::new(0) };
     static EXEC_WITNESS_OVERLAYS: RefCell<Vec<WitnessOverlayFrame>> = const { RefCell::new(Vec::new()) };
 }
@@ -85,7 +90,7 @@ impl ExecWitnessOverlay {
             return;
         }
         self.finished = true;
-        let commit = commit && !witness_recording_suppressed();
+        let commit = commit && owns_exec_witness() && !witness_recording_suppressed();
         // Commit follows the same SLOT -> TLS order as recording and overlay creation.
         // Rollback only pops TLS and cannot publish into any capture generation.
         let mut witness = commit.then(lock_slot);
@@ -149,6 +154,9 @@ impl Drop for WitnessRecordingSuppressionGuard {
 fn witness_recording_suppressed() -> bool {
     WITNESS_RECORDING_SUPPRESSION_DEPTH.with(|depth| depth.get() != 0)
 }
+fn owns_exec_witness() -> bool {
+    EXEC_WITNESS_OWNER.with(Cell::get)
+}
 /// Absent identities never match, including two overlays opened outside a capture.
 fn same_recorder_generation(left: &BlockWitness, right: &BlockWitness) -> bool {
     match (&left.generation, &right.generation) {
@@ -201,6 +209,8 @@ fn merge_overlay_into_witness(target: &mut BlockWitness, source: WitnessOverlayF
 ///
 /// Records are merged into the active block witness only after
 /// [`ExecWitnessOverlay::commit`]. Dropping the returned guard rolls them back.
+/// Only the guard-owning thread can acquire the capture identity. Unrelated execution
+/// gets an unbound overlay and cannot publish into another block's recorder.
 /// An overlay keeps the capture identity present at creation. Nested overlays inherit
 /// their parent's identity even when it is absent or stale; they never bind to a later block.
 pub(crate) fn begin_exec_witness_overlay() -> ExecWitnessOverlay {
@@ -209,7 +219,7 @@ pub(crate) fn begin_exec_witness_overlay() -> ExecWitnessOverlay {
         let mut overlays = overlays.borrow_mut();
         let generation = if let Some(parent) = overlays.last() {
             parent.witness.generation.clone()
-        } else if witness.active {
+        } else if owns_exec_witness() && witness.active {
             witness.generation.clone()
         } else {
             None
@@ -276,7 +286,7 @@ fn lock_exec_witness_lock() -> MutexGuard<'static, ()> {
     }
 }
 fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
-    if witness_recording_suppressed() {
+    if !owns_exec_witness() || witness_recording_suppressed() {
         return;
     }
     let mut g = lock_slot();
@@ -303,6 +313,9 @@ fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
     }
 }
 fn clear_block() {
+    if !owns_exec_witness() {
+        return;
+    }
     let mut g = lock_slot();
     g.active = false;
     g.generation = None;
@@ -312,16 +325,23 @@ fn clear_block() {
 }
 /// Hold exclusive access to the global witness recorder for the duration of a block execution.
 ///
-/// Join every execution worker before draining, clearing or starting another capture. Generation
-/// checks reject stale scoped overlays; direct writes from workers without overlays still rely
-/// on this caller-owned completion rule and are not authenticated by a worker-local token.
+/// Only this guard's thread may record, synchronize or mutate the capture lifecycle.
+/// Execution workers return detached results for application by the owner; they cannot
+/// attach to a capture by observing that the process-global recorder is active.
+/// Generation checks additionally reject stale overlays on the owning thread.
 pub fn exec_witness_guard() -> ExecWitnessGuard {
-    ExecWitnessGuard {
+    let guard = ExecWitnessGuard {
         _guard: lock_exec_witness_lock(),
-    }
+    };
+    EXEC_WITNESS_OWNER.with(|owner| owner.set(true));
+    guard
 }
-/// Start a new witness capture for the current block (clears previous data).
+/// Start a new witness capture for the guard-owning thread (clears previous data).
+/// Calls without the exclusive guard leave the recorder untouched.
 pub fn start_block() {
+    if !owns_exec_witness() {
+        return;
+    }
     let mut g = lock_slot();
     g.active = true;
     g.generation = Some(Arc::new(RecorderGeneration));
@@ -330,7 +350,11 @@ pub fn start_block() {
     g.fastpq_transcripts.clear();
 }
 /// Drain the accumulated witness into an `ExecWitness` and clear the store.
+/// Calls without the exclusive guard return an empty witness without touching the recorder.
 pub fn drain_exec_witness() -> ExecWitness {
+    if !owns_exec_witness() {
+        return ExecWitness::default();
+    }
     let mut g = lock_slot();
     let mut reads: Vec<ExecKv> = Vec::with_capacity(g.reads.len());
     let mut writes: Vec<ExecKv> = Vec::with_capacity(g.writes.len());
@@ -384,16 +408,20 @@ impl Drop for CheckedCaptureReset<'_> {
 /// Unwinding from the validator also resets the recorder before unlocking, even if
 /// an outer caller catches the panic while retaining its exclusive execution guard.
 /// Overlay guards remain intact so their normal last-in, first-out cleanup works.
-/// Finish or drop every outstanding overlay before starting another capture.
-/// Other threads' overlay lifetimes remain the execution owner's responsibility.
+/// Finish or drop every outstanding owner-thread overlay before starting another capture.
+/// Unrelated threads cannot acquire or mutate this capture's generation.
 ///
 /// # Errors
-/// Returns the validator's error unchanged, or rejects an inactive recorder or
+/// Rejects calls without the exclusive guard without touching its owner's recorder.
+/// Otherwise returns the validator's error unchanged, or rejects an inactive recorder or
 /// pending current-thread overlay before invoking the validator. Rejected records
 /// cannot be drained or extended until a new block capture is started.
 pub(crate) fn drain_exec_witness_checked(
     validate: impl FnOnce(&BTreeMap<Hash, Vec<TransferTranscript>>) -> Result<(), String>,
 ) -> Result<ExecWitness, String> {
+    if !owns_exec_witness() {
+        return Err("ordinary witness capture requires the execution-witness guard".to_owned());
+    }
     let mut g = lock_slot();
     let record = {
         // This borrow drops before the mutex guard. It also clears a capture when the
@@ -437,9 +465,13 @@ pub(crate) fn drain_exec_witness_checked(
 /// another first capture or repair any transcript digest.
 ///
 /// # Errors
-/// Rejects an active recorder, unexpected records or a pending current-thread
+/// Rejects calls without the exclusive guard without touching its owner's recorder.
+/// Otherwise rejects an active recorder, unexpected records or a pending current-thread
 /// overlay. Overlay guards must finish before the caller starts another capture.
 pub(crate) fn finish_cached_exec_witness_capture() -> Result<(), String> {
+    if !owns_exec_witness() {
+        return Err("cached witness capture requires the execution-witness guard".to_owned());
+    }
     let mut g = lock_slot();
     let error = if EXEC_WITNESS_OVERLAYS.with(|overlays| !overlays.borrow().is_empty()) {
         Some("cached witness capture has a pending current-thread overlay")
@@ -696,8 +728,10 @@ pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
 /// updated only by `StateTransaction::apply`; copying it wholesale here both installs finalized
 /// digests and removes transcripts from rolled-back transactions. When an execution-witness
 /// overlay is active, the replacement remains private until the overlay commits.
+/// Only the guard-owning thread may synchronize; draining another `StateBlock` on an
+/// unrelated thread cannot replace this capture's finalized transcript inventory.
 pub(crate) fn synchronize_fastpq_transcripts(finalized: &BTreeMap<Hash, Vec<TransferTranscript>>) {
-    if witness_recording_suppressed() {
+    if !owns_exec_witness() || witness_recording_suppressed() {
         return;
     }
     let mut witness = lock_slot();
@@ -1870,19 +1904,17 @@ mod tests {
     #[test]
     fn recorder_recovers_poisoned_witness_locks() {
         let _ = std::panic::catch_unwind(|| {
-            let _guard = exec_witness_lock()
-                .lock()
-                .expect("execution witness guard lock should be held");
+            let _guard = lock_exec_witness_lock();
             panic!("poison execution witness guard for recovery test");
         });
+        // Even deliberate corruption must own the recorder so concurrent captures
+        // cannot observe this test's unfinished poisoning fixture.
+        let _guard = exec_witness_guard();
         let _ = std::panic::catch_unwind(|| {
-            let mut guard = slot()
-                .lock()
-                .expect("execution witness slot lock should be held");
+            let mut guard = lock_slot();
             guard.active = true;
             panic!("poison execution witness slot for recovery test");
         });
-        let _guard = exec_witness_guard();
         start_block();
         let account = (*ALICE_ID).clone();
         let key: Name = "color".parse().expect("metadata key");

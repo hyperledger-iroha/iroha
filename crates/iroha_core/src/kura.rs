@@ -160,6 +160,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
+pub(crate) use lane_geometry::{ReplayGeometryBindingRequest, StartupReplayGeometryTransition};
 #[cfg(test)]
 use norito::core::{Header, MAGIC};
 use norito::{
@@ -679,6 +680,10 @@ pub struct Kura {
     /// runtime cache remains fixed at [`V2_FINALITY_VERIFICATION_CACHE_CAPACITY`].
     v2_startup_finality_verification_inventory:
         Mutex<Option<Arc<V2StartupFinalityVerificationInventory>>>,
+    /// Private publication paired with the audit under inventory-then-publication lock order.
+    /// Every pair install, snapshot and clear holds the inventory lock throughout.
+    v2_startup_replay_geometry_publication:
+        Mutex<Option<Arc<lane_geometry::StartupReplayGeometryPublication>>>,
     /// Counts every live startup inventory allocation, including escaped Arc readers.
     startup_inventory_resident:
         Arc<ResidentMutex<resident_inventory_lifetimes::VerificationAllocations>>,
@@ -3255,6 +3260,7 @@ impl Kura {
                 &resource_inventory,
             ),
             v2_startup_finality_verification_inventory: Mutex::new(None),
+            v2_startup_replay_geometry_publication: Mutex::new(None),
             startup_inventory_resident: Arc::new(ResidentMutex::new(
                 resident_inventory_lifetimes::VerificationAllocations::default(),
                 &resource_inventory,
@@ -3661,6 +3667,7 @@ impl Kura {
                 &resource_inventory,
             ),
             v2_startup_finality_verification_inventory: Mutex::new(None),
+            v2_startup_replay_geometry_publication: Mutex::new(None),
             startup_inventory_resident: Arc::new(ResidentMutex::new(
                 resident_inventory_lifetimes::VerificationAllocations::default(),
                 &resource_inventory,
@@ -6983,6 +6990,57 @@ impl Kura {
             record_count,
             encoded_bytes,
         ))
+    }
+    fn startup_auxiliary_identity_error(&self, path: &Path, change: &str) -> Error {
+        Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("startup replay sidecar identity changed: {change}"),
+            ),
+            path.to_path_buf(),
+        )
+    }
+    fn require_startup_auxiliary_identity(
+        expected: &StableSidecarDirectoryInventory,
+        current: &StableSidecarDirectoryInventory,
+    ) -> Result<()> {
+        let error = |path: &Path, change: &str| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("startup replay sidecar identity changed: {change}"),
+                ),
+                path.to_path_buf(),
+            )
+        };
+        for (path, metadata) in &expected.files {
+            let found = current
+                .files
+                .get(path)
+                .ok_or_else(|| error(path, "file removed"))?;
+            if !Self::stable_sidecar_metadata_unchanged(metadata, found) {
+                return Err(error(path, "file object or metadata changed"));
+            }
+        }
+        if let Some(path) = current
+            .files
+            .keys()
+            .find(|path| !expected.files.contains_key(*path))
+        {
+            return Err(error(path, "file added"));
+        }
+        if !Self::stable_sidecar_directory_metadata_unchanged(
+            &expected.directory,
+            &current.directory,
+        ) {
+            let change = match (&expected.directory.metadata, &current.directory.metadata) {
+                (None, Some(_)) => "directory appeared",
+                (Some(_), None) => "directory disappeared",
+                _ => "directory object, path, or metadata changed",
+            };
+            return Err(error(&expected.directory.expected_path, change));
+        }
+        Ok(())
     }
     fn stable_sidecar_directory_inventory_unchanged(
         left: &StableSidecarDirectoryInventory,
@@ -15391,6 +15449,12 @@ impl Kura {
             let lane_auxiliary_directories =
                 lane_auxiliary.keys().cloned().collect::<BTreeSet<_>>();
             let mut installed = self.v2_startup_finality_verification_inventory.lock();
+            if self.v2_startup_replay_geometry_publication.lock().is_some() {
+                return Err(self.startup_auxiliary_identity_error(
+                    &blocks_dir,
+                    "a published replay binding cannot be refreshed",
+                ));
+            }
             let Some(inventory) = installed.as_mut().and_then(Arc::get_mut) else {
                 return Err(Error::IO(
                     std::io::Error::other(
@@ -15799,7 +15863,12 @@ impl Kura {
         &self,
         inventory: V2StartupFinalityVerificationInventory,
     ) {
-        *self.v2_startup_finality_verification_inventory.lock() = Some(Arc::new(inventory));
+        {
+            let mut installed = self.v2_startup_finality_verification_inventory.lock();
+            let mut publication = self.v2_startup_replay_geometry_publication.lock();
+            *publication = None;
+            *installed = Some(Arc::new(inventory));
+        }
         self.hydrate_v2_finality_telemetry_from_startup_inventory();
     }
     /// Rebuild the complete startup finality inventory when a caller-created
@@ -15841,7 +15910,10 @@ impl Kura {
     ///
     /// Runtime callers continue to use the fixed-size finality LRU.
     pub(crate) fn finish_v2_startup_finality_verification(&self) {
-        *self.v2_startup_finality_verification_inventory.lock() = None;
+        let mut installed = self.v2_startup_finality_verification_inventory.lock();
+        let mut publication = self.v2_startup_replay_geometry_publication.lock();
+        *publication = None;
+        *installed = None;
     }
     #[cfg(test)]
     pub(crate) fn v2_startup_finality_inventory_len_for_test(&self) -> usize {
@@ -15885,7 +15957,7 @@ impl Kura {
         &self,
         binding: &V2StartupReplayStorageBinding,
     ) -> Result<()> {
-        let V2StartupReplayStorageBinding::Strict(inventory) = binding else {
+        let Some((inventory, auxiliary_sidecars)) = binding.strict_parts() else {
             let V2StartupReplayStorageBinding::EmergencyFast(binding) = binding else {
                 unreachable!("startup replay binding variants are exhaustive");
             };
@@ -15950,23 +16022,29 @@ impl Kura {
                 blocks_dir,
             ));
         }
-        let current_auxiliary = self.capture_v2_startup_replay_auxiliary_sidecars()?;
-        if current_auxiliary.len() != inventory.auxiliary_sidecars.len()
-            || inventory
-                .auxiliary_sidecars
-                .iter()
-                .any(|(directory, expected)| {
-                    current_auxiliary.get(directory).is_none_or(|current| {
-                        !Self::stable_sidecar_directory_inventory_unchanged(expected, current)
-                    })
-                })
+        if let V2StartupReplayStorageBinding::StrictAfterGeometryPublication {
+            publication, ..
+        } = binding
         {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "startup replay checkpoint, manifest, or lane sidecar identity changed",
-                ),
-                blocks_dir,
+            self.validate_startup_geometry_publication(publication)?;
+        }
+        let current_auxiliary = self.capture_v2_startup_replay_auxiliary_sidecars()?;
+        for (directory, expected) in auxiliary_sidecars {
+            let current = current_auxiliary.get(directory).ok_or_else(|| {
+                self.startup_auxiliary_identity_error(
+                    directory,
+                    "directory removed from active inventory",
+                )
+            })?;
+            Self::require_startup_auxiliary_identity(expected, current)?;
+        }
+        if let Some(directory) = current_auxiliary
+            .keys()
+            .find(|path| !auxiliary_sidecars.contains_key(*path))
+        {
+            return Err(self.startup_auxiliary_identity_error(
+                directory,
+                "directory added without a replay publication transition",
             ));
         }
         let finality_directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
@@ -16045,14 +16123,23 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let canonical_chain_guard = self.canonical_chain_lock.lock();
         self.ensure_canonical_storage_not_poisoned()?;
-        let inventory = {
+        let (inventory, binding) = {
             let inventory = self.v2_startup_finality_verification_inventory.lock();
             let Some(inventory) = inventory.as_ref() else {
                 return Ok(None);
             };
-            Arc::clone(inventory)
+            let publication = self.v2_startup_replay_geometry_publication.lock();
+            let binding = match publication.as_ref() {
+                Some(publication) => {
+                    V2StartupReplayStorageBinding::StrictAfterGeometryPublication {
+                        inventory: Arc::clone(inventory),
+                        publication: Arc::clone(publication),
+                    }
+                }
+                None => V2StartupReplayStorageBinding::Strict(Arc::clone(inventory)),
+            };
+            (Arc::clone(inventory), binding)
         };
-        let binding = V2StartupReplayStorageBinding::Strict(Arc::clone(&inventory));
         if self
             .validate_v2_startup_replay_storage_binding_unlocked(&binding)
             .is_err()
@@ -16065,6 +16152,7 @@ impl Kura {
             _prune_guard: prune_guard,
             _canonical_chain_guard: canonical_chain_guard,
             inventory,
+            binding,
         }))
     }
     fn v2_startup_retained_entry_matches(
@@ -23857,9 +23945,7 @@ impl V2StartupFinalityVerificationSession<'_> {
     /// rechecked it under this session's mutation guards, so minting the
     /// binding is an O(1) `Arc` clone rather than a third historical scan.
     pub(crate) fn storage_binding(&self) -> Result<V2StartupReplayStorageBinding> {
-        Ok(V2StartupReplayStorageBinding::Strict(Arc::clone(
-            &self.inventory,
-        )))
+        Ok(self.binding.clone())
     }
 }
 fn snapshot_bootstrap_lineage_digest(record: &SnapshotV2BootstrapRecord) -> Hash {
@@ -47482,6 +47568,7 @@ pub(crate) mod tests {
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/00_bounded_sidecar_read_tests.rs");
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
+    include!("kura/tests/01b_startup_replay_geometry_binding.rs");
     include!("kura/tests/01_prune_capacity_support.rs");
     include!("kura/tests/01a_retained_eviction_and_rewrite_tail.rs");
     include!("kura/tests/01b_retained_physical_resource_tests.rs");

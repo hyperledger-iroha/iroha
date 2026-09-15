@@ -325,21 +325,43 @@ pub(crate) struct EmergencyFastStartupReplayBinding {
 pub(crate) enum V2StartupReplayStorageBinding {
     /// Complete Strict-startup finality and sidecar inventory.
     Strict(Arc<V2StartupFinalityVerificationInventory>),
+    /// Same finality audit with a private, exactly checked replay-geometry publication.
+    StrictAfterGeometryPublication {
+        inventory: Arc<V2StartupFinalityVerificationInventory>,
+        publication: Arc<lane_geometry::StartupReplayGeometryPublication>,
+    },
     /// Bounded emergency binding containing only the durable count and tip.
     EmergencyFast(Arc<EmergencyFastStartupReplayBinding>),
 }
 impl V2StartupReplayStorageBinding {
+    fn strict_parts(
+        &self,
+    ) -> Option<(
+        &Arc<V2StartupFinalityVerificationInventory>,
+        &BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
+    )> {
+        match self {
+            Self::Strict(inventory) => Some((inventory, &inventory.auxiliary_sidecars)),
+            Self::StrictAfterGeometryPublication {
+                inventory,
+                publication,
+            } => Some((inventory, publication.active_auxiliary())),
+            Self::EmergencyFast(_) => None,
+        }
+    }
     /// Return the complete Strict replay boundary, when Strict startup produced this binding.
     pub(crate) fn strict_replay_boundary(&self) -> Option<&ExactReplayBoundary> {
         match self {
-            Self::Strict(inventory) => Some(&inventory.boundary),
+            Self::Strict(inventory) | Self::StrictAfterGeometryPublication { inventory, .. } => {
+                Some(&inventory.boundary)
+            }
             Self::EmergencyFast(_) => None,
         }
     }
     /// Return the bounded durable count and tip trusted by emergency Fast startup.
     pub(crate) fn emergency_fast_boundary(&self) -> Option<(u64, Option<HashOf<BlockHeader>>)> {
         match self {
-            Self::Strict(_) => None,
+            Self::Strict(_) | Self::StrictAfterGeometryPublication { .. } => None,
             Self::EmergencyFast(binding) => Some((binding.count, binding.tip_hash)),
         }
     }
@@ -355,6 +377,7 @@ pub(crate) struct V2StartupFinalityVerificationSession<'a> {
     _prune_guard: parking_lot::MutexGuard<'a, ()>,
     _canonical_chain_guard: parking_lot::MutexGuard<'a, ()>,
     inventory: Arc<V2StartupFinalityVerificationInventory>,
+    binding: V2StartupReplayStorageBinding,
 }
 #[derive(Debug, Clone)]
 struct StableSidecarMetadata {

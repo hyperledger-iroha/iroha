@@ -89,6 +89,7 @@ class EdgeValidator:
     upstream_name: str
     validator_host: str
     upstream_address: str
+    https_port: int = 443
 
 
 @dataclass(frozen=True)
@@ -277,7 +278,20 @@ def _require_canonical_upstream_address(value: str, context: str) -> str:
     return value
 
 
-def _validator_host_from_public_origin(value: str, context: str) -> str:
+def _require_public_validator_hostname(value: str, context: str) -> str:
+    host = _require_canonical_dns_name(value, context)
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"{context} must use a public DNS hostname, not an IP literal")
+    if "." not in host or host.rsplit(".", 1)[-1].isdigit() or host.endswith((".localhost", ".local")):
+        raise ValueError(f"{context} must use a public DNS hostname")
+    return host
+
+
+def _validator_listener_from_public_origin(value: str, context: str) -> tuple[str, int]:
     parsed = urlparse(value)
     try:
         hostname = parsed.hostname
@@ -289,21 +303,22 @@ def _validator_host_from_public_origin(value: str, context: str) -> str:
     if (
         parsed.username is not None
         or parsed.password is not None
-        or explicit_port is not None
         or parsed.path
         or parsed.params
         or parsed.query
         or parsed.fragment
     ):
         raise ValueError(
-            f"{context} must not contain credentials, an explicit port, a path, "
-            "a query, or a fragment"
+            f"{context} must not contain credentials, a path, a query, or a fragment"
         )
-    canonical_host = _require_canonical_dns_name(hostname, f"{context} hostname")
-    canonical_origin = f"https://{canonical_host}"
+    canonical_host = _require_public_validator_hostname(hostname, f"{context} hostname")
+    port = 443 if explicit_port is None else int(_require_canonical_port(str(explicit_port), context))
+    if port == 80:
+        raise ValueError(f"{context} HTTPS port80 conflicts with the HTTP/ACME listener")
+    canonical_origin = f"https://{canonical_host}" + (f":{port}" if port != 443 else "")
     if value != canonical_origin:
         raise ValueError(f"{context} must use exact canonical spelling `{canonical_origin}`")
-    return canonical_host
+    return canonical_host, port
 
 
 def _require_canonical_slug(value: str, context: str) -> str:
@@ -398,7 +413,7 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
     assert isinstance(validators_raw, list)
 
     validators: list[EdgeValidator] = []
-    seen_hosts: set[str] = set()
+    seen_listeners: set[tuple[str, int]] = set()
     seen_upstreams: set[str] = set()
     for index, raw in enumerate(validators_raw, start=1):
         if not isinstance(raw, dict):
@@ -410,7 +425,7 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
         torii_public_address = _require_string(
             raw, "torii_public_address", f"validator `{slug}`"
         )
-        validator_host = _validator_host_from_public_origin(
+        validator_host, https_port = _validator_listener_from_public_origin(
             torii_public_address, f"validator `{slug}` torii_public_address"
         )
         upstream_source = _require_string(
@@ -420,14 +435,15 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
             upstream_source,
             f"validator `{slug}` edge_torii_upstream",
         )
-        if validator_host in seen_hosts:
-            raise ValueError(f"validator host `{validator_host}` is duplicated in the roster")
+        listener = (validator_host, https_port)
+        if listener in seen_listeners:
+            raise ValueError(f"validator HTTPS listener `{validator_host}:{https_port}` is duplicated in the roster")
         if upstream_address in seen_upstreams:
             raise ValueError(
                 f"edge upstream `{upstream_address}` is duplicated in the roster; "
                 "shared-edge nginx expects each validator to expose a distinct upstream target"
             )
-        seen_hosts.add(validator_host)
+        seen_listeners.add(listener)
         seen_upstreams.add(upstream_address)
         validators.append(
             EdgeValidator(
@@ -435,6 +451,7 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
                 upstream_name=_nginx_upstream_name_for_slug(slug),
                 validator_host=validator_host,
                 upstream_address=upstream_address,
+                https_port=https_port,
             )
         )
     return validators
@@ -637,7 +654,7 @@ def _require_canonical_render_inputs(
     mon_host_suffix: str,
 ) -> None:
     seen_slugs: set[str] = set()
-    seen_validator_hosts: set[str] = set()
+    seen_validator_listeners: set[tuple[str, int]] = set()
     seen_upstream_addresses: set[str] = set()
     for index, validator in enumerate(validators, start=1):
         context = f"edge validator #{index}"
@@ -647,20 +664,26 @@ def _require_canonical_render_inputs(
             raise ValueError(
                 f"{context} upstream name must be exactly `{expected_upstream_name}`"
             )
-        validator_host = _require_canonical_dns_name(
+        validator_host = _require_public_validator_hostname(
             validator.validator_host, f"{context} public hostname"
         )
+        if type(validator.https_port) is not int:
+            raise ValueError(f"{context} HTTPS port must be an integer")
+        https_port = int(_require_canonical_port(str(validator.https_port), context))
+        if https_port == 80:
+            raise ValueError(f"{context} HTTPS port80 conflicts with the HTTP/ACME listener")
+        listener = (validator_host, https_port)
         upstream_address = _require_canonical_upstream_address(
             validator.upstream_address, f"{context} upstream"
         )
         if slug in seen_slugs:
             raise ValueError(f"edge validator slug `{slug}` is duplicated")
-        if validator_host in seen_validator_hosts:
-            raise ValueError(f"edge validator host `{validator_host}` is duplicated")
+        if listener in seen_validator_listeners:
+            raise ValueError(f"edge validator HTTPS listener `{validator_host}:{https_port}` is duplicated")
         if upstream_address in seen_upstream_addresses:
             raise ValueError(f"edge upstream `{upstream_address}` is duplicated")
         seen_slugs.add(slug)
-        seen_validator_hosts.add(validator_host)
+        seen_validator_listeners.add(listener)
         seen_upstream_addresses.add(upstream_address)
 
     canonical_mon_suffix = _require_canonical_dns_name(
@@ -699,7 +722,7 @@ def render_edge_nginx_conf(
     *,
     soracloud_alias_routes: list[SoracloudAliasRoute] | None = None,
     public_host: str = DEFAULT_PUBLIC_HOST,
-    public_upstream_host: str | None = None,
+    public_upstream_validator: str | None = None,
     explorer_host: str = DEFAULT_EXPLORER_HOST,
     tls_lineage: str = DEFAULT_TLS_LINEAGE,
     certbot_root: str = DEFAULT_CERTBOT_ROOT,
@@ -727,27 +750,33 @@ def render_edge_nginx_conf(
         (cid_host_suffix, "SoraFS CID host suffix"),
     ):
         _require_canonical_dns_name(hostname, context)
-    if public_upstream_host is None:
-        public_upstream_host = validators[0].validator_host
-    _require_canonical_dns_name(public_upstream_host, "public upstream hostname")
+    if public_upstream_validator is None:
+        public_upstream_validator = validators[0].slug
+    _require_canonical_slug(public_upstream_validator, "public upstream validator")
     public_validator = next(
-        (
-            validator
-            for validator in validators
-            if validator.validator_host == public_upstream_host
-        ),
+        (validator for validator in validators if validator.slug == public_upstream_validator),
         None,
     )
     if public_validator is None:
-        raise ValueError(
-            "public upstream host must match a validator hostname from the roster"
-        )
+        raise ValueError("public upstream validator must match an exact validator slug from the roster")
+
+    existing_https_hosts = {public_host, explorer_host, mon_host_suffix}
+    existing_https_hosts.update(route.pretty_host for route in soracloud_alias_routes)
+    for validator in validators:
+        if validator.https_port == 443 and (
+            validator.validator_host in existing_https_hosts
+            or validator.validator_host.endswith("." + mon_host_suffix)
+            or validator.validator_host.endswith("." + cid_host_suffix)
+        ):
+            raise ValueError(
+                f"validator HTTPS listener `{validator.validator_host}:443` conflicts with an existing edge listener"
+            )
     public_validator_upstream = f"{public_validator.upstream_name}_upstream"
 
     escaped_mon_host_suffix = mon_host_suffix.replace(".", r"\.")
     mon_host_pattern = f"~^.+\\.{escaped_mon_host_suffix}$"
     mon_alias_host_var = "$taira_mon_alias_host"
-    server_names = [
+    server_names = list(dict.fromkeys([
         public_host,
         explorer_host,
         mon_host_suffix,
@@ -755,7 +784,7 @@ def render_edge_nginx_conf(
         f"*.{cid_host_suffix}",
         *[route.pretty_host for route in soracloud_alias_routes],
         mon_host_pattern,
-    ]
+    ]))
     lines: list[str] = [
         "# Generated by scripts/render_taira_edge_nginx_conf.py from the Taira validator roster.",
         "# Shared-edge stress runs require the main nginx.conf to set:",
@@ -973,8 +1002,8 @@ def render_edge_nginx_conf(
         lines.extend(
             [
                 "server {",
-                "  listen 443 ssl;",
-                "  listen [::]:443 ssl;",
+                f"  listen {validator.https_port} ssl;",
+                f"  listen [::]:{validator.https_port} ssl;",
                 "  http2 on;",
                 f"  server_name {validator.validator_host};",
                 f"  client_max_body_size {client_max_body_size};",
@@ -1047,11 +1076,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True, help="nginx config output path")
     parser.add_argument("--public-host", default=DEFAULT_PUBLIC_HOST)
     parser.add_argument(
-        "--public-upstream-host",
+        "--public-upstream-validator",
         default=None,
         help=(
-            "Validator hostname selecting the public Torii upstream; preserve the incoming Host "
-            "(defaults to the first validator hostname)"
+            "Exact validator slug selecting the public Torii upstream; preserve the incoming Host "
+            "(defaults to the first ordered validator)"
         ),
     )
     parser.add_argument("--explorer-host", default=DEFAULT_EXPLORER_HOST)
@@ -1091,7 +1120,7 @@ def main(argv: list[str] | None = None) -> int:
         validators,
         soracloud_alias_routes=soracloud_alias_routes,
         public_host=args.public_host,
-        public_upstream_host=args.public_upstream_host,
+        public_upstream_validator=args.public_upstream_validator,
         explorer_host=args.explorer_host,
         tls_lineage=args.tls_lineage,
         certbot_root=args.certbot_root,
