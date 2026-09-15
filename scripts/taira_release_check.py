@@ -576,6 +576,10 @@ CLIENT_STAGES += (("strict lifecycle status client contract", (
     "client::tests::get_lane_lifecycle_status_requests_typed_negotiated_snapshot",
 )),)
 
+CLIENT_STAGES += (("strict native parameters response", (
+    "client::tests::decode_parameters_response_parses_json_payload",
+)),)
+
 CLIENT_STAGES += (("canonical executed block execution commitments", (
     "client::evidence_http_tests::canonical_executed_block_reader_binds_route_wire_and_committed_evidence",
     "client::evidence_http_tests::canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash",

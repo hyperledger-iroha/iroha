@@ -5,7 +5,7 @@
 //! Applied observations are not a finality proof or a deployment-complete claim.
 
 use crate::{Run, RunContext, quote_and_sign_transaction};
-use eyre::{Result, eyre};
+use eyre::{Result, WrapErr, eyre};
 use iroha::{blocking::Client as BlockingClient, client::Client, sns::SnsNamespacePath};
 use iroha_data_model::{
     NetworkId,
@@ -562,7 +562,10 @@ fn check_funding(client: &Client, manifest: &ManifestV1, remaining_phases: usize
 fn physical_matches(plan: &PlanV1, client: &Client) -> Result<()> {
     let status = client.get_lane_lifecycle_status()?;
     status.validate()?;
-    let current = overlay(&client.get_parameters()?, &status)?
+    let parameters = client
+        .get_parameters()
+        .wrap_err("deployment catalog verification: read committed parameters")?;
+    let current = overlay(&parameters, &status)?
         .ok_or_else(|| eyre!("committed runtime catalog overlay is absent"))?;
     let mut lanes = plan.baseline.lanes.clone();
     lanes.push(plan.manifest.lane.clone());
@@ -774,8 +777,22 @@ fn observe(
     transaction: &SignedTransaction,
 ) -> Result<PhaseObservationV1> {
     let hash = transaction.hash();
-    let global = client.get_transaction_status_response_global(hash)?;
-    let peer = client.get_transaction_status_response_local(hash)?;
+    let global = client
+        .get_transaction_status_response_global(hash)
+        .wrap_err_with(|| {
+            format!(
+                "deployment phase {}: read global transaction status",
+                prepared.phase
+            )
+        })?;
+    let peer = client
+        .get_transaction_status_response_local(hash)
+        .wrap_err_with(|| {
+            format!(
+                "deployment phase {}: read local transaction status",
+                prepared.phase
+            )
+        })?;
     let mut result = PhaseObservationV1 {
         phase: prepared.phase.clone(),
         state: "pending".into(),
@@ -813,8 +830,14 @@ fn observe(
     )?
     .is_some()
     {
-        let details =
-            client.get_successful_transaction_details(transaction.hash_as_entrypoint())?;
+        let details = client
+            .get_successful_transaction_details(transaction.hash_as_entrypoint())
+            .wrap_err_with(|| {
+                format!(
+                    "deployment phase {}: read exact committed transaction details",
+                    prepared.phase
+                )
+            })?;
         let TransactionEntrypoint::External(actual) = details.transaction.entrypoint() else {
             eyre::bail!("committed phase is not an external transaction");
         };
@@ -1143,21 +1166,34 @@ pub(crate) fn verification_request<C: RunContext>(
 fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result<ReportV1> {
     operation_id(&args.operation_id)?;
     let journal = Journal::open(&args.journal_dir.join(&args.operation_id), false)?;
-    let plan: PlanV1 = journal.read_json("plan.json")?;
-    plan.verify()?;
+    let plan: PlanV1 = journal
+        .read_json("plan.json")
+        .wrap_err("saved deployment: read plan.json")?;
+    plan.verify()
+        .wrap_err("saved deployment: verify retained plan")?;
     require(
         plan.operation_id == args.operation_id,
         "operation directory contains another plan",
     )?;
-    let client = preflight(context, &plan.manifest, apply)?;
+    let client = preflight(context, &plan.manifest, apply)
+        .wrap_err("saved deployment: signer and capability preflight")?;
     let mut observations = Vec::new();
     for (phase_index, phase) in PHASES.into_iter().enumerate() {
         let prepared_name = format!("{phase}.prepared.json");
         let claim_name = format!("{phase}.submitted.json");
-        let mut prepared: Option<PreparedV1> = journal.optional_json(&prepared_name)?;
+        let mut prepared: Option<PreparedV1> =
+            journal.optional_json(&prepared_name).wrap_err_with(|| {
+                format!("deployment phase {phase}: read retained preparation {prepared_name}")
+            })?;
         if prepared.is_none() && apply {
-            check_funding(client.client(), &plan.manifest, PHASES.len() - phase_index)?;
-            let (instructions, alias_plan) = phase_instructions(&plan, phase, client.client())?;
+            check_funding(client.client(), &plan.manifest, PHASES.len() - phase_index)
+                .wrap_err_with(|| {
+                    format!("deployment phase {phase}: verify funding for remaining caps")
+                })?;
+            let (instructions, alias_plan) = phase_instructions(&plan, phase, client.client())
+                .wrap_err_with(|| {
+                    format!("deployment phase {phase}: prepare native instructions")
+                })?;
             require(
                 !instructions.is_empty(),
                 "empty deployment transactions are forbidden",
@@ -1167,7 +1203,10 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 Executable::from(instructions.clone()),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            )?;
+            )
+            .wrap_err_with(|| {
+                format!("deployment phase {phase}: quote and sign exact transaction")
+            })?;
             check_fee(&plan.manifest, &quote)?;
             let value = PreparedV1 {
                 schema_version: 1,
@@ -1180,14 +1219,18 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 fee_quote: quote,
                 alias_plan,
             };
-            value.verify(&plan, phase)?;
+            value
+                .verify(&plan, phase)
+                .wrap_err_with(|| format!("deployment phase {phase}: verify new preparation"))?;
             journal.install_json(&prepared_name, &value)?;
             prepared = Some(value);
         }
         let Some(prepared) = prepared else {
             break;
         };
-        let transaction = prepared.verify(&plan, phase)?;
+        let transaction = prepared.verify(&plan, phase).wrap_err_with(|| {
+            format!("deployment phase {phase}: verify retained preparation {prepared_name}")
+        })?;
         let claim: Option<String> = journal.optional_json(&claim_name)?;
         if let Some(claim) = &claim {
             require(
@@ -1196,10 +1239,15 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
             )?;
         }
         if apply && claim.is_none() {
-            check_funding(client.client(), &plan.manifest, PHASES.len() - phase_index)?;
+            check_funding(client.client(), &plan.manifest, PHASES.len() - phase_index)
+                .wrap_err_with(|| {
+                    format!("deployment phase {phase}: verify funding for remaining caps")
+                })?;
             // Revalidate current native conditions without preparing another transaction.
             let (instructions, fresh_alias_plan) =
-                phase_instructions(&plan, phase, client.client())?;
+                phase_instructions(&plan, phase, client.client()).wrap_err_with(|| {
+                    format!("deployment phase {phase}: revalidate instructions before dispatch")
+                })?;
             require(
                 instructions == prepared.instructions,
                 "phase changed before first dispatch",
@@ -1420,7 +1468,8 @@ impl Journal {
     fn optional_json<T: JsonDeserialize + JsonSerialize>(&self, name: &str) -> Result<Option<T>> {
         self.read_optional(name)?
             .map(|bytes| {
-                let value: T = json::from_slice(&bytes)?;
+                let value: T = json::from_slice(&bytes)
+                    .wrap_err_with(|| format!("failed to decode retained journal file `{name}`"))?;
                 require(
                     json::to_vec(&value)? == bytes,
                     "retained JSON is not canonical or is incomplete",
@@ -1996,7 +2045,18 @@ mod tests {
                 .is_err()
         );
         journal.install("broken.json", b"{ incomplete").unwrap();
-        assert!(journal.optional_json::<ManifestV1>("broken.json").is_err());
+        let malformed = journal
+            .optional_json::<ManifestV1>("broken.json")
+            .unwrap_err();
+        assert!(
+            malformed
+                .to_string()
+                .contains("retained journal file `broken.json`")
+        );
+        assert!(
+            malformed.downcast_ref::<json::Error>().is_some(),
+            "filename context must retain the native JSON decoder cause: {malformed:#}"
+        );
         symlink(path.join("broken.json"), path.join("linked.json")).unwrap();
         assert!(journal.read_optional("linked.json").is_err());
         fs::hard_link(path.join("broken.json"), path.join("hard.json")).unwrap();

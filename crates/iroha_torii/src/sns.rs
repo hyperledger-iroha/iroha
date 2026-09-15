@@ -13,7 +13,10 @@ use iroha_core::{
     state::{StateReadOnly, StateReadOnlyWithTransactions},
 };
 use iroha_data_model::sns::{NameRecordV1, NameSelectorV1, NameStatus, SuffixId};
-use iroha_torii_shared::sns::SnsRegistrationNotFoundV1;
+use iroha_torii_shared::{
+    ErrorDetails, ErrorEnvelope,
+    sns::{SNS_REGISTRATION_NOT_FOUND_CODE, SnsRegistrationNotFoundV1},
+};
 use parking_lot::Mutex;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 const SNS_NAME_CACHE_MAX_ENTRIES: usize = 4096;
@@ -50,7 +53,15 @@ impl IntoResponse for SnsError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             Self::RegistrationNotFound(body) => {
-                return (StatusCode::NOT_FOUND, JsonBody(body)).into_response();
+                let envelope = ErrorEnvelope::new(
+                    SNS_REGISTRATION_NOT_FOUND_CODE,
+                    "The requested SNS registration does not exist.",
+                )
+                .with_details(ErrorDetails {
+                    sns_registration_not_found: Some(body),
+                    ..ErrorDetails::default()
+                });
+                return (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response();
             }
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
@@ -404,36 +415,147 @@ mod tests {
     }
     #[tokio::test]
     async fn registration_absence_http_response_is_typed_and_other_not_found_is_not() {
-        let error: SnsError = CoreSnsError::RegistrationNotFound {
-            suffix_id: iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID,
-            label: "dpn".to_owned(),
+        use axum::{Router, body::Body, http::Request, routing::get};
+        use iroha_torii_shared::sns::SNS_REGISTRATION_NOT_FOUND_MAX_BYTES;
+        use tower::ServiceExt as _;
+
+        // Exercise the actual outer response layers that rewrite every ordinary
+        // HTTP failure. Testing SnsError::into_response alone misses this contract.
+        async fn through_contract(response: Response, accept: &str) -> ErrorEnvelope {
+            let status = response.status();
+            let response = Arc::new(Mutex::new(Some(response)));
+            let router = Router::new()
+                .route(
+                    "/v1/sns/names/dataspace/dpn",
+                    get(move || {
+                        let response = response.lock().take().expect("one request");
+                        async move { response }
+                    }),
+                )
+                .layer(axum::middleware::from_fn(
+                    crate::enforce_typed_error_contract,
+                ))
+                .layer(axum::middleware::from_fn(crate::enforce_json_utf8_charset));
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/sns/names/dataspace/dpn")
+                        .header("Accept", accept)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("routed response");
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response.headers()["content-type"],
+                if accept == crate::utils::NORITO_MIME_TYPE {
+                    crate::utils::NORITO_MIME_TYPE
+                } else {
+                    "application/json; charset=utf-8"
+                }
+            );
+            let bytes =
+                axum::body::to_bytes(response.into_body(), SNS_REGISTRATION_NOT_FOUND_MAX_BYTES)
+                    .await
+                    .expect("bounded complete envelope");
+            if accept == crate::utils::NORITO_MIME_TYPE {
+                norito::decode_from_bytes(&bytes).expect("native error envelope")
+            } else {
+                norito::json::from_slice(&bytes).expect("JSON error envelope")
+            }
         }
-        .into();
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(response.headers()["content-type"], "application/json");
-        let bytes = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("body");
-        let body: SnsRegistrationNotFoundV1 =
-            norito::json::from_slice(&bytes).expect("typed absence");
-        assert!(
-            body.matches_selector(
-                &NameSelectorV1::new(iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID, "dpn")
-                    .expect("selector")
+
+        let suffix_id = iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID;
+        let selector = NameSelectorV1::new(suffix_id, "dpn").expect("selector");
+        for accept in ["application/json", crate::utils::NORITO_MIME_TYPE] {
+            let error: SnsError = CoreSnsError::RegistrationNotFound {
+                suffix_id,
+                label: selector.label.clone(),
+            }
+            .into();
+            let response = error.into_response();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let envelope = through_contract(response, accept).await;
+            assert_eq!(envelope.code(), SNS_REGISTRATION_NOT_FOUND_CODE);
+            assert!(
+                envelope
+                    .details
+                    .unwrap()
+                    .sns_registration_not_found
+                    .unwrap()
+                    .matches_selector(&selector)
+            );
+
+            // Identical human-readable text cannot manufacture authoritative absence.
+            let other: SnsError =
+                CoreSnsError::NotFound("registration `dpn` not found".to_owned()).into();
+            let envelope = through_contract(other.into_response(), accept).await;
+            assert_ne!(envelope.code(), SNS_REGISTRATION_NOT_FOUND_CODE);
+            assert!(envelope.details.is_none());
+
+            let access = SnsError::Access(crate::Error::AppUnauthorized {
+                code: "sns_auth_required",
+                message: "authentication required".to_owned(),
+            });
+            let response = access.into_response();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let envelope = through_contract(response, accept).await;
+            assert_ne!(envelope.code(), SNS_REGISTRATION_NOT_FOUND_CODE);
+            assert!(
+                envelope
+                    .details
+                    .is_none_or(|details| details.sns_registration_not_found.is_none())
+            );
+
+            // The obsolete standalone body is rejected by the same universal boundary.
+            let old = norito::json::from_str::<norito::json::Value>(
+                r#"{"code":"sns.registration_not_found","suffix_id":4099,"label":"dpn"}"#,
             )
-        );
-        // Identical human-readable text from an unrelated NotFound must never
-        // gain the machine discriminator merely because its status is 404.
-        let other: SnsError =
-            CoreSnsError::NotFound("registration `dpn` not found".to_owned()).into();
-        let response = other.into_response();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_ne!(response.headers()["content-type"], "application/json");
-        let bytes = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("body");
-        assert!(norito::json::from_slice::<SnsRegistrationNotFoundV1>(&bytes).is_err());
+            .expect("retired body fixture");
+            let envelope = through_contract(
+                (StatusCode::NOT_FOUND, JsonBody(old)).into_response(),
+                accept,
+            )
+            .await;
+            assert_ne!(envelope.code(), SNS_REGISTRATION_NOT_FOUND_CODE);
+            assert!(envelope.details.is_none());
+
+            for (status, code, absence) in [
+                (
+                    StatusCode::FORBIDDEN,
+                    SNS_REGISTRATION_NOT_FOUND_CODE,
+                    SnsRegistrationNotFoundV1::new(suffix_id, "dpn".to_owned()),
+                ),
+                (
+                    StatusCode::NOT_FOUND,
+                    "route_not_found",
+                    SnsRegistrationNotFoundV1::new(suffix_id, "dpn".to_owned()),
+                ),
+                (
+                    StatusCode::NOT_FOUND,
+                    SNS_REGISTRATION_NOT_FOUND_CODE,
+                    SnsRegistrationNotFoundV1::new(0, "dpn".to_owned()),
+                ),
+                (
+                    StatusCode::NOT_FOUND,
+                    SNS_REGISTRATION_NOT_FOUND_CODE,
+                    SnsRegistrationNotFoundV1::new(suffix_id, "private\nvalue".to_owned()),
+                ),
+            ] {
+                let envelope =
+                    ErrorEnvelope::new(code, "Missing registration.").with_details(ErrorDetails {
+                        sns_registration_not_found: Some(absence),
+                        ..ErrorDetails::default()
+                    });
+                let envelope =
+                    through_contract((status, JsonBody(envelope)).into_response(), accept).await;
+                assert!(
+                    envelope.details.is_none(),
+                    "wrong context or malformed details must not survive"
+                );
+            }
+        }
     }
     #[test]
     fn sns_name_cache_returns_found_within_same_block() {

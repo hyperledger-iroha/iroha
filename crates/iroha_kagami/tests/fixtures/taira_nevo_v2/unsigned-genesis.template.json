@@ -103,6 +103,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "logo": null,
@@ -139,6 +141,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
               "logo": null,
@@ -164,6 +168,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "logo": null,
@@ -187,6 +193,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
               "logo": null,
@@ -236,6 +244,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "description": null,
               "balance_scope_policy": "Global",
               "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "logo": null,
