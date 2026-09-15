@@ -113,93 +113,6 @@ fn exact_group_commitment_and_corrected_io_accounting_are_frozen() {
     assert!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1 < 2_700_000);
 }
 #[test]
-fn source_and_inverse_packing_coordinates_are_exact_bijections() {
-    let mut seen = [false; SOURCE_OPENING_SCALARS_PER_GROUP_V1];
-    for block in 0..SOURCE_OPENING_BLOCKS_PER_GROUP_V1 {
-        for coefficient in 0..SOURCE_OPENING_SCALARS_PER_BLOCK_V1 {
-            let source_j = 256 * block + coefficient;
-            let packing_k = source_to_packing_coordinate_v1(source_j).unwrap();
-            assert_eq!(packing_k, 64 * coefficient + block);
-            assert!(!seen[packing_k]);
-            seen[packing_k] = true;
-        }
-    }
-    assert!(!seen.contains(&false));
-    assert!(source_to_packing_coordinate_v1(16_384).is_err());
-    for ordinal in 0..SOURCE_OPENING_GROUP_COUNT_V1 {
-        let coordinate = source_opening_group_coordinate_v1(ordinal).unwrap();
-        assert_eq!(usize::from(coordinate.record), ordinal / 8);
-        assert_eq!(usize::from(coordinate.group), ordinal % 8);
-    }
-    assert!(source_opening_group_coordinate_v1(344).is_err());
-}
-#[test]
-fn mapping_and_context_kats_reject_order_duplicates_and_wrong_axes() {
-    let groups: [u16; SOURCE_OPENING_GROUP_COUNT_V1] = core::array::from_fn(|index| index as u16);
-    let source: [u16; SOURCE_OPENING_SCALARS_PER_GROUP_V1] =
-        core::array::from_fn(|index| index as u16);
-    let mapping = source_opening_mapping_digest_for_orders_v1(&groups, &source).unwrap();
-    assert_eq!(mapping, exact_source_opening_mapping_digest_v1().unwrap());
-    assert_eq!(
-        hex::encode(mapping),
-        "8216632703174865bcbf16b05ed3c8a3571dc11672cf5dc1c2f00c288fa912f1"
-    );
-    let mut reordered_groups = groups;
-    reordered_groups.swap(0, 1);
-    assert_ne!(
-        source_opening_mapping_digest_for_orders_v1(&reordered_groups, &source).unwrap(),
-        mapping
-    );
-    let mut duplicate_groups = groups;
-    duplicate_groups[1] = 0;
-    assert!(source_opening_mapping_digest_for_orders_v1(&duplicate_groups, &source).is_err());
-    let mut reordered_source = source;
-    reordered_source.swap(0, 1);
-    assert_ne!(
-        source_opening_mapping_digest_for_orders_v1(&groups, &reordered_source).unwrap(),
-        mapping
-    );
-    let mut duplicate_source = source;
-    duplicate_source[1] = 0;
-    assert!(source_opening_mapping_digest_for_orders_v1(&groups, &duplicate_source).is_err());
-    assert!(source_opening_mapping_digest_for_orders_v1(&groups[..343], &source).is_err());
-    assert!(source_opening_mapping_digest_for_orders_v1(&groups, &source[..16_383]).is_err());
-    let context = source_opening_context_digest_v1(
-        &context_axes_v1(),
-        GLOBAL_LOOKUP_TOPOLOGY_KAT_V1,
-        mapping,
-        ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
-    )
-    .unwrap();
-    assert_eq!(
-        hex::encode(context),
-        "3be10e51876d3927bfb58d02f3f3450ff989b89c146bf71cce69d059718d54d7"
-    );
-    let mut changed = context_axes_v1();
-    changed.source_receipt_digest[0] ^= 1;
-    assert_ne!(
-        source_opening_context_digest_v1(
-            &changed,
-            GLOBAL_LOOKUP_TOPOLOGY_KAT_V1,
-            mapping,
-            ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
-        )
-        .unwrap(),
-        context
-    );
-    let mut wrong_basis = ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1;
-    wrong_basis[0] ^= 1;
-    assert!(
-        source_opening_context_digest_v1(
-            &context_axes_v1(),
-            GLOBAL_LOOKUP_TOPOLOGY_KAT_V1,
-            mapping,
-            wrong_basis,
-        )
-        .is_err()
-    );
-}
-#[test]
 fn tiny_commitment_kat_uses_secret_msm_and_identity_is_rejected() {
     let values = [
         Scalar::from_u64(1),
@@ -272,15 +185,30 @@ fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false()
     let mut record = opening_record_v1();
     assert_eq!(
         hex::encode(record.blinding_context_digest),
-        "fac01296c402faacf1803533792d57a8134410face578ae21081c8a91a61d9af"
+        "f6ca325a2e10aeb1fc4b2348fdc92d98900c92df45968acfee35acf94fa00a77"
     );
     record.record_digest = source_opening_record_digest_v1(&record).unwrap();
     assert_eq!(
         hex::encode(record.record_digest),
-        "af5d0d2832b2dfb03d485e219e86fb33de1cf85c2298a80b9c8309a91db90a66"
+        "fdba02d7adcdf5d759ca21ebc7edc36b1fd6f8f3981b9fefa9f1c70395939b19"
     );
     validate_source_opening_record_v1(&record).unwrap();
-    let mutations: [fn(&mut SourceOpeningRecordV1); 16] = [
+    let mutations: [fn(&mut SourceOpeningRecordV1); 18] = [
+        // Retired identities remain invalid even when the record digest is recomputed.
+        |record| {
+            record.topology_digest = [
+                0x3a, 0xf9, 0xa6, 0xad, 0x67, 0x38, 0x3c, 0x32, 0xb0, 0x6b, 0xb5, 0xd9, 0x5a, 0x05,
+                0x86, 0x3b, 0x8c, 0xb0, 0xb3, 0x33, 0x86, 0x60, 0x17, 0x7b, 0xc2, 0xa9, 0x2e, 0x1b,
+                0xbf, 0x40, 0xb4, 0xab,
+            ]
+        },
+        |record| {
+            record.mapping_digest = [
+                0x82, 0x16, 0x63, 0x27, 0x03, 0x17, 0x48, 0x65, 0xbc, 0xbf, 0x16, 0xb0, 0x5e, 0xd3,
+                0xc8, 0xa3, 0x57, 0x1d, 0xc1, 0x16, 0x72, 0xcf, 0x5d, 0xc1, 0xc2, 0xf0, 0x0c, 0x28,
+                0x8f, 0xa9, 0x12, 0xf1,
+            ]
+        },
         |record| record.group_count -= 1,
         |record| record.total_source_scalars -= 1,
         |record| record.pedersen_terms_per_group -= 1,
@@ -464,3 +392,6 @@ fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
     assert!(EXTERNAL_SOURCE_V1.contains("receipt_digest_v1"));
     assert!(PRODUCTION_SOURCE_V1.contains("SOURCE_SNAPSHOT_BINDING_RULE_V1"));
 }
+
+#[path = "source_openings_v1_mapping_tests.rs"]
+mod mapping;

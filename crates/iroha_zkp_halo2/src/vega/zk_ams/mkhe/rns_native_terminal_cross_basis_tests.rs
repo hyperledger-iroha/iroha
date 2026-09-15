@@ -19,6 +19,13 @@ use crate::vega::zk_ams::mkhe::{
 };
 use std::sync::OnceLock;
 
+fn proof_digest_fixture(label: &[u8], context: u16, ordinal: u16) -> ProofDigestV1 {
+    super::super::rns_native_proof_hash::test_proof_digest_v1(
+        label,
+        (u64::from(context) << 16) | u64::from(ordinal),
+    )
+}
+
 fn digest(label: &[u8], context: u16, ordinal: u16) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-terminal-cross-basis.test");
@@ -107,7 +114,7 @@ fn opening_role(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
 
 fn build_transcript(
     context: u16,
-    cross_basis_root: [u8; 32],
+    cross_basis_root: ProofDigestV1,
 ) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
     let profile = zk_ams_mkhe_rns_native_profile_v1().expect("canonical profile");
     let topology = zk_ams_mkhe_rns_native_topology_v1().expect("canonical topology");
@@ -156,8 +163,8 @@ fn build_transcript(
         .expect("opening transcript");
     let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         transcript.binding_digest(),
-        digest(b"mapping-root", context, 0),
-        digest(b"terminal-hyrax-root", context, 0),
+        proof_digest_fixture(b"mapping-root", context, 0),
+        proof_digest_fixture(b"terminal-hyrax-root", context, 0),
         cross_basis_root,
     )
     .expect("terminal bridge");
@@ -167,7 +174,7 @@ fn build_transcript(
     let fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             u8::try_from(layer).expect("FRI layer fits u8"),
-            digest(
+            proof_digest_fixture(
                 b"qpcs-fri-root",
                 context,
                 u16::try_from(layer).expect("FRI layer fits u16"),
@@ -177,18 +184,17 @@ fn build_transcript(
     });
     let qpcs = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
-        digest(b"qpcs-initial-root", context, 0),
-        digest(b"q-mask-s-root", context, 0),
-        digest(b"qpcs-quotient-root", context, 0),
+        proof_digest_fixture(b"qpcs-initial-root", context, 0),
+        proof_digest_fixture(b"q-mask-s-root", context, 0),
+        proof_digest_fixture(b"qpcs-quotient-root", context, 0),
         fri_roots,
     )
     .expect("qPCS roots");
     let transcript = transcript.bind_qpcs_roots(qpcs).expect("qPCS transcript");
     let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
         transcript.binding_digest(),
-        digest(b"cross-field-root", context, 0),
-        digest(b"global-lookup-root", context, 0),
-        digest(b"zero-padding-root", context, 0),
+        proof_digest_fixture(b"cross-field-root", context, 0),
+        proof_digest_fixture(b"global-lookup-root", context, 0),
     )
     .expect("terminal roots");
     transcript
@@ -205,10 +211,39 @@ fn fixture() -> &'static FixtureV1 {
     static FIXTURE: OnceLock<FixtureV1> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let context = 71;
-        let provisional = build_transcript(context, digest(b"provisional-bridge-root", context, 0));
+        let provisional = build_transcript(
+            context,
+            proof_digest_fixture(b"provisional-bridge-root", context, 0),
+        );
         let binding = context_binding_digest_v1(&provisional).expect("pre-root binding");
         let kernel = detached_kernel_test_fixture_v2(binding).expect("valid detached kernel");
-        let transcript = build_transcript(context, kernel.bridge_root);
+        let hyrax_bytes: Vec<u8> = kernel
+            .hyrax_commitments
+            .iter()
+            .flat_map(|point| {
+                point
+                    .to_non_identity_wire_bytes()
+                    .expect("canonical Hyrax point")
+            })
+            .collect();
+        let bp_bytes: Vec<u8> = kernel
+            .bp_commitments
+            .iter()
+            .flat_map(|point| {
+                point
+                    .to_non_identity_wire_bytes()
+                    .expect("canonical BP point")
+            })
+            .collect();
+        let root = native_bridge_root_after_kernel_v1(
+            &provisional,
+            kernel.bridge_root,
+            &hyrax_bytes,
+            &bp_bytes,
+            &kernel.proof,
+        )
+        .expect("six-lane verified bridge");
+        let transcript = build_transcript(context, root);
         assert_eq!(
             context_binding_digest_v1(&transcript).expect("final binding"),
             binding,
@@ -467,13 +502,126 @@ fn context_point_order_root_proof_and_digest_mutations_are_rejected() {
         RnsNativeTerminalCrossBasisErrorV1::ContextMismatch,
     );
 
-    let other_root = digest(b"wrong-cross-basis-root", 71, 0);
+    let other_root = proof_digest_fixture(b"wrong-cross-basis-root", 71, 0);
     let other_root_transcript = build_transcript(71, other_root);
     let mut wrong_root = fixture.encoded.clone();
-    wrong_root[EXPECTED_ROOT_OFFSET_V1..EXPECTED_ROOT_OFFSET_V1 + 32].copy_from_slice(&other_root);
+    wrong_root[EXPECTED_ROOT_OFFSET_V1..EXPECTED_ROOT_OFFSET_V1 + NATIVE_ROOT_BYTES_V1]
+        .copy_from_slice(other_root.as_bytes());
     refresh_codec(&mut wrong_root);
     assert_kernel_error(
         authenticate_rns_native_terminal_cross_basis_kernel_v1(&other_root_transcript, &wrong_root),
         RnsNativeTerminalCrossBasisErrorV1::RootMismatch,
     );
+}
+
+#[test]
+fn native_bridge_root_rejects_retired_width_padding_and_each_noncanonical_lane() {
+    let fixture = fixture();
+    let mut retired = fixture.encoded.clone();
+    retired.drain(EXPECTED_ROOT_OFFSET_V1 + 32..EXPECTED_ROOT_OFFSET_V1 + NATIVE_ROOT_BYTES_V1);
+    assert_kernel_error(
+        authenticate_rns_native_terminal_cross_basis_kernel_v1(&fixture.transcript, &retired),
+        RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding,
+    );
+    let mut padded = fixture.encoded.clone();
+    padded[EXPECTED_ROOT_OFFSET_V1 + 32..EXPECTED_ROOT_OFFSET_V1 + NATIVE_ROOT_BYTES_V1].fill(0);
+    refresh_codec(&mut padded);
+    assert_kernel_error(
+        authenticate_rns_native_terminal_cross_basis_kernel_v1(&fixture.transcript, &padded),
+        RnsNativeTerminalCrossBasisErrorV1::ContextMismatch,
+    );
+    for lane in 0..6 {
+        let mut malformed = fixture.encoded.clone();
+        let offset = EXPECTED_ROOT_OFFSET_V1 + lane * 8;
+        malformed[offset..offset + 8]
+            .copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+        refresh_codec(&mut malformed);
+        assert_kernel_error(
+            authenticate_rns_native_terminal_cross_basis_kernel_v1(&fixture.transcript, &malformed),
+            RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding,
+        );
+    }
+}
+
+#[test]
+fn native_bridge_commitment_binds_complete_pre_root_context_and_verified_curve_bytes() {
+    let fixture = fixture();
+    let decoded = decode_exact_v1(&fixture.encoded).unwrap();
+    let hyrax = decode_points_v1(decoded.hyrax_points).unwrap();
+    let bp = decode_points_v1(decoded.bp_points).unwrap();
+    let curve_root =
+        verify_detached_kernel_prerequisite_v2(decoded.binding_digest, &hyrax, &bp, decoded.proof)
+            .unwrap();
+    let native = native_bridge_root_after_kernel_v1(
+        &fixture.transcript,
+        curve_root,
+        decoded.hyrax_points,
+        decoded.bp_points,
+        decoded.proof,
+    )
+    .unwrap();
+    assert_eq!(native, decoded.expected_root);
+    let context = build_transcript(72, native);
+    assert_ne!(
+        native,
+        native_bridge_root_after_kernel_v1(
+            &context,
+            curve_root,
+            decoded.hyrax_points,
+            decoded.bp_points,
+            decoded.proof
+        )
+        .unwrap()
+    );
+    for part in 0..4 {
+        let mut changed_root = curve_root;
+        let mut changed_hyrax = decoded.hyrax_points.to_vec();
+        let mut changed_bp = decoded.bp_points.to_vec();
+        let mut changed_proof = decoded.proof.to_vec();
+        let target: &mut [u8] = match part {
+            0 => &mut changed_root,
+            1 => &mut changed_hyrax,
+            2 => &mut changed_bp,
+            _ => &mut changed_proof,
+        };
+        let last = target.len() - 1;
+        target[last] ^= 1;
+        // This checks the commitment function only. The public wrapper still
+        // runs the underlying equation verifier before it can return evidence.
+        assert_ne!(
+            native,
+            native_bridge_root_after_kernel_v1(
+                &fixture.transcript,
+                changed_root,
+                &changed_hyrax,
+                &changed_bp,
+                &changed_proof
+            )
+            .unwrap()
+        );
+    }
+    assert_eq!(
+        native_bridge_root_after_kernel_v1(
+            &fixture.transcript,
+            [0; 32],
+            decoded.hyrax_points,
+            decoded.bp_points,
+            decoded.proof
+        ),
+        Err(RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding)
+    );
+    for part in 0..3 {
+        let mut inputs = [decoded.hyrax_points, decoded.bp_points, decoded.proof];
+        inputs[part] = &inputs[part][..inputs[part].len() - 1];
+        assert_eq!(
+            native_bridge_root_after_kernel_v1(
+                &fixture.transcript,
+                curve_root,
+                inputs[0],
+                inputs[1],
+                inputs[2]
+            ),
+            Err(RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding)
+        );
+    }
 }

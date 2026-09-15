@@ -11,21 +11,21 @@ const VERIFIER_SOURCE_V1: &str =
 const PRE_Z_MANIFEST_KAT_V1: [u8; 32] =
     hex!("d3dbe52d9f2fa7a65f9b084ee8d87be75223f6aa2f05e7b8533b495767aac271");
 const SOURCE_OPENING_MAPPING_KAT_V1: [u8; 32] =
-    hex!("8216632703174865bcbf16b05ed3c8a3571dc11672cf5dc1c2f00c288fa912f1");
+    hex!("fcb9825186f9e7e51269d8df04cc22956143ba26485c194592458587ff51632d");
 const SOURCE_COMMITMENTS_ROOT_KAT_V1: [u8; 32] =
-    hex!("fb767ac66171a3203e16909d1f84babdabba467e3e5e547733fe197d45667c78");
+    hex!("7bced2d55c9cce31443f0300b27bf665b01a1a0b97ed4942e4dede418206f62e");
 const PATTERNED_CANDIDATE_ROOT_KAT_V1: [u8; 32] =
     hex!("b593dd370462a64cf69be83bd86ebd28634a55591e63d2d400bc3511c9280453");
 const PATTERNED_CANDIDATE_WIRE_KAT_V1: [u8; 32] =
     hex!("612bce88df4ccb0cb47b8145cc3b6ad9f24c9811fdd84135c2a98a74e50ca016");
 const CANDIDATE_BLINDING_ROOT_KAT_V1: [u8; 32] =
-    hex!("0b2c297494ff252223ff18bb16032f1ffbe12b57e7141cac9fbb84ab4f672989");
+    hex!("4005e2608b61b63d215ff7b0b21b2fece110c1e2813b3943c81c72a97db3c835");
 const CANDIDATE_OWNER_BINDING_KAT_V1: [u8; 32] =
-    hex!("246379873a55b2f95371f024182280545ff17c60e82019e0844b4ab2e21e813e");
+    hex!("dd55236fb876d36d02b4a924697110281a367613781e415375b60bdb6b964cea");
 const FIRST_CANDIDATE_BLINDING_KAT_V1: [u8; 32] =
     hex!("236d3b8112318b84c14cb221111bf3e0fc756c0e8fc09c2d9c143499de6e1b2e");
 const FIRST_CANDIDATE_TOKEN_KAT_V1: [u8; 32] =
-    hex!("78f7b1117eb31151b8281519dccf9a90aa3889d634d119eb785b52d0c310ded2");
+    hex!("4a0d1d9e1b6ee952ddea6be0f56193f64b21ae9f252d24a16a4e0c19cc86f14f");
 
 fn patterned_points_v1() -> [Point; 3] {
     [
@@ -54,11 +54,11 @@ fn patterned_candidate_wire_v1() -> Vec<u8> {
     wire
 }
 
-fn source_complete_session_v1(
+pub(super) fn source_complete_session_v1(
     proof_context: [u8; 32],
     seed: [u8; 32],
     fault: TestEntropyFaultV1,
-) -> GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1> {
+) -> GlobalLookupCommitmentSessionV1<core::convert::Infallible, SourceOpeningCompleteStageV1> {
     let opening_context = [0x32; 32];
     let generator = Point::canonical_generator().expect("canonical generator");
     let mut session =
@@ -84,20 +84,21 @@ fn source_complete_session_v1(
         .expect("source root");
     assert_eq!(commitments_root, SOURCE_COMMITMENTS_ROOT_KAT_V1);
     session
-        .complete_source_opening_v1(opening_context, commitments_root, [0x52; 32])
+        .complete_source_opening_v1([0x53; 32], opening_context, commitments_root, [0x52; 32])
         .expect("complete source session")
 }
 
 fn begin_candidate_assembly_v1(
     proof_context: [u8; 32],
     seed: [u8; 32],
-) -> RnsNativeExistingRadixCandidateAssemblyV1 {
+) -> RnsNativeExistingRadixCandidateAssemblyV1<core::convert::Infallible> {
     source_complete_session_v1(proof_context, seed, TestEntropyFaultV1::None)
         .into_existing_radix_candidate_assembly_v1()
         .expect("candidate assembly")
 }
 
-fn complete_patterned_candidate_v1() -> RnsNativeExistingRadixCandidateOwnerV1 {
+pub(in super::super) fn complete_patterned_candidate_v1()
+-> RnsNativeExistingRadixCandidateOwnerV1<core::convert::Infallible> {
     let points = patterned_points_v1();
     let mut assembly = begin_candidate_assembly_v1([0x31; 32], [0x41; 32]);
     for wire_ordinal in 0..EXISTING_RADIX_CANDIDATE_POINT_COUNT_V1 as u32 {
@@ -125,7 +126,23 @@ fn complete_patterned_candidate_v1() -> RnsNativeExistingRadixCandidateOwnerV1 {
             )
             .expect("candidate adoption");
     }
+    assert!(assembly.all_prepared_values_committed_v1().unwrap());
     assembly.finish_v1().expect("candidate owner")
+}
+
+// Fault injection stays at the existing test-only entropy owner after the
+// completed full-shape inventory fixture; no replacement source or RNG exists.
+pub(in super::super) fn complete_patterned_candidate_with_fault_v1(
+    fault: TestEntropyFaultV1,
+) -> RnsNativeExistingRadixCandidateOwnerV1<core::convert::Infallible> {
+    let mut owner = complete_patterned_candidate_v1();
+    let GlobalLookupProofSessionEntropySourceV1::TestOnly(entropy) =
+        &mut owner.session.live.as_mut().unwrap().entropy
+    else {
+        unreachable!()
+    };
+    entropy.fault = fault;
+    owner
 }
 
 #[test]
@@ -214,6 +231,14 @@ fn manifest_candidate_root_and_candidate_serialization_hashes_are_frozen() {
 fn completed_owner_retains_blindings_and_emits_only_the_exact_candidate_section() {
     let mut owner = complete_patterned_candidate_v1();
     owner.validate_v1().unwrap();
+    owner
+        .validate_completed_source_prefix_v1(
+            [0x53; 32],
+            [0x32; 32],
+            SOURCE_COMMITMENTS_ROOT_KAT_V1,
+            [0x52; 32],
+        )
+        .unwrap();
     assert_eq!(owner.candidate_root, PATTERNED_CANDIDATE_ROOT_KAT_V1);
     assert_eq!(owner.blinding_root, CANDIDATE_BLINDING_ROOT_KAT_V1);
     assert_eq!(owner.owner_binding_digest, CANDIDATE_OWNER_BINDING_KAT_V1);
@@ -336,13 +361,13 @@ fn order_token_identity_entropy_early_finish_and_unwind_fail_closed() {
 #[test]
 fn owner_is_move_only_source_bound_and_all_stronger_gates_remain_false() {
     assert!(core::mem::needs_drop::<
-        RnsNativeExistingRadixCandidateAssemblyV1,
+        RnsNativeExistingRadixCandidateAssemblyV1<core::convert::Infallible>,
     >());
     assert!(core::mem::needs_drop::<
         RnsNativeExistingRadixCandidateBlindingV1,
     >());
     assert!(core::mem::needs_drop::<
-        RnsNativeExistingRadixCandidateOwnerV1,
+        RnsNativeExistingRadixCandidateOwnerV1<core::convert::Infallible>,
     >());
     assert_eq!(EXISTING_RADIX_CANDIDATE_RETAINED_BLINDING_BYTES_V1, 374_272);
     assert_eq!(EXISTING_RADIX_CANDIDATE_PUBLIC_WIRE_BYTES_V1, 385_968);
@@ -358,14 +383,15 @@ fn owner_is_move_only_source_bound_and_all_stronger_gates_remain_false() {
     assert!(!RELEASE_COMPLETE_V1);
 
     for required in [
-        "session: GlobalLookupCommitmentSessionV1<ExistingRadixCandidateCompleteStageV1>",
+        "session: GlobalLookupCommitmentSessionV1<R, ExistingRadixCandidateCompleteStageV1>",
         "blindings: ZeroizingT256ScalarVecV1",
         "append_permit: Option<ExistingRadixCandidateAppendPermitV1>",
-        "live: Option<ExistingRadixCandidateAssemblyLiveV1>",
+        "live: Option<ExistingRadixCandidateAssemblyLiveV1<R>>",
         "assembly_instance: u64",
         "NEXT_EXISTING_RADIX_ASSEMBLY_INSTANCE_V1",
         "let mut live = self\n            .live\n            .take()",
-        "proof_session_entropy: Infallible",
+        "original_random: R",
+        "commitment_entropy_bytes: u64",
         "append_candidate_section_v1",
         "EXISTING_RADIX_CANDIDATE_POINT_COUNT_V1: usize =",
         "EXISTING_RADIX_CANDIDATE_WIRE_BYTES_V1: usize =",

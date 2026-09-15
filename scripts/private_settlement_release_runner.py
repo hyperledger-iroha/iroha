@@ -2590,6 +2590,28 @@ def _validate_fault_state_response(
     )
 
 
+def _validate_finalized_local_reconciliation(identity, after, previous_local):
+    """Keep financial finality exact while local sidecar reservations retire.
+
+    Torii reconciles these reservations asynchronously. They may only decrease
+    after financial finality; equal-size reservations must retain their exact
+    commitment. Callers must still bind the terminal observation to ``after``.
+    """
+    counts = dict(identity[3])
+    if (_fault_ledger_attempt_identity(identity) != _fault_ledger_attempt_identity(after)
+            or identity[1] != after[1]
+            or counts["replicated_staged_locks"] != 0):
+        raise RunnerError("financial finality or replicated lock release is not atomic")
+    local = (counts["staged_locks"], identity[2])
+    if local[0] == 0 and local[1] != after[2]:
+        raise RunnerError("empty local staging commitment differs from terminal state")
+    if previous_local is not None and (
+            local[0] > previous_local[0]
+            or (local[0] == previous_local[0] and local[1] != previous_local[1])):
+        raise RunnerError("local staging increased or changed after financial finality")
+    return local
+
+
 def _fault_observation_phase_contract(
     control_row: Mapping[str, Any],
     *,
@@ -3288,6 +3310,7 @@ def validate_fault_observation_records(
             recomputed_first_response: str | None = None
             recomputed_last_response: str | None = None
             seen_finalized = False
+            previous_final_local = None
             phase_coverage = summary["phase_coverage"]
             if (
                 not isinstance(phase_coverage, list)
@@ -3468,14 +3491,13 @@ def validate_fault_observation_records(
                                 raise RunnerError(
                                     f"fault observation evidence[{index}].continuous_observations[{peer_index}] finalized state rolled back or was misclassified"
                                 )
-                        elif (
-                            not finalization_allowed
-                            or expected_after_state != "finalized"
-                            or response_identity != after_identity
-                        ):
-                            raise RunnerError(
-                                f"fault observation evidence[{index}].continuous_observations[{peer_index}] finalized in a disallowed phase or was misclassified"
-                            )
+                        else:
+                            if not finalization_allowed or expected_after_state != "finalized":
+                                raise RunnerError("financial finality in a disallowed phase")
+                            previous_final_local = _validate_finalized_local_reconciliation(
+                                response_identity, after_identity, previous_final_local)
+                            if phase["phase"] == "terminal" and response_identity != after_identity:
+                                raise RunnerError("terminal observation retains local staging")
                     for _ in range(repetitions):
                         after_checkpoint = logical_attempt >= checkpoint_attempt
                         if attempt_class == "expected_unavailable":
@@ -4247,6 +4269,7 @@ def _validate_leakage_atomicity_observations(
         previous_height: int | None = None
         first_height: int | None = None
         peer_final_state: tuple[str, str, str, tuple[tuple[str, int], ...]] | None = None
+        previous_final_local = None
         for observation_index, item in enumerate(observations):
             observation = exact_fields(
                 item,
@@ -4426,18 +4449,25 @@ def _validate_leakage_atomicity_observations(
                         f"atomicity observation changed {name} outside finalization"
                     )
             if (
-                staged_total != 0
-                or replicated_staged_total != 0
+                replicated_staged_total != 0
                 or observation["replicated_staged_lock_commitment"]
                 != empty_replicated_staged_commitment
-                or observation["staged_lock_commitment"] != empty_staged_commitment
             ):
-                raise RunnerError("finalized atomicity observation retained staged locks")
+                raise RunnerError("finalized atomicity observation retained replicated staged locks")
+            current_local = (staged_total, observation["staged_lock_commitment"])
+            if previous_final_local is not None and (
+                    current_local[0] > previous_final_local[0]
+                    or (current_local[0] == previous_final_local[0]
+                        and current_local[1] != previous_final_local[1])):
+                raise RunnerError("local staging increased or changed after financial finality")
+            previous_final_local = current_local
             if peer_final_ledger is None:
                 peer_final_ledger = observation["ledger_commitment"]
             elif peer_final_ledger != observation["ledger_commitment"]:
                 raise RunnerError("atomicity evidence contains multiple finalized states")
             finalized += 1
+            if staged_total != 0:
+                continue
             current_final_state = (
                 observation["ledger_commitment"],
                 observation["replicated_staged_lock_commitment"],

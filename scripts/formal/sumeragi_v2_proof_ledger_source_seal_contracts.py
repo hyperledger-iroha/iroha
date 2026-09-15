@@ -4668,7 +4668,7 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_active": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
     "pending_active": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
 }
-_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3adf384d9eb315ac86726a07929fb0cc6c713a7e547e484a5a70a5a4c7eaba5"
+_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "7b911718b152f7a0e15f78f3fb607a1a0c0f7b067fc566f53841f2530de2223f"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
 # trusted runtime contract. These complete-item seals bind the structural
@@ -4709,7 +4709,7 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
     "ordinary:run_lifecycle_active_height": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
     "pending:run_pending_active_height": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
-    "height:drain_lifecycle_v2_ingress": "6e86bd3de1bea9a61393d81b9deb82a21d9b705ccb52d441f36e9c14b8dd2151",
+    "height:drain_lifecycle_v2_ingress": "19dacb23dbda57dee77c7388957cbc2e4fb0d9917a22cf80ba47f2fa967f63a7",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
     "launch:ProductionLifecycleOwnerV1::launch": "ad1f0a95deff0a99eb7b04b7c5bdd48a6e3bfbff6f8ffcee9de4264f9f18a4c2",
@@ -5214,7 +5214,7 @@ _PRODUCTION_READY_PROPOSAL_SIGN_PREEMPTION_ITEM_SHA256 = {
         "9700af71a07b9b6e8c935f44e6e447c3d2087f89508733c6f124a3d4beedce51"
     ),
     "height::drain_lifecycle_v2_ingress": (
-        "6e86bd3de1bea9a61393d81b9deb82a21d9b705ccb52d441f36e9c14b8dd2151"
+        "19dacb23dbda57dee77c7388957cbc2e4fb0d9917a22cf80ba47f2fa967f63a7"
     ),
     "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign": (
         "dd96ca9fb8271e423099f6a019259cbfa524d73d86f07d1afdd377aa80dc8e76"
@@ -5259,7 +5259,7 @@ _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
         "31022665faf68e0fd519f0e7a27d7b09558ad16ad7b1d2ea073549c162e5ac21"
     ),
     "consume_prepared_dequeued_v2_ingress": (
-        "e3adf384d9eb315ac86726a07929fb0cc6c713a7e547e484a5a70a5a4c7eaba5"
+        "7b911718b152f7a0e15f78f3fb607a1a0c0f7b067fc566f53841f2530de2223f"
     ),
 }
 

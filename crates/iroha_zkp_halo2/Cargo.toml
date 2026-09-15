@@ -13,6 +13,9 @@ name = "iroha_zkp_halo2"
 path = "src/lib.rs"
 
 [dependencies]
+fastpq_isi = { path = "../fastpq_isi", optional = true }
+zeroize = { workspace = true, optional = true }
+iroha_crypto = { workspace = true, default-features = false, optional = true }
 tiny-keccak = { workspace = true, optional = true }
 thiserror = { workspace = true, default-features = false, optional = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"], optional = true }
@@ -35,6 +38,9 @@ model-primitives = []
 # Complete proof engine used by node, CLI, and direct crate consumers.
 full = [
     "model-primitives",
+    "dep:fastpq_isi",
+    "dep:zeroize",
+    "dep:iroha_crypto",
     "dep:tiny-keccak",
     "dep:thiserror",
     "dep:norito",

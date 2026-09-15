@@ -2,14 +2,14 @@
 //!
 //! This child freezes the exact ciphertext/source coordinate map and the future aggregation
 //! transcript, but deliberately constructs no relation polynomial and mints no proof, writer,
-//! snapshot, or qPCS authority. The ordering seal at its parent seam is uninhabited in production;
-//! the separate radix/Hyrax seal is accepted only after authenticated source replay exists.
+//! snapshot, or qPCS authority. Its consuming parent seam requires the actual owned-source
+//! manifest preflight. The remaining radix/Hyrax seal is accepted only after authenticated replay.
 //! Test-only permits exercise framing without making the existing Phase-23 context seal or any
 //! release capability constructible.
 
 #![allow(
     dead_code,
-    reason = "both production seals are intentionally uninhabited"
+    reason = "upstream context and later radix/Hyrax proof authorities remain uninhabited"
 )]
 use super::super::super::super::{
     ZkAmsMkheErrorV1,
@@ -117,16 +117,6 @@ const _: () = {
     assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
     assert!(!RELEASE_COMPLETE_V2);
 };
-/// Production cannot construct this move-only ordering proof.  A later,
-/// purpose-specific transition must replace both impossible payloads.
-pub(super) enum OrderedCiphertextBundleSealV2 {
-    Production {
-        ordered_43_ciphertexts: Infallible,
-        move_only_key_authority: Infallible,
-    },
-    #[cfg(test)]
-    TestOnly,
-}
 /// Production cannot claim radix/quotient/Hyrax completion in this slice.
 /// This authority is accepted only after authenticated source replay exists.
 pub(super) enum RadixHyraxProofSealV2 {
@@ -376,8 +366,8 @@ fn require_common_output_v2(
     hash.update(&receipt.receipt_digest());
     require_common_snapshot_v2(receipt.post_publish_read_receipt(), snapshot, hash)
 }
-fn exact_manifest_preflight_v2<K, P>(
-    owner: &ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>,
+fn exact_manifest_preflight_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
+    owner: &ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>,
 ) -> Result<ManifestPreflightAxesV2, ZkAmsMkheErrorV1> {
     owner.validate_v1()?;
     if owner.authority.failed
@@ -513,8 +503,8 @@ fn exact_manifest_preflight_v2<K, P>(
         preflight_digest,
     })
 }
-fn aggregate_schedule_digest_v2<K, P>(
-    owner: &ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>,
+fn aggregate_schedule_digest_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
+    owner: &ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>,
     axes: &ManifestPreflightAxesV2,
     formula_digest: [u8; 32],
     mapping_digest: [u8; 32],
@@ -551,15 +541,14 @@ fn aggregate_schedule_digest_v2<K, P>(
     }
     nonzero_digest_v2(hash.finalize())
 }
-struct SourceAlgebraLiveV2<K, P> {
-    owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>,
-    _ordered_ciphertexts: OrderedCiphertextBundleSealV2,
+struct SourceAlgebraLiveV2<R, K, P> {
+    owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>,
 }
-struct SourceAlgebraIngressV2<K, P> {
-    live: Option<SourceAlgebraLiveV2<K, P>>,
+struct SourceAlgebraIngressV2<R, K, P> {
+    live: Option<SourceAlgebraLiveV2<R, K, P>>,
 }
-struct SourceAlgebraPreflightV2<K, P> {
-    live: Option<SourceAlgebraLiveV2<K, P>>,
+struct SourceAlgebraPreflightV2<R, K, P> {
+    live: Option<SourceAlgebraLiveV2<R, K, P>>,
     axes: ManifestPreflightAxesV2,
 }
 struct SourceAlgebraPrerequisiteRecordV2 {
@@ -582,31 +571,27 @@ struct SourceAlgebraPrerequisiteRecordV2 {
     record_digest: [u8; 32],
 }
 /// Move-only pre-replay owner of the consumed Phase-23 bundle and its false-gated prerequisite
-/// record. It makes no radix/Hyrax claim and has no field accessors or decomposition seam.
-pub(super) struct Phase23SourceAlgebraPrerequisiteV2<K, P> {
-    live: Option<SourceAlgebraLiveV2<K, P>>,
+/// record. The owned manifests and key authority establish exact order through
+/// mandatory preflight; there is no detached ordering seal. It makes no
+/// radix/Hyrax claim and has no field accessors or decomposition seam.
+pub(super) struct Phase23SourceAlgebraPrerequisiteV2<R, K, P> {
+    live: Option<SourceAlgebraLiveV2<R, K, P>>,
     record: SourceAlgebraPrerequisiteRecordV2,
 }
 #[path = "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1.rs"]
 mod global_lookup_source_replay_v1;
 pub(super) use global_lookup_source_replay_v1::{
-    GlobalLookupProofSessionEntropySealV1, GlobalLookupSourceReplaySinkSealV1,
-    Phase23GlobalLookupRadixSourceCursorV2, Phase23GlobalLookupSourceReplayEvidenceV1,
-    Phase23GlobalLookupSourceReplayV1, bind_radix_hyrax_replay_after_materialization_v2,
+    GlobalLookupSourceReplaySinkSealV1, Phase23GlobalLookupRadixSourceCursorV2,
+    Phase23GlobalLookupSourceReplayEvidenceV1, Phase23GlobalLookupSourceReplayV1,
+    bind_radix_hyrax_replay_after_materialization_v2, source_opening_commitment_for_suite_v1,
 };
-impl<K, P> SourceAlgebraIngressV2<K, P> {
-    fn begin_v2(
-        owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>,
-        ordered_ciphertexts: OrderedCiphertextBundleSealV2,
-    ) -> Self {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceAlgebraIngressV2<R, K, P> {
+    fn begin_v2(owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>) -> Self {
         Self {
-            live: Some(SourceAlgebraLiveV2 {
-                owner,
-                _ordered_ciphertexts: ordered_ciphertexts,
-            }),
+            live: Some(SourceAlgebraLiveV2 { owner }),
         }
     }
-    fn preflight_v2(mut self) -> Result<SourceAlgebraPreflightV2<K, P>, ZkAmsMkheErrorV1> {
+    fn preflight_v2(mut self) -> Result<SourceAlgebraPreflightV2<R, K, P>, ZkAmsMkheErrorV1> {
         // The live owner is removed before the first validation.  Any error or
         // unwind drops it locally, so the caller can neither retry nor recover
         // an earlier manifest/CAS capability.
@@ -621,8 +606,10 @@ impl<K, P> SourceAlgebraIngressV2<K, P> {
         })
     }
 }
-impl<K, P> SourceAlgebraPreflightV2<K, P> {
-    fn freeze_v2(mut self) -> Result<Phase23SourceAlgebraPrerequisiteV2<K, P>, ZkAmsMkheErrorV1> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceAlgebraPreflightV2<R, K, P> {
+    fn freeze_v2(
+        mut self,
+    ) -> Result<Phase23SourceAlgebraPrerequisiteV2<R, K, P>, ZkAmsMkheErrorV1> {
         // As above, take precedes every revalidation and every future read
         // boundary represented by this prerequisite.
         let live = self
@@ -668,19 +655,16 @@ impl<K, P> SourceAlgebraPreflightV2<K, P> {
         })
     }
 }
-impl<K, P> Phase23SourceAlgebraPrerequisiteV2<K, P> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
+    Phase23SourceAlgebraPrerequisiteV2<R, K, P>
+{
     /// Consume this exact prerequisite into authenticated compact signed-i8
     /// source planes. Production cannot supply the private sink authority yet.
     pub(super) fn into_global_lookup_source_replay_v1(
         self,
         sink: GlobalLookupSourceReplaySinkSealV1,
-        proof_session_entropy: GlobalLookupProofSessionEntropySealV1,
-    ) -> Result<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>, ZkAmsMkheErrorV1> {
-        global_lookup_source_replay_v1::replay_global_lookup_source_v1(
-            self,
-            sink,
-            proof_session_entropy,
-        )
+    ) -> Result<Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>, ZkAmsMkheErrorV1> {
+        global_lookup_source_replay_v1::replay_global_lookup_source_v1(self, sink)
     }
 }
 fn prerequisite_record_digest_v2(
@@ -744,11 +728,14 @@ fn nonzero_digest_v2(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     }
     Ok(digest)
 }
-pub(super) fn consume_phase23_source_algebra_prerequisite_v2<K, P>(
-    owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>,
-    ordered_ciphertexts: OrderedCiphertextBundleSealV2,
-) -> Result<Phase23SourceAlgebraPrerequisiteV2<K, P>, ZkAmsMkheErrorV1> {
-    SourceAlgebraIngressV2::begin_v2(owner, ordered_ciphertexts)
+pub(super) fn consume_phase23_source_algebra_prerequisite_v2<
+    R: crate::vega::MaskedRelaxedRandomSourceV1,
+    K,
+    P,
+>(
+    owner: ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>,
+) -> Result<Phase23SourceAlgebraPrerequisiteV2<R, K, P>, ZkAmsMkheErrorV1> {
+    SourceAlgebraIngressV2::begin_v2(owner)
         .preflight_v2()?
         .freeze_v2()
 }

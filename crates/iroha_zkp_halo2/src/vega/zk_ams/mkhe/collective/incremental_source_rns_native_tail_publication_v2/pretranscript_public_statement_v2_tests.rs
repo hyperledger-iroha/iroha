@@ -518,14 +518,14 @@ fn accounting_is_exact_and_scoped_v2() {
     assert_eq!(ledger.retained_artifact_digest_bytes, 112_640);
     assert_eq!(ledger.inline_facts_bytes_current_target, 4_000);
     assert_eq!(ledger.pretranscript_public_alias_digests, 3_609);
-    assert_eq!(ledger.pretranscript_public_alias_bytes, 115_488);
+    assert_eq!(ledger.pretranscript_public_alias_bytes, 176_841);
     assert_eq!(ledger.later_global_alias_digests, 3_754);
-    assert_eq!(ledger.later_global_alias_bytes, 120_128);
+    assert_eq!(ledger.later_global_alias_bytes, 183_946);
     assert_eq!(ledger.preparation_public_digest_hash_bytes, 154_158);
     assert_eq!(ledger.begin_public_digest_hash_bytes, 138_248);
     assert_eq!(
         ledger.preparation_and_begin_public_digest_hash_bytes,
         292_406
     );
-    assert_eq!(ledger.known_new_peak_bytes, 240_320);
+    assert_eq!(ledger.known_new_peak_bytes, 301_673);
 }

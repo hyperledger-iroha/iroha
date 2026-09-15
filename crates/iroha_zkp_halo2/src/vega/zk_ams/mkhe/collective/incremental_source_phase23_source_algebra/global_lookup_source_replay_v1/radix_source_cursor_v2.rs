@@ -1,4 +1,4 @@
-//! One-shot authenticated canonical-source cursor for radix materialization.
+//! One-shot authenticated canonical-source cursor for compact and D/S-low materialization.
 
 use super::super::super::{
     PHASE23_CANONICAL_BLOCKS_PER_RECORD_V1, PHASE23_RECORD_COUNT_V1,
@@ -78,16 +78,18 @@ impl RadixSourceReadScheduleV2 {
 /// accepts only the next canonical `(record, block)` pair.
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
 struct Phase23GlobalLookupRadixSourceCursorV2
-<K, P> {
-    evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>,
+<R, K, P> {
+    evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>>,
     replay_record_digest: [u8; 32],
     source_receipt_digest: [u8; 32],
     schedule: Option<RadixSourceReadScheduleV2>,
 }
 
-impl<K, P> Phase23GlobalLookupRadixSourceCursorV2<K, P> {
-    fn begin_v2(
-        evidence: Phase23GlobalLookupSourceReplayEvidenceV1<K, P>,
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
+    Phase23GlobalLookupRadixSourceCursorV2<R, K, P>
+{
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn begin_v2(
+        evidence: Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>,
     ) -> Result<(Self, Phase23RadixSourceCursorAxesV2), ZkAmsMkheErrorV1> {
         validate_replay_evidence_v1(&evidence)?;
         let replay_record_digest = evidence.record.record_digest;
@@ -143,11 +145,40 @@ impl<K, P> Phase23GlobalLookupRadixSourceCursorV2<K, P> {
         Ok(source)
     }
 
-    /// Sole restricted Evidence return. The radix materializer calls this once
-    /// after exactly `43 * 512` successful authenticated reads.
-    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn complete_for_radix_materializer_v2(
+    /// Atomically bind actual prepared values to the original source session.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn commit_prepared_low_digit_v1(
+        &mut self,
+        statement: &super::super::super::radix_range_v2::PreparedLowDigitStatementV1<'_>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let mut evidence = self
+            .evidence
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        evidence.validate_radix_materialization_source_v1(
+            self.replay_record_digest,
+            self.source_receipt_digest,
+        )?;
+        let schedule = self
+            .schedule
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        statement.validate_origin_and_read_position_v1(
+            self.replay_record_digest,
+            self.source_receipt_digest,
+            schedule.next_record,
+            schedule.next_block,
+        )?;
+        evidence.openings.commit_prepared_low_digit_v1(statement)?;
+        self.evidence = Some(evidence);
+        Ok(())
+    }
+
+    /// Restricted evidence return shared by the compact and D/S-low consumers.
+    /// Each consuming invocation requires all `43 * 512` authenticated reads.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn complete_authenticated_source_replay_v1(
         mut self,
-    ) -> Result<(Phase23GlobalLookupSourceReplayEvidenceV1<K, P>, [u8; 32]), ZkAmsMkheErrorV1> {
+    ) -> Result<(Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>, [u8; 32]), ZkAmsMkheErrorV1>
+    {
         let evidence = self
             .evidence
             .take()
@@ -171,12 +202,14 @@ impl<K, P> Phase23GlobalLookupRadixSourceCursorV2<K, P> {
     }
 }
 
-impl<K, P> Phase23GlobalLookupSourceReplayEvidenceV1<K, P> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
+    Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>
+{
     /// Consume authenticated replay into the sole compact radix materializer.
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn into_radix_witness_materialized_v2(
         self,
         sink: Phase23RadixWitnessScratchSinkV2,
-    ) -> Result<Phase23RadixWitnessMaterializedV2<K, P>, ZkAmsMkheErrorV1> {
+    ) -> Result<Phase23RadixWitnessMaterializedV2<R, K, P>, ZkAmsMkheErrorV1> {
         let (cursor, axes) = Phase23GlobalLookupRadixSourceCursorV2::begin_v2(self)?;
         materialize_phase23_radix_witness_v2(cursor, axes, sink)
     }

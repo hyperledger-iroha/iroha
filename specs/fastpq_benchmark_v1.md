@@ -13,12 +13,20 @@ The exact operation names are `fft`, `ifft`, `lde`,
 A filter is exactly `all` or one operation name; aliases are rejected.
 `all` requires all six entries in the listed order; partial or reordered
 inventories cannot claim complete coverage.
+Matrix filter sets are emitted with `all` first when present, followed by the
+selected operation names in that same inventory order. Signed manifests reject
+empty, duplicate or reordered filter arrays.
 BN254 and FFT/LDE arithmetic retain their separate owners.
 
 The report contains `rows`, `padded_rows`, `column_count`, `iterations` and
 `warmups`. Counts are native u64 integers, never booleans. Rows are in
 1..=65,536; padding is exactly the next power of two, iterations are positive,
 and warmups may be zero. Their sum must also fit u64 in every execution mode.
+Both native entry points validate these bounds before tracing, device probes or
+input allocation. The shared preflight derives padded/LDE extents from the sole
+V1 parameter set, checks native count arithmetic, and verifies sample, column,
+flattened BN254 and twiddle allocation layouts. CUDA accepts only the exact
+canonical parameter name. Representable layouts do not promise available memory.
 For trace commitments, exactly `column_count` columns
 named `bench_00`, `bench_01`, … contain `padded_rows` canonical Goldilocks values
 each. For pairs, exactly `rows` ordered pairs contain two complete six-lane
@@ -98,6 +106,10 @@ a CUDA host. `launch_geometry_sweep.py` always requires GPU execution and
 accepts FFT/LDE/queue geometry only. A complete geometry matrix requires the full six-operation inventory and GPU
 timings for FFT, LDE and both six-lane operations. A focused capture remains
 identified by its exact operation filter.
+The matrix builder requires wrapped captures with explicit filters and validates
+both report copies before collecting samples or deriving thresholds. Every
+capture under a device label must name the same backend; CPU, Metal and CUDA
+samples cannot be combined under one backend identity.
 
 Wrap actual captures with `scripts/fastpq/wrap_benchmark.py` and retain the raw
 report, wrapped JSON, source/build identity, device/toolchain metadata and

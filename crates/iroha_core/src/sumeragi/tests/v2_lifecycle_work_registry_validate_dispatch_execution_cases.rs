@@ -3706,7 +3706,7 @@ fn registered_deferred_validate_passes_ordinary_completion_without_releasing_wai
     let handle = std::thread::Builder::new()
         .name("registered-sidecar-ordinary-completion".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(false))
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(false, false))
         .expect("spawn registered-sidecar Completion fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -3719,7 +3719,7 @@ fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasin
     let handle = std::thread::Builder::new()
         .name("registered-sidecar-decided-recovery".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true))
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true, false))
         .expect("spawn registered-sidecar decided recovery fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -3727,8 +3727,21 @@ fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasin
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn registered_deferred_validate_decision_drains_recovery_batch_without_releasing_wait() {
+    let handle = std::thread::Builder::new()
+        .name("registered-sidecar-decided-recovery-batch".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true, true))
+        .expect("spawn registered-sidecar decided recovery batch fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
-fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bool) {
+fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bool, batch: bool) {
     let marker = 0xDF;
     let (mut lane_work, keys, verified, reference, kura) =
         crate::sumeragi::v2_lane_work::tests::missing_lifecycle_sidecar_fixture_for_test();
@@ -3943,6 +3956,29 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             &keys,
             local_validator,
         );
+    // This batch exercises the production dispatch path. Retain the sole
+    // consumer of actual bounded actor queues so post_recoverable checks its
+    // wire, topology, FIFO and byte owners instead of a closed test handle.
+    let mut actor_admissions = batch.then(|| {
+        let local_peer = fixture.verified.context().roster[local_validator as usize]
+            .validator
+            .clone();
+        let targets = fixture
+            .verified
+            .context()
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .filter(|peer| peer != &local_peer)
+            .collect();
+        let (network, actor) = crate::IrohaNetwork::actor_admission_for_tests(
+            local_peer,
+            targets,
+            std::num::NonZeroUsize::new(16).expect("bounded recovery actor capacity"),
+        );
+        crate::sumeragi::v2_worker::tests::install_network_for_test(&mut services, network);
+        actor
+    });
     crate::sumeragi::v2_worker::tests::install_active_tag_for_test(&mut services, tag);
     let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
         &mut services,
@@ -4250,18 +4286,43 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         let admitted_high_water = ingress.state.lock().last_admission_ordinal;
         let wal_before = std::fs::read(runtime_directory.path().join("safety.wal"))
             .expect("read durable Decision WAL");
-        for remaining in [1, 0] {
+        let turns = if batch {
+            [(2, 0), (0, 0)]
+        } else {
+            [(1, 1), (1, 0)]
+        };
+        let mut admitted_output_posts = 0;
+        for (expected_drained, remaining) in turns {
             let drained = launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
                 let directive = executor.local_proposal_directive().expect("read actual executor Decision");
                 assert_eq!(directive.decided_subject(), Some(subject));
                 let _permit = claim.decided_validate_sidecar_recovery_permit(directive.decided_subject().is_some())
                     .expect("only actual Decision opens the registered-wait recovery seam");
-                crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
-                    &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync,
-                ).expect("retire exactly one authenticated recovery occurrence")
+                if batch {
+                    crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_batch_for_test(
+                        &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync, 2,
+                    ).expect("service the bounded authenticated recovery burst")
+                } else {
+                    usize::from(crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
+                        &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync,
+                    ).expect("retire exactly one authenticated recovery occurrence"))
+                }
             });
-            assert!(drained);
+            assert_eq!(drained, expected_drained);
             assert_eq!(ingress.len(), remaining);
+            if let Some(actor) = actor_admissions.as_mut() {
+                admitted_output_posts += actor.drain_posts(|post| {
+                    assert!(
+                        fixture
+                            .verified
+                            .context()
+                            .roster
+                            .iter()
+                            .any(|entry| entry.validator == post.peer_id),
+                        "recovery output must retain an exact committee target"
+                    );
+                });
+            }
             assert_eq!(
                 ingress.state.lock().last_admission_ordinal,
                 admitted_high_water
@@ -4293,6 +4354,19 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                 "recovery cannot step the reducer or append safety work"
             );
             assert!(!output_guard.restart_required());
+        }
+        if batch {
+            assert!(
+                admitted_output_posts > 0,
+                "the batch must cross real actor admission and release its consumed output leases"
+            );
+            assert_eq!(
+                actor_admissions
+                    .as_mut()
+                    .expect("retain live actor owner")
+                    .drain_posts(|_| { panic!("the recovery turn left an unobserved actor post") }),
+                0
+            );
         }
         assert_eq!(
             keeper_kura

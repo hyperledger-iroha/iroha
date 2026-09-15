@@ -540,7 +540,28 @@ fn drain_decided_lane_recovery_ingress(
     // intentionally dropped. The durable Decision and finality tuple are the
     // only global reducer authority. An exact current-height Serve is answered
     // directly from that tuple so a body-missing validator can cross Apply;
-    // no lifecycle reducer or Producer authority is reopened. One occurrence
-    // per outer loop keeps terminal settlement work dominant.
+    // no lifecycle reducer or Producer authority is reopened. The caller
+    // bounds how many independently checked occurrences precede preflight.
     Ok(Some(outcome))
+}
+
+/// Service a bounded recovery burst before repeating the durable lane audit.
+///
+/// One occurrence per expensive preflight can leave an already-admitted quorum
+/// behind continuously arriving retransmissions. Every occurrence still uses
+/// the exact checked dequeue and publishes its owned effects before the next;
+/// the finite cap guarantees that durable preflight is revisited.
+fn service_decided_lane_recovery_ingress_batch(
+    limit: usize,
+    mut service_one: impl FnMut() -> Result<bool, V2RunnerError>,
+) -> Result<usize, V2RunnerError> {
+    const MAX_RECOVERY_INGRESS_BATCH: usize = 16;
+    let mut drained = 0;
+    for _ in 0..limit.clamp(1, MAX_RECOVERY_INGRESS_BATCH) {
+        if !service_one()? {
+            break;
+        }
+        drained += 1;
+    }
+    Ok(drained)
 }

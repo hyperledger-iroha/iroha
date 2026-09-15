@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from types import MappingProxyType
+from typing import Iterable
 
 OPERATION_LABELS = MappingProxyType({
     "fft": "FFT",
@@ -19,7 +20,8 @@ OPERATION_LABELS = MappingProxyType({
 CANONICAL_OPERATION_ORDER = tuple(OPERATION_LABELS)
 CANONICAL_OPERATIONS = frozenset(CANONICAL_OPERATION_ORDER)
 DIGEST384_OPERATIONS = frozenset({"digest384_trace_columns", "digest384_merkle_pairs"})
-CANONICAL_FILTERS = CANONICAL_OPERATIONS | {"all"}
+CANONICAL_FILTER_ORDER = ("all", *CANONICAL_OPERATION_ORDER)
+CANONICAL_FILTERS = frozenset(CANONICAL_FILTER_ORDER)
 
 
 def require_operation(value: object) -> str:
@@ -33,6 +35,23 @@ def require_filter(value: object) -> str:
     """Require an exact operation filter or the complete-operation filter."""
     if not isinstance(value, str) or value not in CANONICAL_FILTERS:
         raise ValueError(f"unknown native benchmark operation filter: {value!r}")
+    return value
+
+
+def ordered_filters(values: Iterable[object]) -> list[str]:
+    """Validate a nonempty capture set and emit its sole canonical filter order."""
+    filters = {require_filter(value) for value in values}
+    if not filters:
+        raise ValueError("operation filter set must be nonempty")
+    return [value for value in CANONICAL_FILTER_ORDER if value in filters]
+
+
+def require_filter_array(value: object) -> list[str]:
+    """Require a nonempty, unique filter array in canonical inventory order."""
+    if not isinstance(value, list) or not value:
+        raise ValueError("operation filters must be a nonempty array")
+    if value != ordered_filters(value):
+        raise ValueError("operation filters must be unique and in canonical inventory order")
     return value
 
 

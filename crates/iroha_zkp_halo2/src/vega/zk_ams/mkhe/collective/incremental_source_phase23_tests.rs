@@ -1,5 +1,12 @@
 use super::*;
 
+#[path = "incremental_source_phase23_tests/context_authority.rs"]
+mod context_authority;
+use context_authority::{
+    current_context_leaf_is_private_v1, exact_current_context_import_v1,
+    exact_pinned_context_descendant_tree_v1,
+};
+
 const RUST_ORACLE_MAX_BYTES_V1: usize = 256 * 1_024;
 const RUST_ORACLE_MAX_DEPTH_V1: usize = 256;
 
@@ -435,14 +442,37 @@ fn direct_context_mints_v1(tokens: &[RustTokenV1<'_>], context: &str) -> usize {
 }
 
 fn top_level_item_ranges_v1(tokens: &[RustTokenV1<'_>]) -> Option<Vec<core::ops::Range<usize>>> {
-    use RustTokenV1::Punct;
+    use RustTokenV1::{Punct, Word};
     let (mut ranges, mut start, mut depth) = (Vec::new(), 0, 0_usize);
-    for (index, token) in tokens.iter().enumerate() {
+    // Inner lint policy belongs to the module, not to its first use item.
+    // Admit only the two actual inert policies; cfg/expansion attributes fail.
+    while tokens.get(start..start + 2) == Some(&[Punct(b'#'), Punct(b'!')]) {
+        let end = matching_pair_v1(tokens, start + 2, b'[', b']')?;
+        if !matches!(
+            &tokens[start + 3..end],
+            [Word("allow"), Punct(b'('), Word("dead_code"), Punct(b')')]
+                | [
+                    Word("forbid"),
+                    Punct(b'('),
+                    Word("unsafe_code"),
+                    Punct(b')')
+                ]
+        ) {
+            return None;
+        }
+        start = end + 1;
+    }
+    for (index, token) in tokens.iter().enumerate().skip(start) {
         match token {
             Punct(b'(' | b'[' | b'{') => depth = depth.checked_add(1)?,
             Punct(b')' | b']' | b'}') => {
                 depth = depth.checked_sub(1)?;
                 if depth == 0 && *token == Punct(b'}') {
+                    // Grouped use items and brace-valued constants own their
+                    // semicolon. Do not split it from the Rust item being checked.
+                    if tokens.get(index + 1) == Some(&Punct(b';')) {
+                        continue;
+                    }
                     if start < index + 1 {
                         ranges.push(start..index + 1);
                     }
@@ -1012,7 +1042,11 @@ fn production_outer_attributes_are_inert_v1(attributes: &[&[RustTokenV1<'_>]]) -
     ];
     attributes.iter().all(|attribute| match *attribute {
         [Word("allow" | "repr"), Punct(b'('), .., Punct(b')')]
-        | [Word("path"), Punct(b'='), RustTokenV1::Literal(_)] => true,
+        | [
+            Word("path" | "must_use"),
+            Punct(b'='),
+            RustTokenV1::Literal(_),
+        ] => true,
         [Word("derive"), Punct(b'('), body @ .., Punct(b')')] => body.iter().all(|token| {
             matches!(token, Punct(b','))
                 || matches!(token, Word(derive) if INERT_DERIVES.contains(derive))
@@ -1031,6 +1065,17 @@ fn has_production_expansion_surface_v1(tokens: &[RustTokenV1<'_>], invoked: &[&s
             continue;
         };
         if *token != Punct(b'!') || tokens.get(index + 1) == Some(&Punct(b'=')) {
+            continue;
+        }
+        // These standalone control-flow keywords precede unary logical not,
+        // not macro invocations. Raw identifiers and qualified/path spellings
+        // remain expansion candidates and must satisfy the existing deny rule.
+        if matches!(*name, "if" | "while" | "return")
+            && !matches!(
+                tokens.get(index.wrapping_sub(2)),
+                Some(Punct(b'#' | b'$' | b':'))
+            )
+        {
             continue;
         }
         let exact_builtin = matches!(
@@ -1148,6 +1193,9 @@ fn descendant_module_has_no_context_mint_v1(source: &str) -> bool {
         if item_is_exact_cfg_test_v1(item) || !item.iter().any(|token| *token == Word(CONTEXT)) {
             continue;
         }
+        if exact_current_context_import_v1(item) {
+            continue;
+        }
         if let Some(implementation) = top_level_word_v1(item, "impl") {
             if !context_impl_has_no_production_mint_v1(item, implementation, CONTEXT) {
                 return false;
@@ -1161,133 +1209,6 @@ fn descendant_module_has_no_context_mint_v1(source: &str) -> bool {
         }
     }
     true
-}
-
-fn exact_pinned_context_descendant_tree_v1(
-    root: &str,
-    cross_field: &str,
-    cross_field_joint_z: &str,
-    q_pcs: &str,
-    q_pcs_soundness: &str,
-    q_pcs_fri_rounds: &str,
-    q_pcs_canonical: &str,
-    q_pcs_verifier: &str,
-) -> bool {
-    const ROOT_CHILDREN: &[(&str, &str)] = &[
-        ("cross_field_v2", "phase23_rns_link_cross_field_v2.rs"),
-        ("q_pcs", "phase23_rns_link_q_pcs.rs"),
-    ];
-    const CROSS_FIELD_CHILDREN: &[(&str, &str)] = &[(
-        "joint_z_binding_v3",
-        "phase23_rns_link_cross_field_v2/joint_z_binding_v3.rs",
-    )];
-    const Q_PCS_CHILDREN: &[(&str, &str)] =
-        &[("v2_soundness", "phase23_rns_link_q_pcs_v2_soundness.rs")];
-    const SOUNDNESS_CHILDREN: &[(&str, &str)] = &[
-        (
-            "prover_fri_rounds_v2",
-            "phase23_rns_link_q_pcs_v2_soundness/prover_fri_rounds_v2.rs",
-        ),
-        (
-            "prover_canonical_proof_v2",
-            "phase23_rns_link_q_pcs_v2_soundness/prover_canonical_proof_v2.rs",
-        ),
-        ("verifier", "phase23_rns_link_q_pcs_v2_verifier.rs"),
-    ];
-    #[rustfmt::skip]
-    let descendants = [
-        (
-            cross_field,
-            (
-                42_350,
-                [
-                    0xe5, 0xce, 0xde, 0x64, 0x7f, 0x3c, 0x45, 0x48, 0x3f, 0xba, 0x60, 0x27,
-                    0x2c, 0x3c, 0xfc, 0x94, 0x0b, 0x27, 0xca, 0x35, 0x36, 0xa8, 0xb3, 0x5c,
-                    0x8a, 0xd2, 0x9e, 0x25, 0x8d, 0x6f, 0x76, 0x02,
-                ],
-            ),
-            CROSS_FIELD_CHILDREN,
-        ),
-        (
-            cross_field_joint_z,
-            (
-                9_152,
-                [
-                    0xc6, 0x44, 0x12, 0x04, 0x2b, 0x00, 0xf4, 0xee, 0xc4, 0x3c, 0xed, 0x4e,
-                    0x5a, 0x11, 0xb9, 0x4b, 0xd2, 0x1d, 0x92, 0x22, 0x80, 0x42, 0x70, 0x10,
-                    0xae, 0x8d, 0x25, 0x9c, 0x09, 0x82, 0xfc, 0x2c,
-                ],
-            ),
-            &[][..],
-        ),
-        (
-            q_pcs,
-            (
-                121_402,
-                [
-                    0x33, 0xe2, 0xb7, 0x24, 0xcc, 0x7e, 0x6c, 0x0c, 0xdb, 0xea, 0x98, 0xdc,
-                    0x53, 0x07, 0xe6, 0x71, 0x8e, 0xdd, 0x01, 0x0a, 0x48, 0x48, 0x2d, 0xdf,
-                    0x02, 0x6f, 0x39, 0xc0, 0xe4, 0x4d, 0xcc, 0xf0,
-                ],
-            ),
-            Q_PCS_CHILDREN,
-        ),
-        (
-            q_pcs_soundness,
-            (
-                51_990,
-                [
-                    0x11, 0x8e, 0x8a, 0xa6, 0xdf, 0xc6, 0xcf, 0x5e, 0x00, 0x9b, 0x81, 0x21,
-                    0xbf, 0xa6, 0x97, 0xec, 0xef, 0xf0, 0x55, 0xe8, 0xe8, 0x00, 0xf3, 0xfe,
-                    0x38, 0xd7, 0xaf, 0x29, 0x00, 0x1c, 0x51, 0xaf,
-                ],
-            ),
-            SOUNDNESS_CHILDREN,
-        ),
-        (
-            q_pcs_fri_rounds,
-            (
-                15_980,
-                [
-                    0xa7, 0xa4, 0x86, 0x14, 0x41, 0x84, 0x28, 0x09, 0x57, 0x1d, 0x61, 0xf0,
-                    0x4b, 0xee, 0x4c, 0x20, 0x8f, 0x32, 0xcc, 0xab, 0xfd, 0x8f, 0x3d, 0x02,
-                    0x65, 0x45, 0x45, 0xf3, 0x9e, 0xc9, 0x8d, 0x94,
-                ],
-            ),
-            &[][..],
-        ),
-        (
-            q_pcs_canonical,
-            (
-                14_380,
-                [
-                    0xb8, 0xe8, 0x4d, 0x22, 0x9f, 0x09, 0xd4, 0x4c, 0xf4, 0x30, 0xa0, 0xbd,
-                    0xb3, 0x64, 0xf6, 0x7e, 0xd5, 0x6c, 0xf8, 0xab, 0xd9, 0x78, 0x8c, 0x3f,
-                    0x39, 0xb3, 0xd6, 0xc3, 0xad, 0xfb, 0x9b, 0x9d,
-                ],
-            ),
-            &[][..],
-        ),
-        (
-            q_pcs_verifier,
-            (
-                23_434,
-                [
-                    0xaa, 0x69, 0x61, 0xfc, 0x23, 0x89, 0xb7, 0x9b, 0x87, 0xcf, 0xc8, 0x80,
-                    0x47, 0x41, 0x4e, 0xbd, 0xff, 0xc6, 0x44, 0x40, 0x34, 0xb0, 0x9c, 0x01,
-                    0x50, 0x2d, 0x04, 0x1d, 0x54, 0xb5, 0x4b, 0x93,
-                ],
-            ),
-            &[][..],
-        ),
-    ];
-    exact_test_only_context_constructor_v1(root)
-        && exact_production_child_modules_v1(root, ROOT_CHILDREN)
-        && descendants.iter().all(|(source, pin, children)| {
-            source_pin_v1(source) == *pin
-                && exact_production_child_modules_v1(source, children)
-                && descendant_module_has_no_context_mint_v1(source)
-        })
 }
 
 fn exact_test_only_context_constructor_v1(source: &str) -> bool {
@@ -1629,6 +1550,29 @@ fn exact_record_schedule_is_x_u_e_re_w_rw() {
     assert!(phase23_record_position_v1(43).is_err());
 }
 #[test]
+fn streaming_release_shape_rejects_each_wrong_dimension_and_retired_bulk_shape() {
+    let exact = ZkAmsPhase23AccumulatorShapeV1::new(89, 1_048_576, 1_024, 524_288, 512)
+        .expect("canonical release shape");
+    require_exact_release_shape_v1(exact).expect("exact streaming source dimensions");
+    for ordinal in 0..6 {
+        let mut wrong = exact;
+        match ordinal {
+            0 => wrong.x -= 1,
+            1 => wrong.e -= 1,
+            2 => wrong.r_e -= 1,
+            3 => wrong.w -= 1,
+            4 => wrong.r_w -= 1,
+            5 => wrong.x = 524_288,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            require_exact_release_shape_v1(wrong),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold),
+            "dimension {ordinal}"
+        );
+    }
+}
+#[test]
 fn hostile_schedule_coordinates_fail_before_the_encryption_core() {
     let position = phase23_record_position_v1(5).unwrap();
     let layout = position.layout_v1().unwrap();
@@ -1723,6 +1667,8 @@ fn structural_gate_preserves_validation_entropy_source_and_output_order() {
     assert!(entropy < source_callback);
     assert!(source_callback < output);
     assert!(core.contains("F: FnOnce("));
+    assert!(core.contains("F: FnOnce(\n        &mut P,"));
+    assert!(source.contains("move |_ciphertext_publisher: &mut P,"));
     assert!(!core.contains("dyn Fn"));
     assert!(source.contains("try_reserve_exact(PHASE23_MAIN_BLOCKS_PER_RECORD_V1)"));
     assert!(source.contains("main.capacity() != PHASE23_MAIN_BLOCKS_PER_RECORD_V1"));
@@ -1754,7 +1700,7 @@ fn structural_gate_is_fail_closed_and_returns_one_move_only_owner_only_on_succes
     let source = include_str!("incremental_source_phase23.rs");
     let external = include_str!("../phase23_rns_link_external_source.rs");
     let encrypted = include_str!("../phase23_encrypted.rs");
-    let leaf = include_str!("../../../../../../iroha_confidential_spool/src/lib.rs");
+    let leaf = include_str!("../../../../../../iroha_crypto/src/confidential_spool.rs");
     assert!(source.contains("let next = self.chunks.next()?;"));
     assert!(source.contains(">= PHASE23_RECORD_COUNT_V1"));
     assert!(source.contains("Err(error) => return Some(Err(error))"));
@@ -1767,15 +1713,14 @@ fn structural_gate_is_fail_closed_and_returns_one_move_only_owner_only_on_succes
     assert!(parent.contains("active.kernel.error_one.as_slice()"));
     assert!(parent.contains("active.kernel.input_identity.encryption_nonce.as_bytes()"));
     assert!(source.contains("pool.persist_exact_record_v1("));
-    assert!(source.contains("struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>"));
+    assert!(source.contains("struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>"));
     assert!(source.contains("source: ZkAmsPhase23RnsLinkExternalSourcePublicationV1"));
     assert!(source.contains("manifests: Vec<ZkAmsMkheStreamingCollectiveCiphertextV1>"));
     assert!(source.contains("public_artifact_manifest_bound: true"));
     assert!(
-        !source.contains("impl<K, P> Clone for ZkAmsPhase23MaterializedEncryptedSourceOwnerV1")
+        !source.contains("impl<R, K, P> Clone for ZkAmsPhase23MaterializedEncryptedSourceOwnerV1")
     );
-    assert!(!source.contains("Serialize"));
-    assert!(!source.contains("Decode"));
+    assert!(contains_no_words_v1(source, &["Serialize", "Decode"]));
     assert!(!source.contains("pub use"));
     assert!(external.contains("const PUBLIC_ARTIFACT_MANIFEST_BOUND_V1: bool = false;"));
     assert!(external.contains("const SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V1: bool = false;"));
@@ -1791,16 +1736,10 @@ fn module_graph_and_context_authority_remain_private_and_fail_closed() {
     let mkhe = include_str!("../../mkhe.rs");
     let source = include_str!("incremental_source_phase23.rs");
     let rns_link = include_str!("../phase23_rns_link.rs");
+    let authority = include_str!("../phase23_rns_link_context_authority_v1.rs");
+    let external_source = include_str!("../phase23_rns_link_external_source.rs");
+    let external_spool = include_str!("../phase23_rns_link_external_spool.rs");
     let cross_field = include_str!("../phase23_rns_link_cross_field_v2.rs");
-    let cross_field_joint_z =
-        include_str!("../phase23_rns_link_cross_field_v2/joint_z_binding_v3.rs");
-    let q_pcs = include_str!("../phase23_rns_link_q_pcs.rs");
-    let q_pcs_soundness = include_str!("../phase23_rns_link_q_pcs_v2_soundness.rs");
-    let q_pcs_fri_rounds =
-        include_str!("../phase23_rns_link_q_pcs_v2_soundness/prover_fri_rounds_v2.rs");
-    let q_pcs_canonical =
-        include_str!("../phase23_rns_link_q_pcs_v2_soundness/prover_canonical_proof_v2.rs");
-    let q_pcs_verifier = include_str!("../phase23_rns_link_q_pcs_v2_verifier.rs");
     assert!(exact_private_path_module_v1(
         mkhe,
         "collective",
@@ -1847,18 +1786,59 @@ fn module_graph_and_context_authority_remain_private_and_fail_closed() {
             ]
         ));
     }
-    assert!(exact_test_only_context_constructor_v1(rns_link));
-    assert!(whole_module_context_mint_inventory_v1(rns_link));
+    assert!(current_context_leaf_is_private_v1(authority));
+    assert!(descendant_module_has_no_context_mint_v1(rns_link));
     assert!(exact_pinned_context_descendant_tree_v1(
         rns_link,
+        authority,
+        external_source,
+        external_spool,
         cross_field,
-        cross_field_joint_z,
-        q_pcs,
-        q_pcs_soundness,
-        q_pcs_fri_rounds,
-        q_pcs_canonical,
-        q_pcs_verifier,
     ));
+    // Reintroducing any unowned private production child is rejected even when it
+    // retains a source-only visibility and claims no release authority.
+    let reintroduced = format!("{rns_link}\n#[path = \"retired_qpcs.rs\"]\nmod q_pcs;\n");
+    assert!(!exact_pinned_context_descendant_tree_v1(
+        &reintroduced,
+        authority,
+        external_source,
+        external_spool,
+        cross_field,
+    ));
+    let retired_joint = format!(
+        "{cross_field}\n#[path = \"phase23_rns_link_cross_field_v2/joint_z_binding_v3.rs\"]\nmod joint_z_binding_v3;\n"
+    );
+    assert!(!exact_pinned_context_descendant_tree_v1(
+        rns_link,
+        authority,
+        external_source,
+        external_spool,
+        &retired_joint,
+    ));
+    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/vega/zk_ams/mkhe");
+    for entry in std::fs::read_dir(source_root).expect("native source directory") {
+        let entry = entry.expect("native source entry");
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(concat!("phase23_rns_link_", "q_pcs"))
+        {
+            let mut pending = vec![entry.path()];
+            while let Some(path) = pending.pop() {
+                if path.is_dir() {
+                    for child in std::fs::read_dir(&path).expect("retired source directory") {
+                        pending.push(child.expect("retired source entry").path());
+                    }
+                } else {
+                    assert_ne!(
+                        path.extension(),
+                        Some(std::ffi::OsStr::new("rs")),
+                        "retired qPCS source remains: {path:?}"
+                    );
+                }
+            }
+        }
+    }
     assert!(exact_test_only_correspondence_seal_v1(source));
 }
 
@@ -2377,6 +2357,10 @@ fn materialize_encrypt_and_publish_phase23_source_v1<I, R, K, P>(
 }
 #[test]
 fn source_files_remain_below_the_global_budget_without_exceptions() {
+    let authority = include_str!("incremental_source_phase23_tests/context_authority.rs");
+    assert!(authority.lines().count() <= 2_400);
+    assert!(authority.len() <= RUST_ORACLE_MAX_BYTES_V1);
+
     assert!(
         include_str!("incremental_source_phase23.rs")
             .lines()

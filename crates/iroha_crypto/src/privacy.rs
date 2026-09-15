@@ -3,6 +3,23 @@
 //! Nexus private lanes currently support only domain-separated Merkle commitments. A proof-system
 //! commitment must not be added here until admission can resolve an on-chain verifying key and
 //! invoke its real cryptographic verifier.
+
+/// Fixed six-lane commitment to the sole first-release privacy protocol catalog.
+///
+/// This is public catalog identity metadata. The data-model owner retains its
+/// exact canonical preimage, reproduction test, and strict catalog decoder; the
+/// lower cryptographic owner exposes the same words to native proof engines
+/// without introducing a data-model dependency or a second catalog value.
+pub const PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1: [u64;
+    fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] = [
+    0x7c30_a004_39f1_37e0,
+    0x6b40_fb5c_d815_db00,
+    0x49a9_4401_d272_97d7,
+    0x2e34_8ea7_fdf3_f0de,
+    0xfabf_bf7c_7865_7f74,
+    0xffbb_e269_c311_4fc9,
+];
+
 use crate::{Hash, HashOf, MerkleProof, MerkleTree};
 use core::{convert::TryFrom, fmt};
 use iroha_schema::IntoSchema;

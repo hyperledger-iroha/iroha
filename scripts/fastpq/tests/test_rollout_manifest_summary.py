@@ -170,3 +170,33 @@ def test_resolve_bench_path_falls_back_to_bundle_basename(tmp_path: Path) -> Non
     )
 
     assert resolved == bench_path.resolve()
+
+
+def test_optional_matrix_filter_absence_remains_absent(tmp_path):
+    for additional in ({}, {"matrix_operation_filters": None}):
+        entry = {"label": "missing", "operation_filter": "fft", **additional}
+        summary = rollout_manifest_summary.summarize_bench_entry(entry, bundle_dir=tmp_path, repo_root=tmp_path)
+        assert summary["matrix_operation_filters"] is None
+        assert "Matrix filters:" not in rollout_manifest_summary.render_markdown({"benches": [summary]})
+
+
+def test_rollout_summary_rejects_noncanonical_matrix_arrays_before_file_access(tmp_path, monkeypatch):
+    import pytest
+    def unexpected_resolution(*args, **kwargs):
+        raise AssertionError("invalid matrix array reached filesystem resolution")
+    monkeypatch.setattr(rollout_manifest_summary, "resolve_bench_path", unexpected_resolution)
+    for filters in ([], ["lde", "fft"], ["fft", "fft"], ["fft", "all"], ["ALL"], ["poseidon_merkle_pairs"], "fft"):
+        entry = {"label": "device", "operation_filter": "fft", "matrix_operation_filters": filters}
+        with pytest.raises(ValueError):
+            rollout_manifest_summary.summarize_bench_entry(entry, bundle_dir=tmp_path, repo_root=tmp_path)
+        with pytest.raises(ValueError):
+            rollout_manifest_summary.render_markdown({"benches": [entry]})
+
+
+def test_rollout_summary_preserves_complete_canonical_matrix_inventory(tmp_path):
+    from scripts.fastpq.benchmark_operations import CANONICAL_FILTER_ORDER
+    filters = list(CANONICAL_FILTER_ORDER)
+    entry = {"label": "missing", "operation_filter": "fft", "matrix_operation_filters": filters}
+    summary = rollout_manifest_summary.summarize_bench_entry(entry, bundle_dir=tmp_path, repo_root=tmp_path)
+    assert summary["matrix_operation_filters"] == filters
+    assert "Matrix filters: " + ", ".join(f"`{name}`" for name in filters) in rollout_manifest_summary.render_markdown({"benches": [summary]})

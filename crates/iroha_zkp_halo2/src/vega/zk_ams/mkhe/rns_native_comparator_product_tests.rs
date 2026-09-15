@@ -147,7 +147,7 @@ fn proof_set_codec_is_exact_canonical_capped_and_context_bound() {
     );
     assert_eq!(
         RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1,
-        6_180_515
+        6_179_219
     );
     let cap_plus_one = vec![0_u8; RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 + 1];
     assert_eq!(
@@ -515,7 +515,7 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert!(source.contains("for group in 0..GROUPS_V1"));
     assert!(source.contains("build_comparator_statement_v1"));
     assert!(source.contains(".verify(&mut transcript)?"));
-    assert!(source.contains("RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1 == 6_180_515"));
+    assert!(source.contains("RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1 == 6_179_219"));
     assert!(source.contains("RnsNativeClaimedSuccessorV1<"));
     assert!(source.contains("RnsNativeCrossFieldRlweClaimedInventoryParentV1<"));
     assert!(stage.contains("_parent: RnsNativeClaimedSuccessorV1<"));

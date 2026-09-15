@@ -25,7 +25,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -36,13 +37,14 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
             }),
             InstructionBox::from(create),
         ],
-        fee(),
-    )?;
+    )
+    .await?;
     submit_transition(
         client,
         attempt_id,
         ParliamentLifecycleTransitionV1::CompleteQualification,
-    )?;
+    )
+    .await?;
 
     let expected_bodies = [
         ParliamentBody::RulesCommittee,
@@ -53,7 +55,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         ParliamentBody::PolicyJury,
     ];
     let request_height =
-        next_queue_plan_execution_height(client, 0, "no-result sortition registration")?;
+        next_queue_plan_execution_height(client, 0, "no-result sortition registration").await?;
     let sortition_pulse_height = request_height + 4;
     let mut election_ids = BTreeMap::new();
     let mut request_ids = Vec::new();
@@ -89,8 +91,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 requests: registrations,
             },
         ),
-    )?;
-    assert_eq!(current_height(client)?, request_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, request_height);
     advance_to_autonomous_predecessor(
         network,
         client,
@@ -99,12 +102,11 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     )
     .await?;
     network.ensure_blocks(sortition_pulse_height).await?;
-    assert_eq!(current_height(client)?, sortition_pulse_height);
-    let pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), sortition_pulse_height))
-        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(current_height(client).await?, sortition_pulse_height);
+    let mut pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        pulses.push(pulse_at(&peer.client(), sortition_pulse_height).await?);
+    }
     assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
     let pulse = &pulses[0];
     submit_transition(
@@ -118,7 +120,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 pulse_id: BeaconPulseId::new(pulse.pulse_id),
             },
         ),
-    )?;
+    )
+    .await?;
 
     submit_transitions(
         client,
@@ -130,8 +133,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 },
             )
         }),
-    )?;
-    let invitation_state = read_attempt(client, attempt_id)?;
+    )
+    .await?;
+    let invitation_state = read_attempt(client, attempt_id).await?;
     let invitation_close_height = expected_bodies
         .into_iter()
         .map(|body| {
@@ -171,9 +175,10 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                     },
                 )
             }),
-        )?;
+        )
+        .await?;
     }
-    assert!(current_height(client)? <= invitation_close_height);
+    assert!(current_height(client).await? <= invitation_close_height);
     let roster_seal_height = invitation_close_height
         .checked_add(1)
         .ok_or_else(|| eyre!("no-result roster-seal height overflow"))?;
@@ -192,10 +197,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 election_attempt_id: election_ids[&body],
             })
         }),
-    )?;
-    assert_eq!(current_height(client)?, roster_seal_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, roster_seal_height);
 
-    let rules_body_id = read_attempt(client, attempt_id)?
+    let rules_body_id = read_attempt(client, attempt_id)
+        .await?
         .sealed_body_for_role(ParliamentBody::RulesCommittee)
         .expect("no-result Rules Committee is sealed")
         .instance()
@@ -218,8 +225,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 target,
             })
         }),
-    )?;
-    let reflecting = read_attempt(client, attempt_id)?;
+    )
+    .await?;
+    let reflecting = read_attempt(client, attempt_id).await?;
     let rules = reflecting
         .body(&rules_body_id)
         .expect("reflecting no-result Rules Committee");
@@ -237,8 +245,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                     assignment_id: assignment.assignment_id,
                 },
             ),
-        )?;
-        let observed = read_attempt(client, attempt_id)?;
+        )
+        .await?;
+        let observed = read_attempt(client, attempt_id).await?;
         let observed_rules = observed
             .body(&rules_body_id)
             .expect("no-result Rules Committee survives projection");
@@ -251,12 +260,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
             );
         }
     }
-    let failed_height = current_height(client)?;
+    let failed_height = current_height(client).await?;
     assert!(
         failed_height < public_finding_deadline,
         "objective quorum impossibility must terminate before the frozen deadline",
     );
-    let rejected = read_attempt(client, attempt_id)?;
+    let rejected = read_attempt(client, attempt_id).await?;
     let rejected_rules = rejected
         .body(&rules_body_id)
         .expect("rejected Rules Committee remains auditable");
@@ -280,17 +289,18 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         client,
         contract_address,
         "public-finding quorum-unreachable effect isolation",
-    )?;
+    )
+    .await?;
 
     let retry = CreateParliamentGovernanceAttemptV1 {
         proposal: proposal.clone(),
         attempt_sequence: 1,
     };
     let retry_id = retry.governance_attempt_id();
-    client.submit(retry, fee())?;
-    let retry_height = current_height(client)?;
+    submit_parliament_instructions(&client, [retry]).await?;
+    let retry_height = current_height(client).await?;
     network.ensure_blocks(retry_height).await?;
-    let retry_state = read_attempt(client, retry_id)?;
+    let retry_state = read_attempt(client, retry_id).await?;
     assert_eq!(retry_state.attempt().sequence, 1);
     assert_eq!(
         retry_state.attempt().status,
@@ -305,9 +315,11 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         client,
         retry_id,
         ParliamentLifecycleTransitionV1::CompleteQualification,
-    )?;
+    )
+    .await?;
     let retry_request_height =
-        next_queue_plan_execution_height(client, 0, "deadline retry sortition registration")?;
+        next_queue_plan_execution_height(client, 0, "deadline retry sortition registration")
+            .await?;
     let retry_pulse_height = retry_request_height
         .checked_add(4)
         .ok_or_else(|| eyre!("deadline retry sortition pulse height overflow"))?;
@@ -345,8 +357,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 requests: retry_registrations,
             },
         ),
-    )?;
-    assert_eq!(current_height(client)?, retry_request_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, retry_request_height);
     advance_to_autonomous_predecessor(
         network,
         client,
@@ -355,11 +368,10 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     )
     .await?;
     network.ensure_blocks(retry_pulse_height).await?;
-    let retry_pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), retry_pulse_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut retry_pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        retry_pulses.push(pulse_at(&peer.client(), retry_pulse_height).await?);
+    }
     assert!(retry_pulses.windows(2).all(|pair| pair[0] == pair[1]));
     submit_transition(
         client,
@@ -372,7 +384,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 pulse_id: BeaconPulseId::new(retry_pulses[0].pulse_id),
             },
         ),
-    )?;
+    )
+    .await?;
     submit_transitions(
         client,
         retry_id,
@@ -383,8 +396,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 },
             )
         }),
-    )?;
-    let retry_invitations = read_attempt(client, retry_id)?;
+    )
+    .await?;
+    let retry_invitations = read_attempt(client, retry_id).await?;
     let retry_invitation_close = expected_bodies
         .into_iter()
         .map(|body| {
@@ -424,7 +438,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                     },
                 )
             }),
-        )?;
+        )
+        .await?;
     }
     let retry_roster_seal_height = retry_invitation_close
         .checked_add(1)
@@ -444,10 +459,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 election_attempt_id: retry_election_ids[&body],
             })
         }),
-    )?;
-    assert_eq!(current_height(client)?, retry_roster_seal_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, retry_roster_seal_height);
 
-    let retry_rules_body_id = read_attempt(client, retry_id)?
+    let retry_rules_body_id = read_attempt(client, retry_id)
+        .await?
         .sealed_body_for_role(ParliamentBody::RulesCommittee)
         .expect("deadline retry Rules Committee is sealed")
         .instance()
@@ -470,8 +487,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 target,
             })
         }),
-    )?;
-    let retry_reflecting = read_attempt(client, retry_id)?;
+    )
+    .await?;
+    let retry_reflecting = read_attempt(client, retry_id).await?;
     let retry_rules = retry_reflecting
         .body(&retry_rules_body_id)
         .expect("deadline retry Rules Committee is reflecting");
@@ -502,7 +520,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
             body_instance_id: retry_rules_body_id,
             result_root: first_root,
         }),
-    )?;
+    )
+    .await?;
     submit_transition(
         &client_for(client, &retry_members[1], citizen_keys),
         retry_id,
@@ -510,8 +529,9 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
             body_instance_id: retry_rules_body_id,
             result_root: competing_root,
         }),
-    )?;
-    let split = read_attempt(client, retry_id)?;
+    )
+    .await?;
+    let split = read_attempt(client, retry_id).await?;
     let split_rules = split
         .body(&retry_rules_body_id)
         .expect("split public finding remains auditable");
@@ -538,7 +558,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
             },
         ),
         "public-finding deadline failure before the frozen deadline",
-    )?;
+    )
+    .await?;
 
     let first_post_deadline_execution = retry_public_finding_deadline
         .checked_add(1)
@@ -558,7 +579,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
             result_root: first_root,
         }),
         "public-finding endorsement after the inclusive frozen deadline",
-    )?;
+    )
+    .await?;
     submit_transition(
         &deadline_relayer_client,
         retry_id,
@@ -567,10 +589,11 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 body_instance_id: retry_rules_body_id,
             },
         ),
-    )?;
-    let deadline_failed_height = current_height(client)?;
+    )
+    .await?;
+    let deadline_failed_height = current_height(client).await?;
     assert!(deadline_failed_height > retry_public_finding_deadline);
-    let deadline_rejected = read_attempt(client, retry_id)?;
+    let deadline_rejected = read_attempt(client, retry_id).await?;
     let deadline_rules = deadline_rejected
         .body(&retry_rules_body_id)
         .expect("deadline-rejected Rules Committee remains auditable");
@@ -597,10 +620,10 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         attempt_sequence: 2,
     };
     let second_retry_id = second_retry.governance_attempt_id();
-    client.submit(second_retry, fee())?;
-    let second_retry_height = current_height(client)?;
+    submit_parliament_instructions(&client, [second_retry]).await?;
+    let second_retry_height = current_height(client).await?;
     network.ensure_blocks(second_retry_height).await?;
-    let second_retry_state = read_attempt(client, second_retry_id)?;
+    let second_retry_state = read_attempt(client, second_retry_id).await?;
     assert_eq!(second_retry_state.attempt().sequence, 2);
     assert_eq!(
         second_retry_state.attempt().status,
@@ -611,14 +634,44 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         GovernanceStageV1::Qualification
     );
 
-    let rejected_response = client.get_parliament_attempt(attempt_id)?;
-    let retry_response = client.get_parliament_attempt(retry_id)?;
-    let second_retry_response = client.get_parliament_attempt(second_retry_id)?;
+    let rejected_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
+    let retry_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (retry_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
+    let second_retry_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (second_retry_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     for peer in network.peers() {
         let peer_client = peer.client();
-        let peer_rejected = peer_client.get_parliament_attempt(attempt_id)?;
-        let peer_retry = peer_client.get_parliament_attempt(retry_id)?;
-        let peer_second_retry = peer_client.get_parliament_attempt(second_retry_id)?;
+        let peer_rejected = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            let attempt_id = (attempt_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?;
+        let peer_retry = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            let attempt_id = (retry_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?;
+        let peer_second_retry = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            let attempt_id = (second_retry_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?;
         assert_eq!(
             peer_rejected.state_payload_hex,
             rejected_response.state_payload_hex
@@ -635,7 +688,8 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
             &peer_client,
             contract_address,
             "public-finding peer effect isolation",
-        )?;
+        )
+        .await?;
     }
 
     let restart_peer = network
@@ -660,11 +714,24 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     )
     .await
     .map_err(|_| eyre!("public-finding restore did not recover finalized state"))?;
-    let restored_rejected = restart_peer.client().get_parliament_attempt(attempt_id)?;
-    let restored_retry = restart_peer.client().get_parliament_attempt(retry_id)?;
-    let restored_second_retry = restart_peer
-        .client()
-        .get_parliament_attempt(second_retry_id)?;
+    let restored_rejected = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
+    let restored_retry = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        let attempt_id = (retry_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
+    let restored_second_retry = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        let attempt_id = (second_retry_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     assert_eq!(
         restored_rejected.state_payload_hex,
         rejected_response.state_payload_hex
@@ -681,8 +748,13 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         &restart_peer.client(),
         contract_address,
         "public-finding restart effect isolation",
-    )?;
-    let restored_status = restart_peer.client().get_sumeragi_status()?;
+    )
+    .await?;
+    let restored_status = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        move || client.get_sumeragi_status()
+    })
+    .await?;
     restored_status
         .validate()
         .map_err(|error| eyre!("invalid public-finding restore status: {error}"))?;

@@ -40,6 +40,7 @@ use super::{
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
     },
+    rns_native_proof_hash::RnsNativeDigestIdentityV1 as DigestIdentityV1,
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
 };
 use crate::{
@@ -142,7 +143,7 @@ const _: () = {
     assert!(HEADER_BYTES_V1 == 302);
     assert!(MIN_WIRE_BYTES_V1 == 527_945);
     assert!(MIN_WIRE_BYTES_V1 <= RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1);
-    assert!(RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1 == 2_587_255);
+    assert!(RNS_NATIVE_SMALL_SIGN_DISJOINTNESS_RESIDUAL_MAX_BYTES_V1 == 2_585_959);
     assert!(SMALL_SIGN_DISJOINTNESS_PRODUCT_VERIFIER_IMPLEMENTED_V1);
     assert!(!COMPARATOR_RADIX_RELATIONS_VERIFIED_V1);
     assert!(!SMALL_SIGNED_RANGE_AND_INVERSES_VERIFIED_V1);
@@ -940,28 +941,27 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     hash.update(&[VERSION_V1, STATEMENT_V1]);
     absorb_upstream_v1(&mut hash, upstream);
     for digest in [
-        previous.residual_digest(),
-        previous.binding_digest(),
-        statement3.residual_digest(),
-        statement3.binding_digest(),
-        inventory.continuation_digest(),
-        inventory.binding_digest(),
-        linked.source().statement_anchor_digest(),
-        linked.source().qpcs().transcript_digest(),
-        linked.source().qpcs().residual_digest(),
-        linked.terminal().binding_digest(),
-        linked.zero_padding().binding_digest(),
-        linked.cross_proof_digest(),
-        linked.cross_link_digest(),
-        linked.anchor_digest(),
-        view.proof_set_root,
-        verified_transcript_root,
-        view.residual_digest,
-        view.codec_digest,
-        circuit_manifest_digest_v1(),
-        ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+        DigestIdentityV1::from(previous.residual_digest()),
+        DigestIdentityV1::from(previous.binding_digest()),
+        DigestIdentityV1::from(statement3.residual_digest()),
+        DigestIdentityV1::from(statement3.binding_digest()),
+        DigestIdentityV1::from(inventory.continuation_digest()),
+        DigestIdentityV1::from(inventory.binding_digest()),
+        DigestIdentityV1::from(linked.source().statement_anchor_digest()),
+        DigestIdentityV1::from(linked.source().qpcs().transcript_digest()),
+        DigestIdentityV1::from(linked.source().qpcs().residual_digest()),
+        DigestIdentityV1::from(linked.terminal().binding_digest()),
+        DigestIdentityV1::from(linked.cross_proof_digest()),
+        DigestIdentityV1::from(linked.cross_link_digest()),
+        DigestIdentityV1::from(linked.anchor_digest()),
+        DigestIdentityV1::from(view.proof_set_root),
+        DigestIdentityV1::from(verified_transcript_root),
+        DigestIdentityV1::from(view.residual_digest),
+        DigestIdentityV1::from(view.codec_digest),
+        DigestIdentityV1::from(circuit_manifest_digest_v1()),
+        DigestIdentityV1::from(ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1),
     ] {
-        hash.update(&digest);
+        hash.update(digest.as_bytes());
     }
     for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
         for repetition in 0..REPETITIONS_V1 {

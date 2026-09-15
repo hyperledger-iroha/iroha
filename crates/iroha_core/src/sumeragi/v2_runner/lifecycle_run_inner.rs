@@ -749,6 +749,32 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
     .map(|drained| drained.is_some())
 }
 
+/// Exercise the bounded terminal recovery burst with real checked ingress.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_batch_for_test(
+    receiver: &FairV2Ingress,
+    executor: &V2EffectExecutor,
+    services: &mut ProductionV2Services,
+    lane_work: &mut V2LaneWorkAdapter,
+    kura: &Kura,
+    block_sync_server: &mut V2BlockSyncServer,
+    limit: usize,
+) -> Result<usize, V2RunnerError> {
+    service_decided_lane_recovery_ingress_batch(limit, || {
+        let drained = drain_decided_lane_recovery_ingress_for_test(
+            receiver,
+            executor,
+            services,
+            lane_work,
+            kura,
+            block_sync_server,
+        )?;
+        dispatch_lane_work_effects(lane_work, services, limit)?;
+        Ok(drained)
+    })
+}
+
 /// Retire the exact process-local Decision handoff owned by an Apply-only barrier.
 ///
 /// Apply may enter its worker in the same outer batch that installs this fence.
@@ -963,6 +989,7 @@ fn run_lifecycle_active_height(
                     block_sync,
                     &mut block_sync_request,
                     npos_beacon,
+                    control_queue_capacity,
                 )?;
             }
             if let Some(permit) = producer_claim.decided_lane_recovery_permit() {
@@ -1296,6 +1323,7 @@ fn run_lifecycle_active_height(
             &mut block_sync_request,
             npos_beacon,
             body_queue_capacity,
+            control_queue_capacity,
             producer_claim,
             terminal_finalization_cut.as_ref(),
         )?;
@@ -1668,22 +1696,34 @@ fn run_lifecycle_active_height(
             // Canonical-body recovery performed by preflight can create the
             // local lane votes needed to make the finalized bundle independently
             // durable. Keep only that exact decided-lane corridor alive until
-            // the certificate/application boundary is complete: consume at most
-            // one authenticated fair-ingress occurrence, then publish the
-            // bounded effects it and preflight produced. Reducer, Runtime,
+            // the certificate/application boundary is complete: consume a
+            // bounded burst of independently authenticated fair-ingress
+            // occurrences, publishing their owned effects between dequeues.
+            // Reducer, Runtime,
             // ordinary Ingress, lane relay, and Producer ownership remain fenced.
             let drained_terminal_ingress = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, services, _local_proposal| {
-                    let drained = drain_decided_lane_recovery_ingress(
-                        receiver,
-                        executor,
-                        services,
-                        &mut lane_work,
-                        executor.current_tag().view(),
-                        kura.as_ref(),
-                        block_sync_server,
-                        DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
+                    let drained = service_decided_lane_recovery_ingress_batch(
+                        control_queue_capacity,
+                        || {
+                            let drained = drain_decided_lane_recovery_ingress(
+                                receiver,
+                                executor,
+                                services,
+                                &mut lane_work,
+                                executor.current_tag().view(),
+                                kura.as_ref(),
+                                block_sync_server,
+                                DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
+                            )?;
+                            dispatch_lane_work_effects(
+                                &mut lane_work,
+                                services,
+                                control_queue_capacity,
+                            )?;
+                            Ok(drained.is_some())
+                        },
                     )?;
                     let now = Instant::now();
                     if now >= next_lane_retransmit {
@@ -1691,7 +1731,7 @@ fn run_lifecycle_active_height(
                         next_lane_retransmit = deadline_after(now, retransmit_interval);
                     }
                     dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-                    Ok::<_, V2RunnerError>(drained.is_some())
+                    Ok::<_, V2RunnerError>(drained != 0)
                 },
             )?;
             if terminal_stall_due {

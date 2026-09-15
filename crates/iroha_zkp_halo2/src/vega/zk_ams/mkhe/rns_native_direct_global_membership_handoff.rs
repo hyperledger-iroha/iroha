@@ -86,7 +86,7 @@ const RELEASE_READY_V1: bool = false;
 
 const _: () = {
     assert!(DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_OWNED_WIRE_BYTES_V1 == 0);
-    assert!(DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_SUCCESSOR_MAX_BYTES_V1 == 108_464);
+    assert!(DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_SUCCESSOR_MAX_BYTES_V1 == 107_201);
     assert!(VERIFIER_SIDE_DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_IMPLEMENTED_V1);
     assert!(!PRODUCTION_AUTHORITATIVE_NUMERIC_SOURCE_AVAILABLE_V1);
     assert!(!PRODUCTION_AUTHENTICATED_REPLAY_OWNER_AVAILABLE_V1);
@@ -104,7 +104,6 @@ const _: () = {
 pub(super) enum RnsNativeDirectGlobalMembershipHandoffErrorV1 {
     Direct(RnsNativeCrossFieldRlweDirectErrorV1),
     GlobalLookupRoot,
-    ZeroPaddingRoot,
 }
 
 impl fmt::Display for RnsNativeDirectGlobalMembershipHandoffErrorV1 {

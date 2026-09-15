@@ -3658,6 +3658,19 @@ mod executor_model {
         CleanupPending,
     }
 
+    /// Exclusive journal lock whose release follows its owning admission.
+    struct JournalLock {
+        file: File,
+    }
+
+    impl Drop for JournalLock {
+        fn drop(&mut self) {
+            // Closing our descriptor alone can leave the lock held by an
+            // unrelated child between fork and exec, before CLOEXEC takes effect.
+            let _ = self.file.unlock();
+        }
+    }
+
     pub(super) struct JournalSeed {
         directory: PathBuf,
         current_path: PathBuf,
@@ -3665,7 +3678,7 @@ mod executor_model {
         deployment_receipt_path: PathBuf,
         aborted_receipt_path: PathBuf,
         rollback_receipt_path: PathBuf,
-        _lock: File,
+        _lock: JournalLock,
     }
 
     pub(super) struct DurableJournal {
@@ -3676,7 +3689,7 @@ mod executor_model {
         aborted_receipt_path: PathBuf,
         rollback_receipt_path: PathBuf,
         state: JournalV1,
-        _lock: File,
+        _lock: JournalLock,
     }
 
     impl DurableJournal {
@@ -3694,6 +3707,7 @@ mod executor_model {
             let lock = open_private_rw(&lock_path)?;
             lock.try_lock()
                 .wrap_err("another public-reset executor holds the journal lock")?;
+            let lock = JournalLock { file: lock };
 
             let completed_dir = directory.join("completed");
             if !completed_dir.exists() {
@@ -7205,6 +7219,56 @@ mod executor_model {
                 "concurrent admission must fail while the lock is held"
             );
             drop(first);
+        }
+
+        #[test]
+        fn journal_lock_release_does_not_wait_for_duplicated_descriptors() {
+            for initialized in [false, true] {
+                let directory = private_tempdir();
+                let canonical = directory.path().canonicalize().expect("canonical tempdir");
+                let admitted = admitted(sample_inventory());
+                let seed = match DurableJournal::classify(&canonical, &admitted)
+                    .expect("fresh admission holds the lock")
+                {
+                    JournalOpen::Fresh(seed) => seed,
+                    JournalOpen::Resumable(_) => panic!("new directory must be fresh"),
+                };
+                let first = if initialized {
+                    JournalOpen::Resumable(
+                        DurableJournal::initialize(seed, &admitted).expect("initialize journal"),
+                    )
+                } else {
+                    JournalOpen::Fresh(seed)
+                };
+                // A duplicate retains the same open file description as a child
+                // forked by another thread before CLOEXEC takes effect.
+                let duplicate = match &first {
+                    JournalOpen::Fresh(seed) => seed._lock.file.try_clone(),
+                    JournalOpen::Resumable(journal) => journal._lock.file.try_clone(),
+                }
+                .expect("duplicate lock descriptor");
+                for _ in 0..2 {
+                    assert!(
+                        DurableJournal::classify(&canonical, &admitted).is_err(),
+                        "failed contenders must leave the active owner's lock intact"
+                    );
+                }
+                drop(first);
+                let replacement = DurableJournal::classify(&canonical, &admitted)
+                    .expect("owner release must unlock even while a duplicate remains open");
+                assert_eq!(
+                    matches!(&replacement, JournalOpen::Resumable(_)),
+                    initialized
+                );
+                drop(duplicate);
+                assert!(
+                    DurableJournal::classify(&canonical, &admitted).is_err(),
+                    "closing the old duplicate must not release the replacement owner's lock"
+                );
+                drop(replacement);
+                DurableJournal::classify(&canonical, &admitted)
+                    .expect("replacement owner releases its lock");
+            }
         }
 
         #[test]

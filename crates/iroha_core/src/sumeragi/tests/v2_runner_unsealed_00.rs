@@ -1,4 +1,47 @@
 #[test]
+fn decided_lane_recovery_batch_bounds_service_and_stops_on_empty_or_error() {
+    for (limit, expected) in [(0, 1), (1, 1), (3, 3), (usize::MAX, 16)] {
+        let mut serviced = 0;
+        assert_eq!(
+            service_decided_lane_recovery_ingress_batch(limit, || {
+                serviced += 1;
+                Ok(true)
+            })
+            .expect("bounded recovery service"),
+            expected
+        );
+        assert_eq!(serviced, expected);
+    }
+    let mut attempted = 0;
+    assert_eq!(
+        service_decided_lane_recovery_ingress_batch(16, || {
+            attempted += 1;
+            Ok(attempted <= 2)
+        })
+        .expect("stop at the first empty checked dequeue"),
+        2
+    );
+    assert_eq!(attempted, 3);
+    let mut attempted = 0;
+    assert!(
+        service_decided_lane_recovery_ingress_batch(16, || {
+            attempted += 1;
+            if attempted == 2 {
+                Err(V2RunnerError::Service(
+                    "incompatible recovery owner".to_owned(),
+                ))
+            } else {
+                Ok(true)
+            }
+        })
+        .is_err()
+    );
+    assert_eq!(
+        attempted, 2,
+        "an ownership failure cannot service later ingress"
+    );
+}
+#[test]
 fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
     let need = |height: u64| {
         let executed_block_wire_hash = Hash::new(&height.to_le_bytes());
@@ -626,7 +669,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
     let drain = open_preflight[incomplete..]
         .find("drain_decided_lane_recovery_ingress(")
         .map(|offset| incomplete + offset)
-        .expect("the bounded corridor consumes one authenticated lane occurrence");
+        .expect("the bounded corridor independently checks every lane occurrence");
     let retransmit_cadence = open_preflight[incomplete..]
         .find("if now >= next_lane_retransmit")
         .map(|offset| incomplete + offset)
@@ -640,7 +683,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .map(|offset| incomplete + offset)
         .expect("finalized recovery advances its retransmit deadline");
     let dispatch = open_preflight[incomplete..]
-        .find("dispatch_lane_work_effects(")
+        .rfind("dispatch_lane_work_effects(")
         .map(|offset| incomplete + offset)
         .expect("the bounded corridor publishes preflight and ingress effects");
     let retry = open_preflight[incomplete..]

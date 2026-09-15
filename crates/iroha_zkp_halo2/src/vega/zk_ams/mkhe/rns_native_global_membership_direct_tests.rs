@@ -11,26 +11,18 @@ use crate::{
 
 use super::super::super::super::rns_native_transcript::ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1;
 
-#[test]
-fn clean_global_root_v2_has_the_exact_acyclic_frame_kat() {
-    let capability = ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1::test_fixture_v1(
-        [1; DIGEST_BYTES_V1],
-        [2; DIGEST_BYTES_V1],
+fn native_digest_v1(word: u64) -> RnsNativeProofDigestV1 {
+    RnsNativeProofDigestV1::from_shared(
+        fastpq_isi::GoldilocksDigest384V1::new([word; 6]).expect("canonical native fixture"),
     )
-    .expect("pre-global capability");
-    let pre_global_capability_digest = capability
-        .sole_z_binding_digest_v1()
-        .expect("sole-z binding");
-    assert_eq!(
-        pre_global_capability_digest,
-        [
-            0x75, 0x16, 0x33, 0xbb, 0x9a, 0x2e, 0x68, 0x02, 0xb3, 0x8d, 0xb5, 0xda, 0xe0, 0xba,
-            0x84, 0x58, 0x21, 0xb2, 0x2b, 0x78, 0x44, 0x2d, 0x1d, 0x2e, 0x55, 0x22, 0x62, 0xd3,
-            0x60, 0xc0, 0xd1, 0x22,
-        ]
-    );
-    let root = verified_global_lookup_core_root_v2(RnsNativeGlobalLookupCleanCoreV2 {
-        pre_global_capability_digest,
+}
+
+fn clean_core_frame_fixture_v2(
+    capability: &ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
+) -> RnsNativeGlobalLookupCleanCoreV2 {
+    // Synthetic public frame controls only; this helper does not prove a curve statement.
+    RnsNativeGlobalLookupCleanCoreV2 {
+        pre_global_capability_digest: capability.sole_z_binding_digest_v1().unwrap(),
         pre_z_binding_digest: [3; DIGEST_BYTES_V1],
         z: [4; SCALAR_BYTES_V1],
         post_z_transcript_digest: [5; DIGEST_BYTES_V1],
@@ -44,20 +36,153 @@ fn clean_global_root_v2_has_the_exact_acyclic_frame_kat() {
         u_sum: [13; POINT_BYTES_V1],
         multiplicity: [14; POINT_BYTES_V1],
         membership_transcript_digest: [15; DIGEST_BYTES_V1],
-        chronology_tag: capability
-            .global_lookup_chronology_tag_v2()
-            .expect("chronology tag"),
-    })
-    .expect("clean global root");
+        chronology_tag: capability.global_lookup_chronology_tag_v2().unwrap(),
+    }
+}
+
+#[test]
+fn clean_global_root_v2_has_the_exact_acyclic_native_frame() {
+    let post_cross = native_digest_v1(1);
+    let global_seed = native_digest_v1(2);
+    let capability =
+        ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1::test_fixture_v1(post_cross, global_seed)
+            .unwrap();
+    let pre_global = capability.sole_z_binding_digest_v1().unwrap();
+    let context = RnsNativeProofHashContextV1::canonical().unwrap();
+    let expected_pre_global = context
+        .frame(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 0,
+                index: 0,
+                counter: 0,
+            },
+            &[
+                b"iroha.zk-ams.v1.mkhe.rns-native-transcript.pre-global-capability",
+                &[1],
+                post_cross.as_bytes(),
+                global_seed.as_bytes(),
+            ],
+        )
+        .unwrap()
+        .hash();
     assert_eq!(
-        root.root,
-        [
-            0xfb, 0x86, 0xc6, 0x87, 0xc8, 0xeb, 0x47, 0x6e, 0x04, 0xa6, 0x6f, 0x08, 0xa5, 0x35,
-            0x38, 0xcf, 0x09, 0x15, 0xb7, 0x0b, 0x09, 0x35, 0x38, 0xa4, 0x0f, 0xa6, 0xb2, 0x9c,
-            0x23, 0x55, 0xbe, 0x28,
-        ]
+        pre_global,
+        RnsNativeProofDigestV1::from_shared(expected_pre_global)
     );
-    assert_eq!(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2, 800);
+    // Independent explicit labels, bytes and length packing; no call to the
+    // production bridge's frame-building helper or a retired32-byte digest.
+    let mut encoded = b"iroha.zk-ams.v2.mkhe.rns-native-global-lookup.verified-core-root".to_vec();
+    encoded.push(2);
+    for (label, value) in [
+        (
+            b"pre-global-capability".as_slice(),
+            pre_global.as_bytes().to_vec(),
+        ),
+        (b"pre-z-binding".as_slice(), vec![3; 32]),
+        (b"z".as_slice(), vec![4; 32]),
+        (b"post-z-transcript".as_slice(), vec![5; 32]),
+        (b"existing-inverse-root".as_slice(), vec![6; 32]),
+        (b"added-inverse-root".as_slice(), vec![7; 32]),
+        (b"alias-root".as_slice(), vec![8; 32]),
+        (b"global-inverse-root".as_slice(), vec![9; 32]),
+        (b"inverse-rho".as_slice(), vec![10; 32]),
+        (b"inverse-sumcheck".as_slice(), vec![11; 32]),
+        (b"inverse-endpoint".as_slice(), vec![12; 32]),
+        (b"u-sum".as_slice(), vec![13; 33]),
+        (b"multiplicity".as_slice(), vec![14; 33]),
+        (b"membership-transcript".as_slice(), vec![15; 32]),
+    ] {
+        encoded.extend_from_slice(&(label.len() as u16).to_be_bytes());
+        encoded.extend_from_slice(label);
+        encoded.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        encoded.extend_from_slice(&value);
+    }
+    assert_eq!(encoded.len(), 816);
+    assert_eq!(VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2, 816);
+    let expected = context
+        .frame(
+            RnsNativeProofHashRoleV1::TerminalBridge,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 2,
+                index: 0,
+                counter: 0,
+            },
+            &[&encoded],
+        )
+        .unwrap()
+        .hash();
+    let root =
+        verified_global_lookup_core_root_v2(clean_core_frame_fixture_v2(&capability)).unwrap();
+    assert_eq!(root.root, RnsNativeProofDigestV1::from_shared(expected));
+    assert!(root.matches_claimed_global_lookup_root_v2(
+        RnsNativeProofDigestV1::from_shared(expected),
+        post_cross,
+        pre_global
+    ));
+}
+
+#[test]
+fn clean_global_root_checks_all_native_lanes_and_exact_chronology() {
+    let post_cross = native_digest_v1(1);
+    let capability = ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1::test_fixture_v1(
+        post_cross,
+        native_digest_v1(2),
+    )
+    .unwrap();
+    let pre_global = capability.sole_z_binding_digest_v1().unwrap();
+    let baseline = verified_global_lookup_core_root_v2(clean_core_frame_fixture_v2(&capability))
+        .unwrap()
+        .root;
+    for lane in 0..6 {
+        let mut core = clean_core_frame_fixture_v2(&capability);
+        let mut words = core.pre_global_capability_digest.words();
+        words[lane] = (words[lane] + 1) % fastpq_isi::poseidon::FIELD_MODULUS;
+        core.pre_global_capability_digest = RnsNativeProofDigestV1::from_shared(
+            fastpq_isi::GoldilocksDigest384V1::new(words).unwrap(),
+        );
+        assert_ne!(
+            verified_global_lookup_core_root_v2(core).unwrap().root,
+            baseline,
+            "pre-global native lane {lane}"
+        );
+        let mut claimed = baseline.words();
+        claimed[lane] = (claimed[lane] + 1) % fastpq_isi::poseidon::FIELD_MODULUS;
+        let claimed = RnsNativeProofDigestV1::from_shared(
+            fastpq_isi::GoldilocksDigest384V1::new(claimed).unwrap(),
+        );
+        let actual =
+            verified_global_lookup_core_root_v2(clean_core_frame_fixture_v2(&capability)).unwrap();
+        assert!(
+            !actual.matches_claimed_global_lookup_root_v2(claimed, post_cross, pre_global),
+            "claimed native lane {lane}"
+        );
+    }
+    for (post, pre) in [
+        (native_digest_v1(3), pre_global),
+        (post_cross, native_digest_v1(4)),
+    ] {
+        let actual =
+            verified_global_lookup_core_root_v2(clean_core_frame_fixture_v2(&capability)).unwrap();
+        assert!(!actual.matches_claimed_global_lookup_root_v2(baseline, post, pre));
+    }
+    let actual =
+        verified_global_lookup_core_root_v2(clean_core_frame_fixture_v2(&capability)).unwrap();
+    assert!(!actual.matches_claimed_global_lookup_root_v2(
+        RnsNativeProofDigestV1::ZERO,
+        post_cross,
+        pre_global
+    ));
+    use crate::vega::zk_ams::mkhe::rns_native_proof_hash::decode_proof_digest_v1;
+    let bytes = baseline.to_le_bytes();
+    assert!(decode_proof_digest_v1(&bytes[..32]).is_err());
+    assert!(decode_proof_digest_v1(&bytes[..47]).is_err());
+    let mut noncanonical = bytes;
+    noncanonical[40..48].copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+    assert!(decode_proof_digest_v1(&noncanonical).is_err());
+    assert_eq!(decode_proof_digest_v1(&bytes).unwrap(), baseline);
 }
 
 #[test]
@@ -117,7 +242,7 @@ fn clean_global_root_v2_surface_excludes_every_cyclic_or_successor_binding() {
             "cyclic clean-root input: {forbidden}"
         );
     }
-    assert!(source.contains("VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2: usize = 800"));
+    assert!(source.contains("VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2: usize = 816"));
     assert!(source.contains("membership.u_sum_commitment() != inverse.u_sum_commitment()"));
     const {
         assert!(!MULTIPLICITY_NONNEGATIVE_RANGE_VERIFIED_V1);
@@ -1545,8 +1670,8 @@ fn production_wire_accounting_and_retired_total_rejection_are_exact() {
     assert_eq!(CODEC_DIGEST_BYTES_V1, 32);
     assert_eq!(OWNED_WIRE_BYTES_V1, 1_651);
     assert_eq!(MIN_WIRE_BYTES_V1, 1_652);
-    assert_eq!(PARENT_RESIDUAL_CAP_BYTES_V1, 110_115);
-    assert_eq!(RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1, 108_464);
+    assert_eq!(PARENT_RESIDUAL_CAP_BYTES_V1, 108_852);
+    assert_eq!(RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1, 107_201);
     assert_eq!(GBP_CHALLENGES_V1, 19);
     assert!(u64_is_strictly_below_scalar_modulus_v1(
         ACTIVE_LOOKUP_VALUES_V1

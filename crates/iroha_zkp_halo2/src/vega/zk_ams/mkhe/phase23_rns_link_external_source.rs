@@ -25,7 +25,7 @@ use super::{
     derive_zk_ams_phase23_rns_link_release_geometry_v1,
 };
 use crate::vega::sponge::Keccak256;
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
 use std::path::Path;
 #[path = "phase23_rns_link_external_spool.rs"]
 mod confidential_spool;
@@ -909,7 +909,9 @@ impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
             .map(ZkAmsPhase23RnsLinkSecretChunkV1)
     }
 }
-/// Static accounting facts, not runtime or release evidence.
+/// Static source accounting facts, not runtime or release evidence.
+// TODO: derive native-40 PCS and aggregate process accounting from their actual
+// owners before making a combined resource-fit claim.
 struct ExternalSourceLinkPlanV1 {
     release_family_count: usize,
     release_record_count: usize,
@@ -926,8 +928,6 @@ struct ExternalSourceLinkPlanV1 {
     named_persistent_slot_cursor_bytes: u64,
     max_single_owned_chunk_bytes: u64,
     proposed_specialized_encryption_bytes: u64,
-    masked_q_pcs_isolated_heap_bytes: u64,
-    named_combined_heap_bytes: u64,
     confidential_backend_wired: bool,
     public_artifact_manifest_bound: bool,
     source_relation_polynomials_constructed: bool,
@@ -953,8 +953,6 @@ const EXTERNAL_SOURCE_LINK_PLAN_V1: ExternalSourceLinkPlanV1 = ExternalSourceLin
     named_persistent_slot_cursor_bytes: 16,
     max_single_owned_chunk_bytes: SECRET_MAIN_PLAINTEXT_BYTES_V1,
     proposed_specialized_encryption_bytes: 9_445_392,
-    masked_q_pcs_isolated_heap_bytes: 74_662_064,
-    named_combined_heap_bytes: 84_107_456,
     confidential_backend_wired: CONFIDENTIAL_BACKEND_WIRED_V1,
     public_artifact_manifest_bound: PUBLIC_ARTIFACT_MANIFEST_BOUND_V1,
     source_relation_polynomials_constructed: SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V1,

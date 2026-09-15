@@ -1,17 +1,14 @@
 //! `CoreHost` test for `ZK_VOTE_GET_TALLY`: ensure it returns finalized and tally from snapshot.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-use iroha_core::smartcontracts::Execute;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::host::CoreHost,
     state::{State, World, WorldReadOnly},
-    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::prelude::*;
-use iroha_primitives::json::Json;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -40,84 +37,28 @@ fn zk_vote_tally_fixture_uses_checked_randomness() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn zk_vote_get_tally_roundtrip_from_snapshot() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!("Skipping: zk vote tally from snapshot gated. Set IROHA_RUN_IGNORED=1 to run.");
-        return;
-    }
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query);
+    let owner = checked_random_zk_vote_tally_account_id();
+    let account = Account::new(owner.clone()).build(&owner);
+    let state = State::new_for_testing(World::with([], [account], []), kura, query);
     // Begin block and transaction
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let owner = checked_random_zk_vote_tally_account_id();
-    // Register verifying key and create a simple election via ISIs
+    // A typed readback fixture, not a proof-admitted or consensus-finalized election.
+    // The actual semantic tally verifier is unavailable; this syscall only reads state.
     let election_id = "e1".to_string();
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
-    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
-    let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
-    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_tally");
-    let mut vk_record = iroha_data_model::proof::VerifyingKeyRecord::new(
-        1,
-        "halo2/pasta/tiny-add-public",
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pallas",
-        fixture.schema_hash,
-        vk_commitment,
+    stx.world.elections_mut().insert(
+        election_id.clone(),
+        iroha_core::state::ElectionState {
+            options: 1,
+            finalized: true,
+            tally: vec![4],
+            ..Default::default()
+        },
     );
-    vk_record.vk_len =
-        u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
-    vk_record.max_proof_bytes =
-        u32::try_from(fixture.proof_bytes.len()).expect("proof length fits into u32");
-    vk_record.gas_schedule_id = Some("halo2_default".into());
-    vk_record.key = Some(vk_box);
-    vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
-    let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
-    let perm_parliament: Permission =
-        iroha_executor_data_model::permission::governance::CanManageParliament.into();
-    iroha_data_model::prelude::Grant::account_permission(perm_vk, owner.clone())
-        .execute(&owner, &mut stx)
-        .expect("grant vk permission");
-    iroha_data_model::prelude::Grant::account_permission(perm_parliament, owner.clone())
-        .execute(&owner, &mut stx)
-        .expect("grant parliament permission");
-    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-        id: vk_id.clone(),
-        record: vk_record,
-    }
-    .execute(&owner, &mut stx)
-    .expect("register vk");
-    let create = iroha_data_model::isi::zk::CreateElection {
-        election_id: election_id.clone(),
-        options: 1,
-        eligible_root: [0u8; 32],
-        start_ts: 0,
-        end_ts: 10,
-        vk_ballot: vk_id.clone(),
-        vk_tally: vk_id.clone(),
-        domain_tag: "ballot-domain".to_string(),
-    };
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(create))
-        .expect("create election");
-    let finalize = iroha_data_model::isi::zk::FinalizeElection {
-        election_id: election_id.clone(),
-        tally: vec![4],
-        tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            fixture.proof_box("halo2/ipa"),
-            vk_id.clone(),
-        ),
-    };
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(finalize))
-        .expect("finalize election");
     stx.apply();
     // Snapshot elections into CoreHost and query via syscall
     let mut vm = ivm::IVM::new(1_000_000);
@@ -125,8 +66,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     {
         use std::collections::BTreeMap;
         let mut esnap: BTreeMap<String, (u32, bool, Vec<u64>)> = BTreeMap::new();
-        let view = state.view();
-        let e = view.world.elections().get(&election_id).unwrap();
+        let e = block.world.elections().get(&election_id).unwrap();
         esnap.insert(
             election_id.clone(),
             (e.options, e.finalized, e.tally.clone()),
@@ -134,7 +74,14 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
         host.set_zk_elections_snapshot(esnap)
             .expect("valid election snapshot");
     }
-    let mut host = host;
+    // Rejected malformed replacement must preserve the exact valid state snapshot.
+    assert_eq!(
+        host.set_zk_elections_snapshot(std::collections::BTreeMap::from([(
+            election_id.clone(),
+            (1, true, Vec::new()),
+        )])),
+        Err(ivm::VMError::NoritoInvalid),
+    );
     // Build request TLV and call syscall
     let req = zk_verify::VoteGetTallyRequest { election_id };
     let payload = norito::to_bytes(&req).expect("encode req");

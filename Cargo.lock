@@ -5976,9 +5976,11 @@ name = "iroha_zkp_halo2"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "criterion",
+ "fastpq_isi",
  "halo2curves",
  "hex",
  "hex-literal",
+ "iroha_crypto",
  "iroha_schema",
  "norito",
  "once_cell",
@@ -5987,6 +5989,7 @@ dependencies = [
  "rayon",
  "thiserror 2.0.18",
  "tiny-keccak",
+ "zeroize",
 ]
 
 [[package]]

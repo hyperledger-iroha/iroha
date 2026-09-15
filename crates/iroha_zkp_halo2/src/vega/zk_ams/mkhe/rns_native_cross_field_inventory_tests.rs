@@ -1,3 +1,5 @@
+//! Exact inventory transport and sealed-envelope prerequisite regressions.
+
 use super::*;
 use crate::{
     vega::derive_t256_generators_v1,
@@ -14,7 +16,7 @@ use crate::{
         },
         rns_native_section_codec::{
             CROSS_LOOKUP_PROOF_OFFSET_V1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
-            ZkAmsMkheRnsNativeTerminalBridgeSectionV1, ZkAmsMkheRnsNativeZeroPaddingSectionV1,
+            ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
             preflight_rns_native_cross_field_global_lookup_from_envelope_v1,
         },
         rns_native_source::{
@@ -141,9 +143,16 @@ fn envelope_digest_v1(label: &[u8], context: u16, ordinal: u16) -> [u8; 32] {
     hash.finalize()
 }
 
-fn envelope_indexed_v1<const N: usize>(label: &[u8], context: u16) -> [[u8; 32]; N] {
+fn envelope_proof_digest_v1(label: &[u8], context: u16, ordinal: u16) -> ProofDigestV1 {
+    super::super::rns_native_proof_hash::test_proof_digest_v1(
+        label,
+        (u64::from(context) << 32) | u64::from(ordinal),
+    )
+}
+
+fn envelope_indexed_v1<const N: usize>(label: &[u8], context: u16) -> [ProofDigestV1; N] {
     core::array::from_fn(|ordinal| {
-        envelope_digest_v1(
+        envelope_proof_digest_v1(
             label,
             context,
             u16::try_from(ordinal).expect("test ordinal fits u16"),
@@ -260,9 +269,9 @@ fn sealed_envelope_fixture_v1(
         .expect("opening transcript");
     let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         transcript.binding_digest(),
-        envelope_digest_v1(b"mapping-root", context, 0),
-        envelope_digest_v1(b"hyrax-root", context, 0),
-        envelope_digest_v1(b"cross-basis-root", context, 0),
+        envelope_proof_digest_v1(b"mapping-root", context, 0),
+        envelope_proof_digest_v1(b"hyrax-root", context, 0),
+        envelope_proof_digest_v1(b"cross-basis-root", context, 0),
     )
     .expect("terminal bridge");
     let transcript = transcript
@@ -271,24 +280,23 @@ fn sealed_envelope_fixture_v1(
     let fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             layer as u8,
-            envelope_digest_v1(b"fri-root", context, layer as u16),
+            envelope_proof_digest_v1(b"fri-root", context, layer as u16),
         )
         .expect("FRI root")
     });
     let qpcs = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
-        envelope_digest_v1(b"qpcs-initial", context, 0),
-        envelope_digest_v1(b"q-mask-s-root", context, 0),
-        envelope_digest_v1(b"qpcs-quotient", context, 0),
+        envelope_proof_digest_v1(b"qpcs-initial", context, 0),
+        envelope_proof_digest_v1(b"q-mask-s-root", context, 0),
+        envelope_proof_digest_v1(b"qpcs-quotient", context, 0),
         fri_roots,
     )
     .expect("qPCS roots");
     let transcript = transcript.bind_qpcs_roots(qpcs).expect("qPCS transcript");
     let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
         transcript.binding_digest(),
-        envelope_digest_v1(b"cross-root", context, 0),
-        envelope_digest_v1(b"global-root", context, 0),
-        envelope_digest_v1(b"zero-root", context, 0),
+        envelope_proof_digest_v1(b"cross-root", context, 0),
+        envelope_proof_digest_v1(b"global-root", context, 0),
     )
     .expect("terminal roots");
     let seeds = transcript
@@ -299,10 +307,10 @@ fn sealed_envelope_fixture_v1(
         .expect("terminal section")
         .to_canonical_bytes_v1()
         .expect("terminal encoding");
-    let equations: [[u8; 32]; 2] = envelope_indexed_v1(b"equation", context);
-    let qpcs_limbs: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] =
+    let equations: [ProofDigestV1; 2] = envelope_indexed_v1(b"equation", context);
+    let qpcs_limbs: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] =
         envelope_indexed_v1(b"qpcs-limb", context);
-    let queries: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1 as usize] =
+    let queries: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1 as usize] =
         envelope_indexed_v1(b"query", context);
     let rns = ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1::new(
         &seeds,
@@ -314,10 +322,10 @@ fn sealed_envelope_fixture_v1(
     .expect("RNS section")
     .to_canonical_bytes_v1()
     .expect("RNS encoding");
-    let points: [[u8; 32]; 5] = envelope_indexed_v1(b"point", context);
-    let cross_limbs: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] =
+    let points: [ProofDigestV1; 5] = envelope_indexed_v1(b"point", context);
+    let cross_limbs: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] =
         envelope_indexed_v1(b"cross-limb", context);
-    let sumcheck: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1 as usize] =
+    let sumcheck: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1 as usize] =
         envelope_indexed_v1(b"sumcheck", context);
     let cross = ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::new(
         &seeds,
@@ -329,15 +337,8 @@ fn sealed_envelope_fixture_v1(
     .expect("cross section")
     .to_canonical_bytes_v1()
     .expect("cross encoding");
-    let padding_limbs: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] =
-        envelope_indexed_v1(b"padding-limb", context);
-    let padding = ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(&seeds, &padding_limbs, b"padding")
-        .expect("padding section")
-        .to_canonical_bytes_v1()
-        .expect("padding encoding");
-    let envelope =
-        ZkAmsMkheRnsNativeProofEnvelopeV1::new(layout, receipt, terminal, rns, cross, padding)
-            .expect("envelope");
+    let envelope = ZkAmsMkheRnsNativeProofEnvelopeV1::new(layout, receipt, terminal, rns, cross)
+        .expect("envelope");
     assert_eq!(
         fri_roots.len(),
         ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize
@@ -1116,15 +1117,24 @@ fn provisional_q_mask_projection_has_exact_first_last_coordinates_and_6400_calls
         source_binding_digest: [2; DIGEST_BYTES_V1],
         source_formula_digest: [3; DIGEST_BYTES_V1],
         source_mapping_digest: [4; DIGEST_BYTES_V1],
-        rns_aggregation_challenge_seed: [5; DIGEST_BYTES_V1],
-        qpcs_parameter_digest: [6; DIGEST_BYTES_V1],
-        qpcs_pre_relation_transcript_digest: [7; DIGEST_BYTES_V1],
+        rns_aggregation_challenge_seed: envelope_proof_digest_v1(b"q-mask-aggregation", 5, 0),
+        qpcs_parameter_digest:
+            super::super::rns_native_qpcs_initial::canonical_parameter_digest_v1()
+                .expect("canonical native qPCS parameter"),
+        qpcs_pre_relation_transcript_digest: envelope_proof_digest_v1(b"q-mask-pre-relation", 7, 0),
     };
     assert_ne!(
         q_mask_s_root_v1(axes, &preflight).expect("exact provisional q-mask root"),
-        [0; DIGEST_BYTES_V1]
+        ProofDigestV1::ZERO
     );
     let after_root = preflight_audit_counters_v1();
+    let mut foreign_parameter = axes;
+    foreign_parameter.qpcs_parameter_digest[0] ^= 1;
+    assert_eq!(
+        q_mask_s_root_v1(foreign_parameter, &preflight),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
+    );
+    assert_eq!(preflight_audit_counters_v1(), after_root);
     assert_eq!(
         after_root.q_mask_digit_projections - before_root.q_mask_digit_projections,
         PRE_QPCS_Q_MASK_S_POINTS_V1
@@ -1536,7 +1546,7 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert!(source.contains("RANGE_AND_CARRY_RELATIONS_VERIFIED_V1: bool = false"));
     assert!(source.contains("CANONICAL_Q_MASK_RELATIONS_VERIFIED_V1: bool = false"));
     assert!(source.contains("GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1: bool = false"));
-    assert!(stage.contains("terminal_transcript_digest: [u8; DIGEST_BYTES_V1]"));
+    assert!(stage.contains("terminal_transcript_digest: ProofDigestV1"));
     assert!(source.contains("terminal_transcript_digest: transcript.transcript_digest()"));
     assert!(source.contains("pub(super) const fn terminal_transcript_digest_v1(&self)"));
 
@@ -1618,10 +1628,10 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
 
     let shared_typed_parser = source
         .split_once("fn from_canonical_bytes_exact_v1(")
-        .expect("typed compatibility parser")
+        .expect("canonical typed parser")
         .1
         .split_once("fn canonical_inventory_root_v1")
-        .expect("typed compatibility parser boundary")
+        .expect("canonical typed parser boundary")
         .0;
     assert!(shared_typed_parser.contains("from_self_consistent_canonical_bytes_exact_v1(bytes)"));
     assert!(shared_typed_parser.contains("validate_expected_prior_context_v1"));
@@ -1671,9 +1681,9 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
             "live gate changed: {false_gate}"
         );
     }
-    assert!(source.contains("PROOF_MAX_BYTES_V1 == 8_385_797"));
+    assert!(source.contains("PROOF_MAX_BYTES_V1 == 8_384_533"));
     assert!(
-        source.contains("RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_780_245")
+        source.contains("RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_778_981")
     );
 
     let parent = include_str!("../mkhe.rs");
@@ -1684,7 +1694,44 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
         1
     );
     assert!(!parent.contains("pub use rns_native_cross_field_inventory"));
-    assert!(!parent.contains("phase23_rns_link"));
+    // The authenticated source bridge remains a private dependency. Its
+    // presence does not authorize the retired qPCS verifier or a public API.
+    let private_source_bridge = |parent: &str| {
+        parent
+            .lines()
+            .filter(|line| line.trim() == "mod phase23_rns_link;")
+            .count()
+            == 1
+            && !parent.contains("pub mod phase23_rns_link")
+            && !parent.contains("pub use phase23_rns_link")
+            && !parent.contains("pub use self::phase23_rns_link")
+    };
+    assert!(private_source_bridge(parent));
+    assert!(!private_source_bridge(
+        &parent.replace("mod phase23_rns_link;", "pub mod phase23_rns_link;")
+    ));
+    assert!(!private_source_bridge(&format!(
+        "{parent}\npub use phase23_rns_link::*;"
+    )));
+    assert!(!source.contains("phase23_rns_link::"));
+    let source_bridge = include_str!("phase23_rns_link.rs")
+        .split_once("\n#[cfg(test)]\nmod tests {")
+        .expect("source bridge runtime boundary")
+        .0;
+    for retired_owner in [
+        "phase23_rns_link_q_pcs",
+        "phase23_rns_link_q_relation_adapter",
+        "phase23_rns_link_state_owned",
+    ] {
+        assert!(
+            !parent.contains(retired_owner),
+            "retired parent owner: {retired_owner}"
+        );
+        assert!(
+            !source_bridge.contains(retired_owner),
+            "retired source owner: {retired_owner}"
+        );
+    }
 
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("StageUnavailable"));
@@ -1692,4 +1739,30 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     let qpcs = include_str!("rns_native_qpcs_fri_complete.rs");
     assert!(qpcs.contains("pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1"));
     assert!(qpcs.contains("Successful verification remains non-authorizing"));
+}
+
+#[test]
+fn curve_inventory_absorbs_full_native_digest_and_preserves_public_identity_width() {
+    let proof = envelope_proof_digest_v1(b"full-native-absorption", 99, 0);
+    let public = envelope_digest_v1(b"public-absorption", 99, 0);
+    let mut actual = Keccak256::new();
+    absorb_digest_v1(&mut actual, public);
+    absorb_digest_v1(&mut actual, proof);
+    let mut oracle = Keccak256::new();
+    oracle.update(&public);
+    oracle.update(proof.as_bytes());
+    let expected = oracle.finalize();
+    assert_eq!(actual.finalize(), expected);
+    for lane in 0..6 {
+        let mut bytes = proof.to_le_bytes();
+        let word = &mut bytes[lane * 8..(lane + 1) * 8];
+        let was_zero = word.iter().all(|byte| *byte == 0);
+        word.fill(0);
+        word[0] = u8::from(was_zero);
+        let changed = ProofDigestV1::from_le_bytes(bytes).expect("canonical lane");
+        let mut hash = Keccak256::new();
+        absorb_digest_v1(&mut hash, public);
+        absorb_digest_v1(&mut hash, changed);
+        assert_ne!(hash.finalize(), expected);
+    }
 }

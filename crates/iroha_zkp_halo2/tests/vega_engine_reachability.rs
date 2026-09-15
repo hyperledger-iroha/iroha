@@ -97,3 +97,44 @@ fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .unwrap_or_else(|| panic!("missing source marker: {end}"))
         .0
 }
+
+#[test]
+fn public_native_roots_use_only_the_complete_canonical_six_lane_type() {
+    use iroha_zkp_halo2::vega::{RnsNativeProofDigestV1, ZkAmsMkheRnsNativeTerminalRootsV1};
+
+    let from_word = |word: u64| {
+        let mut bytes = [0_u8; 48];
+        for lane in bytes.chunks_exact_mut(8) {
+            lane.copy_from_slice(&word.to_le_bytes());
+        }
+        RnsNativeProofDigestV1::from_le_bytes(bytes).expect("canonical six lanes")
+    };
+    let prior = from_word(1);
+    let cross = from_word(2);
+    let global = from_word(3);
+    let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(prior, cross, global)
+        .expect("public current root tuple");
+    assert_eq!(roots.cross_field_root(), cross);
+    assert_eq!(roots.global_lookup_root(), global);
+    assert_eq!(cross.to_le_bytes().len(), 48);
+    assert_eq!(cross.words(), [2; 6]);
+    assert!(ZkAmsMkheRnsNativeTerminalRootsV1::new(prior, cross, cross).is_err());
+    assert!(
+        ZkAmsMkheRnsNativeTerminalRootsV1::new(prior, RnsNativeProofDigestV1::ZERO, global)
+            .is_err()
+    );
+    for lane in 0..6 {
+        let mut malformed = cross.to_le_bytes();
+        malformed[lane * 8..(lane + 1) * 8]
+            .copy_from_slice(&fastpq_isi::poseidon::FIELD_MODULUS.to_le_bytes());
+        assert!(RnsNativeProofDigestV1::from_le_bytes(malformed).is_none());
+    }
+    let mut late_lane = cross.to_le_bytes();
+    late_lane[40..48].copy_from_slice(&4_u64.to_le_bytes());
+    let late_lane = RnsNativeProofDigestV1::from_le_bytes(late_lane).expect("canonical late lane");
+    assert_eq!(&late_lane.as_bytes()[..32], &cross.as_bytes()[..32]);
+    assert_ne!(late_lane, cross);
+    let distinct = ZkAmsMkheRnsNativeTerminalRootsV1::new(prior, cross, late_lane)
+        .expect("distinct complete roots with same first32 bytes");
+    assert_eq!(distinct.global_lookup_root(), late_lane);
+}

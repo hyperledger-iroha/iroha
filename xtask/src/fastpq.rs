@@ -444,7 +444,8 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         matrix_operation_filters: constraints
             .label_operation_filters
             .get(&bench.label)
-            .map(|filters| filters.iter().cloned().collect()),
+            .filter(|filters| !filters.is_empty())
+            .map(canonical_matrix_filters),
         gpu_backend,
         gpu_available: benchmarks_value
             .get("gpu_available")
@@ -456,6 +457,16 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         },
     })
 }
+
+/// Encode a matrix's filter set in the V1 inventory order, with `all` first.
+fn canonical_matrix_filters(filters: &BTreeSet<String>) -> Vec<String> {
+    std::iter::once("all")
+        .chain(digest384_report::OPERATIONS)
+        .filter(|filter| filters.contains(*filter))
+        .map(str::to_owned)
+        .collect()
+}
+
 fn validate_declared_operation_filter(
     label: &str,
     operation_filter: Option<&str>,
@@ -582,6 +593,11 @@ fn validate_manifest_payload(payload: &BenchManifestPayload) -> Result<()> {
             for filter in filters {
                 digest384_report::require_filter(filter).map_err(|error| eyre!(error))?;
             }
+            ensure!(
+                !filters.is_empty()
+                    && *filters == canonical_matrix_filters(&filters.iter().cloned().collect()),
+                "matrix_operation_filters must be nonempty, unique and in canonical inventory order"
+            );
         }
     }
     Ok(())
@@ -1627,6 +1643,51 @@ mod tests {
         }
     }
     #[test]
+    fn signed_manifest_requires_canonical_matrix_filter_inventory() {
+        let temp = TempDir::new().unwrap();
+        let (path, trusted) = signed_manifest_fixture(&temp);
+        let original = fs::read(&path).unwrap();
+        let expected: Vec<String> = std::iter::once("all")
+            .chain(digest384_report::OPERATIONS)
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            canonical_matrix_filters(&expected.iter().cloned().collect()),
+            expected
+        );
+        let mut lexical = expected.clone();
+        lexical.sort();
+        let mut duplicate = expected.clone();
+        duplicate.push("fft".into());
+        let mut swapped = expected.clone();
+        swapped.swap(1, 2);
+        for (filters, valid) in [
+            (expected, true),
+            (vec!["lde".into()], true),
+            (lexical, false),
+            (duplicate, false),
+            (swapped, false),
+            (vec![], false),
+        ] {
+            let mut signed: SignedBenchManifest = json::from_slice(&original).unwrap();
+            signed.payload.benches[0].matrix_operation_filters = Some(filters);
+            let payload = json::to_vec(&signed.payload).unwrap();
+            signed.signature =
+                Some(sign_manifest(&payload, &temp.path().join("fixture-signing.key")).unwrap());
+            fs::write(&path, json::to_vec(&signed).unwrap()).unwrap();
+            let result = verify_bench_manifest(&path, &trusted);
+            if valid {
+                result.expect("canonical signed filter inventory verifies");
+            } else {
+                let error = result.expect_err("a valid signature cannot admit malformed inventory");
+                assert!(
+                    error.to_string().contains("canonical inventory order"),
+                    "{error}"
+                );
+            }
+        }
+    }
+    #[test]
     fn verify_bench_manifest_rejects_untrusted_signers_and_payload_tampering() {
         let temp = TempDir::new().expect("tempdir");
         let (path, trusted) = signed_manifest_fixture(&temp);
@@ -2128,7 +2189,7 @@ mod tests {
             "version": 1,
             "devices": [{
                 "label": "cuda",
-                "operation_filters": ["fft", "lde", "digest384_trace_columns"]
+                "operation_filters": ["digest384_trace_columns", "lde", "fft"]
             }]
         });
         fs::write(
@@ -2160,6 +2221,30 @@ mod tests {
         assert_eq!(
             bench["matrix_operation_filters"],
             norito::json!(["fft", "lde", "digest384_trace_columns"])
+        );
+    }
+    #[test]
+    fn manifest_omits_an_empty_matrix_filter_set() {
+        let temp = TempDir::new().unwrap();
+        let output = temp.path().join("manifest.json");
+        write_bench_manifest(BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "cuda".into(),
+                path: write_bundle(&temp, "cuda.json", 20_000),
+            }],
+            output: output.clone(),
+            label_operation_filters: BTreeMap::from([("cuda".into(), BTreeSet::new())]),
+            ..BenchManifestOptions::default()
+        })
+        .expect("an empty source set represents absent matrix metadata");
+        let bytes = fs::read(output).unwrap();
+        let manifest: SignedBenchManifest = json::from_slice(&bytes).unwrap();
+        validate_manifest_payload(&manifest.payload).expect("writer emits an admissible payload");
+        let raw: Value = json::from_slice(&bytes).unwrap();
+        assert!(
+            raw["payload"]["benches"][0]
+                .get("matrix_operation_filters")
+                .is_none()
         );
     }
     #[test]
