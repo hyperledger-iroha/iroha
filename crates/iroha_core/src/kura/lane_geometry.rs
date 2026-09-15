@@ -24,7 +24,7 @@ use super::{
     LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LANE_MERGE_APPLICATION_FRONTIER_FILE,
     LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE, LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE,
-    LaneArtifactPhysicalTarget, LaneBlockApplicationReceiptArtifact,
+    LaneArtifactPhysicalTarget, LaneArtifactStorageView, LaneBlockApplicationReceiptArtifact,
     LaneBlockApplicationReceiptArtifactFormat, LaneBlockArtifact, LaneBlockExecutionInputArtifact,
     LaneBlockExecutionPreflightArtifact, LaneBlockExecutionSourceV1, LaneHistoryCompactionOutcome,
     LaneMergeApplicationFrontierV1, MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES,
@@ -429,6 +429,50 @@ struct LaneGeometryBinding {
     activation_height: u64,
     blocks_path: String,
     merge_path: String,
+}
+/// Bounded Native evidence discovery location from one authenticated geometry journal.
+/// This has no dataspace identity and grants no read authority until its pair is checked.
+#[derive(Clone)]
+pub(super) struct NativeAmxEvidencePhysicalLocation {
+    binding: LaneGeometryBinding,
+    blocks_path: PathBuf,
+    merge_path: PathBuf,
+    journal_hash: Hash,
+    retained_transition: Option<Hash>,
+}
+impl NativeAmxEvidencePhysicalLocation {
+    /// Journal-bound lane identifier.
+    pub(super) fn lane_id(&self) -> LaneId {
+        self.binding.lane_id
+    }
+    /// Journal-bound lane incarnation.
+    pub(super) fn incarnation(&self) -> Hash {
+        self.binding.incarnation
+    }
+    /// Journal-bound activation height.
+    pub(super) fn activation_height(&self) -> u64 {
+        self.binding.activation_height
+    }
+    /// Exact live or retained block-directory location, without provisioning authority.
+    pub(super) fn blocks_path(&self) -> &Path {
+        &self.blocks_path
+    }
+}
+/// Read-only Native reservation storage with a dataspace learned from authenticated evidence.
+pub(super) struct NativeAmxReservationPhysicalTarget {
+    location: NativeAmxEvidencePhysicalLocation,
+    dataspace_id: DataSpaceId,
+}
+impl LaneArtifactStorageView for NativeAmxReservationPhysicalTarget {
+    fn lane_id(&self) -> LaneId {
+        self.location.lane_id()
+    }
+    fn dataspace_id(&self) -> DataSpaceId {
+        self.dataspace_id
+    }
+    fn blocks_dir(&self, _store_root: &Path) -> PathBuf {
+        self.location.blocks_path.clone()
+    }
 }
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryOperation")]
@@ -11647,10 +11691,11 @@ impl Kura {
     /// cannot be replaced between this check and the sidecar read or write.
     pub(super) fn require_active_lane_artifact(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         descriptor: &LaneBlockDescriptorV1,
     ) -> Result<()> {
-        if descriptor.lane_id != entry.lane_id || descriptor.dataspace_id != entry.dataspace_id {
+        if descriptor.lane_id != entry.lane_id() || descriptor.dataspace_id != entry.dataspace_id()
+        {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -11698,14 +11743,14 @@ impl Kura {
     /// as well.
     pub(super) fn require_active_lane_incarnation(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
         expected_incarnation: Hash,
         proposal_height: u64,
     ) -> Result<()> {
         let path = entry.blocks_dir(&self.store_root).join(MARKER_FILE_NAME);
         let marker = self.read_lane_marker(&path)?;
         if marker.version != MARKER_VERSION
-            || marker.lane_id != entry.lane_id
+            || marker.lane_id != entry.lane_id()
             || marker.incarnation != expected_incarnation
             || proposal_height <= marker.activation_height
         {
@@ -11723,11 +11768,11 @@ impl Kura {
     /// caller-held geometry lock.
     pub(super) fn active_lane_incarnation_marker(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &impl LaneArtifactStorageView,
     ) -> Result<(Hash, u64)> {
         let path = entry.blocks_dir(&self.store_root).join(MARKER_FILE_NAME);
         let marker = self.read_lane_marker(&path)?;
-        if marker.version != MARKER_VERSION || marker.lane_id != entry.lane_id {
+        if marker.version != MARKER_VERSION || marker.lane_id != entry.lane_id() {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -11738,14 +11783,15 @@ impl Kura {
         }
         Ok((marker.incarnation, marker.activation_height))
     }
-    /// Resolve the exact physical bindings selected by durable journal phases.
-    /// This is used only for an already committed canonical association stage
-    /// before State restores the active catalog; it never publishes that catalog.
-    pub(super) fn canonical_association_physical_targets_from_journal(
-        &self,
-        artifacts: &[LaneBlockArtifact],
-    ) -> Result<Vec<LaneArtifactPhysicalTarget>> {
+    /// Select authenticated physical storage without publishing a State catalog.
+    fn selected_canonical_recovery_physical_bindings(&self) -> Result<Vec<LaneGeometryBinding>> {
         let journal = self.read_lane_geometry_journal()?;
+        self.selected_canonical_recovery_physical_bindings_in_journal(&journal)
+    }
+    fn selected_canonical_recovery_physical_bindings_in_journal(
+        &self,
+        journal: &LaneGeometryJournal,
+    ) -> Result<Vec<LaneGeometryBinding>> {
         if journal.configured_catalog_hash.is_none() || journal.configured_primary_binding.is_none()
         {
             return Err(self.geometry_error(
@@ -11788,6 +11834,363 @@ impl Kura {
                     .expect("checked primary binding"),
             )
         };
+        Ok(bindings.to_vec())
+    }
+    /// Collect bounded locations without inventing a dataspace or publishing a catalog.
+    fn native_amx_evidence_physical_locations_in_journal(
+        &self,
+        journal: &LaneGeometryJournal,
+    ) -> Result<Vec<NativeAmxEvidencePhysicalLocation>> {
+        let bindings = self.selected_canonical_recovery_physical_bindings_in_journal(journal)?;
+        let journal_hash = Hash::new(journal.encode());
+        let mut locations = bindings
+            .into_iter()
+            .map(|binding| NativeAmxEvidencePhysicalLocation {
+                blocks_path: self.binding_blocks_path(&binding),
+                merge_path: self.binding_merge_path(&binding),
+                binding,
+                journal_hash,
+                retained_transition: None,
+            })
+            .collect::<Vec<_>>();
+        // Only completed rollback decisions name immutable updated storage.
+        // Unrelated archives and in-progress move targets are not discovery locations.
+        for record in &journal.records {
+            if record.phase != LaneGeometryPhase::RolledBack {
+                continue;
+            }
+            for operation in &record.operations {
+                if !matches!(
+                    operation.kind,
+                    LaneGeometryOperationKind::Create | LaneGeometryOperationKind::Replace
+                ) {
+                    continue;
+                }
+                let binding = operation.updated.as_ref().ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "Native retained geometry has no authenticated updated binding",
+                    )
+                })?;
+                locations.push(NativeAmxEvidencePhysicalLocation {
+                    binding: binding.clone(),
+                    blocks_path: self.resolve_relative_path(&operation.unpublished_blocks_path)?,
+                    merge_path: self.resolve_relative_path(&operation.unpublished_merge_path)?,
+                    journal_hash,
+                    retained_transition: Some(record.transition_id),
+                });
+            }
+        }
+        Ok(locations)
+    }
+    /// Return journal-owned discovery locations under the caller-held geometry lock.
+    /// No physical marker is required merely to check whether Native evidence exists.
+    /// Callers must validate any present evidence location before decoding or admitting it.
+    pub(super) fn native_amx_evidence_physical_locations_from_journal(
+        &self,
+    ) -> Result<Vec<NativeAmxEvidencePhysicalLocation>> {
+        let journal = self.read_lane_geometry_journal()?;
+        if journal.configured_primary_binding.is_none()
+            && journal.records.is_empty()
+            && journal.checkpoint.is_none()
+            && self.exact_durable_blocks_count()? == 0
+        {
+            // State has not yet anchored a fresh store. No committed Native
+            // carrier can predate its first canonical block and geometry anchor.
+            return Ok(Vec::new());
+        }
+        self.native_amx_evidence_physical_locations_in_journal(&journal)
+    }
+    /// Read-only Native reservation target for an already verified canonical carrier.
+    /// The geometry lock remains held through every subsequent namespace read.
+    pub(super) fn native_amx_reservation_physical_target_from_journal(
+        &self,
+        descriptor: &LaneBlockDescriptorV1,
+    ) -> Result<NativeAmxReservationPhysicalTarget> {
+        let journal = self.read_lane_geometry_journal()?;
+        let locations = self.native_amx_evidence_physical_locations_in_journal(&journal)?;
+        let mut candidates = locations.into_iter().filter(|location| {
+            location.lane_id() == descriptor.lane_id
+                && location.incarnation() == descriptor.lane_incarnation
+                && descriptor.proposal_height > location.activation_height()
+        });
+        let location = candidates.next().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidData,
+                "Native reservation physical journal binding is missing",
+            )
+        })?;
+        if candidates.next().is_some() {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "Native reservation physical journal binding is ambiguous",
+            ));
+        }
+        self.native_amx_reservation_physical_target_from_location(
+            &location,
+            descriptor.dataspace_id,
+        )
+    }
+    /// Bind a decoded dataspace to a physically authenticated journal location.
+    /// Existing Native artifact, canonical carrier, finality and WSV checks still apply.
+    pub(super) fn native_amx_reservation_physical_target_from_location(
+        &self,
+        location: &NativeAmxEvidencePhysicalLocation,
+        dataspace_id: DataSpaceId,
+    ) -> Result<NativeAmxReservationPhysicalTarget> {
+        self.require_native_amx_evidence_physical_location(location)?;
+        Ok(NativeAmxReservationPhysicalTarget {
+            location: location.clone(),
+            dataspace_id,
+        })
+    }
+    /// Recheck the complete journal and physical pair before or after Native evidence reads.
+    /// The caller keeps the geometry and sidecar locks held throughout those reads.
+    pub(super) fn require_native_amx_evidence_physical_location(
+        &self,
+        location: &NativeAmxEvidencePhysicalLocation,
+    ) -> Result<()> {
+        let journal = self.read_lane_geometry_journal()?;
+        if Hash::new(journal.encode()) != location.journal_hash {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "Native reservation geometry journal changed during physical reads",
+            ));
+        }
+        if let Some(transition) = location.retained_transition {
+            let retained = journal.records.iter().any(|record| {
+                record.transition_id == transition
+                    && record.phase == LaneGeometryPhase::RolledBack
+                    && record.operations.iter().any(|operation| {
+                        matches!(
+                            operation.kind,
+                            LaneGeometryOperationKind::Create | LaneGeometryOperationKind::Replace
+                        ) && operation.updated.as_ref() == Some(&location.binding)
+                            && self.store_root.join(&operation.unpublished_blocks_path)
+                                == location.blocks_path
+                            && self.store_root.join(&operation.unpublished_merge_path)
+                                == location.merge_path
+                    })
+            });
+            if !retained
+                || !self.require_absent_or_sealed_geometry_binding_at(
+                    &location.binding,
+                    &location.blocks_path,
+                    &location.merge_path,
+                )?
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "Native reservation retained pair lacks exact rollback authority",
+                ));
+            }
+            return Ok(());
+        }
+        self.require_complete_geometry_binding_at(
+            &location.binding,
+            &location.blocks_path,
+            &location.merge_path,
+        )?;
+        if !self.lane_marker_is_unsealed_at(&location.blocks_path, &location.binding)? {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "Native reservation active location carries a move seal",
+            ));
+        }
+        Ok(())
+    }
+    /// Recheck Native-only read authority after inventory reads without changing a live marker.
+    pub(super) fn require_native_amx_reservation_physical_target(
+        &self,
+        target: &NativeAmxReservationPhysicalTarget,
+    ) -> Result<()> {
+        self.require_native_amx_evidence_physical_location(&target.location)
+    }
+    #[cfg(test)]
+    fn native_amx_retained_location_under_geometry_guard_for_test(
+        &self,
+        lane_id: LaneId,
+    ) -> Result<NativeAmxEvidencePhysicalLocation> {
+        let locations = self.native_amx_evidence_physical_locations_from_journal()?;
+        let mut retained = locations.into_iter().filter(|location| {
+            location.lane_id() == lane_id && location.retained_transition.is_some()
+        });
+        let location = retained.next().ok_or_else(|| {
+            self.geometry_error(ErrorKind::InvalidData, "fixture lane has no retained pair")
+        })?;
+        if retained.next().is_some() {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "fixture lane has ambiguous retained pairs",
+            ));
+        }
+        self.require_native_amx_evidence_physical_location(&location)?;
+        Ok(location)
+    }
+    /// Resolve genuine retained block data, merge data and the single paired marker for faults.
+    #[cfg(test)]
+    pub(super) fn native_amx_retained_pair_fault_paths_for_test(
+        &self,
+        lane_id: LaneId,
+    ) -> Result<[PathBuf; 3]> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let location = self.native_amx_retained_location_under_geometry_guard_for_test(lane_id)?;
+        let block_data = location.blocks_path.join(DATA_FILE_NAME);
+        self.geometry_path_identity(&block_data, false)?;
+        Ok([
+            block_data,
+            location.merge_path,
+            location.blocks_path.join(MARKER_FILE_NAME),
+        ])
+    }
+    /// Inject one missing half of a genuine retained pair seal without changing its digests.
+    #[cfg(test)]
+    pub(super) fn clear_native_amx_retained_pair_seal_for_test(
+        &self,
+        lane_id: LaneId,
+        clear_blocks: bool,
+    ) -> Result<()> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let location = self.native_amx_retained_location_under_geometry_guard_for_test(lane_id)?;
+        let path = location.blocks_path.join(MARKER_FILE_NAME);
+        let mut marker = self.read_lane_marker(&path)?;
+        if clear_blocks {
+            marker.move_target_blocks = None;
+        } else {
+            marker.move_target_merge = None;
+        }
+        let mut file = File::create(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        file.write_all(&marker.encode())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| Error::IO(error, path))
+    }
+    /// Rewind the genuine capacity fixture through the production no-snapshot restore path.
+    #[cfg(test)]
+    pub(super) fn rewind_native_amx_fixture_geometry_before_replay_for_test(&self) -> Result<()> {
+        let (lane_config, incarnations, activations, lineage_root) = {
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let journal = self.read_lane_geometry_journal()?;
+            let first = journal.records.first().ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "Native fixture has no geometry history",
+                )
+            })?;
+            let lane_config = LaneConfig::default();
+            if first.transition_height != 0
+                || first.previous_bindings.len() != 1
+                || first.previous_bindings.first() != journal.configured_primary_binding.as_ref()
+                || first.previous_bindings.iter().any(|binding| {
+                    binding.lane_id != LaneId::SINGLE
+                        || binding.activation_height != 0
+                        || self.binding_blocks_path(binding)
+                            != lane_config.primary().blocks_dir(&self.store_root)
+                        || self.binding_merge_path(binding)
+                            != lane_config.primary().merge_log_path(&self.store_root)
+                })
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "Native fixture lacks its exact configured primary-only height-zero baseline",
+                ));
+            }
+            let incarnations = first
+                .previous_bindings
+                .iter()
+                .map(|binding| (binding.lane_id, binding.incarnation))
+                .collect();
+            let activations = first
+                .previous_bindings
+                .iter()
+                .map(|binding| (binding.lane_id, binding.activation_height))
+                .collect();
+            (
+                lane_config,
+                incarnations,
+                activations,
+                first.previous_lineage_root,
+            )
+        };
+        self.restore_lane_segments_with_geometry_before_first_transition_at_height(
+            &lane_config,
+            &incarnations,
+            &activations,
+            lineage_root,
+            0,
+        )
+    }
+    #[cfg(test)]
+    pub(super) fn assert_native_amx_fixture_geometry_for_test(
+        &self,
+        lane_config: &LaneConfig,
+        requested_incarnations: &BTreeMap<LaneId, Hash>,
+    ) {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let journal = self
+            .read_lane_geometry_journal()
+            .expect("validate the exact durable fixture geometry");
+        let bindings = &journal.records[0].updated_bindings;
+        assert_eq!(bindings.len(), lane_config.entries().len());
+        for expected in lane_config.entries() {
+            let entry = self
+                .lane_storage_entry(expected.lane_id)
+                .expect("journal publication installs every configured route");
+            assert_eq!(&entry, expected);
+            let binding = bindings
+                .iter()
+                .find(|binding| binding.lane_id == entry.lane_id)
+                .expect("each live route has its exact durable journal binding");
+            assert_eq!(
+                self.binding_blocks_path(binding),
+                entry.blocks_dir(&self.store_root)
+            );
+            assert_eq!(
+                self.binding_merge_path(binding),
+                entry.merge_log_path(&self.store_root)
+            );
+            self.require_complete_geometry_binding_at(
+                binding,
+                &self.binding_blocks_path(binding),
+                &self.binding_merge_path(binding),
+            )
+            .expect("the published journal owns the complete physical pair");
+            let (incarnation, activation) = self
+                .active_lane_incarnation_marker(&entry)
+                .expect("authenticate the published incarnation marker");
+            assert_eq!(incarnation, binding.incarnation);
+            assert_eq!(activation, 0);
+            if let Some(expected) = requested_incarnations.get(&entry.lane_id) {
+                assert_eq!(&incarnation, expected);
+            }
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn seal_native_amx_reservation_pair_move_for_test(
+        &self,
+        entry: &LaneConfigEntry,
+    ) -> Result<()> {
+        let bindings = self.selected_canonical_recovery_physical_bindings()?;
+        let binding = bindings
+            .iter()
+            .find(|binding| binding.lane_id == entry.lane_id)
+            .expect("fixture has an authenticated Native route");
+        let blocks = self.binding_blocks_path(binding);
+        self.write_lane_marker_at(
+            &blocks,
+            binding,
+            Some(format!("{}.moving", binding.blocks_path)),
+            Some(format!("{}.moving", binding.merge_path)),
+            self.geometry_merge_log_digest(&self.binding_merge_path(binding))?,
+        )
+    }
+    /// Resolve the exact physical bindings selected by durable journal phases.
+    /// This is used only for an already committed canonical association stage
+    /// before State restores the active catalog; it never publishes that catalog.
+    pub(super) fn canonical_association_physical_targets_from_journal(
+        &self,
+        artifacts: &[LaneBlockArtifact],
+    ) -> Result<Vec<LaneArtifactPhysicalTarget>> {
+        let bindings = self.selected_canonical_recovery_physical_bindings()?;
         let mut targets = Vec::with_capacity(artifacts.len());
         for artifact in artifacts {
             let ownership = &artifact.ownership;

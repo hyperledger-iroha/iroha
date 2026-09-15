@@ -475,6 +475,103 @@ test("role and public queries use disjoint authentication policies", async () =>
   );
 });
 
+test("public receipt accepts exact pending, finalized manifest, and aborted identifiers", async () => {
+  // Terminal fixtures check transport shape and identity, not certificate validity.
+  for (const name of ["receipt_pending", "receipt_finalized", "receipt_aborted"]) {
+    const wire = fixture.responses[name];
+    let requestHeaders;
+    const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      async fetchImpl(target, options) {
+        requestHeaders = options.headers;
+        return response(wire, target);
+      },
+    });
+    const actual = await client.getBundleReceipt(fixture.identifiers.bundle_hex);
+    assert.deepEqual(actual.bytes(), jsonBytes(wire));
+    assert.equal("x-iroha-account" in requestHeaders, false);
+    assert.equal("x-iroha-operator-signature" in requestHeaders, false);
+    actual.close();
+  }
+});
+
+test("public receipt rejects removed pending lifecycle and unexpected value fields", async () => {
+  const bundle = fixture.identifiers.bundle_json;
+  const invalid = [
+    ...["collecting", "audited", "prepared", "commit_certified", "finalized", "aborted", "expired"]
+      .map((status) => ({ status: "pending", value: {
+        bundle_id: bundle, lifecycle: { status, value: null },
+      } })),
+    { status: "pending", value: { bundle_id: bundle, memo: "RECEIPT_PRIVATE_CANARY" } },
+    { status: "pending", value: {} },
+    { status: "pending", value: { bundle_id: fixture.identifiers.payload_json } },
+    { status: "pending", value: { bundle_id: null } },
+    { status: "pending", value: null },
+    { status: "pending", value: [] },
+    { status: "unknown", value: { bundle_id: bundle } },
+    { ...fixture.responses.receipt_pending, lifecycle: null },
+  ];
+  const duplicate = jsonBytes(fixture.responses.receipt_pending);
+  const duplicateText = new TextDecoder().decode(duplicate)
+    .replace('"bundle_id":', '"bundle_id":"RECEIPT_PRIVATE_CANARY","bundle_id":');
+  invalid.push(textEncoder.encode(duplicateText));
+  for (const wire of invalid) {
+    const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      async fetchImpl(target) { return response(wire, target); },
+    });
+    await assert.rejects(() => client.getBundleReceipt(fixture.identifiers.bundle_hex), (error) => {
+      assert(error instanceof AtomicPrivateSettlementToriiErrorV1);
+      assert.match(error.message, /response is invalid/u);
+      assert.doesNotMatch(String(error), /RECEIPT_PRIVATE_CANARY/u);
+      return true;
+    });
+  }
+});
+
+test("public receipt finalized binding rejects root aliases and substituted manifests", async () => {
+  const valid = fixture.responses.receipt_finalized;
+  const value = valid.value;
+  const bundle = fixture.identifiers.bundle_json;
+  const { manifest: _manifest, ...withoutManifest } = value;
+  const invalidValues = [
+    { ...withoutManifest, bundle_id: bundle },
+    { ...value, bundle_id: bundle },
+    { ...value, manifest: null },
+    { ...value, manifest: [] },
+    { ...value, manifest: {} },
+    { ...value, manifest: { bundle_id: fixture.identifiers.payload_json } },
+    { ...value, manifest: { bundle_id: null } },
+  ];
+  const invalid = invalidValues.map((bad) => ({ status: "finalized", value: bad }));
+  invalid.push({ ...fixture.responses.receipt_aborted, value: {
+    ...fixture.responses.receipt_aborted.value, bundle_id: fixture.identifiers.payload_json,
+  } });
+  for (const wire of invalid) {
+    const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      async fetchImpl(target) { return response(wire, target); },
+    });
+    await assert.rejects(() => client.getBundleReceipt(fixture.identifiers.bundle_hex),
+      /response is invalid/u);
+  }
+});
+
+test("public receipt keeps HTTP 404 and transport failures distinct from pending", async () => {
+  for (const code of ["not_found", "private_settlement_unavailable"]) {
+    const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      async fetchImpl(target) {
+        return response(fixture.responses.receipt_pending, target, {
+          ok: false, status: 404, headers: { "x-iroha-reject-code": code },
+        });
+      },
+    });
+    await assert.rejects(() => client.getBundleReceipt(fixture.identifiers.bundle_hex), /HTTP 404/u);
+  }
+  const failed = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    async fetchImpl() { throw new Error("connection failed"); },
+  });
+  await assert.rejects(() => failed.getBundleReceipt(fixture.identifiers.bundle_hex),
+    /request failed/u);
+});
+
 test("auditor capsule requires one exact nonzero authoritative height", async () => {
   const valid = fixture.responses.auditor_capsule;
   assert.notEqual(attestationNetworkId(), fixture.identifiers.payload_json);

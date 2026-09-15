@@ -9,16 +9,15 @@
   "governance_rollout": {
     "activation_state": "not-executed",
     "controller_observation_required": true,
-    "genesis_activation_forbidden": true,
-    "mode": "governance-four-wave",
-    "notice_interval_blocks": 300,
-    "observation_interval_blocks": 300,
+    "mode": "explicit-register-then-activate",
+    "execution_height": 1,
+    "instruction_count": 24,
     "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
-    "rollout_plan_sha256": "3ee465268b21d40f50223d250d6653f441ab90d494a70e596b19a9a67a65e6fd"
+    "rollout_plan_sha256": "6030d12c01c919f055a58acf85d2dc05f99230a296fd7a3d1c9283018db2fb3d"
   },
   "privacy_catalog": {
     "matrix_version": 1,
-    "matrix_file_sha256": "5e6f7f5468f6834b5c9d0b1993a53a0c618a2aa12697b7703e853ba80071b386",
+    "matrix_file_sha256": "31e6f8246a0014c9ccacd523449f4812c93dd04231b16ceacac75ba6f97dfff7",
     "registry_sha256": "7730a8f3d6b59735fd4f2dd7c611f4e5123e13e3fdc540686d92ffd2ab5cdfb5",
     "protocols": [
       {

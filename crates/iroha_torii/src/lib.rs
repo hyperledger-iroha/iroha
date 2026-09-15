@@ -22650,7 +22650,12 @@ fn should_retry_generic_torii_proxy_snapshot(snapshot: &ToriiProxyHttpResponseV1
     if should_retry_torii_proxy_status(status) {
         return true;
     }
-    if status != StatusCode::TOO_MANY_REQUESTS {
+    torii_proxy_has_exact_capacity_rejection(snapshot)
+}
+/// Exact candidate-local memory pressure, shared by ordinary and strict admission retries.
+#[cfg(feature = "connect")]
+fn torii_proxy_has_exact_capacity_rejection(snapshot: &ToriiProxyHttpResponseV1) -> bool {
+    if snapshot.status_code != StatusCode::TOO_MANY_REQUESTS.as_u16() {
         return false;
     }
 
@@ -23018,17 +23023,31 @@ fn validate_queue_plan_synced_acceptance(
     )?;
     Ok(validated.certificate.attestations)
 }
-/// A retry hint only: this never proves non-admission or contributes an attestation.
+/// Bounded authority-local retry hints; neither proves non-admission or adds an attestation.
 #[cfg(feature = "connect")]
-fn queue_plan_synced_authority_needs_catch_up(snapshot: &ToriiProxyHttpResponseV1) -> bool {
-    snapshot.status_code == StatusCode::SERVICE_UNAVAILABLE.as_u16()
-        && validate_queue_plan_synced_snapshot_bounds(snapshot).is_ok()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanSyncedAuthorityRetryReason {
+    /// The exact immutable context is ahead of this authority.
+    ContextCatchUp,
+    /// This authority could not reserve its bounded proxy working set.
+    ProxyCapacity,
+}
+#[cfg(feature = "connect")]
+fn queue_plan_synced_authority_retry_reason(
+    snapshot: &ToriiProxyHttpResponseV1,
+) -> Option<QueuePlanSyncedAuthorityRetryReason> {
+    validate_queue_plan_synced_snapshot_bounds(snapshot).ok()?;
+    if torii_proxy_has_exact_capacity_rejection(snapshot) {
+        return Some(QueuePlanSyncedAuthorityRetryReason::ProxyCapacity);
+    }
+    (snapshot.status_code == StatusCode::SERVICE_UNAVAILABLE.as_u16()
         && validate_queue_plan_synced_response_header(
             snapshot,
             "x-iroha-reject-code",
             Some("queue_plan_admission_context_future"),
         )
-        .is_ok()
+        .is_ok())
+    .then_some(QueuePlanSyncedAuthorityRetryReason::ContextCatchUp)
 }
 #[cfg(feature = "connect")]
 fn merge_queue_plan_synced_attestations(
@@ -24325,7 +24344,35 @@ where
             };
             match outcome {
                 Ok(mut snapshot) => {
-                    retry_authority |= queue_plan_synced_authority_needs_catch_up(&snapshot);
+                    let retry_reason = queue_plan_synced_authority_retry_reason(&snapshot);
+                    retry_authority |= retry_reason.is_some();
+                    if !StatusCode::from_u16(snapshot.status_code)
+                        .is_ok_and(|status| status.is_success())
+                    {
+                        // Public routing/status metadata only. Never record request bodies,
+                        // statements, credentials, signatures or returned error payloads.
+                        iroha_logger::debug!(
+                            target: "iroha_torii::queue_plan_admission",
+                            request_id = %request_id,
+                            entrypoint_hash = ?queue_plan_synced_expectation
+                                .as_ref()
+                                .map(|expected| &expected.entrypoint_hash),
+                            signed_transaction_hash = ?queue_plan_synced_expectation
+                                .as_ref()
+                                .and_then(|expected| expected.signed_transaction_hash.as_ref()),
+                            peer_id = %peer_id.peer_id(),
+                            transport = peer_id.transport_label(),
+                            candidate_index,
+                            status_code = snapshot.status_code,
+                            ?retry_reason,
+                            attempt_budget_ms = attempt_budget.as_millis() as u64,
+                            remaining_deadline_ms = execution_deadline
+                                .saturating_duration_since(tokio::time::Instant::now())
+                                .as_millis() as u64,
+                            durable_authority_count = durable_attestations.len(),
+                            "strict QueuePlan authority attempt returned a rejection"
+                        );
+                    }
                     if let Some(expected) = queue_plan_synced_expectation.as_ref() {
                         match validate_queue_plan_synced_acceptance(&snapshot, expected) {
                             Ok(receipts) => {
@@ -24401,6 +24448,24 @@ where
                                             continue;
                                         }
                                     };
+                                    // The distinct durable certificate is encoded. This does
+                                    // not establish response delivery or transaction application.
+                                    iroha_logger::debug!(
+                                        target: "iroha_torii::queue_plan_admission",
+                                        request_id = %request_id,
+                                        entrypoint_hash = %expected.entrypoint_hash,
+                                        signed_transaction_hash = ?expected.signed_transaction_hash,
+                                        peer_id = %peer_id.peer_id(),
+                                        transport = peer_id.transport_label(),
+                                        candidate_index,
+                                        durable_authority_count = durable_attestations.len(),
+                                        durability_threshold = expected.durability_threshold,
+                                        certificate_authority_count = certificate.attestations.len(),
+                                        remaining_deadline_ms = execution_deadline
+                                            .saturating_duration_since(tokio::time::Instant::now())
+                                            .as_millis() as u64,
+                                        "strict QueuePlan durable admission certificate ready"
+                                    );
                                     snapshot.status_code = StatusCode::ACCEPTED.as_u16();
                                     snapshot.headers =
                                         canonical_queue_plan_synced_certificate_headers(expected);
@@ -24475,7 +24540,7 @@ where
         if !retry_authority {
             break;
         }
-        // Retry an explicit catch-up hint or timed-out attempt without renewing
+        // Retry exact catch-up/capacity hints or timed-out attempts without renewing
         // the signed request, binding, identity, or absolute deadline. The next
         // round skips already-attested authorities and gives slow peers more time.
         let retry_at = tokio::time::Instant::now() + retry_delay;
@@ -45169,8 +45234,7 @@ impl Torii {
         );
         builder.route(
             &routes::BUNDLE_RECEIPT,
-            catalog_get(private_settlement::handler_bundle_receipt)
-                .layer(axum::Extension(self.private_settlement_runtime.clone())),
+            catalog_get(private_settlement::handler_bundle_receipt),
         );
         #[cfg(feature = "test-network-private-settlement-route-control")]
         builder.route(
@@ -48168,7 +48232,6 @@ impl Torii {
         let route_index = mounted_manifest.route_index();
         let mut router = router
             .fallback(handler_route_not_found_or_sorafs_site)
-            .method_not_allowed_fallback(handler_method_not_allowed)
             .layer(axum::middleware::from_fn(enforce_route_timeout));
         #[cfg(feature = "app_api")]
         {

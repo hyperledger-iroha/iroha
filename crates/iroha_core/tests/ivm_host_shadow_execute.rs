@@ -79,14 +79,21 @@ fn setup_state(
         asset_def.clone(),
         asset_name.to_string(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(asset_domain.clone()),
     )
     .build(authority);
-    State::new_for_testing(
+    let state = State::new_for_testing(
         World::with([domain], [account], [asset_definition]),
         kura,
         query_handle,
-    )
+    );
+    // Finalize the genesis fixture so its asset has an incarnation before
+    // executing the height-two native and IVM transactions.
+    state
+        .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+        .commit_empty_block_for_testing()
+        .expect("commit genesis fixture");
+    state
 }
 fn data_event_debug(events: Vec<iroha_data_model::events::EventBox>) -> Vec<String> {
     events
@@ -202,4 +209,5 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         .get(&asset_id)
         .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(direct_balance, host_balance);
+    assert_eq!(direct_balance, amount);
 }

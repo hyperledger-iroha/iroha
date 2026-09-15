@@ -223,11 +223,7 @@ struct LifecycleDirectoryOperationGuard<'directory> {
 #[cfg(all(unix, not(target_os = "espidf")))]
 impl Drop for LifecycleDirectoryOperationGuard<'_> {
     fn drop(&mut self) {
-        #[cfg(not(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita"
-        )))]
+        #[cfg(not(any(target_os = "horizon", target_os = "solaris", target_os = "vita")))]
         let _ = rustix::fs::flock(
             &self.directory.directory,
             rustix::fs::FlockOperation::Unlock,
@@ -313,21 +309,13 @@ impl BoundLifecycleLedgerDirectory {
         let thread_lock = self.operation_lock.lock().map_err(|_| {
             LifecycleLedgerError::Io("lifecycle storage operation lock was poisoned".to_owned())
         })?;
-        #[cfg(not(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita"
-        )))]
+        #[cfg(not(any(target_os = "horizon", target_os = "solaris", target_os = "vita")))]
         rustix::fs::flock(&self.directory, rustix::fs::FlockOperation::LockExclusive)
             .map_err(std::io::Error::from)
             .map_err(|error| {
                 lifecycle_storage_io("lock lifecycle directory", &self.expected_path, error)
             })?;
-        #[cfg(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita"
-        ))]
+        #[cfg(any(target_os = "horizon", target_os = "solaris", target_os = "vita"))]
         return Err(LifecycleLedgerError::Io(format!(
             "exclusive lifecycle storage locking is unsupported at {}",
             self.expected_path.display()
@@ -2030,6 +2018,10 @@ impl LifecycleCoordinator {
             ));
         }
         store.persist(&LifecycleLedgerV1::from_coordinator(self)?)?;
+        // This helper attaches a live coordinator, after owner construction.
+        // Consume startup publication custody just as production open does,
+        // so later staged publications cannot extend a cold recovery witness.
+        let _ = store.take_owner_open_successor();
         self.ledger_store = Some(store);
         Ok(())
     }

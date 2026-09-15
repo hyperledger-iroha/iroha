@@ -6,6 +6,7 @@ use iroha_data_model::{
     account::AccountId,
     transaction::{TransactionDomain, signed::TransactionSignatureError},
 };
+pub use iroha_torii_shared::status::StatusFailureReason;
 use thiserror::Error;
 
 /// Canonical result returned by structured Rust SDK operations.
@@ -78,6 +79,17 @@ pub enum Error {
         retry_after: Option<std::time::Duration>,
         /// Exact bounded API response body, including machine-readable error fields.
         body: Vec<u8>,
+    },
+    /// GET `/status` is unavailable, with no retained response body or arbitrary header text.
+    #[error(
+        "diagnostic.status returned HTTP 503 ({reason_code})",
+        reason_code = .reason.map_or("unclassified", StatusFailureReason::code)
+    )]
+    StatusUnavailable {
+        /// Recognized producer reason; missing, invalid or unknown codes are unclassified.
+        reason: Option<StatusFailureReason>,
+        /// One valid Retry-After delta in seconds. This never triggers a retry.
+        retry_after: Option<std::time::Duration>,
     },
     /// The response cannot be decoded under the operation's canonical schema.
     #[error("{operation} response decoding failed: {details}")]

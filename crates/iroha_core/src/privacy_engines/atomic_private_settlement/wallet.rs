@@ -1138,7 +1138,6 @@ pub fn inspect_atomic_private_settlement_wallet_bundle_v1(
 /// failed proof self-verification.
 #[allow(clippy::too_many_arguments)]
 pub fn consume_atomic_private_settlement_wallet_bundle_v1(
-    options: super::facade::AtomicPrivateSettlementProverOptionsV1,
     material: &mut [u8],
     expected_wallet_id: &str,
     manifest: &AtomicPrivateSettlementV1,
@@ -1183,7 +1182,6 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
     ];
     let witness = AtomicPrivateSettlementProverWitnessV1::new(decoded.audit_plaintext, inputs);
     let proof = prove_atomic_private_settlement_v1(
-        options,
         manifest,
         statement,
         canonical_genesis_hash,
@@ -1200,7 +1198,6 @@ pub fn consume_atomic_private_settlement_wallet_bundle_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy_engines::atomic_private_settlement::AtomicPrivateSettlementProverOptionsV1;
     use crate::{
         privacy_engines::{
             atomic_private_settlement::relation::{
@@ -1546,18 +1543,22 @@ mod tests {
         )
         .expect("owner bundle");
         let mut material = encoded.to_vec();
-        let prepared = consume_atomic_private_settlement_wallet_bundle_v1(
-            AtomicPrivateSettlementProverOptionsV1::CPU,
-            &mut material,
-            "bank-a-wallet-positive",
-            &manifest,
-            &statement,
-            &capsule,
-            &policy,
-            *manifest.network_id.as_genesis_hash().as_ref(),
-            manifest.authority_context_height,
-        )
-        .expect("self-verified native proof");
+        let phase_capture = super::super::facade::phase_test_support::PhaseCaptureV1::new(true);
+        let prepared = phase_capture
+            .with_default(|| {
+                consume_atomic_private_settlement_wallet_bundle_v1(
+                    &mut material,
+                    "bank-a-wallet-positive",
+                    &manifest,
+                    &statement,
+                    &capsule,
+                    &policy,
+                    *manifest.network_id.as_genesis_hash().as_ref(),
+                    manifest.authority_context_height,
+                )
+            })
+            .expect("self-verified native proof");
+        let proof_phase_events = phase_capture.assert_one_successful_invocation_v1();
         assert!(!prepared.proof.is_empty());
         assert_eq!(prepared.statement, statement);
         assert_eq!(prepared.audit_capsule, capsule);
@@ -1567,15 +1568,22 @@ mod tests {
             .validate()
             .expect("successor substitution remains structurally valid");
         assert!(
-            crate::privacy_engines::atomic_private_settlement::verify_atomic_private_settlement_v1(
-                &manifest,
-                &substituted_statement,
-                *manifest.network_id.as_genesis_hash().as_ref(),
-                manifest.authority_context_height,
-                &prepared.proof,
-            )
+            phase_capture.with_default(|| {
+                crate::privacy_engines::atomic_private_settlement::verify_atomic_private_settlement_v1(
+                    &manifest,
+                    &substituted_statement,
+                    *manifest.network_id.as_genesis_hash().as_ref(),
+                    manifest.authority_context_height,
+                    &prepared.proof,
+                )
+            })
             .is_err(),
             "a proof must not verify after successor-root substitution"
+        );
+        assert_eq!(
+            phase_capture.events_v1(),
+            proof_phase_events,
+            "the subsequent public verifier must not add facade construction/self-verification events"
         );
         let debug = format!("{prepared:?}");
         assert_eq!(
@@ -1695,7 +1703,6 @@ mod tests {
         .expect("owner bundle");
         let mut material = encoded.to_vec();
         let result = consume_atomic_private_settlement_wallet_bundle_v1(
-            AtomicPrivateSettlementProverOptionsV1::CPU,
             &mut material,
             "bank-a-wallet-7",
             &sidecar.manifest,
@@ -1727,7 +1734,6 @@ mod tests {
         let mut substituted = sidecar.payload.statement.clone();
         substituted.old_epoch += 1;
         let result = consume_atomic_private_settlement_wallet_bundle_v1(
-            AtomicPrivateSettlementProverOptionsV1::CPU,
             &mut material,
             "bank-a-wallet-7",
             &sidecar.manifest,

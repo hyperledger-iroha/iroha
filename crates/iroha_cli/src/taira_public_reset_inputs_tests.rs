@@ -524,3 +524,54 @@ fn preseed_timeout_is_required_and_has_its_own_physical_work_bound() {
         validate_timeouts(&inventory.timeouts).expect("independent bounded preseed work");
     }
 }
+
+#[test]
+fn candidate_runtime_scope_requires_disabled_core_and_exact_full_owner() {
+    use iroha_config::parameters::actual::SoracloudRuntimeInrou;
+    let mut runtime = SoracloudRuntimeInrou::default();
+    runtime.enabled = false;
+    assert!(
+        validate_candidate_inrou_scope(
+            QualificationScopeV1::CoreTestnet,
+            "taira-validator-1",
+            &runtime
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_candidate_inrou_scope(
+            QualificationScopeV1::FullInrou,
+            "taira-validator-1",
+            &runtime
+        )
+        .is_err()
+    );
+    runtime.enabled = true;
+    runtime.portable_vm_uid = std::num::NonZeroU32::new(70000);
+    runtime.portable_vm_gid = std::num::NonZeroU32::new(70000);
+    assert!(
+        validate_candidate_inrou_scope(
+            QualificationScopeV1::CoreTestnet,
+            "taira-validator-1",
+            &runtime
+        )
+        .is_err()
+    );
+    assert!(
+        validate_candidate_inrou_scope(
+            QualificationScopeV1::FullInrou,
+            "taira-validator-1",
+            &runtime
+        )
+        .is_ok()
+    );
+    runtime.portable_vm_gid = std::num::NonZeroU32::new(70001);
+    assert!(
+        validate_candidate_inrou_scope(
+            QualificationScopeV1::FullInrou,
+            "taira-validator-1",
+            &runtime
+        )
+        .is_err()
+    );
+}

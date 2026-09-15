@@ -51,7 +51,7 @@ const V2_FINALITY_VERIFICATION_CACHE_CAPACITY: usize = 64;
 /// maximum-size validator roster. Keeping the batch fixed bounds aggregate
 /// transient memory independently of the host's Rayon worker count.
 const V2_FINALITY_STARTUP_VERIFICATION_BATCH_SIZE: usize = 8;
-const CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY: usize = 64;
+const CERTIFIED_ARTIFACT_ATTESTATION_CACHE_CAPACITY: usize = 64;
 const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
 const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
 const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
@@ -369,10 +369,20 @@ struct StableSidecarRead {
     metadata: StableSidecarMetadata,
 }
 #[derive(Debug, Clone)]
-struct CertifiedFrontierPairDurabilityAttestation {
+struct CertifiedPairDurabilityAttestation {
     artifact_hash: HashOf<CertifiedLaneBlockArtifact>,
     data_metadata: StableSidecarMetadata,
     index_metadata: StableSidecarMetadata,
+    /// Pre-barrier snapshots of every bound directory, immediate parent through Kura root.
+    directories: Vec<ProgressDirectoryDurabilityMetadata>,
+}
+/// Exact directory generation covered by a completed progress-pair durability barrier.
+#[derive(Debug, Clone)]
+struct ProgressDirectoryDurabilityMetadata {
+    expected_path: PathBuf,
+    canonical_path: PathBuf,
+    entry_name: Option<std::ffi::OsString>,
+    metadata: SecureMetadata,
 }
 #[derive(Debug, Clone)]
 struct CertifiedFrontierArtifactValidationAttestation {

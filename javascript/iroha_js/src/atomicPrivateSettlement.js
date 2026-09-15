@@ -1046,12 +1046,29 @@ export class AtomicPrivateSettlementToriiClientV1 {
         if (!["pending", "finalized", "aborted"].includes(parsedBody.status)) {
           throw new TypeError("settlement receipt has an unknown tag");
         }
-        if (
-          parsedBody.value === null
-          || typeof parsedBody.value !== "object"
-          || Array.isArray(parsedBody.value)
-          || parsedBody.value.bundle_id !== identity.value.jsonLiteral
-        ) {
+        const value = parsedBody.value;
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+          throw new TypeError("settlement receipt value is invalid");
+        }
+        let receivedBundleId;
+        if (parsedBody.status === "finalized") {
+          exactFields(
+            value,
+            ["version", "manifest", "authority_catalog", "legs", "finalized_height"],
+            "finalized settlement receipt",
+          );
+          if (value.manifest === null || typeof value.manifest !== "object"
+              || Array.isArray(value.manifest)) {
+            throw new TypeError("settlement receipt manifest is invalid");
+          }
+          receivedBundleId = value.manifest.bundle_id;
+        } else {
+          if (parsedBody.status === "pending") {
+            exactFields(value, ["bundle_id"], "pending settlement receipt");
+          }
+          receivedBundleId = value.bundle_id;
+        }
+        if (receivedBundleId !== identity.value.jsonLiteral) {
           throw new TypeError("settlement receipt identifier is substituted");
         }
       } else if (route.includes("/bundles/") && parsedBody.manifest !== null) {
@@ -1333,6 +1350,7 @@ export class AtomicPrivateSettlementToriiClientV1 {
     return this.#publicBundleRead(bundleId, options, false);
   }
 
+  /** Pending means this node has no public terminal outcome; local lifecycle is a separate query. */
   async getBundleReceipt(bundleId, options) {
     return this.#publicBundleRead(bundleId, options, true);
   }

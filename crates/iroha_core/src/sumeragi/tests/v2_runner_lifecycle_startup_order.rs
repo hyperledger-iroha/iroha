@@ -99,7 +99,7 @@ fn fresh_proposal_refreshes_merge_certification_before_freezing_attachments() {
     assert!(
         refresh_continuation.contains(
             "== super::v2_lane_work::MergeRefreshOutcome::Deferred { \
-             proposal_state.defer_merge_frontier(owner, Instant::now()); return Ok(()); }"
+             proposal_state.defer_candidate_snapshot(owner, Instant::now()); return Ok(()); }"
         ),
         "a deferred merge frontier must stop before control reconciliation, \
          attachment selection, and assembly without arming a non-empty retry"

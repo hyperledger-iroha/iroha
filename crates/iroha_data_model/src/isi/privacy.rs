@@ -18,7 +18,7 @@ use crate::privacy::{
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 isi! {
-    /// Register one immutable, future privacy-protocol activation.
+    /// Register one immutable proposal for explicit governed activation.
     #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1")]
     pub struct RegisterPrivacyProtocolActivationV1 {
@@ -56,11 +56,11 @@ impl RegisterPrivacyExact12QualificationV1 {
     }
 }
 isi! {
-    /// Schedule a delayed component-wise tightening of the chain-wide privacy policy.
+    /// Schedule a component-wise tightening of the chain-wide privacy policy for a future block.
     #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1")]
     pub struct SchedulePrivacyConsensusPolicyTighteningV1 {
-        /// Exact incoming height at which the successor becomes effective.
+        /// Exact incoming height strictly after admission; the next block is allowed.
         pub effective_at_height: u64,
         /// Complete component-wise-lower successor limits.
         pub next_limits: PrivacyConsensusLimitsV1,
@@ -80,13 +80,13 @@ impl SchedulePrivacyConsensusPolicyTighteningV1 {
     }
 }
 isi! {
-    /// Schedule a delayed component-wise tightening for one privacy protocol.
+    /// Schedule a component-wise tightening for one privacy protocol at a future block.
     #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1")]
     pub struct SchedulePrivacyProtocolLimitsTighteningV1 {
         /// Exact registered protocol whose limits will be tightened.
         pub protocol_id: PrivacyProtocolIdV1,
-        /// Exact incoming height at which the successor becomes effective.
+        /// Exact incoming height strictly after admission; the next block is allowed.
         pub effective_at_height: u64,
         /// Complete protocol-tagged successor limits.
         pub next_limits: PrivacyProtocolActivationLimitsV1,
@@ -960,7 +960,6 @@ mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(digest(5)),
             lifecycle: PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                 proposed_at_height: 100,
-                activate_at_height: 400,
             }),
             protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoActivationLimitsV1 {

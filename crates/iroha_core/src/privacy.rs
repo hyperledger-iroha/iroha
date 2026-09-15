@@ -2,7 +2,7 @@
 //!
 //! This module is deliberately independent of individual proof engines. It owns the
 //! consensus-critical state-machine rules which every engine shares: one immutable activation
-//! record per protocol version, future-only activation, fail-closed lifecycle transitions, and
+//! record per protocol version, explicit governed activation, fail-closed lifecycle transitions, and
 //! transaction-atomic resource charging.
 use crate::privacy_profiles::{
     CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
@@ -11,7 +11,7 @@ use iroha_data_model::{
     ValidationFail,
     isi::privacy::SubmitPrivacyProofV1,
     privacy::{
-        PrivacyActivationValidationError, PrivacyActiveLifecycleV1, PrivacyConsensusLimitsV1,
+        PrivacyActivationValidationError, PrivacyConsensusLimitsV1,
         PrivacyConsensusLimitsValidationError, PrivacyLifecycleTransitionError,
         PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         PrivacyTransactionIntentDigestV1,
@@ -20,11 +20,6 @@ use iroha_data_model::{
 };
 use std::collections::{BTreeMap, btree_map::Entry};
 use thiserror::Error;
-/// Minimum governance lead time for a first-release privacy activation.
-///
-/// The deployment workflow may impose a longer wall-clock or block delay. The chain rule is the
-/// irreducible consensus guard and therefore cannot be bypassed by a deployment tool or SDK.
-pub const PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1: u64 = 300;
 const PRIVACY_SIGNED_SUBMISSION_HASH_DOMAIN_V1: &[u8] = b"iroha.privacy.signed-submission-hash.v1";
 /// Hash the complete typed privacy submission authorized by the transaction signature.
 ///
@@ -112,8 +107,8 @@ impl PrivacyProtocolRegistryV1 {
     }
     /// Return an active record at `current_height`.
     ///
-    /// Call [`Self::advance_to_height`] at block start before admission. This accessor remains
-    /// read-only so proof verification cannot mutate governance state.
+    /// Activation requires an explicit governance transition. This accessor remains
+    /// read-only so proof verification and height changes cannot activate a proposal.
     #[must_use]
     pub fn active_record(
         &self,
@@ -126,16 +121,16 @@ impl PrivacyProtocolRegistryV1 {
         };
         (current_height >= active.state_since_height).then_some(record)
     }
-    /// Register one immutable future activation.
+    /// Register one immutable proposal for explicit governed activation.
     ///
-    /// Registration is accepted only in the proposed state, at the exact current height, with a
-    /// delay of at least [`PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1`]. All activations share the
-    /// registry's limits so mixed-protocol blocks have one unambiguous budget.
+    /// Registration is accepted only in the proposed state at the exact current height.
+    /// Governance may activate it in the same transaction; no block-count delay or
+    /// automatic promotion applies. All activations share the registry's resource budget.
     ///
     /// # Errors
     ///
     /// Returns an error for malformed records, duplicate protocol identities,
-    /// historical/future proposal heights, insufficient lead time, or
+    /// historical/future proposal heights, or
     /// activation-specific limits that differ from the global limits.
     pub fn register(
         &mut self,
@@ -158,19 +153,9 @@ impl PrivacyProtocolRegistryV1 {
             }
         }
     }
-    /// Deterministically promote all due proposals.
-    ///
-    /// The scheduled activation height remains the beginning of the active
-    /// interval even if a restored node advances across several heights at
-    /// once.  No verifier or artifact binding can change during promotion.
-    pub fn advance_to_height(&mut self, current_height: u64) {
-        for record in self.records.values_mut() {
-            record.lifecycle = effective_privacy_lifecycle_v1(record.lifecycle, current_height);
-        }
-    }
     /// Apply an explicit fail-closed lifecycle transition.
     ///
-    /// Validation evaluates a due proposal as active without mutating it first, so an invalid
+    /// Validation uses the stored lifecycle without any height-driven promotion, so an invalid
     /// governance instruction has no partial effect. Successful transitions replace only the
     /// lifecycle; artifact bindings cannot be supplied here and therefore cannot be changed.
     ///
@@ -239,43 +224,12 @@ pub fn validate_privacy_registration_v1(
             proposed_at_height: proposed.proposed_at_height,
         });
     }
-    let earliest = current_height
-        .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-        .ok_or(PrivacyRegistryError::HeightOverflow)?;
-    if proposed.activate_at_height < earliest {
-        return Err(PrivacyRegistryError::ActivationLeadTimeTooShort {
-            current_height,
-            activate_at_height: proposed.activate_at_height,
-            earliest,
-        });
-    }
     Ok(())
-}
-/// Derive the lifecycle that is effective at `current_height`.
-///
-/// Only scheduled proposals change implicitly.  Suspension, resumption, and
-/// retirement always require explicit governance instructions.
-#[must_use]
-pub const fn effective_privacy_lifecycle_v1(
-    lifecycle: PrivacyProtocolLifecycleV1,
-    current_height: u64,
-) -> PrivacyProtocolLifecycleV1 {
-    let PrivacyProtocolLifecycleV1::Proposed(proposed) = lifecycle else {
-        return lifecycle;
-    };
-    if current_height < proposed.activate_at_height {
-        return lifecycle;
-    }
-    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: proposed.proposed_at_height,
-        activated_at_height: proposed.activate_at_height,
-        state_since_height: proposed.activate_at_height,
-    })
 }
 /// Validate a lifecycle transition against a persisted activation record.
 ///
-/// A due proposal is promoted before evaluating the requested edge. This makes governance ordering
-/// at the activation height identical in the in-memory registry and typed world storage.
+/// Only the signed governance instruction advances the stored lifecycle. An initial
+/// activation may share the proposal's block, and its effective height must be this block.
 ///
 /// # Errors
 ///
@@ -295,7 +249,8 @@ pub fn validate_privacy_lifecycle_transition_v1(
             transition_height: effective_height,
         });
     }
-    effective_privacy_lifecycle_v1(current.lifecycle, current_height)
+    current
+        .lifecycle
         .validate_transition_to(&next)
         .map_err(PrivacyRegistryError::InvalidLifecycleTransition)?;
     if next.is_active() {
@@ -347,21 +302,6 @@ pub enum PrivacyRegistryError {
         current_height: u64,
         /// Height claimed in the proposal.
         proposed_at_height: u64,
-    },
-    /// Computing the minimum activation height overflowed.
-    #[error("privacy activation height overflow")]
-    HeightOverflow,
-    /// The proposed activation is too close to registration.
-    #[error(
-        "privacy activation at {activate_at_height} is too early after height {current_height}; earliest is {earliest}"
-    )]
-    ActivationLeadTimeTooShort {
-        /// Current block height.
-        current_height: u64,
-        /// Requested activation height.
-        activate_at_height: u64,
-        /// Earliest consensus-permitted activation height.
-        earliest: u64,
     },
     /// A protocol identity already has an immutable record.
     #[error("privacy protocol {protocol_id:?} is already registered")]
@@ -622,70 +562,63 @@ mod tests {
     use super::*;
     use crate::privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_profile_v1};
     use iroha_data_model::privacy::{
-        PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyRetiredLifecycleV1,
-        PrivacySuspendedLifecycleV1,
+        PrivacyActiveLifecycleV1, PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1,
+        PrivacyRetiredLifecycleV1, PrivacySuspendedLifecycleV1,
     };
     const PROPOSAL_HEIGHT: u64 = 1_000;
-    const ACTIVATION_HEIGHT: u64 = PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1;
+    const ACTIVATION_HEIGHT: u64 = PROPOSAL_HEIGHT;
     fn proposal() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("compiled VeRange profile")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: PROPOSAL_HEIGHT,
-                    activate_at_height: ACTIVATION_HEIGHT,
                 },
             ))
     }
     #[test]
-    fn proposal_promotes_only_at_scheduled_height() {
+    fn proposal_requires_explicit_activation_even_after_height_advances() {
         let mut registry = PrivacyProtocolRegistryV1::default();
         let proposal = proposal();
         let protocol_id = proposal.protocol_id;
         registry
             .register(proposal, PROPOSAL_HEIGHT)
             .expect("valid proposal");
-        registry.advance_to_height(ACTIVATION_HEIGHT - 1);
-        assert!(
-            registry
-                .active_record(protocol_id, ACTIVATION_HEIGHT - 1)
-                .is_none()
-        );
-        registry.advance_to_height(ACTIVATION_HEIGHT);
-        let active = registry
-            .active_record(protocol_id, ACTIVATION_HEIGHT)
-            .expect("scheduled proposal must become active");
+        for height in [PROPOSAL_HEIGHT, PROPOSAL_HEIGHT + 300, u64::MAX] {
+            assert!(registry.active_record(protocol_id, height).is_none());
+            assert_eq!(registry.record(protocol_id), Some(&proposal));
+        }
+        let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: PROPOSAL_HEIGHT,
+            activated_at_height: PROPOSAL_HEIGHT,
+            state_since_height: PROPOSAL_HEIGHT,
+        });
+        registry
+            .transition(protocol_id, active, PROPOSAL_HEIGHT)
+            .expect("governance can activate in the registration block");
         assert_eq!(
-            active.lifecycle,
-            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: PROPOSAL_HEIGHT,
-                activated_at_height: ACTIVATION_HEIGHT,
-                state_since_height: ACTIVATION_HEIGHT,
-            })
+            registry
+                .active_record(protocol_id, PROPOSAL_HEIGHT)
+                .expect("explicit activation is immediately effective")
+                .lifecycle,
+            active
         );
     }
     #[test]
-    fn registration_rejects_early_historical_and_duplicate_records() {
+    fn registration_rejects_historical_future_and_duplicate_records() {
         let mut registry = PrivacyProtocolRegistryV1::default();
-        let mut early = proposal();
-        let PrivacyProtocolLifecycleV1::Proposed(ref mut state) = early.lifecycle else {
-            unreachable!();
-        };
-        state.activate_at_height = ACTIVATION_HEIGHT - 1;
-        assert!(matches!(
-            registry.register(early, PROPOSAL_HEIGHT),
-            Err(PrivacyRegistryError::ActivationLeadTimeTooShort { .. })
-        ));
-        let mut historical = proposal();
-        let PrivacyProtocolLifecycleV1::Proposed(ref mut state) = historical.lifecycle else {
-            unreachable!();
-        };
-        state.proposed_at_height -= 1;
-        state.activate_at_height -= 1;
-        assert!(matches!(
-            registry.register(historical, PROPOSAL_HEIGHT),
-            Err(PrivacyRegistryError::ProposalHeightMismatch { .. })
-        ));
+        for height in [PROPOSAL_HEIGHT - 1, PROPOSAL_HEIGHT + 1] {
+            let mut mismatched = proposal();
+            mismatched.lifecycle =
+                PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+                    proposed_at_height: height,
+                });
+            assert!(matches!(
+                registry.register(mismatched, PROPOSAL_HEIGHT),
+                Err(PrivacyRegistryError::ProposalHeightMismatch { .. })
+            ));
+            assert_eq!(registry.iter().len(), 0);
+        }
         registry
             .register(proposal(), PROPOSAL_HEIGHT)
             .expect("first registration");
@@ -710,7 +643,7 @@ mod tests {
         mismatched.pending_protocol_limits_tightening = Some(
             iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
                 scheduled_at_height: PROPOSAL_HEIGHT,
-                effective_at_height: ACTIVATION_HEIGHT,
+                effective_at_height: PROPOSAL_HEIGHT + 300,
                 next_limits,
             },
         );
@@ -739,7 +672,17 @@ mod tests {
         registry
             .register(proposal(), PROPOSAL_HEIGHT)
             .expect("valid proposal");
-        registry.advance_to_height(ACTIVATION_HEIGHT);
+        registry
+            .transition(
+                protocol_id,
+                PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                    proposed_at_height: PROPOSAL_HEIGHT,
+                    activated_at_height: ACTIVATION_HEIGHT,
+                    state_since_height: ACTIVATION_HEIGHT,
+                }),
+                ACTIVATION_HEIGHT,
+            )
+            .expect("explicit governed activation");
         let suspend_height = ACTIVATION_HEIGHT + 1;
         registry
             .transition(
@@ -804,7 +747,17 @@ mod tests {
         registry
             .register(proposal(), PROPOSAL_HEIGHT)
             .expect("valid proposal");
-        registry.advance_to_height(ACTIVATION_HEIGHT);
+        registry
+            .transition(
+                protocol_id,
+                PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                    proposed_at_height: PROPOSAL_HEIGHT,
+                    activated_at_height: ACTIVATION_HEIGHT,
+                    state_since_height: ACTIVATION_HEIGHT,
+                }),
+                ACTIVATION_HEIGHT,
+            )
+            .expect("explicit governed activation");
         let next_height = ACTIVATION_HEIGHT + 1;
         assert!(matches!(
             registry.transition(
@@ -829,7 +782,7 @@ mod tests {
         );
     }
     #[test]
-    fn rejected_transition_does_not_mutate_due_proposal() {
+    fn rejected_transition_does_not_mutate_pending_proposal() {
         let mut registry = PrivacyProtocolRegistryV1::default();
         let proposal = proposal();
         let protocol_id = proposal.protocol_id;
@@ -838,7 +791,7 @@ mod tests {
             .expect("valid proposal");
         let before = *registry.record(protocol_id).expect("registered record");
         let invalid = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-            proposed_at_height: PROPOSAL_HEIGHT,
+            proposed_at_height: PROPOSAL_HEIGHT + 1,
             activated_at_height: None,
             state_since_height: ACTIVATION_HEIGHT + 1,
         });
@@ -925,17 +878,29 @@ mod tests {
         assert_eq!(transaction.bytes(), 1);
     }
     #[test]
-    fn height_overflow_fails_closed() {
+    fn registration_and_activation_at_max_height_need_no_delay_arithmetic() {
         let mut registry = PrivacyProtocolRegistryV1::default();
-        let mut overflow = proposal();
-        let current_height = u64::MAX - 1;
-        overflow.lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-            proposed_at_height: current_height,
-            activate_at_height: u64::MAX,
+        let mut proposal = proposal();
+        proposal.lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+            proposed_at_height: u64::MAX,
         });
+        registry
+            .register(proposal, u64::MAX)
+            .expect("nonzero exact proposal height");
+        let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: u64::MAX,
+            activated_at_height: u64::MAX,
+            state_since_height: u64::MAX,
+        });
+        registry
+            .transition(proposal.protocol_id, active, u64::MAX)
+            .expect("same-block activation does not add an arbitrary delay");
         assert_eq!(
-            registry.register(overflow, current_height),
-            Err(PrivacyRegistryError::HeightOverflow)
+            registry
+                .active_record(proposal.protocol_id, u64::MAX)
+                .expect("active at exact committed height")
+                .lifecycle,
+            active
         );
     }
     #[test]

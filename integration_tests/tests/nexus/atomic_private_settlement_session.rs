@@ -871,7 +871,7 @@ impl RetainedBenchmarkNetwork {
             .ok_or_else(|| eyre!("retained release network was skipped"))?;
         verify_controller_readiness(&network, &runtime)?;
         let coordinator = CoordinatorProcessV1::start(&network.client())?;
-        let activated_height = activate_ivm_private_note(&network.client())?;
+        let activated_height = require_genesis_private_note_active(&network.client())?;
         let initial_inventory =
             collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
         Ok(Self {

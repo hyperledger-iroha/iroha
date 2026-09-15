@@ -33,7 +33,7 @@ use iroha::{
         domain::Domain,
         isi::{
             Grant, GrantBox, InstructionBox, Log, Mint, Register,
-            privacy::RegisterPrivacyProtocolActivationV1,
+            privacy::{RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1},
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
             },
@@ -63,11 +63,11 @@ use iroha::{
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
-            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
-            PrivacyCompiledProfileResultV1, PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1,
-            PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-            PrivacyRecipientIdV1, PrivacyRootV1,
+            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyActiveLifecycleV1,
+            PrivacyCommitmentV1, PrivacyCompiledProfileResultV1, PrivacyEncryptedOutputV1,
+            PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
         },
         query::block::prelude::FindBlocks,
         transaction::{
@@ -76,13 +76,7 @@ use iroha::{
         },
     },
 };
-use iroha_core::privacy_engines::atomic_private_settlement::AtomicPrivateSettlementProverOptionsV1;
-#[cfg(feature = "atomic-private-settlement-metal-smoke")]
-use iroha_core::privacy_engines::atomic_private_settlement::{
-    Digest384GpuBackendV1, DigestExecutionV1,
-};
 use iroha_core::{
-    privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_engines::{
         atomic_private_settlement::{
             AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementProvisionalLegInputV1,
@@ -140,8 +134,7 @@ const REAL_PROCESS_VALIDATOR_WORKER_THREADS: u64 = 4;
 const GLOBAL_LANE_ID: u32 = 0;
 const VALIDATOR_STAKE: u64 = 2_000;
 const PRIVACY_GENESIS_PROPOSAL_HEIGHT: u64 = 1;
-const PRIVACY_PROFILE_ACTIVATION_HEIGHT: u64 =
-    PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1;
+const PRIVACY_PROFILE_ACTIVATION_HEIGHT: u64 = PRIVACY_GENESIS_PROPOSAL_HEIGHT;
 const PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS: u64 = 1;
 const PRIVATE_SETTLEMENT_NOTICE_ACTIVATION_HEIGHT: u64 =
     PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS;
@@ -370,15 +363,22 @@ fn ensure_exact_private_settlement_carrier_fee(
     Ok(())
 }
 
-fn genesis_private_note_activation() -> PrivacyProtocolActivationRecordV1 {
+fn genesis_private_note_proposal() -> PrivacyProtocolActivationRecordV1 {
     compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
         .expect("compiled IVM private-note profile")
         .activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
-                activate_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
             },
         ))
+}
+
+fn genesis_private_note_active_lifecycle() -> PrivacyProtocolLifecycleV1 {
+    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+        activated_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
+        state_since_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
+    })
 }
 
 fn hash(seed: u8) -> Hash {
@@ -506,9 +506,17 @@ fn genesis_post_topology(
     // Genesis pre-exec evaluates its transactions independently, so a grant in
     // an earlier transaction is not an authorization source for a later one.
     // Instruction order inside this transaction makes the grant visible before
-    // the profile is registered at canonical height one.
+    // the profile is registered and explicitly activated at canonical height one.
+    // Both instructions execute the ordinary governance/profile validation path.
     universal
-        .push(RegisterPrivacyProtocolActivationV1::new(genesis_private_note_activation()).into());
+        .push(RegisterPrivacyProtocolActivationV1::new(genesis_private_note_proposal()).into());
+    universal.push(
+        TransitionPrivacyProtocolLifecycleV1::new(
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            genesis_private_note_active_lifecycle(),
+        )
+        .into(),
+    );
     let mut transactions = vec![universal];
     // Staking uses one globally scoped stake asset, so all lane registrations
     // remain together in the targetless transaction routed through universal.
@@ -552,8 +560,8 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         )
         .expect("global and participant committee validators fit P2P fanout")
         // Keep every release profile, including the correctness-only N=3
-        // smoke, on a production-like signed cadence. The smoke deliberately
-        // pays the mandatory 300-height governance notice in full.
+        // smoke, on a production-like signed cadence. Privacy activation is
+        // explicit in genesis; independent pool-policy notice remains enforced.
         .with_block_cadence(Duration::from_secs(4))
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
         .with_npos_consensus()
@@ -645,7 +653,12 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                 TomlValue::String("universal".to_owned()),
             );
             routing.insert("rules".into(), TomlValue::Array(Vec::new()));
+            // The writer holds its borrow across the chain; keep the filter in that chain.
             layer
+                .write(
+                    ["logger", "filter"],
+                    "iroha_torii::queue_plan_admission=debug",
+                )
                 .write(
                     ["concurrency", "scheduler_min_threads"],
                     validator_worker_threads,
@@ -785,16 +798,30 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         })
 }
 
+// EnvFilter matches target prefixes. Keep unselected v2_* siblings at INFO,
+// then enable the exact body-progress adapter and selected runner/worker owners.
+const N3_DIAGNOSTIC_LOG_FILTER: &str = concat!(
+    "iroha_torii::queue_plan_admission=debug,",
+    "iroha_core::sumeragi::v2=debug,",
+    "iroha_core::sumeragi::v2_=info,",
+    "iroha_core::sumeragi::v2_runner=debug,",
+    "iroha_core::sumeragi::v2_worker=debug",
+);
+
 fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
     // Keep the production-like four-second cadence so a release host running
     // sixteen independent validators has enough time to validate and relay the
-    // mandatory DA payload before the view deadline. This release-only smoke
-    // deliberately pays the full 300-height privacy-governance notice instead
-    // of weakening the consensus rule or using a test-only activation path.
+    // mandatory DA payload before the view deadline. Privacy activation is
+    // an explicit governed genesis transition; pool-policy notice is independent.
     // The authenticated test controller exposes the same financial-state
     // observation route used by the release fault campaign. No fault rule is
     // installed by the positive smoke test.
-    localnet_builder(shape).with_consensus_message_control()
+    localnet_builder(shape)
+        .with_consensus_message_control()
+        .with_config_layer(|layer| {
+            // This diagnostic-only smoke retains the shared admission filter.
+            layer.write(["logger", "filter"], N3_DIAGNOSTIC_LOG_FILTER);
+        })
 }
 
 fn routes_from_network(
@@ -892,41 +919,29 @@ fn committees_from_network(
         .collect()
 }
 
-/// Setup diagnostics only; these stages are outside settlement measurements.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PrivateNoteActivationStage {
-    CapabilityRead,
-    PrepareSign,
-    SubmitWait,
-}
-
+/// Setup readiness diagnostics are outside settlement measurements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrivateNoteActivationDiagnostic {
     Call {
-        stage: PrivateNoteActivationStage,
         succeeded: bool,
         elapsed: Duration,
     },
     Completed {
-        confirmed_ticks: u64,
         committed_height: u64,
         elapsed: Duration,
     },
 }
 
-/// Observe the existing call once, before its unchanged error context is added.
+/// Observe one readiness read without changing its result or error identity.
 fn observe_private_note_activation_call<T, E>(
-    stage: PrivateNoteActivationStage,
     observe: &mut impl FnMut(PrivateNoteActivationDiagnostic),
     call: impl FnOnce() -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E> {
     let started = Instant::now();
     let result = call();
-    let elapsed = started.elapsed();
     observe(PrivateNoteActivationDiagnostic::Call {
-        stage,
         succeeded: result.is_ok(),
-        elapsed,
+        elapsed: started.elapsed(),
     });
     result
 }
@@ -937,152 +952,77 @@ fn write_private_note_activation_diagnostic(
     diagnostic: PrivateNoteActivationDiagnostic,
 ) -> std::io::Result<()> {
     match diagnostic {
-        PrivateNoteActivationDiagnostic::Call {
-            stage,
-            succeeded,
-            elapsed,
-        } => {
-            let stage = match stage {
-                PrivateNoteActivationStage::CapabilityRead => "capability_read",
-                PrivateNoteActivationStage::PrepareSign => "prepare_sign",
-                PrivateNoteActivationStage::SubmitWait => "submit_wait",
-            };
+        PrivateNoteActivationDiagnostic::Call { succeeded, elapsed } => {
             let outcome = if succeeded { "success" } else { "error" };
             writeln!(
                 writer,
-                "private-note activation diagnostic_timing stage={stage} outcome={outcome} elapsed_ns={}",
+                "private-note activation diagnostic_timing stage=capability_read outcome={outcome} elapsed_ns={}",
                 elapsed.as_nanos()
             )
         }
         PrivateNoteActivationDiagnostic::Completed {
-            confirmed_ticks,
             committed_height,
             elapsed,
-        } => writeln!(
-            writer,
-            "private-note activation diagnostic_completed confirmed_ticks={confirmed_ticks} committed_height={committed_height} elapsed_ns={}",
-            elapsed.as_nanos()
-        ),
+        } => {
+            writeln!(
+                writer,
+                "private-note activation diagnostic_completed committed_height={committed_height} elapsed_ns={}",
+                elapsed.as_nanos()
+            )
+        }
     }
 }
 
-fn activate_ivm_private_note(client: &Client) -> Result<u64> {
-    let activation_started = Instant::now();
-    // Best-effort setup diagnostics must not replace the original operation result.
+fn validate_genesis_private_note_readiness(
+    activation: &PrivacyProtocolActivationRecordV1,
+    compiled_profile: &PrivacyCompiledProfileResultV1,
+    committed_height: u64,
+) -> Result<u64> {
+    let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?;
+    let expected = compiled.activation_record(genesis_private_note_active_lifecycle());
+    ensure!(
+        activation == &expected,
+        "governed IVM private-note activation differs from the exact active genesis record"
+    );
+    ensure!(
+        compiled_profile == &PrivacyCompiledProfileResultV1::Available(compiled.into()),
+        "active IVM profile differs from the exact compiled private-note profile"
+    );
+    ensure!(
+        committed_height >= PRIVACY_PROFILE_ACTIVATION_HEIGHT,
+        "active genesis profile is ahead of the committed authority context"
+    );
+    Ok(committed_height)
+}
+
+fn require_genesis_private_note_active(client: &Client) -> Result<u64> {
+    let started = Instant::now();
     let mut observe = |diagnostic| {
         let _ = write_private_note_activation_diagnostic(&mut std::io::stderr().lock(), diagnostic);
     };
-    let expected = genesis_private_note_activation();
-    let expected_compiled_profile = PrivacyCompiledProfileResultV1::Available(
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?.into(),
-    );
-    let mut ticks = 0_u64;
-    let mut last_observed_height = None;
-    let tick_limit = PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
-        .checked_add(16)
-        .expect("privacy activation tick limit fits u64");
-    loop {
-        let capability = observe_private_note_activation_call(
-            PrivateNoteActivationStage::CapabilityRead,
-            &mut observe,
-            || client.client().get_privacy_capabilities(),
-        )
-        .wrap_err_with(|| {
-            format!(
-                "private-note activation phase=capability confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
-            )
-        })?;
-        last_observed_height = Some(capability.committed_height);
-        let row = capability
-            .protocols
-            .iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
-            .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
-        let activation = row
-            .activation
-            .ok_or_else(|| eyre!("governed IVM private-note activation is absent"))?;
-        let mut expected_at_lifecycle = expected;
-        expected_at_lifecycle.lifecycle = activation.lifecycle;
-        ensure!(
-            activation == expected_at_lifecycle,
-            "governed IVM private-note activation bindings differ from genesis"
-        );
-        match activation.lifecycle {
-            PrivacyProtocolLifecycleV1::Active(active) => {
-                ensure!(
-                    active.proposed_at_height == PRIVACY_GENESIS_PROPOSAL_HEIGHT
-                        && active.activated_at_height == PRIVACY_PROFILE_ACTIVATION_HEIGHT
-                        && active.state_since_height == active.activated_at_height,
-                    "governed IVM private-note activation history differs from genesis schedule"
-                );
-                ensure!(
-                    row.compiled_profile == expected_compiled_profile,
-                    "active IVM profile differs from the exact compiled private-note profile"
-                );
-                observe(PrivateNoteActivationDiagnostic::Completed {
-                    confirmed_ticks: ticks,
-                    committed_height: capability.committed_height,
-                    elapsed: activation_started.elapsed(),
-                });
-                return Ok(capability.committed_height);
-            }
-            PrivacyProtocolLifecycleV1::Proposed(proposed) => {
-                ensure!(
-                    proposed
-                        == match expected.lifecycle {
-                            PrivacyProtocolLifecycleV1::Proposed(expected) => expected,
-                            _ => unreachable!("genesis activation is proposed"),
-                        },
-                    "governed IVM private-note proposal schedule differs from genesis"
-                );
-            }
-            PrivacyProtocolLifecycleV1::Suspended(_) | PrivacyProtocolLifecycleV1::Retired(_) => {
-                return Err(eyre!(
-                    "governed IVM private-note activation became unavailable before the smoke"
-                ));
-            }
-        }
-        ensure!(
-            ticks < tick_limit,
-            "governed IVM private-note activation did not promote within {tick_limit} blocks"
-        );
-        let tick = observe_private_note_activation_call(
-            PrivateNoteActivationStage::PrepareSign,
-            &mut observe,
-            || {
-                let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [InstructionBox::from(Log::new(
-                            Level::INFO,
-                            format!(
-                                "atomic-private-settlement activation tick {}",
-                                capability.committed_height
-                            ),
-                        ))],
-                        bounded_nexus_fee(),
-                        Metadata::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            },
-        )
-        .wrap_err_with(|| {
-            format!(
-                "private-note activation phase=tick_build confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
-            )
-        })?;
-        observe_private_note_activation_call(
-            PrivateNoteActivationStage::SubmitWait,
-            &mut observe,
-            || client.submit_transaction_and_wait(&tick),
-        )
-        .wrap_err_with(|| {
-            format!(
-                "private-note activation phase=tick_confirmation confirmed_ticks={ticks} last_observed_height={last_observed_height:?}"
-            )
-        })?;
-        ticks += 1;
-    }
+    let capability = observe_private_note_activation_call(&mut observe, || {
+        client.client().get_privacy_capabilities()
+    })
+    .wrap_err("read governed IVM private-note genesis activation")?;
+    let row = capability
+        .protocols
+        .iter()
+        .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+        .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
+    let activation = row
+        .activation
+        .as_ref()
+        .ok_or_else(|| eyre!("governed IVM private-note activation is absent"))?;
+    let height = validate_genesis_private_note_readiness(
+        activation,
+        &row.compiled_profile,
+        capability.committed_height,
+    )?;
+    observe(PrivateNoteActivationDiagnostic::Completed {
+        committed_height: height,
+        elapsed: started.elapsed(),
+    });
+    Ok(height)
 }
 
 fn signing_key(seed: u8) -> KeyPair {
@@ -1579,26 +1519,79 @@ fn proof_manifest(
     Ok(manifest)
 }
 
+/// Spawn all three local proof jobs, then join all owners before ordinal reduction.
+///
+/// The three orchestration threads share the process-wide Rayon pool. They do
+/// not create per-leg pools or change the configured eight-worker kernel bound.
+fn collect_three_smoke_leg_jobs_v1<T, R, F>(jobs: [T; 3], prepare: F) -> Result<Vec<R>>
+where
+    T: Send,
+    R: Send,
+    F: Fn(usize, T) -> Result<R> + Sync,
+{
+    collect_three_smoke_leg_jobs_with_builders_v1(jobs, prepare, |ordinal| {
+        Ok(thread::Builder::new()
+            .name(format!("aps-proof-leg-{ordinal}"))
+            .stack_size(TEST_STACK_BYTES))
+    })
+}
+
+/// The builder factory permits deterministic launch-failure ownership controls.
+fn collect_three_smoke_leg_jobs_with_builders_v1<T, R, F, B>(
+    jobs: [T; 3],
+    prepare: F,
+    mut builder: B,
+) -> Result<Vec<R>>
+where
+    T: Send,
+    R: Send,
+    F: Fn(usize, T) -> Result<R> + Sync,
+    B: FnMut(usize) -> std::io::Result<thread::Builder>,
+{
+    let diagnostic_context = SmokeDiagnosticScopeV1::capture();
+    thread::scope(|scope| {
+        let prepare = &prepare;
+        let mut ordinal = 0;
+        let children = jobs.map(|job| {
+            let index = ordinal;
+            ordinal += 1;
+            let context = diagnostic_context.clone();
+            let child = builder(index).and_then(|builder| {
+                builder.spawn_scoped(scope, move || {
+                    let _diagnostics = SmokeDiagnosticScopeV1::install(context);
+                    prepare(index, job)
+                })
+            });
+            (index, child)
+        });
+        // Array::map performs every join before Result collection can return.
+        // Preserve each proof error and choose the first ordinal error only
+        // after every initiated worker has physically finished.
+        let joined = children.map(|(ordinal, child)| match child {
+            Ok(child) => child.join().unwrap_or_else(|_| {
+                Err(eyre!(
+                    "private-settlement proof leg {ordinal} worker panicked"
+                ))
+            }),
+            Err(_) => Err(eyre!(
+                "private-settlement proof leg {ordinal} worker could not start"
+            )),
+        });
+        joined.into_iter().collect()
+    })
+}
+
 fn prepare_leg(
-    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
     authority_digest: Hash,
 ) -> Result<PreparedLeg> {
     let private_data = default_private_settlement_leg_data(ordinal);
-    prepare_leg_with_private_data(
-        prover_options,
-        ordinal,
-        governed,
-        manifest,
-        authority_digest,
-        &private_data,
-    )
+    prepare_leg_with_private_data(ordinal, governed, manifest, authority_digest, &private_data)
 }
 
 fn prepare_leg_with_private_data(
-    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
@@ -1622,7 +1615,6 @@ fn prepare_leg_with_private_data(
     let mut output_rng = iroha_crypto::rng_from_seed_slice(&output_rng_seed);
     let mut capsule_rng = iroha_crypto::rng_from_seed_slice(&capsule_rng_seed);
     prepare_leg_with_private_data_and_rngs(
-        prover_options,
         ordinal,
         governed,
         manifest,
@@ -1634,7 +1626,6 @@ fn prepare_leg_with_private_data(
 }
 
 fn prepare_leg_with_private_data_and_rngs(
-    prover_options: AtomicPrivateSettlementProverOptionsV1,
     ordinal: usize,
     governed: GovernedLeg,
     manifest: &AtomicPrivateSettlementV1,
@@ -1985,7 +1976,6 @@ fn prepare_leg_with_private_data_and_rngs(
         Some(ordinal),
     );
     let prepared = consume_atomic_private_settlement_wallet_bundle_v1(
-        prover_options,
         &mut owner_material,
         &wallet_id,
         manifest,
@@ -2236,20 +2226,22 @@ fn emit_smoke_diagnostic_v1(event: SmokeDiagnosticEventV1) {
     emit_smoke_diagnostic_to_v1(&mut std::io::stderr().lock(), event);
 }
 
+#[derive(Clone)]
 struct SmokeDiagnosticContextV1 {
     origin: std::time::Instant,
-    next_span: u64,
+    next_span: std::sync::Arc<std::sync::atomic::AtomicU64>,
     active: Vec<u64>,
 }
 
 std::thread_local! {
-    // Enabled only inside the N3 diagnostic on its existing smoke thread.
+    // Enabled only inside the N3 diagnostic and its explicitly scoped proof workers.
     // Registered benchmark helpers otherwise remain observationally unchanged.
     static SMOKE_DIAGNOSTIC_CONTEXT_V1: std::cell::RefCell<Option<SmokeDiagnosticContextV1>> = const { std::cell::RefCell::new(None) };
 }
 
 struct SmokeDiagnosticScopeV1 {
     owns_context: bool,
+    previous_context: Option<SmokeDiagnosticContextV1>,
 }
 
 impl SmokeDiagnosticScopeV1 {
@@ -2264,13 +2256,43 @@ impl SmokeDiagnosticScopeV1 {
                 }
                 *context = Some(SmokeDiagnosticContextV1 {
                     origin: std::time::Instant::now(),
-                    next_span: 1,
+                    next_span: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
                     active: Vec::new(),
                 });
                 true
             })
             .unwrap_or(false);
-        Self { owns_context }
+        Self {
+            owns_context,
+            previous_context: None,
+        }
+    }
+
+    fn capture() -> Option<SmokeDiagnosticContextV1> {
+        SMOKE_DIAGNOSTIC_CONTEXT_V1
+            .try_with(|cell| cell.try_borrow().ok().and_then(|context| context.clone()))
+            .ok()
+            .flatten()
+    }
+
+    fn install(context: Option<SmokeDiagnosticContextV1>) -> Self {
+        let previous = SMOKE_DIAGNOSTIC_CONTEXT_V1
+            .try_with(|cell| {
+                let mut current = cell.try_borrow_mut().ok()?;
+                Some(std::mem::replace(&mut *current, context))
+            })
+            .ok()
+            .flatten();
+        match previous {
+            Some(previous_context) => Self {
+                owns_context: true,
+                previous_context,
+            },
+            None => Self {
+                owns_context: false,
+                previous_context: None,
+            },
+        }
     }
 }
 
@@ -2279,7 +2301,7 @@ impl Drop for SmokeDiagnosticScopeV1 {
         if self.owns_context {
             let _ = SMOKE_DIAGNOSTIC_CONTEXT_V1.try_with(|cell| {
                 if let Ok(mut context) = cell.try_borrow_mut() {
-                    *context = None;
+                    *context = self.previous_context.take();
                 }
             });
         }
@@ -2296,8 +2318,16 @@ impl SmokeDiagnosticSpanV1 {
             .try_with(|cell| {
                 let mut context = cell.try_borrow_mut().ok()?;
                 let context = context.as_mut()?;
-                let span = context.next_span;
-                context.next_span = context.next_span.checked_add(1)?;
+                // IDs are shared across workers; timing stacks remain thread-local.
+                // Relaxed order is sufficient for uniqueness, not clock ordering.
+                let span = context
+                    .next_span
+                    .fetch_update(
+                        std::sync::atomic::Ordering::Relaxed,
+                        std::sync::atomic::Ordering::Relaxed,
+                        |next| next.checked_add(1),
+                    )
+                    .ok()?;
                 let parent = context.active.last().copied().unwrap_or(0);
                 let at_ns = context.origin.elapsed().as_nanos();
                 context.active.push(span);
@@ -2374,6 +2404,235 @@ fn observe_smoke_diagnostic_milestone_v1(phase: SmokeDiagnosticPhaseV1, height: 
     if let Some(event) = event {
         emit_smoke_diagnostic_v1(event);
     }
+}
+
+#[test]
+fn smoke_three_leg_jobs_overlap_and_reduce_reverse_completion_in_ordinal_order() {
+    use std::collections::BTreeSet;
+    use std::sync::{Mutex, mpsc};
+    let (started_tx, started_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let (release_tx, release_rx): (Vec<_>, Vec<_>) = (0..3).map(|_| mpsc::channel()).unzip();
+    let release_rx = release_rx.into_iter().map(Mutex::new).collect::<Vec<_>>();
+    let timeout = Duration::from_secs(5);
+    let results = thread::scope(|scope| {
+        let controller = scope.spawn(move || {
+            let started = (0..3)
+                .map(|_| {
+                    started_rx
+                        .recv_timeout(timeout)
+                        .expect("all three jobs overlap")
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(started, BTreeSet::from([0, 1, 2]));
+            for ordinal in (0..3).rev() {
+                release_tx[ordinal].send(()).expect("release live worker");
+                assert_eq!(
+                    finished_rx.recv_timeout(timeout).expect("worker completed"),
+                    ordinal
+                );
+            }
+        });
+        let results = collect_three_smoke_leg_jobs_v1([10, 20, 30], |ordinal, value| {
+            started_tx.send(ordinal).expect("controller observes job");
+            release_rx[ordinal]
+                .lock()
+                .expect("receiver lock")
+                .recv_timeout(timeout)
+                .expect("controller releases job");
+            finished_tx
+                .send(ordinal)
+                .expect("controller observes finish");
+            Ok(value)
+        });
+        controller.join().expect("controller joined");
+        results.expect("all proof owners joined")
+    });
+    assert_eq!(results, [10, 20, 30]);
+}
+
+#[test]
+fn smoke_three_leg_jobs_join_all_before_returning_first_ordinal_proof_error() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let finished = AtomicUsize::new(0);
+    let result = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| -> Result<usize> {
+        finished.fetch_or(1 << ordinal, Ordering::SeqCst);
+        if ordinal < 2 {
+            Err(eyre!("proof error at ordinal {ordinal}"))
+        } else {
+            Ok(ordinal)
+        }
+    });
+    assert_eq!(finished.load(Ordering::SeqCst), 0b111);
+    assert_eq!(result.unwrap_err().to_string(), "proof error at ordinal 0");
+}
+
+#[test]
+fn smoke_three_leg_jobs_join_every_owner_after_worker_panic() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Finished<'a>(&'a AtomicUsize, usize);
+    impl Drop for Finished<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_or(1 << self.1, Ordering::SeqCst);
+        }
+    }
+    let finished = AtomicUsize::new(0);
+    let result = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        let _finished = Finished(&finished, ordinal);
+        assert_ne!(ordinal, 0, "intentional proof worker panic");
+        Ok(ordinal)
+    });
+    assert_eq!(finished.load(Ordering::SeqCst), 0b111);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "private-settlement proof leg 0 worker panicked"
+    );
+}
+
+#[test]
+fn smoke_three_leg_jobs_attempt_all_launches_and_join_after_launch_failure() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let attempted = AtomicUsize::new(0);
+    let finished = AtomicUsize::new(0);
+    let result = collect_three_smoke_leg_jobs_with_builders_v1(
+        [0, 1, 2],
+        |ordinal, _| {
+            finished.fetch_or(1 << ordinal, Ordering::SeqCst);
+            Ok(ordinal)
+        },
+        |ordinal| {
+            attempted.fetch_or(1 << ordinal, Ordering::SeqCst);
+            if ordinal == 1 {
+                Err(std::io::Error::other("controlled builder failure"))
+            } else {
+                Ok(thread::Builder::new())
+            }
+        },
+    );
+    assert_eq!(attempted.load(Ordering::SeqCst), 0b111);
+    assert_eq!(finished.load(Ordering::SeqCst), 0b101);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "private-settlement proof leg 1 worker could not start"
+    );
+}
+
+#[test]
+fn smoke_worker_diagnostics_share_origin_ids_and_parent_without_sharing_stacks() {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+    let scope = SmokeDiagnosticScopeV1::start();
+    let workflow = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    let original = SmokeDiagnosticScopeV1::capture().unwrap();
+    let parent = workflow.event.unwrap().span;
+    let results = collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        let context = SmokeDiagnosticScopeV1::capture().unwrap();
+        assert_eq!(context.origin, original.origin);
+        assert!(Arc::ptr_eq(&context.next_span, &original.next_span));
+        assert_eq!(context.active, [parent]);
+        let leg = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        let witness = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::WitnessAndCapsulePreparation,
+            Some(ordinal),
+        );
+        let leg_event = leg.event.unwrap();
+        let witness_event = witness.event.unwrap();
+        assert_eq!(leg_event.parent, parent);
+        assert_eq!(witness_event.parent, leg_event.span);
+        witness.complete();
+        assert_eq!(
+            SmokeDiagnosticScopeV1::capture().unwrap().active,
+            [parent, leg_event.span]
+        );
+        leg.complete();
+        assert_eq!(SmokeDiagnosticScopeV1::capture().unwrap().active, [parent]);
+        Ok([leg_event.span, witness_event.span])
+    })
+    .expect("joined diagnostic jobs");
+    let ids = results.into_iter().flatten().collect::<BTreeSet<_>>();
+    assert_eq!(ids, BTreeSet::from([2, 3, 4, 5, 6, 7]));
+    assert_eq!(SmokeDiagnosticScopeV1::capture().unwrap().active, [parent]);
+    workflow.complete();
+    drop(scope);
+    assert!(SmokeDiagnosticScopeV1::capture().is_none());
+}
+
+#[test]
+fn smoke_worker_diagnostics_remain_disabled_without_parent_scope() {
+    assert!(SmokeDiagnosticScopeV1::capture().is_none());
+    collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        assert!(SmokeDiagnosticScopeV1::capture().is_none());
+        let span = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        assert!(span.event.is_none());
+        span.complete();
+        Ok(())
+    })
+    .expect("disabled diagnostics do not alter jobs");
+    assert!(SmokeDiagnosticScopeV1::capture().is_none());
+}
+
+#[test]
+fn smoke_worker_diagnostic_install_restores_context_on_success_error_and_unwind() {
+    let _scope = SmokeDiagnosticScopeV1::start();
+    let parent = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    let original = SmokeDiagnosticScopeV1::capture().unwrap();
+    for outcome in 0..3 {
+        let result = std::panic::catch_unwind(|| -> Result<()> {
+            let mut installed = original.clone();
+            installed.active = vec![100];
+            let _installed = SmokeDiagnosticScopeV1::install(Some(installed));
+            let _incomplete = SmokeDiagnosticSpanV1::start(
+                SmokeDiagnosticPhaseV1::ClientLegConstruction,
+                Some(0),
+            );
+            if outcome == 1 {
+                return Err(eyre!("controlled error"));
+            }
+            assert_ne!(outcome, 2, "controlled unwind");
+            Ok(())
+        });
+        assert_eq!(result.is_err(), outcome == 2);
+        if outcome == 1 {
+            assert!(result.unwrap().is_err());
+        }
+        let restored = SmokeDiagnosticScopeV1::capture().unwrap();
+        assert_eq!(restored.active, original.active);
+        assert_eq!(restored.origin, original.origin);
+        assert!(std::sync::Arc::ptr_eq(
+            &restored.next_span,
+            &original.next_span
+        ));
+    }
+    parent.complete();
+}
+
+#[test]
+fn smoke_shared_span_counter_exhaustion_never_reuses_identity() {
+    let _scope = SmokeDiagnosticScopeV1::start();
+    let context = SmokeDiagnosticScopeV1::capture().unwrap();
+    context
+        .next_span
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    collect_three_smoke_leg_jobs_v1([0, 1, 2], |ordinal, _| {
+        let span = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        assert!(span.event.is_none());
+        Ok(())
+    })
+    .expect("diagnostic exhaustion does not replace operation results");
+    assert_eq!(
+        context.next_span.load(std::sync::atomic::Ordering::Relaxed),
+        u64::MAX
+    );
+    assert!(SmokeDiagnosticScopeV1::capture().unwrap().active.is_empty());
 }
 
 #[test]
@@ -2569,7 +2828,7 @@ fn smoke_diagnostic_partial_and_interrupted_sinks_preserve_complete_record() {
     assert_eq!(partial.bytes, expected);
 }
 
-#[cfg(feature = "atomic-private-settlement-metal-smoke")]
+#[cfg(feature = "atomic-private-settlement-smoke")]
 fn run_n3_real_process_smoke() -> Result<()> {
     let _diagnostics = SmokeDiagnosticScopeV1::start();
     let (bound, request_sha) = read_bound_real_process_request()?;
@@ -2621,7 +2880,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let sponsor = network.client();
     let privacy_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::PrivacyActivation, None);
-    let activated_height = activate_ivm_private_note(&sponsor)?;
+    let activated_height = require_genesis_private_note_active(&sponsor)?;
     privacy_timing.complete();
     let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
@@ -2649,33 +2908,9 @@ fn run_n3_real_process_smoke() -> Result<()> {
         expiry_height,
         &governed,
     )?;
-    let workflow_timing =
-        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
-    let prepared = governed
-        .into_iter()
-        .zip(&committees)
-        .enumerate()
-        .map(|(ordinal, (leg, committee))| {
-            let leg_timing = SmokeDiagnosticSpanV1::start(
-                SmokeDiagnosticPhaseV1::ClientLegConstruction,
-                Some(ordinal),
-            );
-            let prepared = prepare_leg(
-                AtomicPrivateSettlementProverOptionsV1 {
-                    commitment_digest_execution: DigestExecutionV1::Device(
-                        Digest384GpuBackendV1::Metal,
-                    ),
-                    nonce_digest_execution: DigestExecutionV1::Device(Digest384GpuBackendV1::Metal),
-                },
-                ordinal,
-                leg,
-                &manifest,
-                committee.authority.digest()?,
-            )?;
-            leg_timing.complete();
-            Ok(prepared)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // Establish the measurement baseline and continuous observer before client
+    // work begins. Proof construction, self-verification, material preparation
+    // and settlement remain inside the measured workflow.
     let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
     ensure!(
         before.validators.len() == shape.process_count(),
@@ -2702,6 +2937,30 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &manifest.bundle_id,
         false,
     )?;
+
+    let workflow_timing =
+        SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::EndToEndWorkflow, None);
+    ensure!(
+        governed.len() == 3 && committees.len() == 3,
+        "exactly three proof jobs are required"
+    );
+    // Authenticate all committee digests before launching any proof worker.
+    let jobs: [(GovernedLeg, Hash); 3] = governed
+        .into_iter()
+        .zip(&committees)
+        .map(|(leg, committee)| Ok((leg, committee.authority.digest()?)))
+        .collect::<Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| eyre!("exactly three proof jobs are required"))?;
+    let prepared = collect_three_smoke_leg_jobs_v1(jobs, |ordinal, (leg, authority_digest)| {
+        let leg_timing = SmokeDiagnosticSpanV1::start(
+            SmokeDiagnosticPhaseV1::ClientLegConstruction,
+            Some(ordinal),
+        );
+        let prepared = prepare_leg(ordinal, leg, &manifest, authority_digest)?;
+        leg_timing.complete();
+        Ok(prepared)
+    })?;
     let materials = provisional_materials(manifest, &prepared, &committees)?;
     let availability_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::AvailabilityCertification, None);
@@ -2987,16 +3246,40 @@ fn run_n3_real_process_smoke() -> Result<()> {
     signed_finality_timing.complete();
     let replay_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::ReplayValidation, None);
+    // Replay the original signed carrier while it is live. QueuePlan acknowledges
+    // its immutable admission owner; this must not create another financial effect.
+    let replay_height = sponsor
+        .client()
+        .get_privacy_capabilities()?
+        .committed_height;
     ensure!(
-        sponsor
-            .client()
-            .submit_private_settlement_bundle_v1(&request)
-            .is_err(),
-        "replaying the exact finalized carrier was accepted"
+        replay_height >= receipt.finalized_height
+            && replay_height >= final_manifest.authority_context_height
+            && replay_height
+                .checked_add(1)
+                .is_some_and(|candidate| candidate <= final_manifest.expiry_height),
+        "exact finalized replay is outside the original carrier's live height window"
+    );
+    let replay_acknowledgment = sponsor
+        .client()
+        .submit_private_settlement_bundle_v1(&request)
+        .wrap_err("live exact finalized replay must acknowledge its immutable admission owner")?;
+    ensure!(
+        replay_acknowledgment.bundle_id == final_manifest.bundle_id
+            && replay_acknowledgment.carrier_id == Hash::from(request.transaction.hash()),
+        "exact finalized replay acknowledgment changed the bundle or signed carrier identity"
+    );
+    ensure!(
+        replay_acknowledgment.accepted_at_height >= replay_height
+            && replay_acknowledgment
+                .accepted_at_height
+                .checked_add(1)
+                .is_some_and(|candidate| candidate <= final_manifest.expiry_height),
+        "exact finalized replay acknowledgment is outside the original carrier's live height window"
     );
     ensure!(
         sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
-        "rejected finalization replay charged a third carrier fee"
+        "acknowledged finalization replay charged a third carrier fee"
     );
     ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
@@ -3144,7 +3427,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "atomic-private-settlement-metal-smoke")]
+#[cfg(feature = "atomic-private-settlement-smoke")]
 #[test]
 #[ignore = "release-only: starts 16 real validators and generates three native STARK proofs"]
 fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
@@ -3264,12 +3547,10 @@ fn activation_diagnostic_preserves_success_value_and_observation_order() {
     let value = Box::new(17_u8);
     let original = std::ptr::from_ref(value.as_ref());
     let result: std::result::Result<_, ()> = observe_private_note_activation_call(
-        PrivateNoteActivationStage::CapabilityRead,
         &mut |event| {
             assert!(matches!(
                 event,
                 PrivateNoteActivationDiagnostic::Call {
-                    stage: PrivateNoteActivationStage::CapabilityRead,
                     succeeded: true,
                     ..
                 }
@@ -3290,29 +3571,18 @@ fn activation_diagnostic_preserves_success_value_and_observation_order() {
 fn activation_diagnostic_preserves_error_identity_and_fail_fast_order() {
     use std::cell::RefCell;
 
-    let stages = [
-        PrivateNoteActivationStage::CapabilityRead,
-        PrivateNoteActivationStage::PrepareSign,
-        PrivateNoteActivationStage::SubmitWait,
-    ];
-    for failed_index in 0..stages.len() {
+    let call_count = 3;
+    for failed_index in 0..call_count {
         let trace = RefCell::new(Vec::new());
         let mut error = Some(Box::new(23_u8));
         let original = std::ptr::from_ref(error.as_ref().unwrap().as_ref());
         let result: std::result::Result<(), Box<u8>> = (|| {
-            for (index, stage) in stages.into_iter().enumerate() {
+            for index in 0..call_count {
                 observe_private_note_activation_call(
-                    stage,
                     &mut |event| {
-                        let PrivateNoteActivationDiagnostic::Call {
-                            stage: observed_stage,
-                            succeeded,
-                            ..
-                        } = event
-                        else {
+                        let PrivateNoteActivationDiagnostic::Call { succeeded, .. } = event else {
                             panic!("call emits only a call diagnostic")
                         };
-                        assert_eq!(observed_stage, stage);
                         assert_eq!(succeeded, index != failed_index);
                         trace.borrow_mut().push((index, "observed"));
                     },
@@ -3339,28 +3609,20 @@ fn activation_diagnostic_preserves_error_identity_and_fail_fast_order() {
 #[test]
 fn activation_diagnostic_output_has_only_declared_fields() {
     let mut output = Vec::new();
-    for stage in [
-        PrivateNoteActivationStage::CapabilityRead,
-        PrivateNoteActivationStage::PrepareSign,
-        PrivateNoteActivationStage::SubmitWait,
-    ] {
-        for succeeded in [true, false] {
-            write_private_note_activation_diagnostic(
-                &mut output,
-                PrivateNoteActivationDiagnostic::Call {
-                    stage,
-                    succeeded,
-                    elapsed: Duration::from_nanos(37),
-                },
-            )
-            .unwrap();
-        }
+    for succeeded in [true, false] {
+        write_private_note_activation_diagnostic(
+            &mut output,
+            PrivateNoteActivationDiagnostic::Call {
+                succeeded,
+                elapsed: Duration::from_nanos(37),
+            },
+        )
+        .unwrap();
     }
     write_private_note_activation_diagnostic(
         &mut output,
         PrivateNoteActivationDiagnostic::Completed {
-            confirmed_ticks: 100,
-            committed_height: 301,
+            committed_height: 1,
             elapsed: Duration::from_nanos(41),
         },
     )
@@ -3370,11 +3632,7 @@ fn activation_diagnostic_output_has_only_declared_fields() {
         concat!(
             "private-note activation diagnostic_timing stage=capability_read outcome=success elapsed_ns=37\n",
             "private-note activation diagnostic_timing stage=capability_read outcome=error elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=prepare_sign outcome=success elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=prepare_sign outcome=error elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=submit_wait outcome=success elapsed_ns=37\n",
-            "private-note activation diagnostic_timing stage=submit_wait outcome=error elapsed_ns=37\n",
-            "private-note activation diagnostic_completed confirmed_ticks=100 committed_height=301 elapsed_ns=41\n",
+            "private-note activation diagnostic_completed committed_height=1 elapsed_ns=41\n",
         )
     );
 }
@@ -3395,7 +3653,6 @@ fn activation_diagnostic_output_failure_does_not_replace_call_result() {
         let original = std::ptr::from_ref(value.as_ref());
         let mut observation_failed = false;
         let result = observe_private_note_activation_call(
-            PrivateNoteActivationStage::SubmitWait,
             &mut |event| {
                 observation_failed =
                     write_private_note_activation_diagnostic(&mut BrokenWriter, event).is_err();
@@ -3414,9 +3671,8 @@ fn activation_diagnostic_output_failure_does_not_replace_call_result() {
 #[test]
 fn genesis_ivm_private_note_activation_is_exact() {
     assert_eq!(
-        PRIVACY_PROFILE_ACTIVATION_HEIGHT,
-        PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-        "compiled private-note governance delay determines profile activation"
+        PRIVACY_PROFILE_ACTIVATION_HEIGHT, PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+        "explicit governed profile activation is committed in genesis"
     );
     assert_eq!(
         PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT,
@@ -3488,14 +3744,102 @@ fn genesis_ivm_private_note_activation_is_exact() {
         *activation_instruction > governance_instruction,
         "governed activation must follow its permission grant"
     );
-    assert_eq!(registration.activation, genesis_private_note_activation());
+    assert_eq!(registration.activation, genesis_private_note_proposal());
     assert_eq!(
         registration.activation.lifecycle,
         PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
             proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
-            activate_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
         })
     );
+    let transitions = transactions
+        .iter()
+        .enumerate()
+        .flat_map(|(tx, instructions)| {
+            instructions
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, instruction)| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<TransitionPrivacyProtocolLifecycleV1>()
+                        .map(|transition| (tx, index, transition))
+                })
+        })
+        .collect::<Vec<_>>();
+    let [(transition_transaction, transition_instruction, transition)] = transitions.as_slice()
+    else {
+        panic!("genesis must contain exactly one explicit IVM profile activation");
+    };
+    assert_eq!(*transition_transaction, *activation_transaction);
+    assert!(*transition_instruction > *activation_instruction);
+    assert_eq!(
+        transition.protocol_id,
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+    );
+    assert_eq!(
+        transition.next_lifecycle,
+        genesis_private_note_active_lifecycle()
+    );
+    // Building the real signed topology pre-executes every normalized genesis
+    // transaction through Initial. This catches admission failures and rollback
+    // of the earlier stake definition/funding before validator registration.
+    // No validator processes are started by this regression.
+    let handle = std::thread::Builder::new()
+        .name("atomic-private-settlement-genesis".to_owned())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(move || {
+            let network = n3_smoke_builder(shape).build();
+            let _validated_genesis = network.genesis();
+        })
+        .expect("spawn normalized genesis regression");
+    if let Err(panic) = handle.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
+fn genesis_private_note_readiness_accepts_committed_explicit_activation() {
+    let compiled =
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
+    let activation = compiled.activation_record(genesis_private_note_active_lifecycle());
+    let snapshot = PrivacyCompiledProfileResultV1::Available(compiled.into());
+    for height in [
+        PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+        PRIVACY_GENESIS_PROPOSAL_HEIGHT + 17,
+    ] {
+        assert_eq!(
+            validate_genesis_private_note_readiness(&activation, &snapshot, height).unwrap(),
+            height
+        );
+    }
+    assert!(validate_genesis_private_note_readiness(&activation, &snapshot, 0).is_err());
+}
+
+#[test]
+fn genesis_private_note_readiness_rejects_pending_and_substituted_profiles() {
+    let compiled =
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
+    let active = compiled.activation_record(genesis_private_note_active_lifecycle());
+    let snapshot = PrivacyCompiledProfileResultV1::Available(compiled.into());
+    let mut wrong_protocol = active;
+    wrong_protocol.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    let mut wrong_history = active;
+    wrong_history.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 1,
+        activated_at_height: 2,
+        state_since_height: 2,
+    });
+    for candidate in [
+        genesis_private_note_proposal(),
+        wrong_protocol,
+        wrong_history,
+    ] {
+        assert!(validate_genesis_private_note_readiness(&candidate, &snapshot, 3).is_err());
+    }
+    let other =
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1).unwrap();
+    let wrong_snapshot = PrivacyCompiledProfileResultV1::Available(other.into());
+    assert!(validate_genesis_private_note_readiness(&active, &wrong_snapshot, 3).is_err());
 }
 
 #[test]
@@ -3740,6 +4084,32 @@ fn repeat_bundle_private_material_is_reproducible_and_disjoint() {
         2 * PARTICIPANT_COUNT * expected_materials_per_leg
     );
     assert_eq!(recipient_ids.len(), 2 * PARTICIPANT_COUNT * 3);
+}
+
+#[test]
+fn n3_diagnostic_logger_filter_parses_and_preserves_info_and_admission() {
+    let logger = iroha_config::parameters::user::Logger {
+        level: Level::INFO,
+        filter: Some(
+            N3_DIAGNOSTIC_LOG_FILTER
+                .parse()
+                .expect("valid diagnostic directives"),
+        ),
+        ..Default::default()
+    };
+    let resolved = logger.resolve_filter().to_string();
+    let directives = resolved.split(',').collect::<Vec<_>>();
+    assert_eq!(
+        directives.len(),
+        6,
+        "one default and five target directives"
+    );
+    assert_eq!(directives[0], "info", "ordinary node logging stays at INFO");
+    assert!(directives.contains(&"iroha_torii::queue_plan_admission=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2_=info"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2_runner=debug"));
+    assert!(directives.contains(&"iroha_core::sumeragi::v2_worker=debug"));
 }
 
 #[test]

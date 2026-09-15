@@ -31,8 +31,8 @@ use super::{
         validate_historical_autonomous_lane_recovery_record,
     },
     v2_candidate::{
-        CandidateDescriptor, CandidateLimits, CandidateWorkProvider, CandidateWorkUnavailable,
-        PreparedCandidateWork,
+        CandidateDescriptor, CandidateLimits, CandidateWorkDeferral, CandidateWorkError,
+        CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
     },
     v2_context::StagedGenesisNexusAmxContext,
     v2_core::{
@@ -19598,30 +19598,26 @@ impl V2LaneWorkAdapter {
         context: &wire::HeightContext,
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+    ) -> Result<PreparedCandidateWork, CandidateWorkError> {
         if context != &self.context || !candidates.is_empty() {
-            return Err(all_unavailable(
-                candidates.len(),
-                "certified execution carrier requires its exact height and an empty ordinary batch",
+            return Err(CandidateWorkError::Failed(
+                "certified execution carrier requires its exact height and an empty ordinary batch"
+                    .to_owned(),
             ));
         }
         let output_guard = Arc::clone(&self.output_guard);
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
-            return Err(all_unavailable(
-                candidates.len(),
-                "Sumeragi v2 consensus requires process restart",
-            ));
+            return Err(CandidateWorkError::RestartRequired);
         };
         match self.refresh_merge_candidates(view) {
             Ok(MergeRefreshOutcome::Ready) => {}
             Ok(MergeRefreshOutcome::Deferred) => {
                 operation.complete();
-                return Err(all_unavailable(
-                    candidates.len(),
-                    "merge frontier is changing",
+                return Err(CandidateWorkError::Deferred(
+                    CandidateWorkDeferral::MergeFrontier,
                 ));
             }
-            Err(error) => return Err(all_unavailable(candidates.len(), error.to_string())),
+            Err(error) => return Err(CandidateWorkError::Failed(error.to_string())),
         }
         self.planned_lane_proposals.clear();
         self.planned_lane_proposals.insert(
@@ -19658,30 +19654,28 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
         context: &wire::HeightContext,
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+    ) -> Result<PreparedCandidateWork, CandidateWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
-            return Err(all_unavailable(
-                candidates.len(),
-                "Sumeragi v2 consensus requires process restart",
-            ));
+            return Err(CandidateWorkError::RestartRequired);
         };
         if context != &self.context {
             operation.complete();
-            return Err(all_unavailable(candidates.len(), "height context drift"));
+            return Err(CandidateWorkError::Failed(
+                "height context drift".to_owned(),
+            ));
         }
         match self.refresh_merge_candidates(view) {
             Ok(MergeRefreshOutcome::Ready) => {}
             Ok(MergeRefreshOutcome::Deferred) => {
                 operation.complete();
-                return Err(all_unavailable(
-                    candidates.len(),
-                    "merge frontier is changing",
+                return Err(CandidateWorkError::Deferred(
+                    CandidateWorkDeferral::MergeFrontier,
                 ));
             }
             Err(error) => {
                 drop(operation);
-                return Err(all_unavailable(candidates.len(), error.to_string()));
+                return Err(CandidateWorkError::Failed(error.to_string()));
             }
         }
         let result = (|| {
@@ -19713,7 +19707,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 return Err(CandidateWorkUnavailable::new(
                     unavailable,
                     "QueuePlanSynced work requires its globally admitted autonomous reservation",
-                ));
+                )
+                .into());
             }
             let unavailable = candidates
                 .iter()
@@ -19731,7 +19726,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 return Err(CandidateWorkUnavailable::new(
                     unavailable,
                     "ordinary work conflicts with an already-reserved autonomous lane slot",
-                ));
+                )
+                .into());
             }
             let autonomous_lane_payloads = self
                 .pending_autonomous_anchor_payloads
@@ -19745,17 +19741,26 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| {
-                    all_unavailable(
-                        candidates.len(),
-                        format!(
-                            "reserved autonomous payload cannot form a canonical anchor: {error}"
-                        ),
-                    )
+                    CandidateWorkError::Failed(format!(
+                        "reserved autonomous payload cannot form a canonical anchor: {error}"
+                    ))
                 })?;
             let routes = candidates
                 .iter()
                 .map(|candidate| candidate.routing_plan().coordinator_route())
                 .collect::<Vec<_>>();
+            let overflow = lane_session_overflow_indices(
+                &routes,
+                autonomous_lane_payloads.len(),
+                self.limits.session_capacity.get(),
+            )?;
+            if !overflow.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    overflow,
+                    "ordinary lane routes exceed capacity after reserved autonomous work",
+                )
+                .into());
+            }
             let hashes = candidates
                 .iter()
                 .map(|candidate| Hash::from(candidate.entrypoint_hash()))
@@ -19773,13 +19778,14 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 if error.is_storage_error() {
                     self.output_guard.close_admission_for_restart();
                 }
-                all_unavailable(candidates.len(), error.to_string())
+                CandidateWorkError::Failed(error.to_string())
             })?;
             if !lane_plan.unavailable_indices.is_empty() {
                 return Err(CandidateWorkUnavailable::new(
                     lane_plan.unavailable_indices,
                     "lane-local author, committee, or predecessor unavailable",
-                ));
+                )
+                .into());
             }
             if lane_plan
                 .proposals
@@ -19787,9 +19793,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 .saturating_add(autonomous_lane_payloads.len())
                 > self.limits.session_capacity.get()
             {
-                return Err(all_unavailable(
-                    candidates.len(),
-                    "combined lane-local proposal count exceeds the bounded session capacity",
+                return Err(CandidateWorkError::Failed(
+                    "lane planner exceeded the admitted session capacity".to_owned(),
                 ));
             }
             let participant_controls = self
@@ -19800,15 +19805,17 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                             indices,
                             "Native AMX participant predecessor is pending",
                         )
+                        .into()
                     }
                     NativeParticipantControlPreparationError::Unavailable(indices) => {
                         CandidateWorkUnavailable::new(
                             indices,
                             "Native AMX participant control proposal is unavailable",
                         )
+                        .into()
                     }
                     NativeParticipantControlPreparationError::Storage(error) => {
-                        all_unavailable(candidates.len(), error.to_string())
+                        CandidateWorkError::Failed(error.to_string())
                     }
                 })?;
             let mut receipts = Vec::with_capacity(candidates.len());
@@ -19851,7 +19858,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 return Err(CandidateWorkUnavailable::defer_native_for_episode(
                     unavailable,
                     "context-bound Native AMX prepare/commit certificates unavailable",
-                ));
+                )
+                .into());
             }
             self.planned_lane_proposals.insert(
                 wire::ConsensusRound {
@@ -19871,8 +19879,33 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
         result
     }
 }
-fn all_unavailable(count: usize, reason: impl Into<String>) -> CandidateWorkUnavailable {
-    CandidateWorkUnavailable::new((0..count).collect(), reason)
+/// Keep existing autonomous owners and admit additional lane routes in FIFO order.
+/// Every candidate on an overflowing route is deferred together before any native
+/// participant control is prepared; the remaining snapshot can still make progress.
+fn lane_session_overflow_indices(
+    routes: &[RoutingDecision],
+    reserved_sessions: usize,
+    capacity: usize,
+) -> Result<BTreeSet<usize>, CandidateWorkError> {
+    let available = capacity.checked_sub(reserved_sessions).ok_or_else(|| {
+        CandidateWorkError::Failed(
+            "reserved autonomous work exceeds the bounded session capacity".to_owned(),
+        )
+    })?;
+    let mut admitted = BTreeSet::new();
+    let mut overflow = BTreeSet::new();
+    for (index, route) in routes.iter().enumerate() {
+        let key = (route.lane_id, route.dataspace_id);
+        if admitted.contains(&key) {
+            continue;
+        }
+        if admitted.len() < available {
+            admitted.insert(key);
+        } else {
+            overflow.insert(index);
+        }
+    }
+    Ok(overflow)
 }
 fn bitmap_selects(bitmap: &[u8], index: usize) -> bool {
     bitmap
@@ -31698,6 +31731,63 @@ pub(super) mod tests {
     }
     include!("v2_lane_work_autonomous_ready_durability_tests.rs");
     #[test]
+    fn lane_session_capacity_preserves_reserved_owners_and_fifo_route_groups() {
+        let route = |lane, dataspace| RoutingDecision {
+            lane_id: LaneId::new(lane),
+            dataspace_id: DataSpaceId::new(dataspace),
+        };
+        let routes = [
+            route(7, 1),
+            route(2, 1),
+            route(7, 1),
+            route(9, 1),
+            route(2, 1),
+        ];
+        assert_eq!(
+            lane_session_overflow_indices(&routes, 1, 3).expect("two free route slots"),
+            BTreeSet::from([3]),
+        );
+        assert_eq!(
+            lane_session_overflow_indices(&routes, 2, 3).expect("one free route slot"),
+            BTreeSet::from([1, 3, 4]),
+        );
+        assert_eq!(
+            lane_session_overflow_indices(&routes, 3, 3).expect("reserved anchors can progress"),
+            BTreeSet::from([0, 1, 2, 3, 4]),
+        );
+        assert!(
+            lane_session_overflow_indices(&routes, 0, 3)
+                .expect("all routes fit")
+                .is_empty()
+        );
+        assert!(
+            lane_session_overflow_indices(&[], 3, 3)
+                .expect("empty ordinary batch fits")
+                .is_empty()
+        );
+        let distinct_dataspaces = [route(7, 1), route(7, 2), route(7, 1)];
+        assert_eq!(
+            lane_session_overflow_indices(&distinct_dataspaces, 0, 1)
+                .expect("route includes dataspace"),
+            BTreeSet::from([1]),
+        );
+    }
+    #[test]
+    fn lane_session_capacity_rejects_overcommitted_reserved_work_even_when_empty() {
+        let expected = CandidateWorkError::Failed(
+            "reserved autonomous work exceeds the bounded session capacity".to_owned(),
+        );
+        assert_eq!(
+            lane_session_overflow_indices(&[], 4, 3),
+            Err(expected.clone())
+        );
+        let routes = [RoutingDecision {
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(1),
+        }];
+        assert_eq!(lane_session_overflow_indices(&routes, 4, 3), Err(expected));
+    }
+    #[test]
     fn candidate_providers_require_the_installed_unlocked_reducer_view() {
         let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let context = adapter.context.clone();
@@ -31710,10 +31800,20 @@ pub(super) mod tests {
             let certified = adapter
                 .prepare_certified_execution_carrier(&context, view, &[])
                 .expect_err("certified admission waits for the exact reducer directive");
-            assert_eq!(ordinary.reason(), "merge frontier is changing");
-            assert_eq!(certified.reason(), "merge frontier is changing");
-            assert!(ordinary.indices().is_empty());
-            assert!(certified.indices().is_empty());
+            crate::sumeragi::v2_candidate::tests::assert_empty_work_deferral_reaches_assembler(
+                ordinary.clone(),
+            );
+            crate::sumeragi::v2_candidate::tests::assert_empty_work_deferral_reaches_assembler(
+                certified.clone(),
+            );
+            assert_eq!(
+                ordinary,
+                CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier)
+            );
+            assert_eq!(
+                certified,
+                CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier)
+            );
             assert!(
                 !adapter.output_guard.restart_required()
                     && adapter.output_guard.acquire().is_some(),
@@ -31807,6 +31907,9 @@ pub(super) mod tests {
                     &[CandidateDescriptor::new(&synced, &routing_plan)],
                 )
                 .expect_err("QueuePlanSynced cannot bypass its autonomous ownership corridor");
+            let CandidateWorkError::Unavailable(unavailable) = unavailable else {
+                panic!("this one transaction must have positional unavailability");
+            };
             assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
             assert_eq!(
                 unavailable.reason(),
@@ -31898,6 +32001,9 @@ pub(super) mod tests {
         let unavailable = provider
             .prepare(&context, 0, &[conflicting])
             .expect_err("ordinary ownership cannot overlap a live lane reservation");
+        let CandidateWorkError::Unavailable(unavailable) = unavailable else {
+            panic!("this one transaction must have positional unavailability");
+        };
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),

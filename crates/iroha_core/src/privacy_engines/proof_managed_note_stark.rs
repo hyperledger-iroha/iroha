@@ -2,7 +2,7 @@
 //!
 //! This module owns proof-system mechanics and relation-neutral note chips: canonical byte range
 //! checks, a three-lane byte-copy permutation, masked trace LDEs, verifier-fixed preprocessing,
-//! quotient composition, six-lane Poseidon vector-row commitments, binary FRI, grinding, and the exact
+//! quotient composition, SHA3-384 vector-row commitments, binary FRI, grinding, and the exact
 //! aggregate proof codec. Protocol adapters retain their statement policy, ordered hash schedule,
 //! profile-only rows, public-input digest, and error mapping.
 //!
@@ -11,13 +11,14 @@
 //! differential tests, and typed state transition are all complete.
 use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
+    proof_phase_diagnostics::{ManagedNotePhaseCursorV1, ProofPhaseInvocationV1, ProofPhaseV1},
     transparent_stark::{
-        GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-        GoldilocksFp4V1 as E, ReplayableTraceMaskV1, TransparentStarkErrorV1,
-        TransparentTranscriptV1, goldilocks_digest384_frame_v1, goldilocks_fft_v1,
-        goldilocks_ifft_v1, goldilocks_primitive_root_v1, grind_nonce_v1,
-        masked_trace_lde_column_with_mask_v1, sample_trace_mask_v1,
-        transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
+        GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
+        PrivacyOuterDigestV1, ReplayableTraceMaskV1, TransparentStarkErrorV1,
+        TransparentTranscriptV1, goldilocks_fft_v1, goldilocks_ifft_v1,
+        goldilocks_primitive_root_v1, grind_nonce_v1, masked_trace_lde_column_with_mask_v1,
+        privacy_outer_digest_frame_v1, sample_trace_mask_v1, transparent_stark_zk_mask_geometry_v1,
+        verify_grinding_nonce_v1,
     },
 };
 #[cfg(test)]
@@ -85,7 +86,7 @@ const NOTE_SHARED_PROFILE_BINDING_LABEL_V1: &[u8] =
 const NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-stark.combined-profile.v1";
 /// Sole first-release proof-system identity for proof-managed note pools.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_SUITE_V1: &[u8] = b"StarkFriPoseidonX7Goldilocks6x64";
+pub(crate) const PROOF_MANAGED_NOTE_STARK_SUITE_V1: &[u8] = b"StarkFriSha3_384Goldilocks";
 /// Independent composition and FRI lanes in the first-release profile.
 pub(crate) const PROOF_MANAGED_NOTE_SECURITY_LANES_V1: usize = 1;
 /// Unique shared extension-domain queries in the first-release profile.
@@ -112,7 +113,8 @@ pub(crate) const PROOF_MANAGED_NOTE_GRINDING_BITS_V1: u8 = 20;
 pub(crate) const PROOF_MANAGED_NOTE_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 /// Machine-checked affine-batched FRI query-error exponent at 136 queries.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_QUERY_ERROR_BITS_V1: u16 = 160;
-/// Worst-case commitment-error exponent at the maximum native trace.
+/// Worst-case interactive FRI algebraic commitment-error exponent at the maximum native trace.
+/// This excludes outer-hash collision and Fiat--Shamir/QROM composition reductions.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_COMMITMENT_ERROR_BITS_MIN_V1: u16 = 197;
 /// Affine batching parameter in the sole first-release FRI theorem instance.
 pub(crate) const PROOF_MANAGED_NOTE_FRI_BATCHING_PARAMETER_M_V1: u8 = 3;
@@ -129,13 +131,13 @@ pub(crate) const PROOF_MANAGED_NOTE_EXTENSION_FIELD_LOWER_BOUND_BITS_V1: u16 = 2
 /// Protocol adapters bind a separate relation descriptor. The canonical
 /// profile digest frames this shared descriptor first and the relation
 /// descriptor second, so neither layer can silently restate stale geometry.
-pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriPoseidonX7Goldilocks6x64:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=160:commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:codec=fixed-public-profile-length-big-endian-digest384:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1";
+pub(crate) const PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-stark-geometry-v1:proof=StarkFriSha3_384Goldilocks:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha3-384:transcript=sha3-384:copy-width=8:copy-lanes=3:copy-aux-width=118:copy-fixed-width=43:copy-constraints=151:copy-constraint-degree=2:security-lanes=1:queries=136:lde-blowup=8:composition-degree-chunks=4:deep-points=1:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2=14:trace-mask-degree=975:trace-mask-coefficients=976:max-constraint-degree=4:fri-terminal=1024:fri-degree=143:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m=3:rho-upper-bound=1/7:affine-arities=2,2,2:extension-field-lower-bound-bits=252:query-error-bits=160:fri-algebraic-commitment-error-bits-min=197:target-soundness-bits=128:grinding=20-nonadditive:frame=privacy-sha3-384-be-v1:scalar-fp4=bounded-be-u64-rejection:query-source=2^64:codec=fixed-public-profile-length-opaque-digest48-canonical-be-fields:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1";
 /// Derive the canonical digest of shared proof geometry plus one relation.
 pub(crate) fn proof_managed_note_stark_profile_digest_v1(
     domains: aggregate::AggregateStarkDomainsV1,
     relation_descriptor: &[u8],
-) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
-    goldilocks_digest384_frame_v1(
+) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
+    privacy_outer_digest_frame_v1(
         domains.digest_context,
         NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1,
         b"compiled-profile",
@@ -152,8 +154,8 @@ pub(crate) fn proof_managed_note_stark_profile_digest_v1(
 /// Derive the protocol-bound digest of the shared proof geometry.
 pub(crate) fn proof_managed_note_stark_geometry_digest_v1(
     domains: aggregate::AggregateStarkDomainsV1,
-) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
-    goldilocks_digest384_frame_v1(
+) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
+    privacy_outer_digest_frame_v1(
         domains.digest_context,
         NOTE_COMBINED_PROFILE_DIGEST_DOMAIN_V1,
         b"shared-geometry",
@@ -203,13 +205,9 @@ pub(crate) enum ProofManagedNoteStarkErrorV1 {
     /// A checked internal invariant failed.
     #[error("proof-managed note STARK internal invariant failed")]
     Internal,
-    /// Explicit commitment execution failed without backend substitution.
-    #[error("proof-managed note STARK digest execution failed")]
-    DigestExecution,
 }
 fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ProofManagedNoteStarkErrorV1 {
     match error {
-        TransparentStarkErrorV1::DigestExecution => ProofManagedNoteStarkErrorV1::DigestExecution,
         TransparentStarkErrorV1::RandomnessUnavailable => ProofManagedNoteStarkErrorV1::Randomness,
         TransparentStarkErrorV1::AllocationFailure => ProofManagedNoteStarkErrorV1::Resource,
         TransparentStarkErrorV1::NonCanonicalField | TransparentStarkErrorV1::MalformedProof => {
@@ -225,9 +223,6 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ProofManagedNoteS
 }
 fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManagedNoteStarkErrorV1 {
     match error {
-        aggregate::AggregateStarkErrorV1::DigestExecution => {
-            ProofManagedNoteStarkErrorV1::DigestExecution
-        }
         aggregate::AggregateStarkErrorV1::InvalidLayout => {
             ProofManagedNoteStarkErrorV1::InvalidProfile
         }
@@ -271,7 +266,7 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
 pub(crate) struct ProofManagedNoteStarkProtocolV1 {
     /// Exact aggregate proof dimensions and wire limits.
     pub(crate) parameters: aggregate::AggregateStarkParametersV1,
-    /// Complete six-lane Poseidon Merkle and transcript domains.
+    /// Complete SHA3-384 Merkle and transcript domains.
     pub(crate) domains: aggregate::AggregateStarkDomainsV1,
     /// Maximum algebraic degree across shared and profile constraints.
     pub(crate) maximum_constraint_degree: u8,
@@ -456,8 +451,7 @@ pub(crate) trait ProofManagedNoteStarkAdapterV1: Sync {
     /// Closed proof protocol.
     fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1;
     /// Exact digest of all public statement fields.
-    fn public_input_digest_v1(&self)
-    -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1>;
+    fn public_input_digest_v1(&self) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1>;
     /// Binary logarithm of the sole native trace group.
     fn trace_log2_v1(&self) -> u8;
     /// Exact base-trace width, including the eight copy cells.
@@ -1502,14 +1496,14 @@ fn evaluate_masked_native_columns_at_deep_v1(
 }
 fn new_note_transcript_v1(
     prepared: &PreparedNoteProfileV1,
-    public_digest: &GoldilocksDigest384V1,
+    public_digest: &PrivacyOuterDigestV1,
 ) -> Result<TransparentTranscriptV1, ProofManagedNoteStarkErrorV1> {
     let profile_digest = proof_managed_note_stark_profile_digest_v1(
         prepared.protocol.domains,
         prepared.protocol.profile_descriptor,
     )?;
     let geometry_digest = proof_managed_note_stark_geometry_digest_v1(prepared.protocol.domains)?;
-    let geometry_digest = geometry_digest.to_le_bytes();
+    let geometry_digest = geometry_digest.to_bytes();
     let mut transcript = TransparentTranscriptV1::new(
         prepared.protocol.domains.digest_context,
         PROOF_MANAGED_NOTE_STARK_SUITE_V1,
@@ -1733,8 +1727,12 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
     canonical_columns_v1(base_lde, prepared.base_width, lde_size)?;
     canonical_columns_v1(aux_lde, prepared.aux_width, lde_size)?;
     canonical_columns_v1(fixed_lde, prepared.fixed_width, lde_size)?;
-    let lde_root = goldilocks_primitive_root_v1(prepared.layout.common_lde_log2())
-        .map_err(map_transparent_error_v1)?;
+    let inverse_vanishing_period = aggregate::trace_vanishing_inverse_period_v1(
+        prepared.trace_log2,
+        prepared.layout.common_lde_log2(),
+        F(GOLDILOCKS_GENERATOR_V1),
+    )
+    .map_err(map_aggregate_error_v1)?;
     let next_stride = prepared
         .layout
         .trace_groups()
@@ -1751,24 +1749,14 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
         lane.try_reserve_exact(lde_size)
             .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
     }
-    let mut x = F(GOLDILOCKS_GENERATOR_V1);
-    // Retain only one canonical row batch at a time. The domain recurrence is evaluated serially
-    // across batch boundaries, matching the historical path exactly, while rows inside a batch
-    // are independent and collected by index. Serial reduction writes directly into the final
-    // lane vectors, avoiding both a full domain-point table and a full row-major staging vector.
+    // Keep one canonical row batch at a time. The shared vanishing table has
+    // one entry per blowup coordinate; every row retains the same quotient
+    // divisor without a domain-point buffer or per-row exponentiation/inversion.
+    // Indexed collection and serial reduction preserve lane and error order.
     for batch_start in (0..lde_size).step_by(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1) {
         let batch_end = batch_start
             .checked_add(aggregate::DEEP_FRI_BASE_BATCH_ROWS_V1)
             .map_or(lde_size, |end| end.min(lde_size));
-        let batch_len = batch_end - batch_start;
-        let mut domain_points = Vec::new();
-        domain_points
-            .try_reserve_exact(batch_len)
-            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
-        for _ in batch_start..batch_end {
-            domain_points.push(x);
-            x = x.mul(lde_root);
-        }
         let rows = (batch_start..batch_end)
             .into_par_iter()
             .map(|index| {
@@ -1792,12 +1780,8 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
                     copy_challenges,
                     profile_challenges,
                 )?;
-                let local_index = index - batch_start;
-                let inverse_vanishing = domain_points[local_index]
-                    .pow(prepared.trace_size as u128)
-                    .sub(F::ONE)
-                    .inv()
-                    .ok_or(ProofManagedNoteStarkErrorV1::Internal)?;
+                let inverse_vanishing =
+                    inverse_vanishing_period[index % inverse_vanishing_period.len()];
                 let mut row = [E::ZERO; PROOF_MANAGED_NOTE_SECURITY_LANES_V1];
                 for (lane, value) in row.iter_mut().enumerate() {
                     let numerator = residues
@@ -2044,332 +2028,359 @@ pub(crate) fn prove_proof_managed_note_stark_v1_with_rng<
     A: ProofManagedNoteStarkAdapterV1,
     R: TryRngCore,
 >(
-    commitment_digest_execution: fastpq_prover::DigestExecutionV1,
-    nonce_digest_execution: fastpq_prover::DigestExecutionV1,
     adapter: &A,
     base_columns: &[Vec<F>],
     rng: &mut R,
 ) -> Result<ProofManagedNoteCandidateV1, ProofManagedNoteStarkErrorV1> {
-    let prepared = prepare_note_profile_v1(adapter)?;
-    canonical_columns_v1(base_columns, prepared.base_width, prepared.trace_size)?;
-    let public_digest = adapter.public_input_digest_v1()?;
-    let lde_log2 = prepared.layout.common_lde_log2();
-    let lde_size = prepared.layout.common_lde_size();
-    let (base_lde, base_masks) =
-        masked_lde_columns_v1(base_columns, prepared.trace_log2, lde_log2, rng)?;
-    let base_lde = ZeroizingBaseFieldMatrixV1::from(base_lde);
-    let base_tree = aggregate::row_tree_v1(
-        commitment_digest_execution,
-        prepared.protocol.domains.digest_context,
-        prepared.protocol.domains.base_leaf,
-        prepared.protocol.domains.base_node,
-        0,
-        &base_lde,
-        lde_size,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let mut transcript = new_note_transcript_v1(&prepared, &public_digest)?;
-    let mut trace_group_proofs = vec![aggregate::AggregateTraceGroupProofV1 {
-        base_root: base_tree.root(),
-        aux_root: GoldilocksDigest384V1::default(),
-        base_frontier: Vec::new(),
-        aux_frontier: Vec::new(),
-    }];
-    aggregate::absorb_base_roots_v1(
-        &mut transcript,
-        prepared.protocol.domains,
-        &trace_group_proofs,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let copy_challenges = derive_note_copy_challenges_v1(&mut transcript)?;
-    let profile_challenges =
-        adapter.derive_profile_challenges_v1(&mut transcript, copy_challenges)?;
-    let copy_aux = ZeroizingBaseFieldMatrixV1::from(build_note_copy_aux_columns_v1(
-        base_columns,
-        &prepared.fixed_columns,
-        copy_challenges,
-        prepared.trace_size,
-    )?);
-    let mut profile_aux = ZeroizingBaseFieldMatrixV1::from(adapter.build_profile_aux_columns_v1(
-        base_columns,
-        &copy_aux,
-        &prepared.fixed_columns,
-        copy_challenges,
-        &profile_challenges,
-    )?);
-    canonical_columns_v1(
-        &profile_aux,
-        adapter.profile_aux_width_v1(),
-        prepared.trace_size,
-    )?;
-    let mut aux_columns = copy_aux;
-    aux_columns.append(&mut profile_aux);
-    canonical_columns_v1(&aux_columns, prepared.aux_width, prepared.trace_size)?;
-    validate_native_constraints_v1(
-        adapter,
-        &prepared,
-        base_columns,
-        &aux_columns,
-        copy_challenges,
-        &profile_challenges,
-    )?;
-    let (aux_lde, aux_masks) =
-        masked_lde_columns_v1(&aux_columns, prepared.trace_log2, lde_log2, rng)?;
-    let aux_lde = ZeroizingBaseFieldMatrixV1::from(aux_lde);
-    let aux_tree = aggregate::row_tree_v1(
-        commitment_digest_execution,
-        prepared.protocol.domains.digest_context,
-        prepared.protocol.domains.aux_leaf,
-        prepared.protocol.domains.aux_node,
-        0,
-        &aux_lde,
-        lde_size,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    trace_group_proofs[0].aux_root = aux_tree.root();
-    aggregate::absorb_aux_roots_v1(
-        &mut transcript,
-        prepared.protocol.domains,
-        &trace_group_proofs,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let alphas = derive_constraint_alphas_v1(&mut transcript, prepared.constraint_count)?;
-    let fixed_lde = fixed_lde_columns_v1(&prepared.fixed_columns, prepared.trace_log2, lde_log2)?;
-    let compositions = ZeroizingExtensionFieldCubeV1::from(composition_lanes_v1(
-        adapter,
-        &prepared,
-        &base_lde,
-        &aux_lde,
-        &fixed_lde,
-        copy_challenges,
-        &profile_challenges,
-        &alphas,
-    )?);
-    let mut composition_trees = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
-    let mut composition_roots = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
-    for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
-        let tree = aggregate::composition_tree_v1(
-            commitment_digest_execution,
-            prepared.protocol.domains,
-            lane,
-            &compositions[lane],
+    let phase_invocation = ProofPhaseInvocationV1::new_managed_note();
+    let mut phases = ManagedNotePhaseCursorV1::new(phase_invocation.as_ref());
+    // Keep the original statement, RNG and ownership order in one synchronous scope.
+    let result = (|| {
+        phases.advance(ProofPhaseV1::ProfilePreparation);
+        let prepared = prepare_note_profile_v1(adapter)?;
+        canonical_columns_v1(base_columns, prepared.base_width, prepared.trace_size)?;
+        let public_digest = adapter.public_input_digest_v1()?;
+        let lde_log2 = prepared.layout.common_lde_log2();
+        let lde_size = prepared.layout.common_lde_size();
+        phases.advance(ProofPhaseV1::BaseLde);
+        let (base_lde, base_masks) =
+            masked_lde_columns_v1(base_columns, prepared.trace_log2, lde_log2, rng)?;
+        let base_lde = ZeroizingBaseFieldMatrixV1::from(base_lde);
+        phases.advance(ProofPhaseV1::BaseCommitment);
+        let base_tree = aggregate::row_tree_v1(
+            prepared.protocol.domains.digest_context,
+            prepared.protocol.domains.base_leaf,
+            prepared.protocol.domains.base_node,
+            0,
+            &base_lde,
+            lde_size,
         )
         .map_err(map_aggregate_error_v1)?;
-        composition_roots.push(tree.root());
-        composition_trees.push(tree);
-    }
-    aggregate::absorb_composition_roots_v1(
-        &mut transcript,
-        prepared.protocol.parameters,
-        prepared.protocol.domains,
-        &composition_roots,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let fri_masks = aggregate::build_fri_mask_oracles_v1(
-        commitment_digest_execution,
-        prepared.protocol.parameters,
-        prepared.protocol.domains,
-        &prepared.layout,
-        rng,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let fri_mask_roots = fri_masks
-        .iter()
-        .map(|mask| mask.tree.root())
-        .collect::<Vec<_>>();
-    aggregate::absorb_fri_mask_roots_v1(
-        &mut transcript,
-        prepared.protocol.parameters,
-        prepared.protocol.domains,
-        &fri_mask_roots,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let trace_materials = vec![aggregate::AggregateTraceGroupMaterialV1 {
-        base_lde: base_lde.into_inner(),
-        aux_lde: aux_lde.into_inner(),
-        base_tree,
-        aux_tree,
-    }];
-    let deep_point = aggregate::derive_deep_point_v1(
-        &mut transcript,
-        prepared.protocol.parameters,
-        &prepared.layout,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let (base_current, base_next) = evaluate_masked_native_columns_at_deep_v1(
-        base_columns,
-        &base_masks,
-        prepared.trace_log2,
-        deep_point,
-    )?;
-    let (aux_current, aux_next) = evaluate_masked_native_columns_at_deep_v1(
-        &aux_columns,
-        &aux_masks,
-        prepared.trace_log2,
-        deep_point,
-    )?;
-    let deep_compositions = aggregate::evaluate_composition_chunks_at_deep_v1(
-        &compositions,
-        prepared.protocol.parameters,
-        &prepared.layout,
-        deep_point,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let deep = aggregate::AggregateDeepProofV1 {
-        trace_groups: vec![aggregate::AggregateDeepTraceGroupOpeningV1 {
-            base_current: base_current
-                .into_iter()
-                .map(|value| value.coefficients().map(F::value))
-                .collect(),
-            base_next: base_next
-                .into_iter()
-                .map(|value| value.coefficients().map(F::value))
-                .collect(),
-            aux_current: aux_current
-                .into_iter()
-                .map(|value| value.coefficients().map(F::value))
-                .collect(),
-            aux_next: aux_next
-                .into_iter()
-                .map(|value| value.coefficients().map(F::value))
-                .collect(),
-        }],
-        composition_values: deep_compositions
-            .into_iter()
-            .map(|lane| {
-                lane.into_iter()
-                    .map(|value| value.coefficients().map(F::value))
-                    .collect()
-            })
-            .collect(),
-    };
-    aggregate::validate_deep_proof_shape_v1(&deep, prepared.protocol.parameters, &prepared.layout)
+        phases.advance(ProofPhaseV1::AuxiliaryConstruction);
+        let mut transcript = new_note_transcript_v1(&prepared, &public_digest)?;
+        let mut trace_group_proofs = vec![aggregate::AggregateTraceGroupProofV1 {
+            base_root: base_tree.root(),
+            aux_root: PrivacyOuterDigestV1::default(),
+            base_frontier: Vec::new(),
+            aux_frontier: Vec::new(),
+        }];
+        aggregate::absorb_base_roots_v1(
+            &mut transcript,
+            prepared.protocol.domains,
+            &trace_group_proofs,
+        )
         .map_err(map_aggregate_error_v1)?;
-    drop(base_masks);
-    drop(aux_masks);
-    aggregate::absorb_deep_openings_v1(
-        &mut transcript,
-        &deep,
-        prepared.protocol.parameters,
-        &prepared.layout,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let mixes = derive_deep_mixes_v1(
-        &mut transcript,
-        prepared.base_width,
-        prepared.aux_width,
-        prepared.protocol.parameters.composition_degree_chunks,
-        prepared.protocol.parameters,
-        &prepared.layout,
-    )?;
-    let mut fri_lanes = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
-    for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
-        let mut fri_base = ZeroizingExtensionFieldValuesV1::from(mixed_deep_fri_base_v1(
-            &trace_materials[0].base_lde,
-            &trace_materials[0].aux_lde,
-            &compositions[lane],
-            &deep,
-            deep_point,
-            &mixes[lane],
-            lane,
+        let copy_challenges = derive_note_copy_challenges_v1(&mut transcript)?;
+        let profile_challenges =
+            adapter.derive_profile_challenges_v1(&mut transcript, copy_challenges)?;
+        let copy_aux = ZeroizingBaseFieldMatrixV1::from(build_note_copy_aux_columns_v1(
+            base_columns,
+            &prepared.fixed_columns,
+            copy_challenges,
+            prepared.trace_size,
+        )?);
+        let mut profile_aux =
+            ZeroizingBaseFieldMatrixV1::from(adapter.build_profile_aux_columns_v1(
+                base_columns,
+                &copy_aux,
+                &prepared.fixed_columns,
+                copy_challenges,
+                &profile_challenges,
+            )?);
+        canonical_columns_v1(
+            &profile_aux,
+            adapter.profile_aux_width_v1(),
+            prepared.trace_size,
+        )?;
+        let mut aux_columns = copy_aux;
+        aux_columns.append(&mut profile_aux);
+        canonical_columns_v1(&aux_columns, prepared.aux_width, prepared.trace_size)?;
+        phases.advance(ProofPhaseV1::NativeConstraints);
+        validate_native_constraints_v1(
+            adapter,
+            &prepared,
+            base_columns,
+            &aux_columns,
+            copy_challenges,
+            &profile_challenges,
+        )?;
+        phases.advance(ProofPhaseV1::AuxiliaryLde);
+        let (aux_lde, aux_masks) =
+            masked_lde_columns_v1(&aux_columns, prepared.trace_log2, lde_log2, rng)?;
+        let aux_lde = ZeroizingBaseFieldMatrixV1::from(aux_lde);
+        phases.advance(ProofPhaseV1::AuxiliaryCommitment);
+        let aux_tree = aggregate::row_tree_v1(
+            prepared.protocol.domains.digest_context,
+            prepared.protocol.domains.aux_leaf,
+            prepared.protocol.domains.aux_node,
+            0,
+            &aux_lde,
+            lde_size,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        phases.advance(ProofPhaseV1::FixedLdeAndChallenges);
+        trace_group_proofs[0].aux_root = aux_tree.root();
+        aggregate::absorb_aux_roots_v1(
+            &mut transcript,
+            prepared.protocol.domains,
+            &trace_group_proofs,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let alphas = derive_constraint_alphas_v1(&mut transcript, prepared.constraint_count)?;
+        let fixed_lde =
+            fixed_lde_columns_v1(&prepared.fixed_columns, prepared.trace_log2, lde_log2)?;
+        phases.advance(ProofPhaseV1::CompositionValues);
+        let compositions = ZeroizingExtensionFieldCubeV1::from(composition_lanes_v1(
+            adapter,
+            &prepared,
+            &base_lde,
+            &aux_lde,
+            &fixed_lde,
+            copy_challenges,
+            &profile_challenges,
+            &alphas,
+        )?);
+        phases.advance(ProofPhaseV1::CompositionCommitments);
+        let mut composition_trees = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
+        let mut composition_roots = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
+        for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
+            let tree = aggregate::composition_tree_v1(
+                prepared.protocol.domains,
+                lane,
+                &compositions[lane],
+            )
+            .map_err(map_aggregate_error_v1)?;
+            composition_roots.push(tree.root());
+            composition_trees.push(tree);
+        }
+        aggregate::absorb_composition_roots_v1(
+            &mut transcript,
+            prepared.protocol.parameters,
+            prepared.protocol.domains,
+            &composition_roots,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        phases.advance(ProofPhaseV1::FriMaskOracles);
+        let fri_masks = aggregate::build_fri_mask_oracles_v1(
+            prepared.protocol.parameters,
+            prepared.protocol.domains,
+            &prepared.layout,
+            rng,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let fri_mask_roots = fri_masks
+            .iter()
+            .map(|mask| mask.tree.root())
+            .collect::<Vec<_>>();
+        aggregate::absorb_fri_mask_roots_v1(
+            &mut transcript,
+            prepared.protocol.parameters,
+            prepared.protocol.domains,
+            &fri_mask_roots,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        phases.advance(ProofPhaseV1::DeepEvaluations);
+        let trace_materials = vec![aggregate::AggregateTraceGroupMaterialV1 {
+            base_lde: base_lde.into_inner(),
+            aux_lde: aux_lde.into_inner(),
+            base_tree,
+            aux_tree,
+        }];
+        let deep_point = aggregate::derive_deep_point_v1(
+            &mut transcript,
             prepared.protocol.parameters,
             &prepared.layout,
-        )?);
-        aggregate::add_fri_mask_oracle_v1(&mut fri_base, &fri_masks[lane])
-            .map_err(map_aggregate_error_v1)?;
-        fri_lanes.push(
-            aggregate::build_fri_lane_v1(
-                commitment_digest_execution,
-                prepared.protocol.parameters,
-                prepared.protocol.domains,
-                &prepared.layout,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let (base_current, base_next) = evaluate_masked_native_columns_at_deep_v1(
+            base_columns,
+            &base_masks,
+            prepared.trace_log2,
+            deep_point,
+        )?;
+        let (aux_current, aux_next) = evaluate_masked_native_columns_at_deep_v1(
+            &aux_columns,
+            &aux_masks,
+            prepared.trace_log2,
+            deep_point,
+        )?;
+        let deep_compositions = aggregate::evaluate_composition_chunks_at_deep_v1(
+            &compositions,
+            prepared.protocol.parameters,
+            &prepared.layout,
+            deep_point,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let deep = aggregate::AggregateDeepProofV1 {
+            trace_groups: vec![aggregate::AggregateDeepTraceGroupOpeningV1 {
+                base_current: base_current
+                    .into_iter()
+                    .map(|value| value.coefficients().map(F::value))
+                    .collect(),
+                base_next: base_next
+                    .into_iter()
+                    .map(|value| value.coefficients().map(F::value))
+                    .collect(),
+                aux_current: aux_current
+                    .into_iter()
+                    .map(|value| value.coefficients().map(F::value))
+                    .collect(),
+                aux_next: aux_next
+                    .into_iter()
+                    .map(|value| value.coefficients().map(F::value))
+                    .collect(),
+            }],
+            composition_values: deep_compositions
+                .into_iter()
+                .map(|lane| {
+                    lane.into_iter()
+                        .map(|value| value.coefficients().map(F::value))
+                        .collect()
+                })
+                .collect(),
+        };
+        aggregate::validate_deep_proof_shape_v1(
+            &deep,
+            prepared.protocol.parameters,
+            &prepared.layout,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        drop(base_masks);
+        drop(aux_masks);
+        aggregate::absorb_deep_openings_v1(
+            &mut transcript,
+            &deep,
+            prepared.protocol.parameters,
+            &prepared.layout,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let mixes = derive_deep_mixes_v1(
+            &mut transcript,
+            prepared.base_width,
+            prepared.aux_width,
+            prepared.protocol.parameters.composition_degree_chunks,
+            prepared.protocol.parameters,
+            &prepared.layout,
+        )?;
+        phases.advance(ProofPhaseV1::FriLayers);
+        let mut fri_lanes = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
+        for lane in 0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1 {
+            let mut fri_base = ZeroizingExtensionFieldValuesV1::from(mixed_deep_fri_base_v1(
+                &trace_materials[0].base_lde,
+                &trace_materials[0].aux_lde,
+                &compositions[lane],
+                &deep,
+                deep_point,
+                &mixes[lane],
                 lane,
-                fri_base.into_inner(),
-                &mut transcript,
-            )
-            .map_err(map_aggregate_error_v1)?,
-        );
-    }
-    let grinding_state = transcript.state();
-    let grinding_nonce = grind_nonce_v1(
-        nonce_digest_execution,
-        prepared.protocol.domains.digest_context,
-        &grinding_state,
-        PROOF_MANAGED_NOTE_GRINDING_BITS_V1,
-    )
-    .map_err(map_transparent_error_v1)?;
-    absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
-    let query_indices = aggregate::query_indices_v1(
-        &transcript,
-        prepared.protocol.parameters,
-        prepared.protocol.domains,
-        &prepared.layout,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    let queries = query_indices
-        .into_iter()
-        .map(|index| {
-            aggregate::build_query_v1(
                 prepared.protocol.parameters,
                 &prepared.layout,
-                index,
+            )?);
+            aggregate::add_fri_mask_oracle_v1(&mut fri_base, &fri_masks[lane])
+                .map_err(map_aggregate_error_v1)?;
+            fri_lanes.push(
+                aggregate::build_fri_lane_v1(
+                    prepared.protocol.parameters,
+                    prepared.protocol.domains,
+                    &prepared.layout,
+                    lane,
+                    fri_base.into_inner(),
+                    &mut transcript,
+                )
+                .map_err(map_aggregate_error_v1)?,
+            );
+        }
+        phases.advance(ProofPhaseV1::Nonce);
+        let grinding_state = transcript.state();
+        let grinding_nonce = grind_nonce_v1(
+            prepared.protocol.domains.digest_context,
+            &grinding_state,
+            PROOF_MANAGED_NOTE_GRINDING_BITS_V1,
+        )
+        .map_err(map_transparent_error_v1)?;
+        absorb_grinding_nonce_v1(&mut transcript, grinding_nonce)?;
+        phases.advance(ProofPhaseV1::Openings);
+        let query_indices = aggregate::query_indices_v1(
+            &transcript,
+            prepared.protocol.parameters,
+            prepared.protocol.domains,
+            &prepared.layout,
+        )
+        .map_err(map_aggregate_error_v1)?;
+        let queries = query_indices
+            .into_iter()
+            .map(|index| {
+                aggregate::build_query_v1(
+                    prepared.protocol.parameters,
+                    &prepared.layout,
+                    index,
+                    &trace_materials,
+                    &compositions,
+                    &fri_masks,
+                    &fri_lanes,
+                )
+                .map_err(map_aggregate_error_v1)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let (trace_frontiers, composition_frontiers, fri_mask_frontiers, fri_round_frontiers) =
+            aggregate::build_all_frontiers_v1(
+                prepared.protocol.parameters,
+                &prepared.layout,
+                &queries,
                 &trace_materials,
-                &compositions,
+                &composition_trees,
                 &fri_masks,
                 &fri_lanes,
             )
-            .map_err(map_aggregate_error_v1)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let (trace_frontiers, composition_frontiers, fri_mask_frontiers, fri_round_frontiers) =
-        aggregate::build_all_frontiers_v1(
+            .map_err(map_aggregate_error_v1)?;
+        for (group, (base_frontier, aux_frontier)) in
+            trace_group_proofs.iter_mut().zip(trace_frontiers)
+        {
+            group.base_frontier = base_frontier;
+            group.aux_frontier = aux_frontier;
+        }
+        let proof = aggregate::AggregateStarkProofV1 {
+            version: prepared.protocol.parameters.proof_version,
+            trace_groups: trace_group_proofs,
+            composition_roots,
+            composition_frontiers,
+            fri_mask_roots,
+            fri_mask_frontiers,
+            fri_lanes: fri_lanes
+                .into_iter()
+                .zip(fri_round_frontiers)
+                .map(
+                    |(lane, round_frontiers)| aggregate::AggregateFriLaneProofV1 {
+                        roots: lane.roots,
+                        terminal_values: lane
+                            .terminal_values
+                            .into_iter()
+                            .map(|value| value.coefficients().map(F::value))
+                            .collect(),
+                        round_frontiers,
+                    },
+                )
+                .collect(),
+            queries,
+            grinding_nonce,
+        };
+        phases.advance(ProofPhaseV1::Encode);
+        let encoded = aggregate::encode_proof_with_deep_v1(
+            &proof,
+            &deep,
             prepared.protocol.parameters,
             &prepared.layout,
-            &queries,
-            &trace_materials,
-            &composition_trees,
-            &fri_masks,
-            &fri_lanes,
         )
         .map_err(map_aggregate_error_v1)?;
-    for (group, (base_frontier, aux_frontier)) in trace_group_proofs.iter_mut().zip(trace_frontiers)
-    {
-        group.base_frontier = base_frontier;
-        group.aux_frontier = aux_frontier;
+        let candidate = ProofManagedNoteCandidateV1 { encoded };
+        phases.finish(true);
+        Ok(candidate)
+    })();
+    if result.is_err() {
+        // Normal failure includes cleanup of the closure's locals. Unwind stays incomplete.
+        phases.finish(false);
     }
-    let proof = aggregate::AggregateStarkProofV1 {
-        version: prepared.protocol.parameters.proof_version,
-        trace_groups: trace_group_proofs,
-        composition_roots,
-        composition_frontiers,
-        fri_mask_roots,
-        fri_mask_frontiers,
-        fri_lanes: fri_lanes
-            .into_iter()
-            .zip(fri_round_frontiers)
-            .map(
-                |(lane, round_frontiers)| aggregate::AggregateFriLaneProofV1 {
-                    roots: lane.roots,
-                    terminal_values: lane
-                        .terminal_values
-                        .into_iter()
-                        .map(|value| value.coefficients().map(F::value))
-                        .collect(),
-                    round_frontiers,
-                },
-            )
-            .collect(),
-        queries,
-        grinding_nonce,
-    };
-    let encoded = aggregate::encode_proof_with_deep_v1(
-        &proof,
-        &deep,
-        prepared.protocol.parameters,
-        &prepared.layout,
-    )
-    .map_err(map_aggregate_error_v1)?;
-    Ok(ProofManagedNoteCandidateV1 { encoded })
+    result
 }
 /// Construct a canonical proof with operating-system masking entropy.
 #[allow(dead_code)]
@@ -2377,13 +2388,7 @@ pub(crate) fn prove_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapterV
     adapter: &A,
     base_columns: &[Vec<F>],
 ) -> Result<ProofManagedNoteCandidateV1, ProofManagedNoteStarkErrorV1> {
-    prove_proof_managed_note_stark_v1_with_rng(
-        fastpq_prover::DigestExecutionV1::Cpu,
-        fastpq_prover::DigestExecutionV1::Cpu,
-        adapter,
-        base_columns,
-        &mut rand::rngs::OsRng,
-    )
+    prove_proof_managed_note_stark_v1_with_rng(adapter, base_columns, &mut rand::rngs::OsRng)
 }
 struct NoteOpenedRowEvaluatorV1<'a, A: ProofManagedNoteStarkAdapterV1> {
     adapter: &'a A,
@@ -2690,7 +2695,7 @@ pub(crate) mod fixed_query_audit {
         }
         fn public_input_digest_v1(
             &self,
-        ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+        ) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
             self.0.public_input_digest_v1()
         }
         fn trace_log2_v1(&self) -> u8 {
@@ -3045,7 +3050,7 @@ mod tests {
     struct MockAdapterV1 {
         parameters: aggregate::AggregateStarkParametersV1,
         maximum_constraint_degree: u8,
-        public_digest: GoldilocksDigest384V1,
+        public_digest: PrivacyOuterDigestV1,
         corrupt_schedule: bool,
         execution: bool,
         reject_fixed_materialization: bool,
@@ -3056,8 +3061,7 @@ mod tests {
             Self {
                 parameters: mock_parameters_v1(),
                 maximum_constraint_degree: NOTE_COPY_CONSTRAINT_DEGREE_V1,
-                public_digest: GoldilocksDigest384V1::new([0x24; 6])
-                    .expect("mock public digest is canonical"),
+                public_digest: PrivacyOuterDigestV1::from_bytes([0x24; 48]),
                 corrupt_schedule: false,
                 execution: false,
                 reject_fixed_materialization: false,
@@ -3086,7 +3090,7 @@ mod tests {
         }
         fn public_input_digest_v1(
             &self,
-        ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+        ) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
             if let Some(reads) = &self.public_input_reads {
                 reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
@@ -3248,7 +3252,7 @@ mod tests {
     fn column_stage_orchestration_is_identical_across_rayon_widths() {
         // One more than the source-fixed resident-column bound forces two canonical dispatches.
         // TODO: add whole-proof fixed-RNG byte equality to the slow release suite; repeating the
-        // protocol-mandated 20-bit Poseidon grind is intentionally outside this unit test.
+        // protocol-mandated 20-bit SHA3-384 grind is intentionally outside this unit test.
         assert_eq!(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, 8);
         let columns = (0..=aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
             .map(|column| {
@@ -3711,16 +3715,10 @@ mod tests {
             let adapter = MockAdapterV1::default();
             let base = mock_base_columns_v1();
             let mut rng = StdRng::from_seed([0xA5; 32]);
-            let proof = prove_proof_managed_note_stark_v1_with_rng(
-                fastpq_prover::DigestExecutionV1::Cpu,
-                fastpq_prover::DigestExecutionV1::Cpu,
-                &adapter,
-                &base,
-                &mut rng,
-            )
-            .expect("canonical mock candidate")
-            .verify_into_bytes_v1(&adapter)
-            .expect("independently verified mock proof");
+            let proof = prove_proof_managed_note_stark_v1_with_rng(&adapter, &base, &mut rng)
+                .expect("canonical mock candidate")
+                .verify_into_bytes_v1(&adapter)
+                .expect("independently verified mock proof");
             (adapter, base, proof)
         })
     }
@@ -3772,8 +3770,7 @@ mod tests {
                 .verify_into_bytes_v1(&public_adapter)
                 .is_err()
         );
-        public_adapter.public_digest =
-            GoldilocksDigest384V1::new([0x25; 6]).expect("substituted public digest");
+        public_adapter.public_digest = PrivacyOuterDigestV1::from_bytes([0x25; 48]);
         assert!(
             ProofManagedNoteCandidateV1 {
                 encoded: bytes.clone()
@@ -3785,7 +3782,7 @@ mod tests {
     #[test]
     fn shared_geometry_descriptor_and_digest_match_every_driver_constant() {
         let expected = format!(
-            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=poseidon-x7-goldilocks-6x64:transcript=poseidon-x7-goldilocks-6x64:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho-upper-bound={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:codec=fixed-public-profile-length-big-endian-digest384:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1",
+            "proof-managed-note-stark-geometry-v1:proof={}:base-field=goldilocks:challenge-field=goldilocks-fp4:merkle=sha3-384:transcript=sha3-384:copy-width={}:copy-lanes={}:copy-aux-width={}:copy-fixed-width={}:copy-constraints={}:copy-constraint-degree={}:security-lanes={}:queries={}:lde-blowup={}:composition-degree-chunks={}:deep-points={}:deep-openings=base-current,base-next,aux-current,aux-next,composition:deep-mixes=independent:max-native-trace-log2={}:trace-mask-degree={}:trace-mask-coefficients={}:max-constraint-degree={}:fri-terminal={}:fri-degree={}:fri-input=deep-ali:fri-theorem=affine-batched-theorem2:l-minus-one=3/2:batching-m={}:rho-upper-bound={}/{}:affine-arities={},{},{}:extension-field-lower-bound-bits={}:query-error-bits={}:fri-algebraic-commitment-error-bits-min={}:target-soundness-bits={}:grinding={}-nonadditive:frame=privacy-sha3-384-be-v1:scalar-fp4=bounded-be-u64-rejection:query-source=2^64:codec=fixed-public-profile-length-opaque-digest48-canonical-be-fields:frontiers=canonical-minimal:padding=required-zero-tail-to-maximum-encoded-proof-with-deep-v1",
             std::str::from_utf8(PROOF_MANAGED_NOTE_STARK_SUITE_V1).expect("ASCII suite"),
             NOTE_COPY_WIDTH_V1,
             NOTE_COPY_LANES_V1,
@@ -3905,7 +3902,6 @@ mod tests {
                 .collect::<Vec<_>>(),
         ];
         let base_tree = aggregate::row_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.base_leaf,
             MOCK_DOMAINS_V1.base_node,
@@ -3915,7 +3911,6 @@ mod tests {
         )
         .expect("base tree");
         let aux_tree = aggregate::row_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             MOCK_DOMAINS_V1.digest_context,
             MOCK_DOMAINS_V1.aux_leaf,
             MOCK_DOMAINS_V1.aux_node,
@@ -4091,8 +4086,8 @@ mod tests {
         let mut transcript =
             new_note_transcript_v1(&prepared, &adapter.public_digest).expect("transcript");
         let dummy_groups = [aggregate::AggregateTraceGroupProofV1 {
-            base_root: GoldilocksDigest384V1::new([7; 6]).expect("base root"),
-            aux_root: GoldilocksDigest384V1::default(),
+            base_root: PrivacyOuterDigestV1::from_bytes([7; 48]),
+            aux_root: PrivacyOuterDigestV1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }];
@@ -4243,8 +4238,8 @@ mod tests {
         let mut transcript =
             new_note_transcript_v1(&prepared, &adapter.public_digest).expect("transcript");
         let groups = [aggregate::AggregateTraceGroupProofV1 {
-            base_root: GoldilocksDigest384V1::new([9; 6]).expect("base root"),
-            aux_root: GoldilocksDigest384V1::default(),
+            base_root: PrivacyOuterDigestV1::from_bytes([9; 48]),
+            aux_root: PrivacyOuterDigestV1::default(),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         }];
@@ -4269,7 +4264,7 @@ mod tests {
         verify_proof_managed_note_stark_v1(adapter, proof).expect("canonical proof verifies");
         assert_eq!(&proof[..4], b"PMN1");
         assert!(proof.len() < adapter.parameters.maximum_proof_bytes);
-        let digest = goldilocks_digest384_frame_v1(
+        let digest = privacy_outer_digest_frame_v1(
             MOCK_DOMAINS_V1.digest_context,
             b"proof-managed-note-test-proof",
             b"complete-wire",
@@ -4279,16 +4274,17 @@ mod tests {
             &[proof],
         )
         .expect("proof digest");
-        assert_ne!(digest, GoldilocksDigest384V1::default());
+        assert_ne!(digest, PrivacyOuterDigestV1::default());
         let mut wrong_public = adapter.clone();
-        let mut wrong_public_words = wrong_public.public_digest.words();
-        wrong_public_words[0] += 1;
-        wrong_public.public_digest =
-            GoldilocksDigest384V1::new(wrong_public_words).expect("mutated public digest");
+        let mut wrong_public_words = wrong_public.public_digest.to_bytes();
+        wrong_public_words[0] ^= 1;
+        wrong_public.public_digest = PrivacyOuterDigestV1::from_bytes(wrong_public_words);
         assert!(verify_proof_managed_note_stark_v1(&wrong_public, proof).is_err());
     }
     #[test]
     fn exact_wire_and_committed_values_reject_adversarial_mutations() {
+        use crate::privacy_engines::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
+
         let (adapter, _base, proof) = proof_fixture_v1();
         assert!(verify_proof_managed_note_stark_v1(adapter, &[]).is_err());
         for length in [1, 4, 7, proof.len() / 4, proof.len() / 2, proof.len() - 1] {
@@ -4297,7 +4293,14 @@ mod tests {
         let mut trailing = proof.to_vec();
         trailing.push(0);
         assert!(verify_proof_managed_note_stark_v1(adapter, &trailing).is_err());
-        for offset in [0_usize, 4, 6, 8, 40, 72, 168] {
+        let header_bytes = 8;
+        let digest_bytes = PRIVACY_OUTER_DIGEST_BYTES_V1;
+        // The header is followed by base/aux roots and composition/mask roots.
+        // Opaque SHA3 digests have no Goldilocks canonical-field restriction.
+        for offset in [0_usize, 4, 6].into_iter().chain(
+            (0..2 + 2 * PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
+                .map(|root| header_bytes + root * digest_bytes),
+        ) {
             let mut changed = proof.to_vec();
             changed[offset] ^= 1;
             assert!(
@@ -4317,7 +4320,8 @@ mod tests {
         )
         .expect("mock layout");
         let fri_rounds = layout.fri_rounds(parameters).expect("FRI rounds");
-        let deep_insertion = 8 + 2 * 32 + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * 2 * 32;
+        let deep_insertion =
+            header_bytes + (2 + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * 2) * digest_bytes;
         let deep_bytes =
             aggregate::exact_deep_opening_bytes_v1(parameters, &layout).expect("DEEP byte length");
         let deep_end = deep_insertion + deep_bytes;
@@ -4370,6 +4374,23 @@ mod tests {
                 verify_proof_managed_note_stark_v1(adapter, &changed).is_err(),
                 "mutated DEEP {label} opening must be rejected"
             );
+            for invalid in [
+                super::super::transparent_stark::GOLDILOCKS_MODULUS_V1,
+                u64::MAX,
+            ] {
+                for coefficient in 0..4 {
+                    let mut noncanonical = proof.to_vec();
+                    let start = offset + coefficient * core::mem::size_of::<u64>();
+                    noncanonical[start..start + 8].copy_from_slice(&invalid.to_be_bytes());
+                    assert!(
+                        matches!(
+                            verify_proof_managed_note_stark_v1(adapter, &noncanonical),
+                            Err(ProofManagedNoteStarkErrorV1::ProofWire)
+                        ),
+                        "noncanonical DEEP {label} coefficient {coefficient} must fail decoding"
+                    );
+                }
+            }
         }
         let mut reordered_deep = proof.to_vec();
         let first_current =
@@ -4383,15 +4404,8 @@ mod tests {
             ..deep_insertion + (NOTE_COPY_WIDTH_V1 + 1) * extension_bytes]
             .copy_from_slice(&first_current);
         assert!(verify_proof_managed_note_stark_v1(adapter, &reordered_deep).is_err());
-        let mut noncanonical_deep = proof.to_vec();
-        noncanonical_deep[deep_insertion..deep_insertion + 8]
-            .copy_from_slice(&u64::MAX.to_be_bytes());
-        assert!(matches!(
-            verify_proof_managed_note_stark_v1(adapter, &noncanonical_deep),
-            Err(ProofManagedNoteStarkErrorV1::ProofWire)
-        ));
         let first_terminal =
-            deep_end + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * (fri_rounds + 1) * 32;
+            deep_end + PROOF_MANAGED_NOTE_SECURITY_LANES_V1 * (fri_rounds + 1) * digest_bytes;
         let mut noncanonical = proof.to_vec();
         noncanonical[first_terminal..first_terminal + 8].copy_from_slice(&u64::MAX.to_be_bytes());
         assert!(matches!(
@@ -4406,26 +4420,100 @@ mod tests {
         wrong_nonce[grinding + 7] ^= 1;
         assert!(verify_proof_managed_note_stark_v1(adapter, &wrong_nonce).is_err());
     }
+
+    #[test]
+    fn phase_diagnostics_close_real_profile_entropy_and_constraint_failures() {
+        use crate::privacy_engines::proof_phase_diagnostics::test_support::CaptureV1;
+        let adapter = MockAdapterV1::default();
+        let base = mock_base_columns_v1();
+        let capture = CaptureV1::new(false, true);
+        let mut invalid = adapter.clone();
+        invalid.parameters.query_count -= 1;
+        let result = capture.with_default(|| {
+            prove_proof_managed_note_stark_v1_with_rng(
+                &invalid,
+                &base,
+                &mut StdRng::from_seed([0xD1; 32]),
+            )
+        });
+        assert!(matches!(
+            result,
+            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
+        ));
+        capture.assert_note_prefix(1, "failed", 0);
+
+        let capture = CaptureV1::new(false, true);
+        let result = capture.with_default(|| {
+            prove_proof_managed_note_stark_v1_with_rng(&adapter, &base, &mut MaxValueRng)
+        });
+        assert!(matches!(
+            result,
+            Err(ProofManagedNoteStarkErrorV1::Randomness)
+        ));
+        capture.assert_note_prefix(2, "failed", 0);
+
+        // Change the entire first column to preserve its copy multiset while violating
+        // the mock profile's first-cell constraint. This reaches native validation.
+        let mut invalid_base = base;
+        invalid_base[0].fill(F::ONE);
+        let capture = CaptureV1::new(false, true);
+        let result = capture.with_default(|| {
+            prove_proof_managed_note_stark_v1_with_rng(
+                &adapter,
+                &invalid_base,
+                &mut StdRng::from_seed([0xD1; 32]),
+            )
+        });
+        assert!(matches!(
+            result,
+            Err(ProofManagedNoteStarkErrorV1::Constraint)
+        ));
+        capture.assert_note_prefix(5, "failed", 0);
+    }
+
+    #[test]
+    #[ignore = "two full canonical grinds require the owned release prover slot"]
+    fn phase_diagnostics_preserve_seeded_candidate_bytes_and_rng_position() {
+        use crate::privacy_engines::proof_phase_diagnostics::test_support::CaptureV1;
+        let adapter = MockAdapterV1::default();
+        let base = mock_base_columns_v1();
+        let mut disabled_rng = StdRng::from_seed([0xA5; 32]);
+        let mut enabled_rng = StdRng::from_seed([0xA5; 32]);
+        let disabled = CaptureV1::new(false, false);
+        let baseline = disabled
+            .with_default(|| {
+                prove_proof_managed_note_stark_v1_with_rng(&adapter, &base, &mut disabled_rng)
+            })
+            .expect("uninstrumented canonical candidate")
+            .verify_into_bytes_v1(&adapter)
+            .expect("independent baseline verification");
+        let enabled = CaptureV1::new(false, true);
+        let observed = enabled
+            .with_default(|| {
+                prove_proof_managed_note_stark_v1_with_rng(&adapter, &base, &mut enabled_rng)
+            })
+            .expect("instrumented canonical candidate")
+            .verify_into_bytes_v1(&adapter)
+            .expect("independent observed verification");
+        assert_eq!(baseline, observed);
+        let mut disabled_tail = [0_u8; 64];
+        let mut enabled_tail = [0_u8; 64];
+        disabled_rng.fill_bytes(&mut disabled_tail);
+        enabled_rng.fill_bytes(&mut enabled_tail);
+        assert_eq!(disabled_tail, enabled_tail);
+        assert!(disabled.events().is_empty());
+        enabled.assert_note_prefix(16, "succeeded", 0);
+    }
+
     #[test]
     fn malformed_trace_and_entropy_never_emit_a_proof() {
         let adapter = MockAdapterV1::default();
         let mut changed = mock_base_columns_v1();
         changed[0][5] = F::ONE;
         let mut rng = StdRng::from_seed([3; 32]);
-        assert!(
-            prove_proof_managed_note_stark_v1_with_rng(
-                fastpq_prover::DigestExecutionV1::Cpu,
-                fastpq_prover::DigestExecutionV1::Cpu,
-                &adapter,
-                &changed,
-                &mut rng,
-            )
-            .is_err()
-        );
+        assert!(prove_proof_managed_note_stark_v1_with_rng(&adapter, &changed, &mut rng,).is_err());
         assert!(matches!(
             prove_proof_managed_note_stark_v1_with_rng(
-                fastpq_prover::DigestExecutionV1::Cpu,
-                fastpq_prover::DigestExecutionV1::Cpu,
                 &adapter,
                 &mock_base_columns_v1(),
                 &mut MaxValueRng,

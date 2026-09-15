@@ -1,5 +1,6 @@
 fn canonical_prune_intent_artifact_fixture() -> KuraPruneIntentV3 {
     seal_prune_intent_fixture(KuraPruneIntentV3 {
+        native_amx_retirement_record_hashes: Vec::new(),
         version: 3,
         source_height: 2,
         source_tip_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
@@ -214,6 +215,7 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     let preview = admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 2,
             source_tip_hash: Some(blocks[1].hash()),
@@ -263,6 +265,7 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
     let intent = admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 2,
             source_tip_hash: Some(blocks[1].hash()),
@@ -356,6 +359,7 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
     let intent = admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 4,
             source_tip_hash: Some(blocks[3].hash()),
@@ -425,6 +429,7 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     let intent = admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 4,
             source_tip_hash: Some(blocks[3].hash()),
@@ -708,7 +713,7 @@ fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
     assert!(projection.pipeline.required);
     assert!(
         projection.pipeline.retained_data_bytes > PRUNE_INTENT_MAX_BYTES as u64,
-        "the retained pipeline payload must prove that 4 KiB alone is insufficient",
+        "the retained pipeline payload must exceed the complete bounded intent reserve",
     );
     assert_eq!(
         projection.sequential_peak_bytes,
@@ -721,6 +726,7 @@ fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
     let preview = admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 1,
             source_tip_hash: Some(blocks[0].hash()),
@@ -794,6 +800,7 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     let intent = admit_prune_intent_fixture(
         &kura,
         KuraPruneIntentV3 {
+            native_amx_retirement_record_hashes: Vec::new(),
             version: 3,
             source_height: 1,
             source_tip_hash: Some(blocks[0].hash()),
@@ -849,4 +856,118 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
         .expect("startup exact-limit recovery compacts sidecars");
     assert_ne!(canonical_prune_sidecar_files(&inspection), before);
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
+}
+
+#[test]
+fn canonical_prune_capacity_schema_binds_all_lane_publication_reservations() {
+    let sidecar = KuraPruneSidecarRewriteProjectionV3::none();
+    let current = KuraPruneCapacityAdmissionV3 {
+        source_physical_bytes: 11,
+        pending_canonical_bytes: 13,
+        lane_publication_reserved_bytes: 17,
+        certified_bundle_reserved_bytes: 19,
+        autonomous_terminal_reserved_bytes: 23,
+        intent_bytes: 29,
+        marker_temporary_bytes: 31,
+        marker_stable_growth_bytes: 7,
+        admitted_peak_bytes: 143,
+    };
+    let bytes = norito::encode_canonical(&current).expect("encode current aggregate capacity");
+    assert_eq!(
+        norito::decode_canonical::<KuraPruneCapacityAdmissionV3>(&bytes)
+            .expect("decode current aggregate capacity"),
+        current
+    );
+    assert_eq!(current.reserved_bytes(), Some(13 + 17 + 19 + 23));
+    assert_eq!(current.required_peak_bytes(sidecar), Some(143));
+    assert!(current.is_canonical(sidecar));
+
+    // Admission binds each current reservation value. Norito frame identities
+    // are declared by the type; Rust field names do not select a binary layout.
+    for mut changed in [
+        KuraPruneCapacityAdmissionV3 {
+            pending_canonical_bytes: 14,
+            ..current
+        },
+        KuraPruneCapacityAdmissionV3 {
+            lane_publication_reserved_bytes: 18,
+            ..current
+        },
+        KuraPruneCapacityAdmissionV3 {
+            certified_bundle_reserved_bytes: 20,
+            ..current
+        },
+        KuraPruneCapacityAdmissionV3 {
+            autonomous_terminal_reserved_bytes: 24,
+            ..current
+        },
+    ] {
+        let changed_bytes = norito::encode_canonical(&changed).expect("encode changed reservation");
+        assert_ne!(changed_bytes, bytes);
+        assert_eq!(
+            norito::decode_canonical::<KuraPruneCapacityAdmissionV3>(&changed_bytes)
+                .expect("decode changed reservation"),
+            changed,
+        );
+        assert_eq!(changed.reserved_bytes(), Some(73));
+        assert_eq!(changed.required_peak_bytes(sidecar), Some(144));
+        assert!(
+            !changed.is_canonical(sidecar),
+            "a larger obligation requires matching peak admission",
+        );
+        changed.admitted_peak_bytes = 144;
+        assert!(changed.is_canonical(sidecar));
+    }
+    let overflow = KuraPruneCapacityAdmissionV3 {
+        lane_publication_reserved_bytes: u64::MAX,
+        ..current
+    };
+    assert_eq!(overflow.reserved_bytes(), None);
+    assert_eq!(overflow.required_peak_bytes(sidecar), None);
+    assert!(!overflow.is_canonical(sidecar));
+}
+
+#[test]
+fn canonical_prune_native_retirement_population_is_bounded_canonical_and_roundtrips() {
+    let mut intent = canonical_prune_intent_artifact_fixture();
+    intent.native_amx_retirement_record_hashes = (0..MAX_NATIVE_AMX_PUBLICATION_INDEX_RECORDS)
+        .map(|index| Hash::new(index.to_le_bytes()))
+        .collect();
+    intent.native_amx_retirement_record_hashes.sort_unstable();
+    assert!(
+        intent
+            .native_amx_retirement_record_hashes
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+    );
+    let intent = seal_prune_intent_fixture(intent);
+    let bytes = norito::encode_canonical(&intent)
+        .expect("encode maximum bounded Native retirement population");
+    assert!(bytes.len() <= PRUNE_INTENT_MAX_BYTES);
+    assert_eq!(
+        Kura::decode_prune_intent(Path::new("prune_intent.norito"), &bytes)
+            .expect("exact current maximum population"),
+        intent
+    );
+    for case in 0..3 {
+        let mut invalid = intent.clone();
+        match case {
+            0 => invalid.native_amx_retirement_record_hashes.swap(0, 1),
+            1 => {
+                invalid.native_amx_retirement_record_hashes[1] =
+                    invalid.native_amx_retirement_record_hashes[0]
+            }
+            _ => {
+                invalid
+                    .native_amx_retirement_record_hashes
+                    .push(Hash::new(b"excess Native record"));
+                invalid.native_amx_retirement_record_hashes.sort_unstable();
+            }
+        }
+        let invalid = seal_prune_intent_fixture(invalid);
+        let bytes =
+            norito::encode_canonical(&invalid).expect("encode malformed retirement population");
+        Kura::decode_prune_intent(Path::new("prune_intent.norito"), &bytes)
+            .expect_err("order, uniqueness, and count are independent mandatory bounds");
+    }
 }

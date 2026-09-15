@@ -26352,7 +26352,7 @@
         "properties": {
           "engine": {
             "enum": [
-              "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+              "native-goldilocks-sha3-384-stark-fri-v1",
               "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
               "native-anonymous-pgc-p256",
               "native-verange-p256",
@@ -27455,7 +27455,7 @@
         "properties": {
           "proof_system": {
             "enum": [
-              "stark-fri-poseidon-x7-goldilocks-6x64-v1",
+              "stark-fri-sha3-384-goldilocks-v1",
               "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
               "anonymous-pgc-p256",
               "iroha-verange-p256",
@@ -27920,11 +27920,6 @@
               "record": {
                 "additionalProperties": false,
                 "properties": {
-                  "activate_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
                   "proposed_at_height": {
                     "format": "uint64",
                     "minimum": 1,
@@ -27932,8 +27927,7 @@
                   }
                 },
                 "required": [
-                  "proposed_at_height",
-                  "activate_at_height"
+                  "proposed_at_height"
                 ],
                 "type": "object"
               },
@@ -28446,7 +28440,7 @@
         }
       },
       "PrivateSettlementBundleReceiptResponseV1": {
-        "description": "Public compact receipt, opaque abort, or pending lifecycle; no plaintext contents.",
+        "description": "Public compact receipt, opaque abort, or absence of public terminal state at this node; no plaintext contents.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -28460,14 +28454,10 @@
                 "properties": {
                   "bundle_id": {
                     "$ref": "#/components/schemas/Hash"
-                  },
-                  "lifecycle": {
-                    "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
                   }
                 },
                 "required": [
-                  "bundle_id",
-                  "lifecycle"
+                  "bundle_id"
                 ],
                 "type": "object"
               }

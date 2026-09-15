@@ -73512,19 +73512,13 @@ pub async fn handle_status(
         accept = ?accept,
         "serving /status"
     );
-    ensure_status_visible(telemetry, "status")?;
+    ensure_status_visible(telemetry, "status").map_err(status_visibility_failure)?;
     // The actor owns classification, height, and routing policy in one response.
     // Do not join a pre-await State height to a later mutable metrics registry.
-    let owned =
-        telemetry
-            .status_snapshot(build)
-            .await
-            .map_err(|error| Error::AppServiceUnavailable {
-                code: "status_metrics_unavailable",
-                message: format!(
-                    "status metrics could not reach a fresh classified frontier: {error}"
-                ),
-            })?;
+    let owned = telemetry
+        .status_snapshot(build)
+        .await
+        .map_err(status_snapshot_failure)?;
     let (status, classified_height) = owned.into_parts();
     ensure_status_metrics_match_authoritative_height(&status, classified_height)?;
     iroha_logger::debug!(

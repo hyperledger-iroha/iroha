@@ -23,7 +23,7 @@ impl CanonicalPruneIntentArtifactInventory {
         // `tempfile::persist_noclobber` may crash after creating the stable
         // hard link but before unlinking the exact temporary name. Both names
         // are authenticated below, while disk accounting counts that one
-        // physical inode once so the 4 KiB maintenance reserve remains exact.
+        // physical inode once so the bounded maintenance reserve remains exact.
         if let (Some(stable), Some(temporary)) = (&self.stable, &self.temporary)
             && Self::same_physical_object(stable, temporary)
         {
@@ -59,17 +59,25 @@ impl Kura {
                 bytes.len()
             )));
         }
-        let intent = norito::decode_canonical::<KuraPruneIntentV3>(bytes).map_err(|err| {
-            Error::PruneIntentConflict(format!(
-                "intent {} failed exact Norito decode: {err}",
-                path.display()
-            ))
-        })?;
+        let limits = recovery_control_decode_limits_v1(u64::try_from(PRUNE_INTENT_MAX_BYTES)?)?;
+        let intent = norito::decode_canonical_with_limits::<KuraPruneIntentV3>(bytes, limits)
+            .map_err(|err| {
+                Error::PruneIntentConflict(format!(
+                    "intent {} failed exact Norito decode: {err}",
+                    path.display()
+                ))
+            })?;
         if intent.version != 3
             || intent.target_height > intent.source_height
             || (intent.source_height == 0) != intent.source_tip_hash.is_none()
             || (intent.target_height == 0) != intent.target_tip_hash.is_none()
             || (intent.retained_merge_entries == 0) != intent.retained_merge_tip_hash.is_none()
+            || intent.native_amx_retirement_record_hashes.len()
+                > MAX_NATIVE_AMX_PUBLICATION_INDEX_RECORDS
+            || intent
+                .native_amx_retirement_record_hashes
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
             || !intent.sidecar_rewrite.is_canonical()
             || !intent.capacity.is_canonical(intent.sidecar_rewrite)
             || (intent.target_height == intent.source_height
@@ -856,13 +864,13 @@ impl Kura {
         marker_stable_growth_bytes: u64,
     ) -> Result<KuraPruneCapacityAdmissionV3> {
         let used = self.kura_disk_usage_bytes()?;
-        let post_wsv = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+        let post_wsv = self.lane_publication_budget_reserved_bytes()?;
         let certified_bundles = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminals = self.autonomous_global_terminal_outcome_reserved_bytes()?;
         Ok(KuraPruneCapacityAdmissionV3 {
             source_physical_bytes: used,
             pending_canonical_bytes: pending_blocks,
-            post_wsv_reserved_bytes: post_wsv,
+            lane_publication_reserved_bytes: post_wsv,
             certified_bundle_reserved_bytes: certified_bundles,
             autonomous_terminal_reserved_bytes: autonomous_terminals,
             intent_bytes: 0,

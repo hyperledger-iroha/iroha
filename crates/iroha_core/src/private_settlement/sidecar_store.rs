@@ -1570,7 +1570,7 @@ impl PrivateSettlementFileSidecarStoreV1 {
         })
     }
 
-    /// Read a public all-leg lifecycle projection by opaque bundle identifier.
+    /// Read a public lifecycle projection of this node's retained bundle legs.
     ///
     /// The result contains only the already-public manifest and aggregate phase
     /// counters. It never contains proof bytes, capsules, approvals, or audit
@@ -1579,7 +1579,8 @@ impl PrivateSettlementFileSidecarStoreV1 {
     /// # Errors
     ///
     /// Returns unavailable for an unknown bundle and corruption for conflicting
-    /// local manifests or duplicate/non-canonical ordinals.
+    /// local manifests or index keys that do not bind the exact durable manifest leg.
+    /// Sparse local ordinal subsets are valid; all-leg states require every leg.
     pub fn public_bundle_status(
         &self,
         bundle_id: Hash,
@@ -1601,25 +1602,30 @@ impl PrivateSettlementFileSidecarStoreV1 {
             return Err(PrivateSettlementSidecarStoreErrorV1::Unavailable);
         }
         digests.sort_unstable_by_key(|(ordinal, _)| *ordinal);
-        if digests
-            .iter()
-            .enumerate()
-            .any(|(index, (ordinal, _))| usize::from(*ordinal) != index)
-        {
-            return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
-        }
 
         let mut manifest = None;
         let mut lifecycles = Vec::with_capacity(digests.len());
         let mut lifecycle_height = 0_u64;
-        for (_, digest) in digests {
+        for (ordinal, digest) in digests {
             let metadata = state
                 .index
                 .get(&digest)
                 .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
             let durable = self.read_record_v1(digest)?;
             durable.validate()?;
-            if durable.sidecar.manifest.bundle_id != bundle_id {
+            let leg = durable
+                .sidecar
+                .manifest
+                .legs
+                .get(usize::from(ordinal))
+                .ok_or(PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
+            if metadata.bundle_id != bundle_id
+                || metadata.leg_ordinal != ordinal
+                || durable.sidecar.manifest.bundle_id != bundle_id
+                || durable.sidecar.payload.statement.leg_ordinal != ordinal
+                || leg.ordinal != ordinal
+                || leg.payload_digest != digest
+            {
                 return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
             }
             match &manifest {
@@ -3929,11 +3935,11 @@ pub(crate) mod tests {
             .collect()
     }
 
-    fn second_leg_delta_v1(
+    fn other_leg_delta_v1(
         manifest: &AtomicPrivateSettlementV1,
         first: &PrivateSettlementDeltaV1,
     ) -> PrivateSettlementDeltaV1 {
-        let leg = manifest.legs[1];
+        let leg = manifest.legs[usize::from(first.leg_ordinal == 0)];
         let mut second = first.clone();
         second.leg_ordinal = leg.ordinal;
         second.route = leg.route;
@@ -4117,8 +4123,18 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn sidecar_fixture_with_threshold(min_approvals: u8) -> SidecarFixtureV1 {
+        sidecar_fixture_with_threshold_and_ordinal(min_approvals, 0)
+    }
+
+    fn sidecar_fixture_with_threshold_and_ordinal(
+        min_approvals: u8,
+        ordinal: u8,
+    ) -> SidecarFixtureV1 {
+        assert!(ordinal < 2);
+        let local = usize::from(ordinal);
+        let other = usize::from(ordinal == 0);
         assert!((1..=2).contains(&min_approvals));
-        let route = route(7);
+        let route = route(7 + u64::from(ordinal));
         let signing = KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);
         let auditor = AccountId::new(signing.public_key().clone());
         let mut hybrid_rng = iroha_crypto::rng_from_seed_slice(b"sidecar auditor encryption key");
@@ -4196,10 +4212,10 @@ pub(crate) mod tests {
             public_fee_intent: FeePaymentIntent::authority(Vec::new(), None),
             fee_intent_digest: hash(0x25),
             reimbursement_terms_commitment: hash(0x26),
-            reimbursement_leg_ordinal: 0,
+            reimbursement_leg_ordinal: ordinal,
             legs: vec![
                 PrivateSettlementLegCommitmentV1 {
-                    ordinal: 0,
+                    ordinal,
                     route,
                     pool_id: PrivacyPoolIdV1::new([0x27; 32]),
                     asset_binding_commitment: hash(0x28),
@@ -4209,8 +4225,8 @@ pub(crate) mod tests {
                     delta_digest: hash(0x2A),
                 },
                 PrivateSettlementLegCommitmentV1 {
-                    ordinal: 1,
-                    route: self::route(8),
+                    ordinal: 1 - ordinal,
+                    route: self::route(8 - u64::from(ordinal)),
                     pool_id: PrivacyPoolIdV1::new([0x2B; 32]),
                     asset_binding_commitment: hash(0x2C),
                     audit_policy_digest: hash(0x2D),
@@ -4220,6 +4236,7 @@ pub(crate) mod tests {
                 },
             ],
         };
+        manifest.legs.sort_unstable_by_key(|leg| leg.ordinal);
         manifest.fee_intent_digest = manifest
             .computed_fee_intent_digest()
             .expect("fee intent digest");
@@ -4231,7 +4248,7 @@ pub(crate) mod tests {
         );
         let pool_governance = PrivateSettlementPoolGovernanceV1::from_restricted_mapping(
             route,
-            manifest.legs[0].pool_id,
+            manifest.legs[local].pool_id,
             asset_definition_id.clone(),
             [0x3A; 32],
             &policy,
@@ -4252,9 +4269,9 @@ pub(crate) mod tests {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             network_id: manifest.network_id,
             bundle_id: manifest.bundle_id,
-            leg_ordinal: 0,
+            leg_ordinal: ordinal,
             route,
-            pool_id: manifest.legs[0].pool_id,
+            pool_id: manifest.legs[local].pool_id,
             payer: AccountId::new(payer.public_key().clone()),
             payer_authorization: placeholder_payer_authorization(&payer),
             recipient: AccountId::new(recipient.public_key().clone()),
@@ -4293,7 +4310,7 @@ pub(crate) mod tests {
                 },
             ],
         };
-        manifest.legs[0].asset_binding_commitment =
+        manifest.legs[local].asset_binding_commitment =
             plaintext.asset_binding_commitment().expect("asset binding");
         manifest.reimbursement_terms_commitment = plaintext
             .reimbursement_terms_commitment()
@@ -4308,11 +4325,11 @@ pub(crate) mod tests {
             proof_profile_digest: profile.digest(),
             network_id: manifest.network_id,
             bundle_id: manifest.bundle_id,
-            leg_ordinal: 0,
+            leg_ordinal: ordinal,
             route,
             authority_context_height: manifest.authority_context_height,
-            pool_id: manifest.legs[0].pool_id,
-            asset_binding_commitment: manifest.legs[0].asset_binding_commitment,
+            pool_id: manifest.legs[local].pool_id,
+            asset_binding_commitment: manifest.legs[local].asset_binding_commitment,
             old_root: PrivacyRootV1::new([0x31; 32]),
             new_root: PrivacyRootV1::new([0x34; 32]),
             old_epoch: 1,
@@ -4436,7 +4453,7 @@ pub(crate) mod tests {
         let aad = PrivateSettlementAuditAadV1 {
             network_id: manifest.network_id,
             bundle_id: manifest.bundle_id,
-            leg_ordinal: 0,
+            leg_ordinal: ordinal,
             route,
             authority_digest,
             authority_context_height: manifest.authority_context_height,
@@ -4499,12 +4516,12 @@ pub(crate) mod tests {
             },
         };
         payload.delta.proof_digest = payload.proof_digest();
-        manifest.legs[0].delta_digest = payload.delta.digest().expect("delta digest");
-        let second_delta = second_leg_delta_v1(&manifest, &payload.delta);
-        manifest.legs[1].delta_digest = second_delta.digest().expect("second delta digest");
+        manifest.legs[local].delta_digest = payload.delta.digest().expect("delta digest");
+        let second_delta = other_leg_delta_v1(&manifest, &payload.delta);
+        manifest.legs[other].delta_digest = second_delta.digest().expect("second delta digest");
         let payload_digest = payload.payload_digest().expect("payload digest");
         payload.availability.body.payload_digest = payload_digest;
-        manifest.legs[0].payload_digest = payload_digest;
+        manifest.legs[local].payload_digest = payload_digest;
         payload.availability.body.payload_bytes = u32::try_from(
             payload
                 .sidecar_material_bytes_len()
@@ -4531,7 +4548,7 @@ pub(crate) mod tests {
         payload.availability.aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
                 .expect("availability aggregate");
-        manifest.legs[0].availability_certificate_digest = payload
+        manifest.legs[local].availability_certificate_digest = payload
             .availability
             .digest()
             .expect("availability certificate digest");
@@ -4780,7 +4797,7 @@ pub(crate) mod tests {
     fn global_receipt_fixture(fixture: &SidecarFixtureV1) -> PrivateSettlementReceiptV1 {
         let second_manifest_leg = fixture.sidecar.manifest.legs[1];
         let second_delta =
-            second_leg_delta_v1(&fixture.sidecar.manifest, &fixture.sidecar.payload.delta);
+            other_leg_delta_v1(&fixture.sidecar.manifest, &fixture.sidecar.payload.delta);
         let mut second_authority = fixture.sidecar.authority.clone();
         second_authority.route = second_manifest_leg.route;
         let local_prepare = phase_certificate(
@@ -4981,6 +4998,76 @@ pub(crate) mod tests {
         remove_reservations_v1(&mut state, owner_a, Some(&reservations)).expect("terminal release");
         ensure_reservations_available_v1(&state, owner_b, Some(&reservations))
             .expect("released resources can be reserved by another bundle");
+    }
+
+    #[test]
+    fn public_bundle_status_accepts_sparse_local_ordinals_after_restart() {
+        let fixture = sidecar_fixture_with_threshold_and_ordinal(1, 1);
+        assert_eq!(fixture.sidecar.payload.statement.leg_ordinal, 1);
+        fixture
+            .sidecar
+            .validate()
+            .expect("bound nonzero-ordinal sidecar");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("restricted-sidecars");
+        let store =
+            PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).expect("store");
+        store
+            .store(fixture.sidecar.clone())
+            .expect("store actual leg one");
+        drop(store);
+        let store =
+            PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).expect("reopen");
+        let status = store
+            .public_bundle_status(fixture.sidecar.manifest.bundle_id, 12)
+            .expect("sparse local subset");
+        assert_eq!(status.manifest, fixture.sidecar.manifest);
+        assert_eq!(status.durable_legs, 1);
+        assert_eq!(
+            status.lifecycle,
+            PrivateSettlementSidecarLifecycleV1::Collecting
+        );
+        assert_eq!(status.lifecycle_height, fixture.sidecar.stored_at_height);
+    }
+
+    #[test]
+    fn public_bundle_status_rejects_index_key_misbinding() {
+        let fixture = sidecar_fixture_with_threshold_and_ordinal(1, 1);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = PrivateSettlementFileSidecarStoreV1::open(
+            temp.path().join("restricted-sidecars"),
+            Default::default(),
+        )
+        .expect("store");
+        store
+            .store(fixture.sidecar.clone())
+            .expect("store actual leg one");
+        let bundle = fixture.sidecar.manifest.bundle_id;
+        let digest = fixture.sidecar.payload_digest();
+        for incorrect_ordinal in [0, 2] {
+            let mut state = store.state.lock().expect("state");
+            state.by_leg.remove(&(bundle, 1));
+            state.by_leg.insert((bundle, incorrect_ordinal), digest);
+            drop(state);
+            assert_eq!(
+                store.public_bundle_status(bundle, 12),
+                Err(PrivateSettlementSidecarStoreErrorV1::Corrupt)
+            );
+            let mut state = store.state.lock().expect("state");
+            state.by_leg.remove(&(bundle, incorrect_ordinal));
+            state.by_leg.insert((bundle, 1), digest);
+        }
+        let wrong_bundle = hash(0xFE);
+        store
+            .state
+            .lock()
+            .expect("state")
+            .by_leg
+            .insert((wrong_bundle, 1), digest);
+        assert_eq!(
+            store.public_bundle_status(wrong_bundle, 12),
+            Err(PrivateSettlementSidecarStoreErrorV1::Corrupt)
+        );
     }
 
     #[test]
@@ -5380,7 +5467,7 @@ pub(crate) mod tests {
         let fixture = sidecar_fixture();
         let second_manifest_leg = fixture.sidecar.manifest.legs[1];
         let second_delta =
-            second_leg_delta_v1(&fixture.sidecar.manifest, &fixture.sidecar.payload.delta);
+            other_leg_delta_v1(&fixture.sidecar.manifest, &fixture.sidecar.payload.delta);
         assert_eq!(
             fixture.sidecar.manifest.legs[1].delta_digest,
             second_delta.digest().expect("second delta digest")

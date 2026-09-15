@@ -487,7 +487,12 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             expectedIdentifierField = null,
         )
 
-    /** Read the public terminal receipt or pending marker for one bundle. */
+    /**
+     * Read a public terminal receipt for one bundle.
+     *
+     * Pending means that this node has no public terminal result. It does not establish that the
+     * bundle is locally known; use [getBundleStatus] for the local lifecycle.
+     */
     fun getBundleReceipt(
         bundleId: AtomicPrivateSettlementIdentifierV1,
     ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> =
@@ -1089,7 +1094,6 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         }
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun validateReceiptIdentity(
         parsed: Map<String, Any?>,
         expected: AtomicPrivateSettlementIdentifierV1,
@@ -1100,7 +1104,32 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         }
         val value = parsed["value"]
         require(value is Map<*, *>) { "settlement receipt value must be an object" }
-        require((value as Map<String, Any?>)["bundle_id"] == expected.jsonLiteral()) {
+        val bundleId = when (status) {
+            "pending" -> {
+                require(value.keys == setOf("bundle_id")) {
+                    "pending settlement receipt has unexpected public fields"
+                }
+                value["bundle_id"]
+            }
+            "finalized" -> {
+                require(
+                    value.keys == setOf(
+                        "version",
+                        "manifest",
+                        "authority_catalog",
+                        "legs",
+                        "finalized_height",
+                    ),
+                ) { "finalized settlement receipt has unexpected public fields" }
+                val manifest = value["manifest"]
+                require(manifest is Map<*, *>) {
+                    "finalized settlement receipt manifest must be an object"
+                }
+                manifest["bundle_id"]
+            }
+            else -> value["bundle_id"]
+        }
+        require(bundleId == expected.jsonLiteral()) {
             "atomic private settlement receipt is substituted"
         }
     }

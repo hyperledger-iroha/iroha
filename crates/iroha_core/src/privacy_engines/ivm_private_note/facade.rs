@@ -73,18 +73,13 @@ fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNotePro
         | ProofManagedNoteStarkErrorV1::Composition
         | ProofManagedNoteStarkErrorV1::Fri
         | ProofManagedNoteStarkErrorV1::Transcript
-        | ProofManagedNoteStarkErrorV1::Internal
-        | ProofManagedNoteStarkErrorV1::DigestExecution => {
-            IvmPrivateNoteProofErrorV1::ProverInvariant
-        }
+        | ProofManagedNoteStarkErrorV1::Internal => IvmPrivateNoteProofErrorV1::ProverInvariant,
     }
 }
 fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNoteProofErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Resource => IvmPrivateNoteProofErrorV1::ResourceLimit,
-        ProofManagedNoteStarkErrorV1::InvalidProfile
-        | ProofManagedNoteStarkErrorV1::Internal
-        | ProofManagedNoteStarkErrorV1::DigestExecution => {
+        ProofManagedNoteStarkErrorV1::InvalidProfile | ProofManagedNoteStarkErrorV1::Internal => {
             IvmPrivateNoteProofErrorV1::ProverInvariant
         }
         ProofManagedNoteStarkErrorV1::InvalidTrace

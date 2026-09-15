@@ -8,7 +8,7 @@ use axum::{
     Router,
     body::Body,
     handler::Handler,
-    http::{Method, Request},
+    http::{HeaderValue, Method, Request},
     response::IntoResponse,
     routing::{MethodFilter, MethodRouter, Route, any, delete, on, post},
 };
@@ -190,6 +190,7 @@ impl MatchedRouteMetadata {
 pub(crate) struct MountedRouteIndex {
     explicit: Arc<BTreeMap<(&'static str, &'static str), RouteDescriptor>>,
     by_path: Arc<BTreeMap<&'static str, RouteDescriptor>>,
+    allow_by_path: Arc<BTreeMap<&'static str, HeaderValue>>,
     private_no_store_paths: Arc<BTreeSet<&'static str>>,
     cors_paths: Arc<BTreeSet<&'static str>>,
 }
@@ -278,6 +279,29 @@ impl MountedRouteManifest {
             .iter()
             .map(|descriptor| (descriptor.path(), *descriptor))
             .collect();
+        // The completed manifest is also the sole Allow-header authority.
+        // Build each immutable value once; method rejection does not scan the
+        // catalog or allocate a joined string on the request path.
+        let mut methods_by_path = BTreeMap::<_, BTreeSet<_>>::new();
+        for descriptor in &self.explicit_routes {
+            if descriptor.method() != HttpMethod::Any {
+                methods_by_path
+                    .entry(descriptor.path())
+                    .or_default()
+                    .insert(descriptor.method().as_str());
+            }
+        }
+        let allow_by_path = methods_by_path
+            .into_iter()
+            .map(|(path, methods)| {
+                let value = methods.into_iter().collect::<Vec<_>>().join(", ");
+                // HttpMethod supplies only fixed uppercase ASCII spellings;
+                // neither paths nor caller-controlled bytes enter this value.
+                let value = HeaderValue::from_str(&value)
+                    .expect("fixed catalog methods form a valid Allow header");
+                (path, value)
+            })
+            .collect();
         // Framework OPTIONS and method-not-allowed responses represent a path rather than one
         // exact method. Preserve the strictest cache requirement across every method mounted at
         // that path instead of inheriting whichever descriptor was collected last.
@@ -299,6 +323,7 @@ impl MountedRouteManifest {
         MountedRouteIndex {
             explicit: Arc::new(explicit),
             by_path: Arc::new(by_path),
+            allow_by_path: Arc::new(allow_by_path),
             private_no_store_paths: Arc::new(private_no_store_paths),
             cors_paths: Arc::new(cors_paths),
         }
@@ -558,7 +583,8 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
     ///
     /// The middleware buffers at most `max_body_bytes`, verifies the canonical
     /// request signature before the handler can decode or process the body, and
-    /// exposes the verified account through request extensions.
+    /// exposes the verified account through request extensions. Body extractors
+    /// use the same ceiling unless an explicit inner route layer is narrower.
     #[must_use]
     pub(crate) fn authenticated_canonical_account_body(
         self,
@@ -594,7 +620,13 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         CatalogMethodRouter {
             method: self.method,
             authentication: SealedAuthentication(AuthenticationPolicy::CanonicalAccountSignature),
-            inner: self.inner.layer(layer),
+            // Authentication runs first. Its explicit ceiling also replaces Axum's
+            // implicit extractor default; pre-existing route layers remain inside
+            // this default so a deliberately narrower extractor limit still wins.
+            inner: self
+                .inner
+                .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+                .layer(layer),
         }
     }
     /// Install optional canonical account authentication over the exact bounded body.
@@ -602,6 +634,8 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
     /// Anonymous requests retain public-dataspace visibility. If any canonical
     /// authentication material is supplied, the middleware verifies it before
     /// body decoding and exposes the resulting visibility through extensions.
+    /// The declared ceiling also bounds body extractors, preserving any explicit
+    /// narrower limit installed on the route before this authentication layer.
     #[must_use]
     pub(crate) fn optionally_authenticated_canonical_account_body(
         self,
@@ -621,7 +655,12 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             authentication: SealedAuthentication(
                 AuthenticationPolicy::OptionalCanonicalAccountSignature,
             ),
-            inner: self.inner.layer(layer),
+            // Keep anonymous and signed requests on the same declared body bound.
+            // An existing inner route limit can still impose a smaller ceiling.
+            inner: self
+                .inner
+                .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+                .layer(layer),
         }
     }
     /// Admit, bound, and authenticate an expensive proof body before handler work.
@@ -810,10 +849,10 @@ macro_rules! catalog_method_constructor {
 }
 /// Construct a sealed GET-only router.
 ///
-/// Axum's convenience `get` constructor also dispatches HEAD requests to the
-/// GET handler. Catalog routes are exact-method operations, so use an exact
-/// method filter and require any future HEAD operation to be declared and
-/// mounted explicitly.
+/// Axum dispatches HEAD through a GET endpoint even with `MethodFilter::GET`.
+/// The completed builder therefore enforces the catalog's exact method set
+/// outside the mounted authentication and body layers. Any future HEAD
+/// operation must be declared and mounted explicitly.
 pub(crate) fn catalog_get<H, T, S>(handler: H) -> CatalogMethodRouter<S, ToriiDefaultAuthentication>
 where
     H: Handler<T, S>,
@@ -829,6 +868,41 @@ where
 catalog_method_constructor!(catalog_post, Post, post);
 catalog_method_constructor!(catalog_delete, Delete, delete);
 catalog_method_constructor!(catalog_any, Any, any);
+/// Reject framework method aliases and misses before route-local middleware.
+///
+/// The index comes from the completed manifest and the path from Axum's matcher.
+/// CORS preflight remains owned by the outer catalog-aware CORS layer; it does
+/// not become an explicit application method or inherit GET authentication.
+async fn enforce_catalog_method(
+    axum::extract::State(index): axum::extract::State<MountedRouteIndex>,
+    request: Request<Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let Some(path) = request.extensions().get::<axum::extract::MatchedPath>() else {
+        return next.run(request).await;
+    };
+    let path = path.as_str();
+    // Unknown paths remain 404s and ANY-only gateways have no finite Allow
+    // set. Every explicit non-ANY path has a value in the completed index.
+    let Some(allowed) = index.allow_by_path.get(path) else {
+        return next.run(request).await;
+    };
+    if index
+        .explicit
+        .contains_key(&(request.method().as_str(), path))
+        || index.explicit.contains_key(&("ANY", path))
+    {
+        return next.run(request).await;
+    }
+    let allowed = allowed.clone();
+    // Supply the exact catalog Allow header before Axum can add its implicit
+    // HEAD advertisement. The existing typed method-error response is retained.
+    (
+        [(axum::http::header::ALLOW, allowed)],
+        crate::handler_method_not_allowed().await,
+    )
+        .into_response()
+}
 /// Catalog-aware wrapper around an Axum router.
 pub(crate) struct RouterBuilder<S = SharedAppState> {
     router: Router<S>,
@@ -967,13 +1041,20 @@ where
         let explicit_routes: Vec<_> = enabled.into_iter().copied().collect();
         let implicit_routes =
             RouteCatalog::new(&explicit_routes).implicit_routes(self.enabled_features);
-        Ok((
-            self.router,
-            MountedRouteManifest {
-                explicit_routes,
-                implicit_routes,
-            },
-        ))
+        let manifest = MountedRouteManifest {
+            explicit_routes,
+            implicit_routes,
+        };
+        // Install the fallback before the guard: replacing it after layering
+        // would discard enforcement for Axum's method-miss branch.
+        let router = self
+            .router
+            .method_not_allowed_fallback(crate::handler_method_not_allowed)
+            .layer(axum::middleware::from_fn_with_state(
+                manifest.route_index(),
+                enforce_catalog_method,
+            ));
+        Ok((router, manifest))
     }
 }
 #[cfg(test)]
@@ -1198,6 +1279,7 @@ mod tests {
         assert_eq!(head.stable_route_id(), "http.method_not_allowed");
         assert_eq!(head.transport(), None);
         let response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::HEAD)
@@ -1209,6 +1291,127 @@ mod tests {
             .expect("response");
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(response.headers()[axum::http::header::ALLOW], "GET, POST");
+        for method in [Method::DELETE, Method::PUT, Method::OPTIONS, Method::TRACE] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(READ.path())
+                        .body(Body::from("not an admitted operation"))
+                        .expect("unsupported method request"),
+                )
+                .await
+                .expect("method fallback response");
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(response.headers()[axum::http::header::ALLOW], "GET, POST");
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+        for (method, status) in [
+            (Method::GET, StatusCode::OK),
+            (Method::POST, StatusCode::NO_CONTENT),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(READ.path())
+                        .body(Body::empty())
+                        .expect("declared method request"),
+                )
+                .await
+                .expect("declared method response");
+            assert_eq!(response.status(), status);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let missing = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::HEAD)
+                    .uri("/v1/tests/absent")
+                    .body(Body::empty())
+                    .expect("unknown path request"),
+            )
+            .await
+            .expect("unknown path response");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert!(!missing.headers().contains_key(axum::http::header::ALLOW));
+        let cors = router.layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([Method::GET, Method::POST]),
+        );
+        let preflight = cors
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri(READ.path())
+                    .header(axum::http::header::ORIGIN, "https://client.example")
+                    .header(axum::http::header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .body(Body::empty())
+                    .expect("declared CORS preflight"),
+            )
+            .await
+            .expect("CORS response");
+        assert_eq!(preflight.status(), StatusCode::OK);
+        assert_eq!(
+            preflight.headers()[axum::http::header::ACCESS_CONTROL_ALLOW_METHODS],
+            "GET,POST"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            manifest
+                .route_index()
+                .resolve(&Method::OPTIONS, Some(READ.path()))
+                .stable_route_id(),
+            "http.cors_preflight"
+        );
+
+        const GATEWAY: RouteDescriptor = RouteDescriptor::new(
+            "test.any_gateway",
+            HttpMethod::Any,
+            "/v1/tests/gateway",
+            ApiSurface::Protocol,
+            Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
+        );
+        let mut gateway =
+            RouterBuilder::new((), RouteCatalog::new(&[GATEWAY]), EnabledFeatures::none())
+                .expect("valid protocol gateway catalog");
+        let gateway_calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let handler_calls = std::sync::Arc::clone(&gateway_calls);
+        gateway.route(
+            &GATEWAY,
+            catalog_any(move || {
+                let calls = std::sync::Arc::clone(&handler_calls);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        let (gateway, gateway_manifest) = gateway.finish().expect("exact ANY registration");
+        assert_eq!(gateway_manifest.explicit_routes(), &[GATEWAY]);
+        for method in [Method::HEAD, Method::GET, Method::POST, Method::OPTIONS] {
+            let response = gateway
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(GATEWAY.path())
+                        .body(Body::empty())
+                        .expect("gateway request"),
+                )
+                .await
+                .expect("gateway response");
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            assert!(!response.headers().contains_key(axum::http::header::ALLOW));
+        }
+        assert_eq!(gateway_calls.load(Ordering::SeqCst), 4);
     }
     #[test]
     fn unsafe_effect_and_admission_metadata_cannot_reach_mounting() {
@@ -1471,6 +1674,410 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn canonical_body_route_uses_declared_extractor_limit_and_preserves_narrower_limits() {
+        use crate::utils::extractors::NoritoJson;
+        use axum::{Extension, extract::DefaultBodyLimit};
+        use std::sync::Arc;
+
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let key_pair = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0x71,
+            "derive canonical body-bound route test key",
+        );
+        let account = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account),
+        );
+        const LIMIT: usize = 3 * 1024 * 1024;
+        for (body_bytes, inner_limit, expected_status) in [
+            (LIMIT - 1, None, StatusCode::NO_CONTENT),
+            (LIMIT, None, StatusCode::NO_CONTENT),
+            (LIMIT + 1, None, StatusCode::PAYLOAD_TOO_LARGE),
+            (1024, Some(1024), StatusCode::NO_CONTENT),
+            (1025, Some(1024), StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let handler_calls = Arc::clone(&calls);
+            let expected_account = account.clone();
+            let mut method = catalog_post(
+                move |Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+                      NoritoJson(body): NoritoJson<String>| {
+                    let calls = Arc::clone(&handler_calls);
+                    let expected_account = expected_account.clone();
+                    async move {
+                        assert_eq!(verified.account, expected_account);
+                        assert_eq!(body.len(), body_bytes - 2);
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                },
+            );
+            if let Some(inner_limit) = inner_limit {
+                method = method.layer(DefaultBodyLimit::max(inner_limit));
+            }
+            let mut builder = RouterBuilder::new(
+                app.clone(),
+                RouteCatalog::new(&[ACCOUNT_AUTHENTICATED]),
+                EnabledFeatures::none(),
+            )
+            .expect("valid bounded account catalog");
+            builder.route(
+                &ACCOUNT_AUTHENTICATED,
+                method.authenticated_canonical_account_body(app.clone(), LIMIT),
+            );
+            let (router, _) = builder.finish().expect("sealed account body route");
+            let router = router.with_state(app.clone());
+            let uri: axum::http::Uri = ACCOUNT_AUTHENTICATED.path().parse().expect("route URI");
+            let mut body = vec![b'x'; body_bytes];
+            body[0] = b'"';
+            body[body_bytes - 1] = b'"';
+            let headers = crate::tests_runtime_handlers::signed_app_headers(
+                &account,
+                &key_pair,
+                &Method::POST,
+                &uri,
+                &body,
+            );
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("signed bounded JSON request");
+            request.headers_mut().extend(headers);
+            let response = router
+                .oneshot(request)
+                .await
+                .expect("bounded route response");
+            assert_eq!(
+                response.status(),
+                expected_status,
+                "body bytes {body_bytes}"
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                usize::from(expected_status.is_success())
+            );
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn canonical_body_route_authenticates_large_bodies_before_typed_decode() {
+        use crate::utils::extractors::NoritoJson;
+        use axum::Extension;
+        use std::sync::Arc;
+
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let key_pair = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0x72,
+            "derive canonical large-body authentication test key",
+        );
+        let account = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account),
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&calls);
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[ACCOUNT_AUTHENTICATED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid authenticated body catalog");
+        builder.route(
+            &ACCOUNT_AUTHENTICATED,
+            catalog_post(
+                move |Extension(_verified): Extension<
+                    crate::app_auth::VerifiedCanonicalRequest,
+                >,
+                      NoritoJson(_body): NoritoJson<String>| {
+                    let calls = Arc::clone(&handler_calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                },
+            )
+            .authenticated_canonical_account_body(app.clone(), 3 * 1024 * 1024),
+        );
+        let (router, _) = builder.finish().expect("sealed authenticated body route");
+        let router = router.with_state(app);
+        let uri: axum::http::Uri = ACCOUNT_AUTHENTICATED.path().parse().expect("route URI");
+        let body = vec![b'{'; 2 * 1024 * 1024 + 1];
+        let unsigned = Request::builder()
+            .method(Method::POST)
+            .uri(uri.clone())
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.clone()))
+            .expect("unsigned malformed large body");
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(unsigned)
+                .await
+                .expect("unsigned response")
+                .status(),
+            StatusCode::UNAUTHORIZED,
+        );
+        let mut tampered = body.clone();
+        tampered[0] = b'[';
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &account,
+            &key_pair,
+            &Method::POST,
+            &uri,
+            &body,
+        );
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(tampered))
+            .expect("tampered malformed large body");
+        request.headers_mut().extend(headers);
+        assert_eq!(
+            router
+                .oneshot(request)
+                .await
+                .expect("tampered response")
+                .status(),
+            StatusCode::FORBIDDEN,
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn optional_canonical_body_route_keeps_exact_bounds_and_authentication() {
+        use crate::utils::extractors::NoritoJson;
+        use axum::Extension;
+        use std::sync::Arc;
+
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let key_pair = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0x73,
+            "derive optional body-bound authentication test key",
+        );
+        let account = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account),
+        );
+        const LIMIT: usize = 3 * 1024 * 1024;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let signed_calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&calls);
+        let handler_signed_calls = Arc::clone(&signed_calls);
+        let expected_account = account.clone();
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[OPTIONAL_DATASPACE_AUTHENTICATED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid optional authenticated body catalog");
+        builder.route(
+            &OPTIONAL_DATASPACE_AUTHENTICATED,
+            catalog_post(
+                move |Extension(visibility): Extension<crate::ToriiAccountReadVisibility>,
+                      NoritoJson(body): NoritoJson<String>| {
+                    let calls = Arc::clone(&handler_calls);
+                    let signed_calls = Arc::clone(&handler_signed_calls);
+                    let expected_account = expected_account.clone();
+                    async move {
+                        assert_eq!(body.len(), LIMIT - 2);
+                        if visibility.is_signed() {
+                            assert_eq!(visibility.caller(), Some(&expected_account));
+                            signed_calls.fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            assert!(visibility.caller().is_none());
+                        }
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                },
+            )
+            .optionally_authenticated_canonical_account_body(app.clone(), LIMIT),
+        );
+        let (router, _) = builder.finish().expect("sealed optional body route");
+        let router = router.with_state(app);
+        let uri: axum::http::Uri = OPTIONAL_DATASPACE_AUTHENTICATED
+            .path()
+            .parse()
+            .expect("route URI");
+        for signed in [false, true] {
+            for (body_bytes, expected_status) in [
+                (LIMIT, StatusCode::NO_CONTENT),
+                (LIMIT + 1, StatusCode::PAYLOAD_TOO_LARGE),
+            ] {
+                let mut body = vec![b'x'; body_bytes];
+                body[0] = b'"';
+                body[body_bytes - 1] = b'"';
+                let headers = signed.then(|| {
+                    crate::tests_runtime_handlers::signed_app_headers(
+                        &account,
+                        &key_pair,
+                        &Method::POST,
+                        &uri,
+                        &body,
+                    )
+                });
+                let mut request = Request::builder()
+                    .method(Method::POST)
+                    .uri(uri.clone())
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .expect("optional authenticated body request");
+                if let Some(headers) = headers {
+                    request.headers_mut().extend(headers);
+                }
+                let response = router
+                    .clone()
+                    .oneshot(request)
+                    .await
+                    .expect("optional response");
+                assert_eq!(response.status(), expected_status);
+            }
+        }
+        let partial = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .header(crate::HEADER_ACCOUNT, account.to_string())
+            .body(Body::from("{"))
+            .expect("partial authentication request");
+        assert_eq!(
+            router
+                .oneshot(partial)
+                .await
+                .expect("partial authentication response")
+                .status(),
+            StatusCode::UNAUTHORIZED,
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(signed_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn canonical_body_zero_limit_get_rejects_nonempty_bodies() {
+        use axum::{Extension, extract::DefaultBodyLimit};
+        use std::sync::Arc;
+
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let key_pair = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0x74,
+            "derive zero-body GET authentication test key",
+        );
+        let account = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account),
+        );
+        const ROUTE: RouteDescriptor = RouteDescriptor::new(
+            "test.zero_body_account",
+            HttpMethod::Get,
+            "/v1/tests/zero-body-account",
+            ApiSurface::Public,
+            Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::AuthenticatedAccount,
+        )
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&calls);
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[ROUTE]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid zero-body catalog");
+        builder.route(
+            &ROUTE,
+            catalog_get(
+                move |Extension(_verified): Extension<
+                    crate::app_auth::VerifiedCanonicalRequest,
+                >| {
+                    let calls = Arc::clone(&handler_calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                },
+            )
+            .layer(DefaultBodyLimit::max(1024))
+            .authenticated_canonical_account_body(app.clone(), 0),
+        );
+        let (router, _) = builder.finish().expect("sealed zero-body route");
+        let router = router.with_state(app);
+        let uri: axum::http::Uri = ROUTE.path().parse().expect("route URI");
+        for method in [Method::HEAD, Method::POST] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri.clone())
+                        .body(Body::from("unadmitted body"))
+                        .expect("wrong-method authenticated route request"),
+                )
+                .await
+                .expect("wrong-method response");
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(response.headers()[axum::http::header::ALLOW], "GET");
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+        let unsigned = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri.clone())
+                    .body(Body::empty())
+                    .expect("unsigned GET request"),
+            )
+            .await
+            .expect("unsigned GET response");
+        assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for (body, expected_status) in [
+            (Vec::new(), StatusCode::NO_CONTENT),
+            (vec![b'x'], StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let headers = crate::tests_runtime_handlers::signed_app_headers(
+                &account,
+                &key_pair,
+                &Method::GET,
+                &uri,
+                &body,
+            );
+            let mut request = Request::builder()
+                .method(Method::GET)
+                .uri(uri.clone())
+                .body(Body::from(body))
+                .expect("signed GET request");
+            request.headers_mut().extend(headers);
+            assert_eq!(
+                router
+                    .clone()
+                    .oneshot(request)
+                    .await
+                    .expect("GET response")
+                    .status(),
+                expected_status,
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn canonical_signed_body_requires_the_sealed_handler_witness() {
         let mut builder = RouterBuilder::new(

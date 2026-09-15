@@ -2825,6 +2825,7 @@ region|current_protected|effects|after|fn current_protected_body_occurrence(|bef
 region|install|effects|after|pub(in crate::sumeragi) struct PreparedRecoveredDurableValidateRetryInstallV1|before|impl<R: EffectRuntime> V2EffectExecutor<R>
 region|runtime_decision|runtime|after|pub(crate) fn replayed_decision_key(|before|/// Rebind one independently durable validation marker before replayed
 region|catalog_open|effects|after|pub(in crate::sumeragi) fn open_with_body_store(|before|/// Preview one recovered signature and authenticate its next body in one borrow.
+region|pending_kura_terminal|effects|at|if let Some(replay) = pending_kura_apply_replay.as_deref_mut() {|before|if pending_kura_apply_replay
 region|marker_join|effects|after|fn record_lifecycle_validated_body(|before|/// Borrow the immutable context governing this executor height.
 region|retry_stutter|effects|after|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(seal) = retained_validate_retry_seals|before|let mut candidate_semantic_identity = evidence.candidate_semantic_identity();
 region|decision_cleanup|effects|after|fn reconcile_decision_work<S: V2EffectServices>(|before|fn plan_fetch_completion<S: V2EffectServices>(
@@ -3011,7 +3012,7 @@ forbidden|install|DurableValidateRetrySealV1::Recovered(Arc::new(owner))|cold ow
 required|runtime_decision|self.driver.replayed_decision_key()|cold launch stopped reading the runtime's exact replayed Decision
 required|catalog_open|ensure_recovered_markers_revalidated()|body catalogs opened before marker authentication
 required|catalog_open|.recovery_catalog()|body catalogs lost their checksummed durable inventory
-required|catalog_open|let recovered_validations = body_store.validated_recovery_catalog()|cold marker deferral lost the validated catalog
+required|catalog_open|let mut recovered_validations = body_store.validated_recovery_catalog()|cold marker deferral lost the validated catalog and its exclusive pending-Kura transfer
 required|catalog_open|RecoveredDurableValidateRetryCensusV1|body-store open lost the opaque complete Ready Validate census
 required|catalog_open|mut recovered_validate_retry_census|body-store open cannot fold exact marker commitments into the sealed cold retry census
 required|catalog_open|for (key, validated_receipt) in &recovered_validations|cold marker deferral stopped classifying every validated marker
@@ -3024,6 +3025,17 @@ required|catalog_open|install_into_executor(|the opaque census was not consumed 
 forbidden|catalog_open|Vec<RecoveredDurableValidateRetryOwnerV1>|body-store open regained a caller-selectable raw owner list
 forbidden|catalog_open|recovered_validate_retry_census.iter(|body-store open iterated or selected a census subset
 order|catalog_open|8|ensure_recovered_markers_revalidated()|recovery_catalog()|validated_recovery_catalog()|for (key, validated_receipt) in &recovered_validations|classify_and_bind_validated_marker(|Self::with_runtime_and_guard(|install_recovered_validation_catalog(|install_into_executor(|body catalogs, exact marker authority binding or recovery, executor open, catalog install, and sealed census consumption must remain ordered
+required|pending_kura_terminal|for (key, terminal) in &cold_terminal_results|pending-Kura recovery must inspect the complete authenticated terminal catalog
+required|pending_kura_terminal|recovered_bodies.get(key)|pending-Kura terminal recovery lost its exact durable body join
+required|pending_kura_terminal|.classify_and_defer_validated_marker(*key, manifest, durable, validated)|pending-Kura terminal recovery lost its exact replay-owned marker classification
+required|pending_kura_terminal|terminal.key() != *key|pending-Kura terminal recovery accepted a substituted outcome key
+required|pending_kura_terminal|terminal.durable() != durable|pending-Kura terminal recovery accepted a substituted durable body
+required|pending_kura_terminal|recovered_validations.contains_key(key)|pending-Kura terminal recovery accepted an existing validation owner
+required|pending_kura_terminal|.classify_and_bind_validated_marker(*key, validated)|pending-Kura terminal recovery stopped excluding a Ready Validate owner
+required|pending_kura_terminal|selected_terminal.replace(*key).is_some()|pending-Kura terminal recovery accepted multiple selected terminal outcomes
+required|pending_kura_terminal|recovered_validations.insert(key, validated).is_some()|pending-Kura terminal transfer stopped rejecting replacement of another marker
+count|catalog_open|recovered_validations.insert(|1|only the selected pending-Kura terminal may extend the validated catalog
+order|pending_kura_terminal|5|.classify_and_defer_validated_marker(*key, manifest, durable, validated)|selected_terminal.replace(*key).is_some()|cold_terminal_results.remove(&key)|drop(terminal)|recovered_validations.insert(key, validated)|pending-Kura transfer must authenticate one owner and remove ordinary terminal custody before installing its validation receipt
 required|marker_join|self.validated_bodies|later validation marker join stopped preflighting the current catalog
 required|marker_join|let projected_recovered_seal =|later validation marker join stopped projecting a replacement recovered frontier before mutation
 required|marker_join|project_recovered_commitment_ceiling(validated.execution_commitment())|later validation marker join stopped latching or checking its exact commitment
@@ -3053,7 +3065,8 @@ forbidden|launch|install_recovered_durable_validate_retry_owners|launch retained
 forbidden|launch|arm_live_clocks|launch must not arm clocks before the complete cold Validate census is installed
 required|launched|executor: V2EffectExecutor<SerializedV2Runtime>|only the fully installed executor may cross into launched ownership
 required|launched|services: ProductionV2Services|service ownership must remain inside the same launched cut
-order|activation|3|.arm_live_clocks(clock_activation, now)|.activate_effect_completion_observer(observer)|publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)|live clocks, observer, and ingress must open only from the installed launched owner
+required|activation|ProductionLifecycleActivationPublicationV1::RecoveredCompleteTip { .. }|recovered Decision activation must remain bound to CompleteTip publication
+order|activation|4|.recovered_successor_decision_activation_authority()|.arm_live_clocks(clock_activation, now)|.activate_effect_completion_observer(observer)|publication.open_and_publish(\n            &self.leader_wire_ingress_binding.ingress,\n            status,\n            recovered_decision,\n        )|live clocks, observer, and ingress must open only from the installed owner with its authenticated recovered Decision authority
 end
 case|lifecycle_decision_apply_scheduler_attestation_is_lineage_exact_and_io_bounded
 region|declaration|registry|after|pub(super) struct ReadyLifecycleDecisionApplyAttestationV1|before|impl ReadyLifecycleDecisionApplyAttestationV1
@@ -3862,7 +3875,15 @@ forbidden|decision_body_retirement|persist_exact_successor|body retirement stagi
 required|decision_body_startup|changed \p\p retired_body|fresh Decision admission must include the staged retirement in its one publication
 count|decision_body_startup|publish_retirement()?|3|retained body and canonical Store/Validate branches must publish retirement before installing ownership
 order|decision_body_startup|3|reconcile_recovered_decision_body_generation|.stage_authenticated_wal_decision_fetch(&projection)|.persist_exact_successor(&opened, &repaired)|fresh Decision must stage cancellation and admission before one exact successor publication
-count|ledger_production|.persist_exact_successor(|10|only reviewed staged transactions and authenticated startup retirement may publish exact ledger successors
+region|timeout_body_retirement|ledger|at|fn reconcile_timeout_body_pipeline_startup(|before|fn authenticate_durable_certified_body_pipeline_census(
+required|timeout_body_retirement|adapter_startup.recovered_lifecycle_output_frontier(verified)?|timeout retirement must derive its frontier from authenticated adapter startup
+required|timeout_body_retirement|record.terminal() == Some(None)|timeout retirement must select only live body leaves
+required|timeout_body_retirement|Some(DurablePayloadReference::BodyFrame(_))|timeout retirement must retain exact durable body frame ownership
+required|timeout_body_retirement|.ordinary_body_is_superseded_by_timeout(frontier)|timeout retirement must prove supersession against the recovered frontier
+required|timeout_body_retirement|!original.contains_live_ordinal(self.records[index].ordinal())|timeout retirement must reject leaves outside the authenticated original body census
+order|timeout_body_retirement|7|adapter_startup.recovered_lifecycle_output_frontier(verified)?|!original.contains_live_ordinal(self.records[index].ordinal())|Self::cancelled_record(&self.records[index])|.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)|.authenticate_durable_certified_body_pipeline_startup(verified, store)|.persist_exact_successor(self, &reconciled)|ledger_store.load().is_ok_and(\ploaded\p loaded == reconciled)|timeout retirement must authenticate the exact source and remaining census before its sole CAS and exact readback
+count|timeout_body_retirement|.persist_exact_successor(|1|timeout body retirement must publish one authenticated successor
+count|ledger_production|.persist_exact_successor(|11|only reviewed staged transactions and authenticated startup retirement may publish exact ledger successors
 end
 case|production_scheduler_factory_has_no_raw_rank_mint
 region|scheduler|scheduler_inputs|begin|-|end|-

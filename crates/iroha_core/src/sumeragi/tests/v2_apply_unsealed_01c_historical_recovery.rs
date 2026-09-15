@@ -1094,8 +1094,10 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             );
             let unavailable = lane_work
                 .prepare_certified_execution_carrier(active_context.context(), 0, &[])
-                .expect_err("fatal provider failure remains unavailable");
-            assert!(unavailable.reason().contains(expected));
+                .expect_err("fatal provider failure retains its cause");
+            assert!(
+                matches!(unavailable, crate::sumeragi::v2_candidate::CandidateWorkError::Failed(reason) if reason.contains(expected))
+            );
             assert!(
                 !lane_work.merge_output_is_open_for_test(),
                 "fatal errors still poison the output guard"
@@ -1429,7 +1431,12 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 let certified = lane_work
                     .prepare_certified_execution_carrier(active_context.context(), 0, &[])
                     .expect_err("certified provider waits for State publication");
-                assert_eq!(certified.reason(), "merge frontier is changing");
+                assert_eq!(
+                    certified,
+                    crate::sumeragi::v2_candidate::CandidateWorkError::Deferred(
+                        crate::sumeragi::v2_candidate::CandidateWorkDeferral::MergeFrontier
+                    )
+                );
                 assert!(
                     lane_work.merge_output_is_open_for_test(),
                     "deferred certified provider completes its guard"
@@ -1437,7 +1444,12 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 let ordinary = (&mut lane_work)
                     .prepare(active_context.context(), 0, &[])
                     .expect_err("ordinary provider waits for State publication");
-                assert_eq!(ordinary.reason(), "merge frontier is changing");
+                assert_eq!(
+                    ordinary,
+                    crate::sumeragi::v2_candidate::CandidateWorkError::Deferred(
+                        crate::sumeragi::v2_candidate::CandidateWorkDeferral::MergeFrontier
+                    )
+                );
                 assert!(
                     lane_work.merge_output_is_open_for_test(),
                     "deferred ordinary provider completes its guard"

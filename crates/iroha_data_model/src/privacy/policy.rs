@@ -1,4 +1,4 @@
-//! Consensus privacy limits and delayed policy tightening validation.
+//! Consensus privacy limits and governed future-block tightening validation.
 
 use super::*;
 
@@ -232,7 +232,7 @@ impl PrivacyConsensusPolicyTighteningV1 {
     ///
     /// # Errors
     ///
-    /// Rejects zero/overflowing heights, insufficient notice, an invalid
+    /// Rejects zero/overflowing heights, a non-future effective height, an invalid
     /// successor, any increase, or a no-op.
     pub fn validate_against(
         &self,
@@ -304,7 +304,7 @@ impl PrivacyConsensusPolicyV1 {
     }
     /// Root-retention cap enforced while admitting new roots.
     ///
-    /// During the notice window new histories must already satisfy the pending
+    /// While a tightening is pending, new histories must already satisfy the
     /// lower limit so the effective-height transition is deterministic.
     #[must_use]
     pub const fn admission_retained_root_count(&self) -> u32 {
@@ -333,19 +333,13 @@ fn validate_privacy_policy_schedule_heights_v1(
     if scheduled_at_height == 0 {
         return Err(PrivacyPolicyValidationErrorV1::ZeroScheduledHeight);
     }
-    if effective_at_height <= scheduled_at_height {
+    let next_height = scheduled_at_height
+        .checked_add(1)
+        .ok_or(PrivacyPolicyValidationErrorV1::HeightOverflow)?;
+    if effective_at_height < next_height {
         return Err(PrivacyPolicyValidationErrorV1::EffectiveNotLater {
             scheduled_at_height,
             effective_at_height,
-        });
-    }
-    let earliest_effective_height = scheduled_at_height
-        .checked_add(MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1)
-        .ok_or(PrivacyPolicyValidationErrorV1::HeightOverflow)?;
-    if effective_at_height < earliest_effective_height {
-        return Err(PrivacyPolicyValidationErrorV1::LeadTimeTooShort {
-            effective_at_height,
-            earliest_effective_height,
         });
     }
     Ok(())
@@ -356,7 +350,7 @@ impl PrivacyProtocolLimitsTighteningV1 {
     ///
     /// # Errors
     ///
-    /// Rejects insufficient notice, a protocol mismatch, invalid limits, an increase, or a no-op.
+    /// Rejects invalid schedule heights, a protocol mismatch, invalid limits, an increase, or a no-op.
     pub fn validate_against(
         &self,
         current_limits: &PrivacyProtocolActivationLimitsV1,

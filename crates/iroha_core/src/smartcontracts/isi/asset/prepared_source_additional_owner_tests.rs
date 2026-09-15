@@ -544,3 +544,147 @@ fn optimized_detached_missing_identity_rejects_before_balance_and_event_writes()
     assert_eq!(tx.pending_transfer_transcript_count_for_testing(), 0);
     assert_eq!(tx.world.internal_event_buf.len(), events_before);
 }
+
+#[test]
+fn numeric_transfer_precheck_preserves_typed_source_and_receiver_controls() {
+    use NumericAssetTransferControlPolicy as Policy;
+
+    for (policy, outbound_exempt, credit_exempt) in [
+        (Policy::Enforce, false, false),
+        (Policy::KagemushaRedemption, true, false),
+        (Policy::OraclePenalty, true, false),
+        (Policy::OracleDisputeResolution, true, false),
+        (Policy::StakingUnbond, true, false),
+        (Policy::StakingSlash, true, true),
+        (Policy::ModerationChallengeSettlement, true, true),
+        (Policy::GovernanceSlash, true, false),
+        (Policy::GovernanceRestitution, true, false),
+        (Policy::GovernanceUnlock, true, false),
+        (Policy::CitizenshipRelease, true, false),
+    ] {
+        let (state, definition, source) = build_asset_transfer_control_test_state(10);
+        let destination = AssetId::new(definition.clone(), BOB_ID.clone());
+        let mut block = state.block(occurrence_header());
+        let mut tx = block.transaction();
+        let amount = Quantity::from(3_u32);
+        SetAssetTransferAvailability::new(
+            ALICE_ID.clone(),
+            definition.clone(),
+            0,
+            AssetTransferAvailability::Enabled,
+            AssetTransferAvailability::Disabled,
+            None,
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        assert!(matches!(
+            tx.world
+                .precheck_numeric_asset_transfer_delta_exact(&source, &destination, &amount),
+            Err(Error::AssetTransferAdmission(
+                AssetTransferAdmissionError::OutgoingDisabled(_)
+            ))
+        ));
+        let precheck = |tx: &StateTransaction<'_, '_>, amount: &Quantity| {
+            tx.world
+                .precheck_numeric_asset_transfer_delta_exact_with_control_policy(
+                    &source,
+                    &destination,
+                    amount,
+                    policy,
+                )
+        };
+        let outgoing_result = precheck(&tx, &amount);
+        if outbound_exempt {
+            let delta = outgoing_result.unwrap_or_else(|error| panic!("{policy:?}: {error}"));
+            assert_eq!(delta.from_balance_before, Quantity::from(10_u32));
+            assert_eq!(delta.from_balance_after, Quantity::from(7_u32));
+            assert_eq!(delta.to_balance_before, Quantity::zero());
+            assert_eq!(delta.to_balance_after, amount);
+        } else {
+            assert!(
+                matches!(
+                    outgoing_result,
+                    Err(Error::AssetTransferAdmission(
+                        AssetTransferAdmissionError::OutgoingDisabled(_)
+                    ))
+                ),
+                "{policy:?}: {outgoing_result:?}"
+            );
+        }
+        SetAssetTransferAvailability::new(
+            ALICE_ID.clone(),
+            definition.clone(),
+            1,
+            AssetTransferAvailability::Enabled,
+            AssetTransferAvailability::Enabled,
+            None,
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        SetAssetTransferAvailability::new(
+            BOB_ID.clone(),
+            definition.clone(),
+            0,
+            AssetTransferAvailability::Disabled,
+            AssetTransferAvailability::Enabled,
+            None,
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        let incoming_result = precheck(&tx, &amount);
+        if credit_exempt {
+            incoming_result.unwrap_or_else(|error| panic!("{policy:?}: {error}"));
+        } else {
+            assert!(
+                matches!(
+                    incoming_result,
+                    Err(Error::AssetTransferAdmission(
+                        AssetTransferAdmissionError::IncomingDisabled(_)
+                    ))
+                ),
+                "{policy:?}: {incoming_result:?}"
+            );
+        }
+        SetAssetTransferAvailability::new(
+            BOB_ID.clone(),
+            definition.clone(),
+            1,
+            AssetTransferAvailability::Enabled,
+            AssetTransferAvailability::Enabled,
+            None,
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        SetAssetHoldingLimit::new(
+            BOB_ID.clone(),
+            definition.clone(),
+            Some(Quantity::from(2_u32)),
+        )
+        .execute(&ALICE_ID, &mut tx)
+        .unwrap();
+        let holding_result = precheck(&tx, &amount);
+        if credit_exempt {
+            holding_result.unwrap_or_else(|error| panic!("{policy:?}: {error}"));
+        } else {
+            assert!(
+                matches!(
+                    holding_result,
+                    Err(Error::AssetTransferAdmission(
+                        AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                    ))
+                ),
+                "{policy:?}: {holding_result:?}"
+            );
+        }
+        SetAssetHoldingLimit::new(BOB_ID.clone(), definition, None)
+            .execute(&ALICE_ID, &mut tx)
+            .unwrap();
+        let insufficient = precheck(&tx, &Quantity::from(11_u32));
+        assert!(
+            matches!(insufficient, Err(Error::Math(MathError::NotEnoughQuantity))),
+            "{policy:?}: {insufficient:?}"
+        );
+        assert_eq!(asset_balance_or_zero(&tx, &source), Quantity::from(10_u32));
+        assert_eq!(asset_balance_or_zero(&tx, &destination), Quantity::zero());
+    }
+}

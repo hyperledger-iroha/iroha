@@ -453,7 +453,7 @@ fn tc_reset_readmits_exact_locked_commit_once_per_consumer_tag() {
             && intent.round == wire_round
             && intent.subject == Some(locked_subject)
             && intent.execution_commitment == Some(locked_execution_commitment)
-            && intent.stage == wire::SumeragiV2OutboundIntentStage::Sent
+            && intent.stage == wire::SumeragiV2OutboundIntentStage::Retained
     }));
     assert!(liveness.liveness.commit_quorums.iter().any(|quorum| {
         quorum.round == wire_round

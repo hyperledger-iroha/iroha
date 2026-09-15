@@ -203,7 +203,7 @@ fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
     );
 }
 #[test]
-fn merge_frontier_rechecks_preserve_proposal_shape_and_retire_with_owner() {
+fn candidate_snapshot_rechecks_preserve_proposal_shape_and_retire_with_owner() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 3, Generation::new(18));
     let owner = proposal_owner(&context, tag, None, None);
@@ -221,13 +221,13 @@ fn merge_frontier_rechecks_preserve_proposal_shape_and_retire_with_owner() {
             }),
             ..LocalProposalState::default()
         };
-        // Even a long publication delay must not arm the ordinary non-empty
+        // Even a long snapshot delay must not arm the ordinary non-empty
         // fallback or consume an already-owned proposal or recovery retry.
         for elapsed_seconds in [0, 2, 60, 3_600] {
             let now = started_at
                 .checked_add(Duration::from_secs(elapsed_seconds))
                 .expect("frontier fixture time is representable");
-            state.defer_merge_frontier(owner, now);
+            state.defer_candidate_snapshot(owner, now);
             let wait = state
                 .candidate_work_wait
                 .expect("frontier recheck is armed");
@@ -252,7 +252,7 @@ fn merge_frontier_rechecks_preserve_proposal_shape_and_retire_with_owner() {
         );
         state.reconcile(successor);
         assert!(state.is_pristine(), "a new owner retires the old recheck");
-        state.defer_merge_frontier(successor, started_at);
+        state.defer_candidate_snapshot(successor, started_at);
         assert_eq!(
             state.candidate_work_wait.expect("successor recheck").owner,
             successor

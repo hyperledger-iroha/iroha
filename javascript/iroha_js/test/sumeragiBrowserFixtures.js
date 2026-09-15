@@ -116,7 +116,7 @@ export function browserSumeragiStatusFixture() {
           },
           subject,
           execution_commitment: null,
-          stage: { stage: "sent", details: null },
+          stage: { stage: "retained", details: null },
         },
       ],
       work: {

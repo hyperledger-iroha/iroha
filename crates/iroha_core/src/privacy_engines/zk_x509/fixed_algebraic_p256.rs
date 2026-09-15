@@ -44,14 +44,14 @@ use super::{
     stark::ZK_X509_DIGEST_CONTEXT_V1,
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-    goldilocks_digest384_frame_v1,
+    GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, PrivacyOuterDigestV1,
+    privacy_outer_digest_frame_v1,
 };
 use std::{sync::OnceLock, vec::Vec};
 use thiserror::Error;
 /// Exact compact P-256 fixed-schedule semantics bound by the release profile.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log22:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest=poseidon-x7-goldilocks-6x64-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
+    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log22:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest=sha3-384-opaque48-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
 #[cfg(test)]
 const P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:p256-fixed-algebraic-compiler:v1";
@@ -2607,8 +2607,8 @@ fn logical_constant_range_atom_count_v1(
 /// Digest of the stable P-256 structural compiler descriptor.
 #[cfg(test)]
 pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
--> Result<GoldilocksDigest384V1, ZkX509P256FixedAlgebraicErrorV1> {
-    goldilocks_digest384_frame_v1(
+-> Result<PrivacyOuterDigestV1, ZkX509P256FixedAlgebraicErrorV1> {
+    privacy_outer_digest_frame_v1(
         ZK_X509_DIGEST_CONTEXT_V1,
         P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1,
         b"p256-fixed-algebraic-compiler",
@@ -2626,7 +2626,7 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509P256FixedAlgebraicScheduleV1 {
     children: [ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1],
-    descriptor_digest: GoldilocksDigest384V1,
+    descriptor_digest: PrivacyOuterDigestV1,
 }
 impl ZkX509P256FixedAlgebraicScheduleV1 {
     fn new_v1(
@@ -2654,9 +2654,9 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
             let width = child.width_v1().to_be_bytes();
             encoded_widths[index * 2..index * 2 + 2].copy_from_slice(&width);
             child_digests[index * 48..index * 48 + 48]
-                .copy_from_slice(&child.descriptor_digest_v1().to_le_bytes());
+                .copy_from_slice(&child.descriptor_digest_v1().to_bytes());
         }
-        let descriptor_digest = goldilocks_digest384_frame_v1(
+        let descriptor_digest = privacy_outer_digest_frame_v1(
             ZK_X509_DIGEST_CONTEXT_V1,
             P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
             b"p256-fixed-algebraic-composite",
@@ -2681,14 +2681,14 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
         ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 as u16
     }
     /// Digest binding compiler semantics and every ordered child descriptor.
-    pub(crate) const fn descriptor_digest_v1(&self) -> GoldilocksDigest384V1 {
+    pub(crate) const fn descriptor_digest_v1(&self) -> PrivacyOuterDigestV1 {
         self.descriptor_digest
     }
     /// Fail closed unless the compiled profile pins this exact composite.
     #[cfg(test)]
     pub(crate) fn verify_descriptor_digest_v1(
         &self,
-        expected: &GoldilocksDigest384V1,
+        expected: &PrivacyOuterDigestV1,
     ) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
         if self.descriptor_digest != *expected {
             return Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch);
@@ -2975,9 +2975,9 @@ mod tests {
         }
         total
     }
-    fn digest_hex_v1(digest: GoldilocksDigest384V1) -> String {
+    fn digest_hex_v1(digest: PrivacyOuterDigestV1) -> String {
         let mut encoded = String::with_capacity(96);
-        for byte in digest.to_le_bytes() {
+        for byte in digest.to_bytes() {
             write!(&mut encoded, "{byte:02x}").expect("writing to a String is infallible");
         }
         encoded
@@ -3659,7 +3659,7 @@ mod tests {
         assert_ne!(
             zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
                 .expect("compiler descriptor digest"),
-            GoldilocksDigest384V1::default()
+            PrivacyOuterDigestV1::default()
         );
         assert_eq!(
             first.atoms_v1().len(),
@@ -3667,7 +3667,7 @@ mod tests {
         );
         assert_ne!(
             first.descriptor_digest_v1(),
-            GoldilocksDigest384V1::default()
+            PrivacyOuterDigestV1::default()
         );
         let independently_compiled = compile_zk_x509_p256_fixed_algebraic_schedule_v1()
             .expect("independent deterministic compilation");
@@ -3692,7 +3692,7 @@ mod tests {
             schedule
                 .children_v1()
                 .iter()
-                .all(|child| child.descriptor_digest_v1() != GoldilocksDigest384V1::default())
+                .all(|child| child.descriptor_digest_v1() != PrivacyOuterDigestV1::default())
         );
         let mut reordered = schedule.children.clone();
         reordered.swap(2, 3);
@@ -4021,10 +4021,9 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidDomain)
         );
         let mut changed_digest = schedule_v1().descriptor_digest_v1();
-        let mut changed_words = changed_digest.words();
+        let mut changed_words = changed_digest.to_bytes();
         changed_words[0] ^= 1;
-        changed_digest =
-            GoldilocksDigest384V1::new(changed_words).expect("canonical changed digest");
+        changed_digest = PrivacyOuterDigestV1::from_bytes(changed_words);
         assert_eq!(
             schedule_v1().verify_descriptor_digest_v1(&changed_digest),
             Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch)

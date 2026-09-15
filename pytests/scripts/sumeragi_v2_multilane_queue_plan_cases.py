@@ -1247,3 +1247,23 @@ def test_queue_plan_pending_membership_contract_rejects_current_owner_drift(
     replace_once_after(tmp_path / relative, f"fn {symbol}(", old, new)
     errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
     assert any(symbol in error and old in error for error in errors), errors
+
+
+def test_queue_plan_pending_membership_contract_rejects_historical_authority_order_drift(
+    tmp_path: Path,
+) -> None:
+    """The authenticated helper keeps exact history ahead of live authority lookup."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
+    symbol = "validate_authenticated_queue_plan_admission_for_carrier_in_view"
+    swap_ordered_once_after(
+        path,
+        f"fn {symbol}(",
+        "state_view.block_hashes().get(index).copied()",
+        "queue_plan_authoritative_peers_in_view_at_height(",
+    )
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any(
+        "ordered QueuePlan" in error and symbol in error for error in errors
+    ), errors

@@ -6534,7 +6534,7 @@ export type ToriiSumeragiV2OutboundIntentKind = Readonly<{
 }>;
 
 export type ToriiSumeragiV2OutboundIntentStage = Readonly<{
-  stage: "pending_persistence" | "pending_signature" | "queued" | "sent";
+  stage: "pending_persistence" | "pending_signature" | "queued" | "retained";
   details: null;
 }>;
 

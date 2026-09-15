@@ -15581,11 +15581,15 @@ impl SumeragiV2Adapter {
                 self.intent_from_signable(signable, wire::SumeragiV2OutboundIntentStage::Queued)?;
             Self::retain_intent(&mut intents, intent);
         }
-        for message in self.reducer.outbound_messages() {
-            if let Some(intent) =
-                self.intent_from_message(message, wire::SumeragiV2OutboundIntentStage::Sent)?
-            {
-                Self::retain_intent(&mut intents, intent);
+        // Observer-held certificates are recovery evidence without productive
+        // retransmission eligibility.
+        if self.reducer.local_validator().is_some() {
+            for message in self.reducer.retained_control_messages() {
+                if let Some(intent) = self
+                    .intent_from_message(message, wire::SumeragiV2OutboundIntentStage::Retained)?
+                {
+                    Self::retain_intent(&mut intents, intent);
+                }
             }
         }
         Ok(intents.into_values().collect())
@@ -18944,7 +18948,7 @@ const fn outbound_stage_rank(stage: wire::SumeragiV2OutboundIntentStage) -> u8 {
         wire::SumeragiV2OutboundIntentStage::PendingPersistence => 0,
         wire::SumeragiV2OutboundIntentStage::PendingSignature => 1,
         wire::SumeragiV2OutboundIntentStage::Queued => 2,
-        wire::SumeragiV2OutboundIntentStage::Sent => 3,
+        wire::SumeragiV2OutboundIntentStage::Retained => 3,
     }
 }
 const fn progress_transition_is_public_at_view(

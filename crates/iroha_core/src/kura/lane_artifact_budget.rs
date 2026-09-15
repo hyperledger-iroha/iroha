@@ -441,6 +441,7 @@ impl Kura {
             }
             return Ok(0);
         };
+        let native_reservations = self.native_amx_publication_capacity_reserved_bytes()?;
         let mut reservations = self.post_wsv_lane_artifact_budget_reservations.lock();
         if let Some(mut reservation) = reservations.get_mut(&plan.entry_hash) {
             if reservation.plan != plan {
@@ -507,6 +508,7 @@ impl Kura {
                 .checked_add(pending_canonical_bytes)
                 .and_then(|bytes| bytes.checked_add(terminal_reservations))
                 .and_then(|bytes| bytes.checked_add(existing_reservations))
+                .and_then(|bytes| bytes.checked_add(native_reservations))
                 .and_then(|bytes| bytes.checked_add(reserved_bytes))
                 .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
                 .and_then(|bytes| {
@@ -1245,58 +1247,8 @@ impl Kura {
                 );
             }
         }
-        if !block.has_results() {
-            // Raw pending bodies have no execution-derived application manifest.
-            // Their canonical bytes and payload ownerships are already budgeted;
-            // result-bearing publication accounts its own authenticated evidence.
-            return Ok(total);
-        }
-        let native_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
-            block,
-            merge_entry,
-        )
-        .map_err(|error| {
-            Self::invalid_lane_artifact_error(
-                PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
-                format!("cannot account Native AMX application manifest: {error}"),
-            )
-        })?;
-        let native_artifacts = native_amx_participant_application_artifacts(
-            &native_manifest,
-            native_amx_participant_application_finality_placeholder_hash(),
-        )
-        .ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
-                "cannot account missing Native AMX manifest proof",
-            )
-        })?;
-        let mut native_prune_intent_routes = BTreeSet::new();
-        for (manifest_artifact, receipt) in native_artifacts {
-            let (manifest_bytes, receipt_bytes) =
-                native_amx_participant_application_pair_framed_bytes(&manifest_artifact, &receipt)?;
-            let manifest_len = u64::try_from(manifest_bytes.len())?;
-            let receipt_len = u64::try_from(receipt_bytes.len())?;
-            let latest_len = u64::try_from(
-                norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
-                    &receipt,
-                ))?
-                .len(),
-            )?;
-            total = total
-                .saturating_add(manifest_len)
-                .saturating_add(receipt_len)
-                .saturating_add(latest_len);
-            if native_prune_intent_routes.insert((
-                manifest_artifact.leaf.lane_id,
-                manifest_artifact.leaf.dataspace_id,
-                manifest_artifact.leaf.lane_incarnation,
-            )) {
-                total = total.saturating_add(u64::try_from(
-                    self.native_amx_evidence_prune_intent_max_bytes(),
-                )?);
-            }
-        }
+        // Native manifest/receipt/latest bytes and exact prune-journal headroom belong
+        // to the operation's typed reservation. Cached block geometry stays immutable.
         Ok(total)
     }
     fn native_amx_manifest_for_committed_block(

@@ -2017,3 +2017,282 @@ fn typed_treasury_payout_policy_cannot_name_a_signable_treasury() {
         Some("validation-fee treasury payout contract subject must equal the policy treasury")
     );
 }
+
+#[test]
+fn active_policy_admits_privacy_control_effects_without_granting_authority() {
+    use iroha_data_model::{
+        isi::{
+            privacy::{
+                SchedulePrivacyConsensusPolicyTighteningV1,
+                SchedulePrivacyProtocolLimitsTighteningV1,
+            },
+            private_settlement::RotatePrivateSettlementPoolPolicyV1,
+        },
+        nexus::{PrivateSettlementPoolGovernanceLifecycleV1, PrivateSettlementRouteV1},
+        privacy::{
+            PrivacyPoolIdV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1,
+            VeRangeActivationLimitsV1,
+        },
+    };
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+
+    let deployer_key = key_pair(55);
+    let deployer = account(55);
+    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
+        validation_fee_payout_world(&deployer),
+        crate::kura::Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+        "generic-testnet".parse().expect("chain id"),
+        validation_fee_test_network_id(),
+    );
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut state_tx = block.transaction();
+    let policy =
+        install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
+    assert!(active_policy(&state_tx).expect("active policy").is_some());
+    let original = *state_tx.world.privacy_consensus_policy.get();
+    let mut next_limits = original.current_limits;
+    next_limits.max_actions_per_block -= 1;
+    let schedule = SchedulePrivacyConsensusPolicyTighteningV1::new(
+        TEST_POLICY_EFFECTIVE_HEIGHT + 1,
+        next_limits,
+    );
+    // Classification is independent of subsequent protocol/pool state validation. These
+    // signed instructions exercise both omitted schedules and the omitted settlement rotation.
+    let instructions: Vec<InstructionBox> = vec![
+        schedule.clone().into(),
+        SchedulePrivacyProtocolLimitsTighteningV1::new(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            TEST_POLICY_EFFECTIVE_HEIGHT + 1,
+            PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+                VeRangeActivationLimitsV1 {
+                    max_aggregation_count: 1,
+                },
+            ),
+        )
+        .into(),
+        RotatePrivateSettlementPoolPolicyV1 {
+            version: iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            route: PrivateSettlementRouteV1 {
+                dataspace_id: DataSpaceId::new(1),
+                lane_id: LaneId::new(1),
+                lane_incarnation: Hash::new(b"fee-effect-route"),
+            },
+            pool_id: PrivacyPoolIdV1::new([0x81; 32]),
+            expected_governance_digest: Hash::new(b"prior-governance"),
+            asset_binding_commitment: Hash::new(b"same-private-asset"),
+            audit_policy_digest: Hash::new(b"successor-audit-policy"),
+            audit_key_epoch: 2,
+            lifecycle: PrivateSettlementPoolGovernanceLifecycleV1 {
+                governance_revision: 2,
+                activation_height: TEST_POLICY_EFFECTIVE_HEIGHT,
+                retirement_height: None,
+            },
+            governance_digest: Hash::new(b"successor-governance"),
+        }
+        .into(),
+    ];
+    for instruction in &instructions {
+        assert_eq!(
+            native_instruction_ds_effect_disposition(instruction, &policy_fee_asset(&policy)),
+            NativeInstructionDsEffectDisposition::AuditedNoDsEffect,
+        );
+        let transaction = tx(55, vec![instruction.clone()], Metadata::default());
+        assert!(!is_validation_fee_control_plane_transaction(&transaction));
+        assert!(
+            enforce_validation_fee_admission(&transaction, &state_tx)
+                .expect("audited privacy controls remain fee-admissible")
+                .is_none()
+        );
+        let error = crate::executor::Executor::Initial
+            .execute_instruction(&mut state_tx, &deployer, instruction.clone())
+            .expect_err("fee admission must not grant governance authority");
+        assert!(
+            format!("{error:?}").contains("CanEnactGovernance"),
+            "{error:?}"
+        );
+        assert_eq!(*state_tx.world.privacy_consensus_policy.get(), original);
+    }
+    let combined = tx(55, instructions, Metadata::default());
+    assert!(
+        enforce_validation_fee_admission(&combined, &state_tx)
+            .expect("all three neutral instructions compose without a synthetic fee transfer")
+            .is_none()
+    );
+    state_tx.world.add_account_permission(
+        &deployer,
+        iroha_data_model::permission::Permission::from(
+            iroha_executor_data_model::permission::governance::CanEnactGovernance,
+        ),
+    );
+    crate::executor::Executor::Initial
+        .execute_instruction(&mut state_tx, &deployer, schedule.into())
+        .expect("fee-admitted, authorized strict tightening executes");
+    let scheduled = *state_tx.world.privacy_consensus_policy.get();
+    assert_eq!(scheduled.current_limits, original.current_limits);
+    let pending = scheduled
+        .pending_tightening
+        .expect("actual pending tightening");
+    assert_eq!(pending.scheduled_at_height, TEST_POLICY_EFFECTIVE_HEIGHT);
+    assert_eq!(
+        pending.effective_at_height,
+        TEST_POLICY_EFFECTIVE_HEIGHT + 1
+    );
+    assert_eq!(pending.next_limits, next_limits);
+}
+
+#[test]
+fn active_policy_rejects_privacy_proof_and_unreviewed_effects() {
+    use crate::smartcontracts::isi::{
+        InitialNativeInstructionAdmission, NativeInstructionAssetEffect,
+        registered_native_instruction_asset_effect,
+        registered_native_instruction_initial_admission,
+    };
+    use iroha_data_model::privacy::{
+        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
+        PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVeRangeBitLengthV1,
+        VeRangeTransparentRangeStatementV1,
+    };
+
+    let deployer_key = key_pair(55);
+    let deployer = account(55);
+    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
+        validation_fee_payout_world(&deployer),
+        crate::kura::Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+        "generic-testnet".parse().expect("chain id"),
+        validation_fee_test_network_id(),
+    );
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut state_tx = block.transaction();
+    let policy =
+        install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
+    assert!(active_policy(&state_tx).expect("active policy").is_some());
+    let compiled = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+    )
+    .expect("available compiled profile");
+    // Deliberately unproved: fee admission must reject the DS-capable native operation
+    // independently of which protocol/proof its later native verifier would accept.
+    let statement =
+        PrivacyStatementV1::VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1 {
+            context: PrivacyStatementContextV1 {
+                network_id: validation_fee_test_network_id(),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x82; 32]),
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+            },
+            asset_definition_id: fee_asset(),
+            policy_id: PrivacyPolicyIdV1::new([0x83; 32]),
+            value_commitments: Vec::new(),
+            bit_length: PrivacyVeRangeBitLengthV1::Bits32,
+            aggregation_count: 0,
+        });
+    let instruction: InstructionBox =
+        iroha_data_model::isi::privacy::SubmitPrivacyProofV1::new(PrivacyProofEnvelopeV1 {
+            wire_magic: Default::default(),
+            catalog_commitment: Default::default(),
+            protocol_id: compiled.protocol_id,
+            proof_system_id: compiled.proof_system_id,
+            engine_id: compiled.engine_id,
+            parameter_id: compiled.parameter_id,
+            parameter_digest: compiled.parameter_digest,
+            verifier_digest: compiled.verifier_digest,
+            statement_schema_digest: compiled.statement_schema_digest,
+            engine_manifest_digest: compiled.engine_manifest_digest,
+            statement_digest: statement.digest().expect("statement digest"),
+            statement,
+            proof: PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new())),
+        })
+        .into();
+    let type_name = core::any::type_name::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>();
+    assert_eq!(
+        registered_native_instruction_initial_admission(&instruction),
+        Some(InitialNativeInstructionAdmission::CoreAuthorized)
+    );
+    assert_eq!(
+        registered_native_instruction_asset_effect(&instruction),
+        Some((
+            type_name,
+            NativeInstructionAssetEffect::MayAffectNumericAssets
+        ))
+    );
+    assert_eq!(
+        native_instruction_ds_effect_disposition(&instruction, &policy_fee_asset(&policy)),
+        NativeInstructionDsEffectDisposition::RejectKnownDsCapable(type_name)
+    );
+    let transaction = tx(55, vec![instruction], Metadata::default());
+    let expected = ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement {
+        context_index: 0,
+        instruction_index: 0,
+        instruction_wire_id: type_name,
+    };
+    assert_eq!(enforce_policy(&transaction, &policy), Err(expected.clone()));
+    assert!(!is_validation_fee_control_plane_transaction(&transaction));
+    let rejection = enforce_validation_fee_admission(&transaction, &state_tx)
+        .expect_err("native authority cannot override DS-capable fee rejection");
+    assert_eq!(
+        rejection,
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+            "validation-fee admission rejected transaction: {expected}"
+        )))
+    );
+    for (instruction, type_name) in [
+        (
+            iroha_data_model::isi::InvalidInstruction::new(
+                "future.native.instruction",
+                [0xAB; 32],
+                "unreviewed effect",
+            )
+            .into(),
+            Some(core::any::type_name::<
+                iroha_data_model::isi::InvalidInstruction,
+            >()),
+        ),
+        (
+            iroha_data_model::isi::CustomInstruction::new(Json::new("unreviewed")).into(),
+            None,
+        ),
+    ] {
+        assert_eq!(
+            registered_native_instruction_asset_effect(&instruction),
+            None
+        );
+        let transaction = tx(55, vec![instruction], Metadata::default());
+        let expected = ValidationFeeAdmissionError::UnclassifiedNativeInstruction {
+            context_index: 0,
+            instruction_index: 0,
+            registered_type_name: type_name,
+        };
+        assert_eq!(enforce_policy(&transaction, &policy), Err(expected.clone()));
+        let rejection = enforce_validation_fee_admission(&transaction, &state_tx)
+            .expect_err("unreviewed effects must fail under the actual active policy");
+        assert_eq!(
+            rejection,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "validation-fee admission rejected transaction: {expected}"
+            )))
+        );
+    }
+}

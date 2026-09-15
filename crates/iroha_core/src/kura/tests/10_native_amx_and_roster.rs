@@ -128,17 +128,17 @@ fn native_amx_latest_index_startup_rejects_fully_unbacked_pointer() {
 #[test]
 fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt() {
     for drift_kind in ["executed wire", "finality", "manifest"] {
-        let (_temp_dir, config) =
-            kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
-        let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize Kura");
-        let entry = kura
-            .lane_storage_entry(LaneId::SINGLE)
-            .expect("primary lane storage entry");
-        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-        kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-            .expect("publish exact V2 latest pointer");
+        let (fixture, entry, receipt) = native_amx_indexed_latest_index_evidence_fixture();
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir: temp_dir,
+            kura,
+            lane_config,
+            ..
+        } = fixture;
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let indexed = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("exact pending publication before latest-pointer drift")
+            .records;
         let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
             &entry,
             &kura.store_root,
@@ -177,18 +177,38 @@ fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receip
         fs::remove_file(&receipt_path).expect("remove exact Native receipt");
         sync_dir(Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root)).as_path())
             .expect("sync manifest-backed Native evidence directory");
-        drop(kura);
-        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
-            Ok(_) => {
-                panic!("startup must reject {drift_kind} drift without an exact receipt")
-            }
-            Err(error) => error,
-        };
+        let files = snapshot_regular_files_recursively(&kura.store_root);
+        let error = kura
+            .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+            .expect_err("live startup reader must reject each manifest-binding drift");
         assert!(
             error
                 .to_string()
                 .contains("not backed by its exact receipt or QC-authenticated manifest"),
-            "unexpected {drift_kind} latest-pointer error: {error}"
+            "unexpected live {drift_kind} latest-pointer error: {error}"
+        );
+        assert_eq!(snapshot_regular_files_recursively(&kura.store_root), files);
+        assert_eq!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .expect("binding refusal must not retire the pending index")
+                .records,
+            indexed
+        );
+        let store_root = kura.store_root.clone();
+        drop(kura);
+        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+            Ok(_) => panic!("cold startup must reject {drift_kind} drift without a receipt"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, Error::PruneIntentConflict(message)
+            if message == "Native AMX reserved latest pointer conflicts with retained bytes"),
+            "unexpected cold {drift_kind} latest-pointer error: {error}"
+        );
+        assert_eq!(snapshot_regular_files_recursively(&store_root), files);
+        assert!(
+            !receipt_path.exists(),
+            "failed admission must not manufacture a receipt"
         );
         assert!(
             latest_path.exists(),
@@ -1406,20 +1426,75 @@ fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
 }
 #[test]
 fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
-    let (_temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir,
+        kura,
+        block,
+        manifest,
+        finality,
+        lane_config,
+    } = native_amx_publication_capacity_fixture_with_route_count(2);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    // The exact pending index and real canonical Native carrier own unfinished
+    // publication. Physical startup reads do not activate secondary lane writers.
+    let (incarnations, activation_heights): (BTreeMap<_, _>, BTreeMap<_, _>) = lane_config
+        .entries()
+        .iter()
+        .map(|entry| {
+            let (incarnation, activation) = kura
+                .active_lane_incarnation_marker(entry)
+                .expect("authenticate the original journal-published lane");
+            ((entry.lane_id, incarnation), (entry.lane_id, activation))
+        })
+        .unzip();
+    kura.store_block(Arc::clone(&block))
+        .expect("store the real Native publication carrier");
+    let commit_receipt = kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish exact Native carrier finality");
+    assert_v2_commit_receipt_matches_artifact(&commit_receipt, &finality);
+    kura.prepublish_native_amx_participant_application_evidence(&block, None)
+        .expect("publish both real Native participant routes");
+    let artifacts = native_amx_participant_application_artifacts(&manifest, HashOf::new(&finality))
+        .expect("derive exact Native receipt from canonical outputs");
+    let (participant_manifest, receipt) = &artifacts[0];
     let entry = kura
-        .lane_storage_entry(LaneId::SINGLE)
-        .expect("primary lane storage entry");
-    let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-    let data_path =
-        Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        .lane_storage_entry(participant_manifest.leaf.lane_id)
+        .expect("exact Native participant lane storage entry");
+    let data_path = Kura::native_amx_participant_receipt_path_for_entry(
+        &entry,
+        &kura.store_root,
+        participant_manifest.leaf.participant_height,
+    );
     let temporary = data_path.with_extension("norito.tmp");
     let exact_bytes = fs::read(&data_path).expect("read standalone Native receipt");
+    assert_eq!(
+        exact_bytes,
+        receipt.encode_framed().expect("exact Native receipt bytes")
+    );
     fs::remove_file(&data_path).expect("stage crash before receipt promotion");
     fs::write(&temporary, &exact_bytes).expect("stage exact receipt publication temporary");
     drop(kura);
-    let (_reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("an exact lone publication temporary is mechanically recoverable");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reserve the exact unfinished publication before State geometry replay");
+    assert!(
+        !reopened
+            .lane_storage_entries
+            .lock()
+            .contains_key(&entry.lane_id)
+    );
+    assert_eq!(
+        fs::read(&temporary).expect("retain the exact secondary receipt temporary"),
+        exact_bytes,
+        "physical reservation discovery must not publish secondary evidence"
+    );
+    assert!(!data_path.exists());
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
+        .expect("authenticate and restore the actual secondary lane geometry");
+    reopened
+        .finish_restored_lane_segments_with_geometry(&lane_config)
+        .expect("recover the exact publication temporary after geometry replay");
     assert!(
         !temporary.exists(),
         "startup must consume the exact publication temporary"
@@ -1429,6 +1504,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
         exact_bytes,
         "startup must promote the exact receipt bytes without rewriting them"
     );
+    let lane_config = RuntimeLaneConfig::default();
     let malformed_temp_dir = TempDir::new().expect("malformed temporary Kura directory");
     let malformed_config = kura_config_for_dir(&malformed_temp_dir, BLOCKS_IN_MEMORY);
     let (malformed_kura, _) =
@@ -2009,6 +2085,26 @@ fn native_amx_all_manifest_barrier_does_not_promote_another_routes_receipt_temp(
 #[allow(clippy::too_many_lines)]
 fn native_amx_startup_repair_preflights_all_targets_then_skips_advanced_sibling() {
     let fixture = native_amx_two_route_repair_fixture();
+    let carrier = Kura::native_amx_publication_carrier(&fixture.block)
+        .expect("exact targeted repair carrier");
+    let reservation_before = fixture
+        .kura
+        .native_amx_publication_capacity_reservations
+        .lock()
+        .get(&carrier)
+        .expect("real store owns both routes")
+        .clone();
+    let capacity_route_b = NativeAmxPublicationRoute {
+        lane_id: fixture.markers[1].lane_id,
+        dataspace_id: fixture.markers[1].dataspace_id,
+        incarnation: fixture.markers[1].lane_incarnation,
+    };
+    let index_directory = fixture
+        .kura
+        .store_root
+        .join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
+    let index_before = snapshot_regular_files_recursively(&index_directory);
+
     let route_a_dir =
         Kura::lane_artifact_dir(&fixture.entries[0].blocks_dir(&fixture.kura.store_root));
     let route_b_dir =
@@ -2053,6 +2149,20 @@ fn native_amx_startup_repair_preflights_all_targets_then_skips_advanced_sibling(
         "unexpected advanced-target preflight error: {error}"
     );
     assert_eq!(
+        fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .get(&carrier),
+        Some(&reservation_before),
+        "failed target preflight cannot change any reservation"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&index_directory),
+        index_before,
+        "failed target preflight cannot publish or remove the pending index"
+    );
+    assert_eq!(
         snapshot_regular_files_recursively(&route_a_dir),
         route_a_before,
         "whole-target preflight must finish before the first target manifest write"
@@ -2080,6 +2190,35 @@ fn native_amx_startup_repair_preflights_all_targets_then_skips_advanced_sibling(
             .expect("repair route A without consulting advanced route B"),
         1
     );
+    {
+        let reservations = fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock();
+        let remaining = reservations
+            .get(&carrier)
+            .expect("untargeted route keeps carrier ownership");
+        assert_eq!(
+            remaining.routes.get(&capacity_route_b),
+            reservation_before.routes.get(&capacity_route_b),
+            "targeted repair must preserve the exact untargeted reservation"
+        );
+        assert_eq!(
+            remaining.index_record, reservation_before.index_record,
+            "target selection must not retire or replace the carrier discovery record"
+        );
+        assert_eq!(
+            remaining.reserved_bytes(),
+            reservation_before.routes[&capacity_route_b].reserved_bytes(),
+            "only the completed target allocation is released"
+        );
+    }
+    assert_eq!(
+        snapshot_regular_files_recursively(&index_directory),
+        index_before,
+        "untargeted work retains its exact durable discovery record"
+    );
+
     assert_eq!(
         snapshot_regular_files_recursively(&route_b_dir),
         route_b_before,
@@ -2103,6 +2242,26 @@ fn native_amx_startup_repair_preflights_all_targets_then_skips_advanced_sibling(
 #[test]
 fn native_amx_startup_repair_does_not_require_retired_sibling_storage() {
     let fixture = native_amx_two_route_repair_fixture();
+    let carrier = Kura::native_amx_publication_carrier(&fixture.block)
+        .expect("exact targeted repair carrier");
+    let reservation_before = fixture
+        .kura
+        .native_amx_publication_capacity_reservations
+        .lock()
+        .get(&carrier)
+        .expect("real store owns both routes")
+        .clone();
+    let capacity_route_b = NativeAmxPublicationRoute {
+        lane_id: fixture.markers[1].lane_id,
+        dataspace_id: fixture.markers[1].dataspace_id,
+        incarnation: fixture.markers[1].lane_incarnation,
+    };
+    let index_directory = fixture
+        .kura
+        .store_root
+        .join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
+    let index_before = snapshot_regular_files_recursively(&index_directory);
+
     let route_b_blocks = fixture.entries[1].blocks_dir(&fixture.kura.store_root);
     let retired_route_b = fixture._temp_dir.path().join("retired-native-route-b");
     fs::rename(&route_b_blocks, &retired_route_b).expect("retire route-B storage");
@@ -2126,6 +2285,35 @@ fn native_amx_startup_repair_does_not_require_retired_sibling_storage() {
             .expect("repair route A after route B retirement"),
         1
     );
+    {
+        let reservations = fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock();
+        let remaining = reservations
+            .get(&carrier)
+            .expect("untargeted route keeps carrier ownership");
+        assert_eq!(
+            remaining.routes.get(&capacity_route_b),
+            reservation_before.routes.get(&capacity_route_b),
+            "targeted repair must preserve the exact untargeted reservation"
+        );
+        assert_eq!(
+            remaining.index_record, reservation_before.index_record,
+            "target selection must not retire or replace the carrier discovery record"
+        );
+        assert_eq!(
+            remaining.reserved_bytes(),
+            reservation_before.routes[&capacity_route_b].reserved_bytes(),
+            "only the completed target allocation is released"
+        );
+    }
+    assert_eq!(
+        snapshot_regular_files_recursively(&index_directory),
+        index_before,
+        "untargeted work retains its exact durable discovery record"
+    );
+
     assert_eq!(
         snapshot_regular_files_recursively(&retired_route_b),
         retired_before,
@@ -2140,6 +2328,26 @@ fn native_amx_startup_repair_does_not_require_retired_sibling_storage() {
 #[allow(clippy::too_many_lines)]
 fn native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent() {
     let fixture = native_amx_two_route_repair_fixture();
+    let carrier = Kura::native_amx_publication_carrier(&fixture.block)
+        .expect("exact targeted repair carrier");
+    let reservation_before = fixture
+        .kura
+        .native_amx_publication_capacity_reservations
+        .lock()
+        .get(&carrier)
+        .expect("real store owns both routes")
+        .clone();
+    let capacity_route_b = NativeAmxPublicationRoute {
+        lane_id: fixture.markers[1].lane_id,
+        dataspace_id: fixture.markers[1].dataspace_id,
+        incarnation: fixture.markers[1].lane_incarnation,
+    };
+    let index_directory = fixture
+        .kura
+        .store_root
+        .join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
+    let index_before = snapshot_regular_files_recursively(&index_directory);
+
     let route_b = &fixture.entries[1];
     let route_b_blocks = route_b.blocks_dir(&fixture.kura.store_root);
     let archived_b1 = fixture._temp_dir.path().join("archived-native-route-b1");
@@ -2177,6 +2385,35 @@ fn native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent() 
             1,
             "every exact repair retry reports its one State-owned target"
         );
+        {
+            let reservations = fixture
+                .kura
+                .native_amx_publication_capacity_reservations
+                .lock();
+            let remaining = reservations
+                .get(&carrier)
+                .expect("untargeted route keeps carrier ownership");
+            assert_eq!(
+                remaining.routes.get(&capacity_route_b),
+                reservation_before.routes.get(&capacity_route_b),
+                "targeted repair must preserve the exact untargeted reservation"
+            );
+            assert_eq!(
+                remaining.index_record, reservation_before.index_record,
+                "target selection must not retire or replace the carrier discovery record"
+            );
+            assert_eq!(
+                remaining.reserved_bytes(),
+                reservation_before.routes[&capacity_route_b].reserved_bytes(),
+                "only the completed target allocation is released"
+            );
+        }
+        assert_eq!(
+            snapshot_regular_files_recursively(&index_directory),
+            index_before,
+            "untargeted work retains its exact durable discovery record"
+        );
+
         assert_eq!(
             snapshot_regular_files_recursively(&route_b_blocks),
             route_b2_before,
@@ -2188,6 +2425,50 @@ fn native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent() 
             "route-A retry {attempt} must not mutate archived B1 evidence"
         );
     }
+    let retained_owner = fixture
+        .kura
+        .native_amx_publication_capacity_reservations
+        .lock()
+        .remove(&carrier)
+        .expect("both-route carrier is still owned");
+    let error = fixture
+        .kura
+        .persist_native_amx_participant_application_repair_targets_under_publication_guard(
+            fixture.block.as_ref(),
+            &fixture.plan,
+            &route_a_targets,
+        )
+        .expect_err("a partial target cannot replace missing full-carrier ownership");
+    assert!(
+        error
+            .to_string()
+            .contains("lacks the complete carrier reservation"),
+        "{error}"
+    );
+    assert!(
+        fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&index_directory),
+        index_before
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&route_b_blocks),
+        route_b2_before
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&archived_b1),
+        archived_b1_before
+    );
+    fixture
+        .kura
+        .native_amx_publication_capacity_reservations
+        .lock()
+        .insert(carrier, retained_owner);
     for invalid_markers in [
         Vec::new(),
         vec![fixture.markers[0].clone(), fixture.markers[0].clone()],

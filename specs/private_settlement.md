@@ -7,7 +7,22 @@ path. It is separate from transparent Native AMX DvP/PvP. Configuration keeps
 it disabled by default. Enabling the flag is necessary but not sufficient:
 admission also requires a governed activation height, the active compiled
 `IrohaIvmPrivateNoteStarkV1` capability, adequate fixed-slot limits, V1 policy
-permission, and the configured governance notice period.
+permission, and the independent pool-policy governance notice period.
+
+Privacy protocol registration stores only a nonzero proposal execution height.
+The proposal remains pending until `TransitionPrivacyProtocolLifecycleV1`
+explicitly activates the exact compiled profile under governance authority.
+Registration and initial activation may execute in the same transaction,
+including the authorized signed genesis transaction. Both recorded heights
+must equal the executing block height. There is no protocol activation delay,
+automatic height promotion, or compatibility decoding for a scheduled proposal.
+Suspension, resumption and retirement retain strictly increasing lifecycle
+history. Governed consensus-policy and protocol-resource tightening choose an
+explicit effective height strictly after their admission block; the next block is
+allowed. There is no fixed minimum block delay and no wall-time guarantee. Limits
+change at the start of that block only after the scheduling transaction commits.
+Pending lower root-retention limits already constrain new histories, preserving a
+deterministic transition. Pool-policy notice remains an independent constraint.
 
 The implementation is not production-qualified until every release gate in
 this document and `specs/private_settlement_threat_model.md` is satisfied.
@@ -130,7 +145,7 @@ performance preparation share this ordering. They do not predict how many
 admission blocks precede activation or require a later capability query to
 equal the activation transaction's block height. Exact historical committee
 authorization, governance validity, root membership for positive inputs and
-the 300-height protocol activation notice remain mandatory. Current runtime
+explicit activation of the exact compiled protocol remain mandatory. Current runtime
 qualification of this harness correction is pending.
 
 The required public `audit_input_commitment` binds the exact two ordered input
@@ -193,7 +208,39 @@ addressed by an opaque one-shot handle; Python supplies only the public
 successor root and receives the statement, proof, derived delta, and encrypted
 capsule. No witness enters Python.
 
-Digest preparation uses one always-compiled resource policy: at most 65,536 frames and 4,194,304 canonical words per batch. Private row preparation additionally retains its independent 32 MiB serialized-payload limit and chooses the minimum of these three bounds using the framing owner's exact length-only geometry. Device admission still validates the actual complete frames. Pair preparation uses fallible allocations, preserves absolute node indices and ordered digests, and never changes transcript bytes. These are local resource limits, not proof-profile or consensus parameters; readiness/KAT, quarantine and private-buffer zeroization remain enforced.
+Privacy STARK outer commitments, transcript derivation, query sampling and
+nonce grinding use SHA3-384 through `privacy_engines/privacy_outer_hash.rs`.
+Every digest is an opaque 48-byte string; canonical Goldilocks decoding applies
+to actual field openings only. The frame binds the exact catalog, protocol,
+compiled profile, role, phase, level, index, counter and ordered length-prefixed
+fields with checked big-endian widths. The compiled proof-system and engine
+labels are `stark-fri-sha3-384-goldilocks-v1` and
+`native-goldilocks-sha3-384-stark-fri-v1`. The note relation's SHA-256 constraints
+and ZK-ACE's inner identity/replay Poseidon constraints retain their own owners.
+
+The scalar challenge accepts a nonzero canonical first big-endian 64-bit word.
+The Fp4 challenge accepts the first four words only when every coefficient is
+canonical; zero is allowed unless the caller states a deterministic public
+predicate. Both reject at most sixteen candidates without changing transcript
+state, then absorb the complete accepted digest and advance a checked counter.
+Queries use sparse Fisher--Yates sampling with rejection from the full `2^64`
+source space and at most 256 attempts per draw. Ordered nonce intervals choose
+the smallest satisfying nonce independently of Rayon scheduling.
+
+Private row preparation retains at most 4,096 frames and 32 MiB of complete
+framed bytes per batch. Exact length admission precedes allocation; payload
+buffers, cloned hash cores and partial block buffers are wiped on drop. Ordered
+CPU/Rayon hashing uses the existing Core `simd` feature for the SHA3 dependency's
+runtime-detected ARM acceleration, with the deterministic software path on
+other supported hardware. The prover has one outer suite and no digest-device
+option. Local batch limits do not change the proof profile. The ignored N=3
+smoke is selected with `atomic-private-settlement-smoke`.
+
+The aggregate descriptor's 197-bit minimum is an interactive FRI algebraic
+error bound. It does not account for Merkle binding, Fiat--Shamir composition
+or quantum queries. SHA3-specific protocol soundness and independent review,
+current compiled profile/SDK fixtures, native proofs and network qualification
+remain required before activation.
 
 Global timeout certificates are delivered to the immutable union of the global roster and usable current-height participant committees resolved from one preceding-State view. Only global-roster senders expand this delivery audience; ordinary votes keep their original global destinations. An unpopulated optional lane or an oversubscribed lane awaiting its first beacon pulse contributes no guessed committee. Other authority inconsistencies remain errors. Existing certificate authentication, exact-view admission and retained retransmission govern observer progress.
 
@@ -509,7 +556,17 @@ The canonical route catalog is
 | `POST .../legs/{payload_digest}/audit-approvals` | identity-bound governed auditor | record approval |
 | `POST /v1/nexus/private-settlements/bundles` | canonical sponsor signature | submit exact Prepare-lock registration, finalization, or abort carrier |
 | `GET .../bundles/{bundle_id}` | public | redacted bundle status |
-| `GET .../bundles/{bundle_id}/receipt` | public | final receipt or abort marker |
+| `GET .../bundles/{bundle_id}/receipt` | public | finalized receipt, abort marker, or `Pending { bundle_id }` |
+
+Receipt polling reads the active service configuration and public terminal records
+from one committed WSV view. Finalized receipts take precedence over abort markers;
+otherwise the response is HTTP 200 `Pending { bundle_id }`. Pending means only that
+this node has no public terminal record for the identifier. It does not establish
+that the bundle is known, accepted, or locally stored, and carries no lifecycle.
+Malformed identifiers and unavailable/inactive service configuration remain errors.
+Receipt polling never reads encrypted sidecars. The separate bundle-status route
+aggregates the node's validated local ordinal subset; advanced all-leg lifecycle
+states still require every manifest leg to be present locally.
 
 All restricted and authenticated settlement responses advertise private
 `no-store` behavior. The ordinary leg-status response exposes lifecycle and
@@ -725,8 +782,8 @@ commitments.
 
 Release execution first requires a completed
 `scripts/private_settlement_smoke_campaign.py` campaign: ten consecutive fresh
-N=3 runs, each with sixteen distinct validators, the governed 300-height
-activation notice, continuous financial-state observations, signed RS16
+N=3 runs, each with sixteen distinct validators, explicit governed protocol
+activation, continuous financial-state observations, signed RS16
 finality, replay rejection, and restart of every validator. The driver builds
 the exact signed clean source and retains requests, process inventories,
 state/certificate/finality artifacts, command logs, and source/executable

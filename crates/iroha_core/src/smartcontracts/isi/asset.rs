@@ -140,33 +140,20 @@ pub mod isi {
             destination_id: &AssetId,
             amount: &Quantity,
         ) -> Result<TransferDeltaTranscript, Error> {
-            self.precheck_numeric_asset_transfer_delta_exact_inner(
+            self.precheck_numeric_asset_transfer_delta_exact_with_control_policy(
                 source_id,
                 destination_id,
                 amount,
-                true,
+                NumericAssetTransferControlPolicy::Enforce,
             )
         }
-        /// Precheck a verified protocol-custody movement without user account controls.
-        fn precheck_protocol_custody_transfer_delta_exact(
+        /// Precheck a movement using the controls selected by its verified typed purpose.
+        fn precheck_numeric_asset_transfer_delta_exact_with_control_policy(
             &self,
             source_id: &AssetId,
             destination_id: &AssetId,
             amount: &Quantity,
-        ) -> Result<TransferDeltaTranscript, Error> {
-            self.precheck_numeric_asset_transfer_delta_exact_inner(
-                source_id,
-                destination_id,
-                amount,
-                false,
-            )
-        }
-        fn precheck_numeric_asset_transfer_delta_exact_inner(
-            &self,
-            source_id: &AssetId,
-            destination_id: &AssetId,
-            amount: &Quantity,
-            enforce_account_controls: bool,
+            control_policy: NumericAssetTransferControlPolicy,
         ) -> Result<TransferDeltaTranscript, Error> {
             if source_id.definition() != destination_id.definition() {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -178,17 +165,40 @@ pub mod isi {
                     .into(),
                 ));
             }
-            if enforce_account_controls && !amount.is_zero() {
-                self.ensure_numeric_asset_transfer_availability(
-                    source_id,
-                    amount.clone(),
-                    AssetTransferDirection::Outgoing,
-                )?;
-                self.ensure_numeric_asset_transfer_availability(
-                    destination_id,
-                    amount.clone(),
-                    AssetTransferDirection::Incoming,
-                )?;
+            // Retained protocol debits have the same outbound availability exception
+            // as their blacklist/cap exception. Receiver controls remain independent;
+            // only finality-owned staking/moderation custody also exempts the credit.
+            // Custody, usage, privacy, and scope admission are separate gates.
+            let (enforce_debit_controls, enforce_credit_controls) = match control_policy {
+                NumericAssetTransferControlPolicy::Enforce => (true, true),
+                NumericAssetTransferControlPolicy::KagemushaRedemption
+                | NumericAssetTransferControlPolicy::OraclePenalty
+                | NumericAssetTransferControlPolicy::OracleDisputeResolution
+                | NumericAssetTransferControlPolicy::StakingUnbond
+                | NumericAssetTransferControlPolicy::GovernanceSlash
+                | NumericAssetTransferControlPolicy::GovernanceRestitution
+                | NumericAssetTransferControlPolicy::GovernanceUnlock
+                | NumericAssetTransferControlPolicy::CitizenshipRelease => (false, true),
+                NumericAssetTransferControlPolicy::StakingSlash
+                | NumericAssetTransferControlPolicy::ModerationChallengeSettlement => {
+                    (false, false)
+                }
+            };
+            if !amount.is_zero() {
+                if enforce_debit_controls {
+                    self.ensure_numeric_asset_transfer_availability(
+                        source_id,
+                        amount.clone(),
+                        AssetTransferDirection::Outgoing,
+                    )?;
+                }
+                if enforce_credit_controls {
+                    self.ensure_numeric_asset_transfer_availability(
+                        destination_id,
+                        amount.clone(),
+                        AssetTransferDirection::Incoming,
+                    )?;
+                }
             }
             let source_spec = self.asset_definition(source_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), source_spec)?;
@@ -216,7 +226,7 @@ pub mod isi {
                 .checked_add(amount)
                 .map_err(|_| MathError::Overflow)?;
             assert_numeric_spec_with(to_balance_after.as_numeric(), source_spec)?;
-            if enforce_account_controls {
+            if enforce_credit_controls {
                 self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
             }
             Ok(TransferDeltaTranscript {
@@ -4558,29 +4568,18 @@ pub mod isi {
                 .unwrap_or_else(|| amount.as_numeric().scale());
             let normalized_amount =
                 normalized_numeric_to_u64(amount.as_numeric(), normalized_scale);
-            // Exact retained staking and moderation settlement capabilities are
-            // protocol-owned after their funds have entered custody. Ordinary
-            // account blacklist/cap, availability, and holding-limit changes
-            // made later cannot veto them. The protocol precheck still binds
-            // one definition, verifies both accounts and numeric precision,
-            // performs checked balance arithmetic, and conserves the transfer.
-            let prechecked_delta = if source_policy.uses_protocol_custody_precheck() {
-                state_transaction
-                    .world
-                    .precheck_protocol_custody_transfer_delta_exact(
-                        &source_id,
-                        &destination_id,
-                        &amount,
-                    )?
-            } else {
-                state_transaction
-                    .world
-                    .precheck_numeric_asset_transfer_delta_exact(
-                        &source_id,
-                        &destination_id,
-                        &amount,
-                    )?
-            };
+            // Keep the typed control exception through the balance precheck so
+            // mandatory debits cannot be vetoed by ordinary outbound availability.
+            // Source custody, scope, usage, and privacy policies remain independent
+            // gates above; this precheck always enforces precision and conservation.
+            let prechecked_delta = state_transaction
+                .world
+                .precheck_numeric_asset_transfer_delta_exact_with_control_policy(
+                    &source_id,
+                    &destination_id,
+                    &amount,
+                    control_policy,
+                )?;
             if !source_policy.is_moderation_challenge_settlement() {
                 let source_balance_after = if source_id == destination_id {
                     &prechecked_delta.to_balance_after

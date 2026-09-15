@@ -40,15 +40,15 @@ public final class PrivacyExact12FixtureJavaConsumerTest {
     assertEquals(6, PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V1.ordinal());
     assertEquals(11, PrivacyProtocolIdV1.PQ_MASP_STARK_V1.ordinal());
     assertEquals(
-        0, PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.ordinal());
+        0, PrivacyProofSystemIdV1.STARK_FRI_SHA3_384_GOLDILOCKS_V1.ordinal());
     assertEquals(
-        "stark-fri-poseidon-x7-goldilocks-6x64-v1",
-        PrivacyProofSystemIdV1.STARK_FRI_POSEIDON_X7_GOLDILOCKS_6X64_V1.getCanonicalLabel());
+        "stark-fri-sha3-384-goldilocks-v1",
+        PrivacyProofSystemIdV1.STARK_FRI_SHA3_384_GOLDILOCKS_V1.getCanonicalLabel());
     assertEquals(
-        0, PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.ordinal());
+        0, PrivacyEngineIdV1.NATIVE_GOLDILOCKS_SHA3_384_STARK_FRI_V1.ordinal());
     assertEquals(
-        "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
-        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_POSEIDON_X7_STARK_FRI_6X64_V1.getCanonicalLabel());
+        "native-goldilocks-sha3-384-stark-fri-v1",
+        PrivacyEngineIdV1.NATIVE_GOLDILOCKS_SHA3_384_STARK_FRI_V1.getCanonicalLabel());
   }
 
   @Test

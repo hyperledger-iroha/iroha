@@ -2,7 +2,7 @@
 
 use super::{Client, WireFormatPreference, dispatch, join_torii_url};
 use crate::{
-    Error, Result,
+    Error, Result, StatusFailureReason,
     http::{Method, Response, StatusCode},
 };
 use iroha_torii_shared::{status::Status as NodeStatus, uri};
@@ -101,6 +101,18 @@ pub(super) fn decode_response(
     response: Response<Vec<u8>>,
     preference: WireFormatPreference,
 ) -> Result<NodeStatus> {
+    if response.status() == StatusCode::SERVICE_UNAVAILABLE {
+        let mut codes = response.headers().get_all("x-iroha-reject-code").iter();
+        let reason = codes
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .and_then(StatusFailureReason::from_code);
+        let reason = if codes.next().is_none() { reason } else { None };
+        return Err(Error::StatusUnavailable {
+            reason,
+            retry_after: crate::error::retry_after(response.headers()),
+        });
+    }
     if response.status() != StatusCode::OK {
         return Err(Error::Http {
             operation: GET,

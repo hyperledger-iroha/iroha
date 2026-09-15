@@ -2608,7 +2608,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       const stage = parseSumeragiTaggedUnit(
         item.stage,
         "stage",
-        ["pending_persistence", "pending_signature", "queued", "sent"],
+        ["pending_persistence", "pending_signature", "queued", "retained"],
         `${itemContext}.stage`,
       );
       const subject = item.subject == null

@@ -791,6 +791,92 @@ fn package_openapi_authority_is_canonical_norito_json() {
     );
 }
 #[test]
+fn privacy_proposed_lifecycle_schema_matches_explicit_governance_payload() {
+    use iroha_data_model::privacy::{PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1};
+
+    let lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+        proposed_at_height: 7,
+    });
+    let encoded = norito::json::to_json(&lifecycle).expect("serialize pending proposal");
+    let payload: Value = norito::json::from_str(&encoded).expect("parse typed proposal JSON");
+    assert_eq!(payload["state"].as_str(), Some("proposed"));
+    let payload_fields = payload["record"]
+        .as_object()
+        .expect("typed proposal record")
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(payload_fields, BTreeSet::from(["proposed_at_height"]));
+    assert_eq!(payload["record"]["proposed_at_height"].as_u64(), Some(7));
+    assert_eq!(
+        norito::json::from_str::<PrivacyProtocolLifecycleV1>(&encoded)
+            .expect("decode typed pending proposal"),
+        lifecycle
+    );
+
+    for (label, document) in [
+        ("authored", canonical_document()),
+        ("compiled", generate_spec()),
+    ] {
+        let variants = component_schemas(&document)["PrivacyProtocolLifecycleV1"]["oneOf"]
+            .as_array()
+            .expect("privacy lifecycle alternatives");
+        let proposed = variants
+            .iter()
+            .filter(|variant| variant["properties"]["state"]["const"] == payload["state"])
+            .collect::<Vec<_>>();
+        assert_eq!(proposed.len(), 1, "{label}: one typed Proposed alternative");
+        let record = &proposed[0]["properties"]["record"];
+        assert_eq!(record["type"].as_str(), Some("object"), "{label}");
+        assert_eq!(
+            record["additionalProperties"].as_bool(),
+            Some(false),
+            "{label}"
+        );
+        let properties = record["properties"]
+            .as_object()
+            .expect("proposal properties");
+        assert_eq!(
+            properties
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            payload_fields,
+            "{label}: authored properties must match the typed payload"
+        );
+        let required = record["required"]
+            .as_array()
+            .expect("required proposal fields")
+            .iter()
+            .map(|value| value.as_str().expect("required field name"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            required, payload_fields,
+            "{label}: required typed payload fields"
+        );
+        assert_eq!(
+            properties["proposed_at_height"]["type"].as_str(),
+            Some("integer")
+        );
+        assert_eq!(
+            properties["proposed_at_height"]["format"].as_str(),
+            Some("uint64")
+        );
+        assert_eq!(
+            properties["proposed_at_height"]["minimum"].as_u64(),
+            Some(1)
+        );
+    }
+
+    for removed in [
+        r#"{"state":"proposed","record":{"proposed_at_height":7,"activate_at_height":7}}"#,
+        r#"{"state":"proposed","record":{"proposed_at_height":7,"activate_at_height":307}}"#,
+    ] {
+        assert!(norito::json::from_str::<PrivacyProtocolLifecycleV1>(removed).is_err());
+    }
+}
+
+#[test]
 fn standalone_ballot_drafts_publish_one_exact_success_and_standard_bad_request() {
     let document = canonical_document();
     let schemas = component_schemas(&document);

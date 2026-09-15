@@ -5,7 +5,7 @@ use super::{
     evidence_http_tests::*, status,
 };
 use crate::{
-    Error, blocking,
+    Error, StatusFailureReason, blocking,
     http::{Method, Response, TransportRequest},
 };
 use iroha_torii_shared::{status::Status as NodeStatus, uri};
@@ -204,35 +204,139 @@ fn transport_conversion_preserves_io_categories_through_contexts() {
 }
 
 #[tokio::test]
-async fn status_and_version_preserve_bounded_http_error_bodies_without_replay() {
+async fn status_unavailable_is_typed_without_changing_other_http_errors_or_replaying() {
     for version in [false, true] {
-        let body = br#"{"code":"unavailable","retryable":false}"#.to_vec();
-        let reply = Response::builder().status(503).body(body.clone()).unwrap();
-        let (client, requests, _) = attach(
+        for status in [400, 429, 500, 503] {
+            let body = br#"{"code":"unavailable","retryable":false}"#.to_vec();
+            let reply = Response::builder()
+                .status(status)
+                .body(body.clone())
+                .unwrap();
+            let (client, requests, _) = attach(
+                move |_| Ok(reply.clone()),
+                Duration::ZERO,
+                Duration::ZERO,
+                WireFormatPreference::NoritoPreferred,
+            );
+            let error = if version {
+                client.status().version().await.unwrap_err()
+            } else {
+                client.status().get().await.unwrap_err()
+            };
+            let expected = if !version && status == 503 {
+                Error::StatusUnavailable {
+                    reason: None,
+                    retry_after: None,
+                }
+            } else {
+                Error::Http {
+                    operation: if version {
+                        "core.api_version"
+                    } else {
+                        "diagnostic.status"
+                    },
+                    status,
+                    retry_after: None,
+                    body,
+                }
+            };
+            assert_eq!(error, expected);
+            assert_eq!(requests.lock().unwrap().len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn status_unavailable_reasons_are_safe_in_errors_and_do_not_trigger_retries() {
+    let cases = [
+        StatusFailureReason::Disabled,
+        StatusFailureReason::MailboxUnavailable,
+        StatusFailureReason::ActorClosed,
+        StatusFailureReason::DeadlineElapsed,
+        StatusFailureReason::StateUnavailable,
+        StatusFailureReason::CheckpointChanged,
+        StatusFailureReason::MissingBlock,
+        StatusFailureReason::JournalMismatch,
+        StatusFailureReason::CounterOverflow,
+        StatusFailureReason::CounterMismatch,
+        StatusFailureReason::MetricsStale,
+        StatusFailureReason::ProfileRestricted,
+    ];
+    for reason in cases {
+        let reply = Response::builder()
+            .status(503)
+            .header("x-iroha-reject-code", reason.code())
+            .header("Retry-After", "3")
+            .body(b"DO_NOT_LOG_STATUS_BODY".to_vec())
+            .unwrap();
+        let (client, requests, completed) = attach(
             move |_| Ok(reply.clone()),
             Duration::ZERO,
             Duration::ZERO,
             WireFormatPreference::NoritoPreferred,
         );
-        let error = if version {
-            client.status().version().await.unwrap_err()
-        } else {
-            client.status().get().await.unwrap_err()
-        };
+        let error = client.status().get().await.unwrap_err();
         assert_eq!(
             error,
-            Error::Http {
-                operation: if version {
-                    "core.api_version"
-                } else {
-                    "diagnostic.status"
-                },
-                status: 503,
-                retry_after: None,
-                body
+            Error::StatusUnavailable {
+                reason: Some(reason),
+                retry_after: Some(Duration::from_secs(3)),
             }
         );
+        assert_eq!(
+            error.to_string(),
+            format!("diagnostic.status returned HTTP 503 ({})", reason.code(),)
+        );
+        assert!(!format!("{error:?}").contains("DO_NOT_LOG_STATUS_BODY"));
+        let report = eyre::Report::from(error);
+        assert!(format!("{report:?}").contains(reason.code()));
+        assert!(!format!("{report:?}").contains("DO_NOT_LOG_STATUS_BODY"));
         assert_eq!(requests.lock().unwrap().len(), 1);
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn status_unavailable_rejects_missing_unknown_invalid_and_duplicate_reason_headers() {
+    use http::HeaderValue;
+    let known = HeaderValue::from_static("status_state_unavailable");
+    let cases = [
+        Vec::new(),
+        vec![HeaderValue::from_static("DO_NOT_LOG_UNKNOWN_HEADER")],
+        vec![HeaderValue::from_static(" status_state_unavailable")],
+        vec![HeaderValue::from_static("STATUS_STATE_UNAVAILABLE")],
+        vec![HeaderValue::from_static(
+            "status_state_unavailable,status_state_unavailable",
+        )],
+        vec![HeaderValue::from_bytes(&[0xff]).unwrap()],
+        vec![known.clone(), known.clone()],
+        vec![known, HeaderValue::from_static("DO_NOT_LOG_UNKNOWN_HEADER")],
+    ];
+    for codes in cases {
+        let mut reply = Response::builder()
+            .status(503)
+            .header("Retry-After", "18446744073709551616")
+            .body(b"DO_NOT_LOG_STATUS_BODY".to_vec())
+            .unwrap();
+        for code in codes {
+            reply.headers_mut().append("x-iroha-reject-code", code);
+        }
+        let error =
+            status::decode_response(reply, WireFormatPreference::NoritoPreferred).unwrap_err();
+        assert_eq!(
+            error,
+            Error::StatusUnavailable {
+                reason: None,
+                retry_after: None
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "diagnostic.status returned HTTP 503 (unclassified)"
+        );
+        for display in [error.to_string(), format!("{error:?}")] {
+            assert!(!display.contains("DO_NOT_LOG"));
+        }
     }
 }
 

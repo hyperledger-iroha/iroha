@@ -29,7 +29,8 @@ fn install_native_amx_startup_carrier_without_participant_evidence(kura: &Kura) 
     let block = Arc::new(block);
     kura.store_block(Arc::clone(&block))
         .expect("store exact non-Native startup carrier");
-    let _ = kura.store_v2_finality_artifact(&finality)
+    let _ = kura
+        .store_v2_finality_artifact(&finality)
         .expect("publish authenticated non-Native startup carrier finality");
     assert!(
         kura.read_native_amx_participant_application_history(LaneId::SINGLE)
@@ -123,6 +124,82 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
         "an internally valid same-depth three-leaf commitment must not substitute for the four-leaf QC execution commitment"
     );
 }
+// Keep a genuine outstanding publication through the fault injection. The normal
+// pre-WSV publisher creates all three artifact kinds; only later authenticated
+// completion may retire the durable index installed by the canonical Native store.
+fn native_amx_indexed_latest_index_evidence_fixture() -> (
+    NativeAmxPublicationCapacityFixture,
+    LaneConfigEntry,
+    NativeAmxParticipantApplicationReceiptArtifact,
+) {
+    let fixture = native_amx_publication_capacity_fixture_with_route_count(2);
+    let kura = &fixture.kura;
+    kura.store_block(Arc::clone(&fixture.block))
+        .expect("admit the actual two-route Native carrier");
+    let carrier = Kura::native_amx_publication_carrier(&fixture.block)
+        .expect("exact result-bearing Native carrier");
+    let indexed = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+        .expect("read store-owned pending index")
+        .records;
+    assert_eq!(indexed.len(), 1);
+    assert!(indexed.contains_key(&carrier));
+    let finality_receipt = kura
+        .store_v2_finality_artifact(&fixture.finality)
+        .expect("persist the actual Native finality");
+    assert_v2_commit_receipt_matches_artifact(&finality_receipt, &fixture.finality);
+    kura.prepublish_native_amx_participant_application_evidence(&fixture.block, None)
+        .expect("prepublish exact manifests, receipts and latest pointers");
+    let height = fixture.block.header().height().get();
+    let checkpoint_hash = Hash::new(b"indexed latest-pointer repair WSV checkpoint");
+    kura.store_wsv_checkpoint(height, fixture.block.hash(), checkpoint_hash)
+        .expect("persist the exact pending carrier checkpoint");
+    kura.store_commit_manifest(
+        CommitManifest::new(
+            height,
+            fixture.block.hash(),
+            None,
+            None,
+            checkpoint_hash,
+            None,
+        )
+        .with_authenticated_v2_commit_authority(&fixture.finality),
+    )
+    .expect("persist the finality-bound pending carrier commit manifest");
+    assert_eq!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("prepublication and metadata must retain the original index")
+            .records,
+        indexed
+    );
+    {
+        let owners = kura.native_amx_publication_capacity_reservations.lock();
+        let owner = owners.get(&carrier).expect("pending real carrier owner");
+        assert_eq!(owner.routes.len(), 2);
+        assert!(owner.routes.values().all(|route| !route.cleanup_complete));
+    }
+    let (manifest, receipt) = native_amx_participant_application_artifacts(
+        &fixture.manifest,
+        HashOf::new(&fixture.finality),
+    )
+    .expect("derive exact artifacts from the admitted Native carrier")
+    .into_iter()
+    .next()
+    .expect("first actual publication route");
+    let entry = kura
+        .lane_storage_entry(manifest.leaf.lane_id)
+        .expect("journal-authenticated selected publication route");
+    let latest_path =
+        Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
+    assert_eq!(
+        kura.decode_native_amx_participant_receipt_latest_index(&entry, &latest_path)
+            .expect("read production-prepublished latest pointer"),
+        Some(NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
+            &receipt
+        ))
+    );
+    (fixture, entry, receipt)
+}
+
 fn install_native_amx_latest_index_evidence_fixture(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -521,152 +598,27 @@ struct NativeAmxTwoRouteRepairFixture {
 }
 #[allow(clippy::too_many_lines)]
 fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
-    let route_configs = [
-        (LaneId::new(2), DataSpaceId::new(8)),
-        (LaneId::new(3), DataSpaceId::new(9)),
-    ];
-    let lanes =
-        std::iter::once(ModelLaneConfig::default())
-            .chain(route_configs.iter().copied().enumerate().map(
-                |(index, (lane_id, dataspace_id))| ModelLaneConfig {
-                    id: lane_id,
-                    dataspace_id,
-                    alias: format!("native-targeted-repair-{index}"),
-                    ..ModelLaneConfig::default()
-                },
-            ))
-            .collect::<Vec<_>>();
-    let catalog = LaneCatalog::new(
-        NonZeroU32::new(4).expect("two-route Native lane bound"),
-        lanes,
-    )
-    .expect("build two-route Native repair catalog");
-    let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let temp_dir = TempDir::new().expect("two-route Native repair Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)
-        .expect("initialize two-route Native repair Kura");
-    kura.restore_lane_segments(&lane_config)
-        .expect("restore trusted two-route Native repair lane geometry");
-    let entries = route_configs.map(|(lane_id, _)| {
-        kura.lane_storage_entry(lane_id)
-            .expect("two-route Native repair lane entry")
-    });
-    let block = store_dummy_block_arcs(&kura, 1)
-        .into_iter()
-        .next()
-        .expect("one durable two-route Native carrier");
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir: temp_dir,
+        kura,
+        block,
+        manifest,
+        finality,
+        lane_config: _,
+    } = native_amx_publication_capacity_fixture_with_route_count(2);
+    // The real canonical store installs the exact pending index and reservation
+    // before its result-bearing Native block becomes durable.
+    kura.store_block(Arc::clone(&block))
+        .expect("store actual two-route Native carrier");
     let application_block_height = block.header().height().get();
     let application_block_hash = block.hash();
-    let executed_block_wire = block
-        .encode_wire()
-        .expect("encode two-route Native carrier wire");
-    let executed_block_wire_len =
-        u64::try_from(executed_block_wire.len()).expect("two-route carrier length fits u64");
-    let executed_block_wire_hash = Hash::new(&executed_block_wire);
-    let mut route_evidence = Vec::with_capacity(entries.len());
-    for (index, entry) in entries.iter().enumerate() {
-        let (session, _) =
-            sample_committed_lane_block_session_for_kura(entry.lane_id, entry.dataspace_id, 1);
-        let mut proposal = session.proposal;
-        proposal.descriptor.proposal_height = application_block_height;
-        proposal.descriptor.previous_lane_block_height = 0;
-        proposal.descriptor.previous_lane_block_descriptor_hash = None;
-        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        crate::lane_consensus::validate_lane_block_proposal(&proposal)
-            .expect("canonical two-route Native proposal");
-        kura.install_lane_incarnation_marker_for_test(
-            entry,
-            proposal.descriptor.lane_incarnation,
-            0,
-        )
-        .expect("install two-route Native incarnation");
-        let mut source_id = [0_u8; Hash::LENGTH];
-        source_id[0] = u8::try_from(index + 1).expect("two-route source index fits u8");
-        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            proposal.descriptor.accepted_transaction_hashes[0],
-        );
-        let result =
-            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::default()));
-        let settlement =
-            iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.dataspace_id,
-                proposal.descriptor.lane_incarnation,
-                proposal.descriptor.lane_block_height,
-                application_block_height,
-                None,
-                vec![source_id],
-            )
-            .expect("valid Native participant control");
-        let settlement_hash = settlement
-            .computed_hash()
-            .expect("hash two-route Native settlement");
-        let leaf = NativeAmxApplicationManifestLeafV1 {
-            version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            lane_id: proposal.descriptor.lane_id,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            participant_height: proposal.descriptor.lane_block_height,
-            participant_view: proposal.descriptor.lane_block_view,
-            predecessor_height: proposal.descriptor.previous_lane_block_height,
-            predecessor_descriptor_hash: proposal.descriptor.previous_lane_block_descriptor_hash,
-            descriptor_hash: proposal.descriptor.descriptor_hash,
-            proposal_hash: proposal.proposal_hash,
-            settlement_hash,
-            previous_native_settlement_hash: None,
-            members: vec![
-                iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1 {
-                    entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
-                    source_id,
-                    entrypoint_hash,
-                    result_hash: result.hash(),
-                },
-            ],
-            application_block_height,
-            application_block_hash,
-            executed_block_wire_hash,
-        };
-        leaf.validate().expect("canonical two-route Native leaf");
-        route_evidence.push((
-            leaf,
-            proposal,
-            settlement,
-            source_id,
-            entrypoint_hash,
-            result,
-        ));
-    }
-    let tree = route_evidence
-        .iter()
-        .map(|(leaf, ..)| HashOf::new(leaf))
-        .collect::<MerkleTree<_>>();
-    let manifest_root = tree
-        .root()
-        .map(Hash::from)
-        .expect("two-route Native manifest root");
-    let manifest_leaf_count =
-        u32::try_from(route_evidence.len()).expect("two-route leaf count fits u32");
-    let execution_commitment =
-        ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
-            Hash::new(b"two-route targeted repair parent state"),
-            Hash::new(b"two-route targeted repair post state"),
-            Hash::new(b"two-route targeted repair ordinary writes"),
-            None,
-            0,
-            iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            manifest_root,
-            manifest_leaf_count,
-            executed_block_wire_len,
-            executed_block_wire_hash,
-        )
-        .expect("build two-route Native execution commitment");
-    let finality =
-        v2_finality_artifact_for_block_with_execution(block.as_ref(), execution_commitment);
+    let executed_block_wire_hash = manifest.executed_block_wire_hash();
+    let manifest_root = manifest.root();
+    let manifest_leaf_count = manifest.count();
+    assert_eq!(manifest_leaf_count, 2);
     let _finality_commit_receipt = kura
         .store_v2_finality_artifact(&finality)
-        .expect("persist two-route Native finality");
+        .expect("persist exact two-route Native finality");
     let checkpoint_hash = Hash::new(b"two-route targeted repair WSV checkpoint");
     kura.store_wsv_checkpoint(
         application_block_height,
@@ -687,43 +639,21 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
     )
     .expect("persist two-route Native commit manifest");
     let finality_artifact_hash = HashOf::new(&finality);
-    let mut artifacts = Vec::with_capacity(route_evidence.len());
-    let mut markers = Vec::with_capacity(route_evidence.len());
-    for (index, (leaf, proposal, settlement, source_id, entrypoint_hash, result)) in
-        route_evidence.into_iter().enumerate()
-    {
-        let leaf_index = u32::try_from(index).expect("two-route leaf index fits u32");
-        let manifest = NativeAmxParticipantApplicationManifestArtifactV1 {
-            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-            leaf: leaf.clone(),
-            leaf_index,
-            proof: tree
-                .get_proof(leaf_index)
-                .expect("two-route Native Merkle proof"),
-            manifest_root,
-            manifest_leaf_count,
-            finality_artifact_hash,
-        };
-        let receipt = NativeAmxParticipantApplicationReceiptArtifact {
-            version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
-            participant_proposal: proposal,
-            participant_settlement: settlement,
-            participant_settlement_hash: leaf.settlement_hash,
-            application_block_height,
-            application_block_hash,
-            executed_block_wire_hash,
-            finality_artifact_hash,
-            manifest_artifact_hash: HashOf::new(&manifest),
-            source_ids: vec![source_id],
-            entrypoint_indices: vec![leaf.members[0].entrypoint_index],
-            entrypoint_hashes: vec![entrypoint_hash],
-            result_hashes: vec![result.hash()],
-            results: vec![result],
-        };
-        Kura::validate_native_amx_participant_application_manifest_artifact(&manifest)
+    let artifacts = native_amx_participant_application_artifacts(&manifest, finality_artifact_hash)
+        .expect("derive all real two-route Native artifacts");
+    assert_eq!(artifacts.len(), 2);
+    let mut markers = Vec::with_capacity(2);
+    let mut entries = Vec::with_capacity(2);
+    for (manifest, receipt) in &artifacts {
+        Kura::validate_native_amx_participant_application_manifest_artifact(manifest)
             .expect("validate two-route Native manifest artifact");
-        Kura::validate_native_amx_participant_application_receipt_artifact(&receipt)
+        Kura::validate_native_amx_participant_application_receipt_artifact(receipt)
             .expect("validate two-route Native receipt artifact");
+        let leaf = &manifest.leaf;
+        entries.push(
+            kura.lane_storage_entry(leaf.lane_id)
+                .expect("exact two-route Native entry"),
+        );
         markers.push(crate::state::AppliedNativeAmxParticipantFrontierMarker {
             version: 2,
             lane_id: leaf.lane_id,
@@ -741,7 +671,6 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
             source_count: u64::try_from(leaf.members.len())
                 .expect("two-route source count fits u64"),
         });
-        artifacts.push((manifest, receipt));
     }
     let plan = NativeAmxParticipantApplicationEvidencePlan {
         application_block_height,
@@ -758,7 +687,9 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
         block,
         plan,
         markers,
-        entries,
+        entries: entries
+            .try_into()
+            .expect("exactly two distinct Native publication routes"),
     }
 }
 fn snapshot_regular_files_recursively(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -964,6 +895,20 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
         Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
     let oldest_receipt =
         Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+    let store_root = kura.store_root.clone();
+    let retained_payloads = [2_u64, 3]
+        .into_iter()
+        .flat_map(|height| {
+            [
+                Kura::native_amx_application_manifest_path_for_entry(&entry, &store_root, height),
+                Kura::native_amx_participant_receipt_path_for_entry(&entry, &store_root, height),
+            ]
+        })
+        .map(|path| {
+            let bytes = fs::read(&path).expect("exact retained payload before startup compaction");
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("retention plus one fully valid pair must compact at startup");
@@ -989,6 +934,13 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
                 )
                 .exists(),
             "startup compaction must retain complete height {retained_height} evidence"
+        );
+    }
+    for (path, expected_bytes) in retained_payloads {
+        assert_eq!(
+            fs::read(path).expect("retained payload after startup compaction"),
+            expected_bytes,
+            "refreshing sibling-directory metadata must preserve exact retained evidence bytes"
         );
     }
     let latest = reopened
@@ -1664,17 +1616,19 @@ fn native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join() 
 #[test]
 fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
     for missing_kind in ["manifest", "receipt"] {
-        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let (fixture, entry, receipt) = native_amx_indexed_latest_index_evidence_fixture();
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir: temp_dir,
+            kura,
+            lane_config,
+            ..
+        } = fixture;
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("initialize Kura");
-        let entry = kura
-            .lane_storage_entry(LaneId::SINGLE)
-            .expect("primary lane storage entry");
-        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-        kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-            .expect("publish exact derived latest pointer");
+        let (incarnations, activation_heights) =
+            native_amx_replay_test_geometry_maps(&kura, &lane_config);
+        let indexed = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("pending exact carrier before half-pair fault")
+            .records;
         let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
             &entry,
             &kura.store_root,
@@ -1791,12 +1745,47 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
             fs::remove_file(&missing_data_path)
                 .expect("remove interrupted standalone Native receipt");
         }
+        sync_dir(Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root)).as_path())
+            .expect("sync the exact pending half-pair fault");
+        assert_eq!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .expect("half-pair fault must retain real publication authority")
+                .records,
+            indexed
+        );
+        let files = snapshot_regular_files_recursively(&kura.store_root);
         drop(kura);
         let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("missing structurally valid Native evidence must remain repair-pending");
+            .expect("indexed missing Native evidence must remain repair-pending");
+        assert_eq!(
+            snapshot_regular_files_recursively(&reopened.store_root),
+            files
+        );
+        assert!(
+            !reopened
+                .lane_storage_entries
+                .lock()
+                .contains_key(&entry.lane_id)
+        );
+        reopened
+            .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
+            .expect("restore only the original authenticated secondary geometry");
+        reopened
+            .finish_restored_lane_segments_with_geometry(&lane_config)
+            .expect("retain the indexed highest half-pair for State-driven repair");
+        assert!(
+            !missing_data_path.exists(),
+            "startup must not fabricate {missing_kind}"
+        );
+        assert_eq!(
+            Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+                .expect("unfinished route must keep the original pending index")
+                .records,
+            indexed
+        );
         let reopened_entry = reopened
-            .lane_storage_entry(LaneId::SINGLE)
-            .expect("reopened primary lane storage entry");
+            .lane_storage_entry(entry.lane_id)
+            .expect("replayed secondary publication route");
         let latest = reopened
             .decode_native_amx_participant_receipt_latest_index(&reopened_entry, &latest_path)
             .expect("decode retained repair-pending latest pointer")
@@ -2523,4 +2512,1614 @@ fn native_amx_history_read_distinguishes_empty_and_authenticated_pruned_suffix()
             receipts[1].clone()
         ))
     );
+}
+
+fn native_amx_prune_planning_maps_for_test(
+    kura: &Kura,
+    entry: &LaneConfigEntry,
+    receipts: &[NativeAmxParticipantApplicationReceiptArtifact],
+) -> (
+    BTreeMap<u64, NativeAmxParticipantApplicationManifestArtifactV1>,
+    BTreeMap<u64, NativeAmxParticipantApplicationReceiptArtifact>,
+) {
+    let manifests = receipts
+        .iter()
+        .map(|receipt| {
+            let height = receipt.participant_proposal.descriptor.lane_block_height;
+            let path = Kura::native_amx_application_manifest_path_for_entry(
+                entry,
+                &kura.store_root,
+                height,
+            );
+            let manifest =
+                norito::decode_canonical::<NativeAmxParticipantApplicationManifestArtifactV1>(
+                    &fs::read(path).expect("read exact planner fixture manifest"),
+                )
+                .expect("decode exact planner fixture manifest");
+            (height, manifest)
+        })
+        .collect();
+    let receipts = receipts
+        .iter()
+        .map(|receipt| {
+            (
+                receipt.participant_proposal.descriptor.lane_block_height,
+                receipt.clone(),
+            )
+        })
+        .collect();
+    (manifests, receipts)
+}
+
+#[test]
+fn native_amx_prospective_prune_plan_is_zero_until_exact_retention_is_crossed() {
+    let temp = TempDir::new().expect("prospective Native prune directory");
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open prospective Native prune Kura");
+    let entry = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("planner route");
+    let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3]);
+    let (mut manifests, mut receipt_map) =
+        native_amx_prune_planning_maps_for_test(&kura, &entry, &receipts);
+    let incoming_manifest = manifests.remove(&3).expect("incoming manifest");
+    let incoming_receipt = receipt_map.remove(&3).expect("incoming receipt");
+    assert!(
+        Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+            nonzero!(2_usize),
+            kura.native_amx_participant_evidence_file_bytes(),
+            kura.native_amx_evidence_prune_intent_max_bytes(),
+            &manifests,
+            &receipt_map,
+        )
+        .expect("retained pair plan")
+        .is_none(),
+        "fitting retained evidence needs no journal"
+    );
+    manifests.insert(3, incoming_manifest);
+    receipt_map.insert(3, incoming_receipt);
+    let plan = Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+        nonzero!(2_usize),
+        kura.native_amx_participant_evidence_file_bytes(),
+        kura.native_amx_evidence_prune_intent_max_bytes(),
+        &manifests,
+        &receipt_map,
+    )
+    .expect("incoming pair plan")
+    .expect("one removed pair requires a journal");
+    let expected = native_amx_prune_intent_for_test(&kura, &entry, &receipts[2], &[1]);
+    assert_eq!(
+        plan, expected,
+        "reserve the actual prefix and canonical settlement preimage"
+    );
+    let encoded = norito::encode_canonical(&plan).expect("exact planned journal");
+    assert!(encoded.len() < kura.native_amx_evidence_prune_intent_max_bytes());
+    assert_eq!(
+        plan.removed_settlements,
+        vec![receipts[0].participant_settlement.clone()]
+    );
+    assert!(
+        Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+            nonzero!(3_usize),
+            kura.native_amx_participant_evidence_file_bytes(),
+            kura.native_amx_evidence_prune_intent_max_bytes(),
+            &manifests,
+            &receipt_map,
+        )
+        .expect("all three pairs fit")
+        .is_none()
+    );
+}
+
+#[test]
+fn native_amx_prospective_prune_plan_matches_authenticated_publication() {
+    let temp = TempDir::new().expect("authenticated Native prune directory");
+    let mut config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    config.lane_history_retention = nonzero!(2_usize);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open authenticated Native prune Kura");
+    let entry = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("planner route");
+    let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3]);
+    let (manifests, receipt_map) =
+        native_amx_prune_planning_maps_for_test(&kura, &entry, &receipts);
+    let prospective = Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+        config.lane_history_retention,
+        kura.native_amx_participant_evidence_file_bytes(),
+        kura.native_amx_evidence_prune_intent_max_bytes(),
+        &manifests,
+        &receipt_map,
+    )
+    .expect("prospective journal")
+    .expect("oldest pair removed");
+    let before = native_amx_prune_evidence_snapshot(&kura, &entry, &[1, 2, 3]);
+    let _prune = kura.prune_lock.lock();
+    let _canonical = kura.canonical_chain_lock.lock();
+    let _geometry = kura.lane_geometry_lock.lock();
+    let _sidecar = kura.sidecar_lock.lock();
+    let namespace = kura
+        .native_amx_evidence_namespace_for_entry(&entry)
+        .expect("bound namespace");
+    let inventory = kura
+        .inventory_native_amx_evidence_files_locked(&namespace, true)
+        .expect("bounded inventory");
+    let authenticated = kura
+        .plan_native_amx_evidence_pair_prune_locked(&entry, &namespace, &inventory)
+        .expect("authenticated journal plan")
+        .expect("oldest pair removed");
+    assert_eq!(prospective, authenticated);
+    assert_native_amx_prune_evidence_snapshot(&before, "planning is read-only");
+    let mut resources = kura
+        .begin_total_disk_usage_mutation()
+        .with_resource_children(1);
+    kura.prune_native_amx_evidence_pairs_locked(&mut resources, &entry, &namespace)
+        .expect("publish and finish exact authenticated prune journal");
+    resources.finish();
+    for height in [1, 2, 3] {
+        for path in [
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, height),
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, height),
+        ] {
+            assert_eq!(
+                path.exists(),
+                height != 1,
+                "only the exact oldest pair may be removed"
+            );
+        }
+    }
+    let (stable, temporary) = native_amx_prune_special_paths(&kura, &entry);
+    assert!(
+        !stable.exists() && !temporary.exists(),
+        "journal lifetime ends after completed cleanup"
+    );
+}
+
+#[test]
+fn native_amx_prospective_prune_plan_preserves_byte_and_history_bounds() {
+    let temp = TempDir::new().expect("bounded Native prune directory");
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open bounded Native prune Kura");
+    let entry = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("planner route");
+    let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3]);
+    let (mut manifests, mut receipt_map) =
+        native_amx_prune_planning_maps_for_test(&kura, &entry, &receipts);
+    let pair_limit = manifests
+        .iter()
+        .map(|(height, manifest)| {
+            u64::try_from(
+                manifest.encode_framed().unwrap().len()
+                    + receipt_map[height].encode_framed().unwrap().len(),
+            )
+            .unwrap()
+        })
+        .max()
+        .expect("three pairs");
+    let byte_plan = Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+        nonzero!(3_usize),
+        pair_limit,
+        kura.native_amx_evidence_prune_intent_max_bytes(),
+        &manifests,
+        &receipt_map,
+    )
+    .expect("byte-based prefix plan")
+    .expect("only newest pair fits");
+    assert_eq!(
+        byte_plan
+            .entries
+            .iter()
+            .map(|entry| entry.participant_height)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 2, 2]
+    );
+    let actual_journal_len = norito::encode_canonical(&byte_plan).unwrap().len();
+    assert!(
+        Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+            nonzero!(3_usize),
+            pair_limit,
+            actual_journal_len - 1,
+            &manifests,
+            &receipt_map,
+        )
+        .is_err(),
+        "hard journal bound cannot be bypassed by variable settlement preimages"
+    );
+    assert!(
+        Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+            nonzero!(3_usize),
+            0,
+            kura.native_amx_evidence_prune_intent_max_bytes(),
+            &manifests,
+            &receipt_map,
+        )
+        .is_err(),
+        "protected pair must fit the stable bound"
+    );
+    manifests.remove(&2);
+    receipt_map.remove(&2);
+    assert!(
+        Kura::plan_native_amx_evidence_prune_intent_from_artifacts(
+            nonzero!(3_usize),
+            kura.native_amx_participant_evidence_file_bytes(),
+            kura.native_amx_evidence_prune_intent_max_bytes(),
+            &manifests,
+            &receipt_map,
+        )
+        .is_err(),
+        "prospective accounting cannot hide an interior Native settlement"
+    );
+}
+
+#[test]
+fn native_amx_reconstructed_cleanup_reserves_exact_journal_before_growth() {
+    let temp = TempDir::new().expect("Native exact journal recovery directory");
+    let mut config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    config.lane_history_retention = nonzero!(2_usize);
+    let (mut kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Native journal recovery");
+    let entry = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("Native recovery route");
+    let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3]);
+    let newest = &receipts[2];
+    let (latest, _) = native_amx_latest_index_test_paths(&kura, &entry);
+    write_synced_native_amx_test_file(
+        &latest,
+        &norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
+            newest,
+        ))
+        .expect("encode exact latest"),
+    );
+    let journal = native_amx_prune_intent_for_test(&kura, &entry, newest, &[1]);
+    let exact = u64::try_from(
+        norito::encode_canonical(&journal)
+            .expect("encode exact journal")
+            .len(),
+    )
+    .expect("journal length");
+    let before = snapshot_regular_files_recursively(&kura.store_root);
+    kura.rebuild_native_amx_publication_capacity_on_startup()
+        .expect("reconstruct all retained Native owners read-only");
+    assert_eq!(
+        snapshot_regular_files_recursively(&kura.store_root),
+        before,
+        "reconstruction must not publish, prune or repair"
+    );
+    assert_eq!(
+        kura.native_amx_publication_capacity_reserved_bytes()
+            .expect("Native capacity"),
+        exact
+    );
+    assert!(
+        exact
+            < u64::try_from(kura.native_amx_evidence_prune_intent_max_bytes())
+                .expect("decoder ceiling")
+    );
+    assert_eq!(
+        kura.post_wsv_lane_artifact_budget_reserved_bytes()
+            .expect("merge capacity"),
+        0
+    );
+    let exact_limit = canonical_storage_budget_base_for_test(&kura);
+    Arc::get_mut(&mut kura)
+        .expect("exclusive recovery fixture")
+        .max_disk_usage_bytes = exact_limit - 1;
+    let rejected = kura
+        .rebuild_native_amx_publication_capacity_on_startup()
+        .expect_err("one byte below exact operation reservation fails before repair");
+    assert!(
+        matches!(rejected, Error::StorageBudgetExceeded { required, .. } if required == exact_limit)
+    );
+    assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
+    assert!(
+        !kura
+            .native_amx_resident_recovery_complete
+            .load(Ordering::Acquire)
+    );
+    assert_eq!(
+        kura.native_amx_publication_capacity_reserved_bytes()
+            .expect("failed reconstruction retains ownership"),
+        exact
+    );
+    Arc::get_mut(&mut kura)
+        .expect("exclusive recovery retry")
+        .max_disk_usage_bytes = exact_limit;
+    kura.rebuild_native_amx_publication_capacity_on_startup()
+        .expect("exact retry fits");
+    kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+        .expect("actual prune with reserved journal");
+    assert_eq!(
+        kura.native_amx_publication_capacity_reserved_bytes()
+            .expect("capacity after exact cleanup"),
+        0
+    );
+    assert!(
+        !Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1).exists()
+    );
+    assert!(
+        !Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1).exists()
+    );
+    assert_eq!(
+        kura.read_native_amx_participant_application_history(LaneId::SINGLE)
+            .expect("remaining exact history")
+            .entries()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn native_amx_cleanup_barrier_failure_retains_ownership_until_exact_retry() {
+    for (label, barrier) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
+        let (fixture, _entry, receipt) = native_amx_indexed_latest_index_evidence_fixture();
+        let kura = &fixture.kura;
+        let carrier = Kura::native_amx_publication_carrier(&fixture.block)
+            .expect("exact pending cleanup carrier");
+        let (sibling_manifest, sibling_receipt) = native_amx_participant_application_artifacts(
+            &fixture.manifest,
+            HashOf::new(&fixture.finality),
+        )
+        .expect("exact two-route cleanup artifacts")
+        .into_iter()
+        .nth(1)
+        .expect("the other real publication route");
+        {
+            let _prune = kura.prune_lock.lock();
+            kura.cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                &sibling_receipt,
+            )
+            .expect("complete the sibling before testing the final route barrier");
+        }
+        let owned = kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .clone();
+        assert_eq!(owned.len(), 1);
+        let owner = owned
+            .get(&carrier)
+            .expect("store-owned final cleanup obligation");
+        assert_eq!(owner.routes.len(), 2);
+        assert_eq!(
+            owner
+                .routes
+                .values()
+                .filter(|route| !route.cleanup_complete)
+                .count(),
+            1,
+            "only the selected route remains unfinished"
+        );
+        assert!(
+            owner
+                .routes
+                .values()
+                .all(|route| route.outstanding_components.is_empty())
+        );
+        let record = owner
+            .index_record
+            .as_ref()
+            .expect("real pending index authority");
+        let indexed = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("exact index before the cleanup barrier")
+            .records;
+        assert_eq!(indexed, BTreeMap::from([(carrier, record.clone())]));
+        // A completed sibling cannot acquire new cleanup work on an exact store
+        // retry while the selected route still owns the durable carrier index.
+        let sibling_entry = kura
+            .lane_storage_entry(sibling_manifest.leaf.lane_id)
+            .expect("live completed sibling route");
+        let (sibling_latest, sibling_temporary) =
+            native_amx_latest_index_test_paths(kura, &sibling_entry);
+        let sibling_bytes = norito::encode_canonical(
+            &NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&sibling_receipt),
+        )
+        .expect("exact redundant sibling temporary bytes");
+        assert_eq!(
+            fs::read(&sibling_latest).expect("completed sibling stable pointer"),
+            sibling_bytes
+        );
+        assert!(!sibling_temporary.exists());
+        let completed_sibling = owner
+            .routes
+            .iter()
+            .find(|(route, _)| route.lane_id == sibling_manifest.leaf.lane_id)
+            .map(|(_, route)| route)
+            .expect("completed sibling ownership");
+        assert!(completed_sibling.cleanup_complete);
+        assert!(!completed_sibling.physical_cleanup_pending);
+        let without_redundant_temporary = snapshot_regular_files_recursively(&kura.store_root);
+        write_synced_native_amx_test_file(&sibling_temporary, &sibling_bytes);
+        let redundant_files = snapshot_regular_files_recursively(&kura.store_root);
+        let redundant_enforced = kura
+            .refresh_disk_usage_bytes()
+            .expect("account exact redundant sibling temporary");
+        let redundant_total = kura.disk_usage_bytes().expect("redundant temporary total");
+        let retry_error = kura
+            .store_block(Arc::clone(&fixture.block))
+            .expect_err("an exact retry cannot reopen a completed sibling cleanup");
+        assert!(
+            matches!(&retry_error, Error::PruneIntentConflict(reason)
+                if reason == "Native AMX exact retry changed an owned publication component"),
+            "reject the exact completed-route cleanup transition: {retry_error}"
+        );
+        assert_eq!(
+            *kura.native_amx_publication_capacity_reservations.lock(),
+            owned
+        );
+        assert_eq!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .expect("unchanged index after rejected completed-route retry")
+                .records,
+            indexed
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&kura.store_root),
+            redundant_files
+        );
+        assert_eq!(
+            kura.kura_disk_usage_bytes()
+                .expect("unchanged retry enforced usage"),
+            redundant_enforced
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("unchanged retry total usage"),
+            redundant_total
+        );
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("unchanged retry cached usage"),
+            redundant_total
+        );
+        assert_eq!(
+            fs::read(&sibling_temporary).expect("owned redundant temporary"),
+            sibling_bytes
+        );
+        fs::remove_file(&sibling_temporary)
+            .expect("remove only the test-owned redundant temporary");
+        sync_dir(
+            sibling_temporary
+                .parent()
+                .expect("sibling temporary parent"),
+        )
+        .expect("sync exact redundant temporary removal");
+        assert_eq!(
+            snapshot_regular_files_recursively(&kura.store_root),
+            without_redundant_temporary
+        );
+        let index_relative = PathBuf::from(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY)
+            .join(record.file_name().expect("exact cleanup index filename"));
+        let before = snapshot_regular_files_recursively(&kura.store_root);
+        let index_bytes = record.encoded().expect("exact persisted index bytes");
+        assert_eq!(before.get(&index_relative), Some(&index_bytes));
+        let enforced_before = kura
+            .refresh_disk_usage_bytes()
+            .expect("refresh pre-fault usage");
+        let total_before = kura.disk_usage_bytes().expect("pre-fault total usage");
+        {
+            let _prune = kura.prune_lock.lock();
+            barrier.inject();
+            let error = kura
+                .cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                    &receipt,
+                )
+                .expect_err("failed directory durability must retain cleanup ownership");
+            assert!(
+                matches!(&error, Error::IO(source, _)
+                if source.kind() == std::io::ErrorKind::InvalidData
+                    && source.to_string() == "Native AMX capacity completion directory durability sync failed"),
+                "{label} must fail at the exact cleanup directory barrier: {error}"
+            );
+        }
+        assert_eq!(
+            *kura.native_amx_publication_capacity_reservations.lock(),
+            owned,
+            "{label} must not release or change any ownership on failure"
+        );
+        assert_eq!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .expect("retained exact index after failed barrier")
+                .records,
+            indexed
+        );
+        assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
+        assert_eq!(
+            kura.kura_disk_usage_bytes()
+                .expect("enforced usage after failure"),
+            enforced_before
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("total usage after failure"),
+            total_before
+        );
+        assert_eq!(
+            kura.disk_usage_bytes().expect("cached usage after failure"),
+            total_before
+        );
+        {
+            let _prune = kura.prune_lock.lock();
+            kura.cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                &receipt,
+            )
+            .expect("exact durable cleanup retry");
+        }
+        assert!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .is_empty(),
+            "{label} retry closes the exact owner"
+        );
+        assert!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .expect("completed publication index")
+                .records
+                .is_empty()
+        );
+        // Successful final cleanup retires only the exact operation index. Every
+        // canonical, geometry and Native evidence byte remains unchanged.
+        let mut expected_after = before;
+        assert_eq!(
+            expected_after.remove(&index_relative),
+            Some(index_bytes.clone())
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&kura.store_root),
+            expected_after
+        );
+        let retired_bytes = u64::try_from(index_bytes.len()).expect("bounded retired index length");
+        assert_eq!(
+            kura.kura_disk_usage_bytes()
+                .expect("enforced usage after retry"),
+            enforced_before - retired_bytes
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("total usage after retry"),
+            total_before - retired_bytes
+        );
+        assert_eq!(
+            kura.disk_usage_bytes().expect("cached usage after retry"),
+            total_before - retired_bytes
+        );
+    }
+}
+
+#[test]
+fn native_amx_pending_prune_journal_is_physical_not_reserved_twice() {
+    for temporary in [false, true] {
+        let temp = TempDir::new().expect("Native pending journal directory");
+        let mut config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        config.lane_history_retention = nonzero!(2_usize);
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open pending journal fixture");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("pending journal route");
+        let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3]);
+        let newest = &receipts[2];
+        let (latest, _) = native_amx_latest_index_test_paths(&kura, &entry);
+        write_synced_native_amx_test_file(
+            &latest,
+            &norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
+                newest,
+            ))
+            .expect("encode pending journal latest"),
+        );
+        let intent = native_amx_prune_intent_for_test(&kura, &entry, newest, &[1]);
+        let (stable, staged) = native_amx_prune_special_paths(&kura, &entry);
+        write_synced_native_amx_test_file(
+            if temporary { &staged } else { &stable },
+            &norito::encode_canonical(&intent).expect("encode pending exact journal"),
+        );
+        let before = snapshot_regular_files_recursively(&kura.store_root);
+        kura.rebuild_native_amx_publication_capacity_on_startup()
+            .expect("read-only pending-journal reservation reconstruction");
+        assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
+        assert_eq!(
+            kura.native_amx_publication_capacity_reserved_bytes()
+                .expect("physical journal allocation"),
+            0
+        );
+        assert_eq!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .len(),
+            1,
+            "zero growth still owns cleanup completion"
+        );
+        {
+            let owners = kura.native_amx_publication_capacity_reservations.lock();
+            let owner = owners
+                .values()
+                .next()
+                .expect("physical prune cleanup owner");
+            assert!(
+                owner.index_record.is_none(),
+                "maintenance has no publication index"
+            );
+            assert_eq!(owner.routes.len(), 1);
+            let route = owner
+                .routes
+                .values()
+                .next()
+                .expect("exact prune maintenance route");
+            assert!(route.physical_cleanup_pending);
+            assert_eq!(route.prune_journal_bytes, 0);
+            assert!(route.outstanding_components.is_empty());
+            assert!(!route.cleanup_complete);
+        }
+        kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+            .expect("finish exact pending journal");
+        assert!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .is_empty()
+        );
+        assert!(!stable.exists() && !staged.exists());
+    }
+}
+
+#[test]
+fn native_amx_capacity_restart_after_store_without_native_files_reconstructs_exact_owner() {
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir,
+        kura,
+        block,
+        manifest,
+        finality,
+        lane_config,
+    } = native_amx_publication_capacity_fixture();
+    kura.store_block(Arc::clone(&block))
+        .expect("durably store Native carrier before evidence");
+    let commit_receipt = kura
+        .store_v2_finality_artifact(&finality)
+        .expect("durable exact carrier finality");
+    assert_v2_commit_receipt_matches_artifact(&commit_receipt, &finality);
+    let expected = kura
+        .native_amx_publication_capacity_reserved_bytes()
+        .expect("live operation allocation");
+    assert!(expected > 0);
+    for leaf in manifest.entries() {
+        let entry = kura
+            .lane_storage_entry(leaf.leaf.lane_id)
+            .expect("active publication route");
+        assert!(
+            !Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1)
+                .exists()
+        );
+        assert!(
+            !Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1)
+                .exists()
+        );
+    }
+    let (incarnations, activation_heights): (BTreeMap<_, _>, BTreeMap<_, _>) = lane_config
+        .entries()
+        .iter()
+        .map(|entry| {
+            let (incarnation, activation) = kura
+                .active_lane_incarnation_marker(entry)
+                .expect("authenticate the original journal-published lane");
+            ((entry.lane_id, incarnation), (entry.lane_id, activation))
+        })
+        .unzip();
+    let before_restart = snapshot_regular_files_recursively(&kura.store_root);
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart before any Native publication");
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .expect("reconstructed allocation"),
+        expected
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .len(),
+        1
+    );
+    assert_eq!(
+        reopened
+            .post_wsv_lane_artifact_budget_reserved_bytes()
+            .expect("ordinary carrier has no merge owner"),
+        0
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&reopened.store_root),
+        before_restart,
+        "cold reservation reconstruction must not publish secondary lane evidence"
+    );
+    assert_eq!(reopened.lane_storage_entries.lock().len(), 1);
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
+        .expect("authenticate and restore the actual secondary lane geometry");
+    reopened
+        .finish_restored_lane_segments_with_geometry(&lane_config)
+        .expect("complete startup recovery after authenticated geometry restoration");
+    reopened
+        .store_block(Arc::clone(&block))
+        .expect("exact durable carrier retry");
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .expect("deduplicated restart allocation"),
+        expected
+    );
+}
+
+#[test]
+fn native_amx_capacity_restart_with_highest_half_pair_keeps_missing_component() {
+    for retained_kind in [
+        NativeAmxEvidenceKind::Manifest,
+        NativeAmxEvidenceKind::Receipt,
+    ] {
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir,
+            kura,
+            block,
+            manifest,
+            finality,
+            lane_config,
+        } = native_amx_publication_capacity_fixture();
+        kura.store_block(Arc::clone(&block))
+            .expect("store half-pair carrier");
+        let commit_receipt = kura
+            .store_v2_finality_artifact(&finality)
+            .expect("half-pair finality");
+        assert_v2_commit_receipt_matches_artifact(&commit_receipt, &finality);
+        let expected = kura
+            .native_amx_publication_capacity_reserved_bytes()
+            .expect("all component allocation");
+        let artifacts =
+            native_amx_participant_application_artifacts(&manifest, HashOf::new(&finality))
+                .expect("exact finality artifacts");
+        let (manifest, receipt) = &artifacts[0];
+        let entry = kura
+            .lane_storage_entry(manifest.leaf.lane_id)
+            .expect("half-pair route");
+        let (path, bytes) = match retained_kind {
+            NativeAmxEvidenceKind::Manifest => (
+                Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1),
+                manifest.encode_framed().expect("manifest bytes"),
+            ),
+            NativeAmxEvidenceKind::Receipt => (
+                Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1),
+                receipt.encode_framed().expect("receipt bytes"),
+            ),
+        };
+        fs::create_dir_all(path.parent().expect("half-pair directory"))
+            .expect("create exact fixture namespace");
+        write_synced_native_amx_test_file(&path, &bytes);
+        let (incarnations, activation_heights): (BTreeMap<_, _>, BTreeMap<_, _>) = lane_config
+            .entries()
+            .iter()
+            .map(|entry| {
+                let (incarnation, activation) = kura
+                    .active_lane_incarnation_marker(entry)
+                    .expect("authenticate the original journal-published lane");
+                ((entry.lane_id, incarnation), (entry.lane_id, activation))
+            })
+            .unzip();
+        let before_restart = snapshot_regular_files_recursively(&kura.store_root);
+        drop(kura);
+        let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("restart with highest half-pair");
+        let remaining = expected - u64::try_from(bytes.len()).expect("stable half allocation");
+        assert_eq!(
+            reopened
+                .native_amx_publication_capacity_reserved_bytes()
+                .expect("half-pair remaining capacity"),
+            remaining
+        );
+        assert_eq!(fs::read(path).expect("retained half is unchanged"), bytes);
+        assert_eq!(
+            snapshot_regular_files_recursively(&reopened.store_root),
+            before_restart,
+            "cold reservation reconstruction must not publish secondary lane evidence"
+        );
+        assert_eq!(reopened.lane_storage_entries.lock().len(), 1);
+        reopened
+            .recover_lane_geometry_journal(&lane_config, &incarnations, &activation_heights)
+            .expect("authenticate and restore the actual secondary lane geometry");
+        reopened
+            .finish_restored_lane_segments_with_geometry(&lane_config)
+            .expect("complete startup recovery after authenticated geometry restoration");
+        reopened
+            .store_block(Arc::clone(&block))
+            .expect("exact retry preserves actual finality hash and half-pair credit");
+        assert_eq!(
+            reopened
+                .native_amx_publication_capacity_reserved_bytes()
+                .expect("half-pair retry"),
+            remaining
+        );
+    }
+}
+
+#[test]
+fn native_amx_capacity_promoted_temporary_never_regains_consumed_allocation_on_retry() {
+    for kind in [
+        NativeAmxEvidenceKind::Manifest,
+        NativeAmxEvidenceKind::Receipt,
+    ] {
+        let fixture = native_amx_publication_capacity_fixture();
+        let kura = &fixture.kura;
+        kura.store_block(Arc::clone(&fixture.block))
+            .expect("store temporary carrier");
+        let commit_receipt = kura
+            .store_v2_finality_artifact(&fixture.finality)
+            .expect("temporary exact finality");
+        assert_v2_commit_receipt_matches_artifact(&commit_receipt, &fixture.finality);
+        let artifacts = native_amx_participant_application_artifacts(
+            &fixture.manifest,
+            HashOf::new(&fixture.finality),
+        )
+        .expect("temporary exact pair");
+        let (manifest, receipt) = &artifacts[0];
+        let entry = kura
+            .lane_storage_entry(manifest.leaf.lane_id)
+            .expect("temporary route");
+        let manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        fs::create_dir_all(manifest_path.parent().expect("temporary directory"))
+            .expect("create fixture namespace");
+        let (path, bytes) = match kind {
+            NativeAmxEvidenceKind::Manifest => (
+                manifest_path,
+                manifest.encode_framed().expect("manifest temporary bytes"),
+            ),
+            NativeAmxEvidenceKind::Receipt => {
+                write_synced_native_amx_test_file(
+                    &manifest_path,
+                    &manifest
+                        .encode_framed()
+                        .expect("stable prerequisite manifest"),
+                );
+                (
+                    receipt_path,
+                    receipt.encode_framed().expect("receipt temporary bytes"),
+                )
+            }
+        };
+        let temporary = path.with_extension("norito.tmp");
+        write_synced_native_amx_test_file(&temporary, &bytes);
+        kura.rebuild_native_amx_publication_capacity_on_startup()
+            .expect("read-only physical temporary credit");
+        let before = kura
+            .native_amx_publication_capacity_reserved_bytes()
+            .expect("temporary-aware reserve");
+        {
+            let _prune = kura.prune_lock.lock();
+            let _canonical = kura.canonical_chain_lock.lock();
+            let _geometry = kura.lane_geometry_lock.lock();
+            let _sidecar = kura.sidecar_lock.lock();
+            let namespace = kura
+                .native_amx_evidence_namespace_for_entry(&entry)
+                .expect("bound temporary namespace");
+            with_native_resource_batch_for_test(kura, |resources| {
+                kura.recover_native_amx_evidence_publication_temp_locked(
+                    resources,
+                    &entry,
+                    &namespace,
+                    NativeAmxEvidenceRecoveryPhase::Startup,
+                )
+            })
+            .expect("promote exact physical temporary");
+        }
+        assert!(!temporary.exists());
+        assert_eq!(fs::read(path).expect("promoted artifact"), bytes);
+        kura.store_block(Arc::clone(&fixture.block))
+            .expect("temporary-to-stable exact retry must not report allocation growth");
+        assert_eq!(
+            kura.native_amx_publication_capacity_reserved_bytes()
+                .expect("retry remaining allocation"),
+            before
+        );
+    }
+}
+
+#[test]
+fn native_amx_capacity_exact_latest_temporary_recovers_without_second_allocation() {
+    for stable_present in [false, true] {
+        let temp = TempDir::new().expect("Native exact latest temporary directory");
+        let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open latest temporary fixture");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("latest temporary route");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let (stable, temporary) = native_amx_latest_index_test_paths(&kura, &entry);
+        let bytes = norito::encode_canonical(
+            &NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&receipt),
+        )
+        .expect("exact latest temporary bytes");
+        assert!(
+            !stable.exists(),
+            "fixture begins without a derived latest pointer"
+        );
+        if stable_present {
+            write_synced_native_amx_test_file(&stable, &bytes);
+        }
+        write_synced_native_amx_test_file(&temporary, &bytes);
+        kura.rebuild_native_amx_publication_capacity_on_startup()
+            .expect("authenticate physical latest temporary");
+        assert_eq!(
+            kura.native_amx_publication_capacity_reserved_bytes()
+                .expect("latest physical credit"),
+            0
+        );
+        assert_eq!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .len(),
+            1
+        );
+        {
+            let owners = kura.native_amx_publication_capacity_reservations.lock();
+            let owner = owners
+                .values()
+                .next()
+                .expect("physical latest cleanup owner");
+            assert!(
+                owner.index_record.is_none(),
+                "cleanup must not invent a publication index"
+            );
+            assert_eq!(owner.routes.len(), 1);
+            let route = owner
+                .routes
+                .values()
+                .next()
+                .expect("exact maintenance route");
+            assert!(route.physical_cleanup_pending);
+            assert!(!route.cleanup_complete);
+            assert_eq!(
+                route
+                    .outstanding_components
+                    .contains(&NativeAmxPublicationComponent::Latest),
+                !stable_present,
+                "an identical stable pointer needs only temporary cleanup"
+            );
+        }
+        let exact = canonical_storage_budget_base_for_test(&kura);
+        Arc::get_mut(&mut kura)
+            .expect("exclusive latest temporary fixture")
+            .max_disk_usage_bytes = exact;
+        kura.rebuild_native_amx_publication_capacity_on_startup()
+            .expect("restart exact physical limit admits no duplicate allocation");
+        kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+            .expect("promote existing exact temporary");
+        assert_eq!(fs::read(&stable).expect("promoted latest"), bytes);
+        assert!(!temporary.exists());
+        assert!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .is_empty()
+        );
+        let completed_files = snapshot_regular_files_recursively(&kura.store_root);
+        kura.rebuild_native_amx_publication_capacity_on_startup()
+            .expect("completed pointer without physical residue needs no maintenance owner");
+        assert!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .is_empty()
+        );
+        assert_eq!(
+            kura.native_amx_publication_capacity_reserved_bytes()
+                .expect("completed cleanup allocation"),
+            0
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&kura.store_root),
+            completed_files
+        );
+    }
+}
+
+#[test]
+fn native_amx_capacity_restart_finds_unpublished_carrier_below_ordinary_tip() {
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir,
+        kura,
+        block,
+        manifest: _,
+        finality,
+        lane_config,
+    } = native_amx_publication_capacity_fixture();
+    kura.store_block(Arc::clone(&block))
+        .expect("store unpublished Native carrier");
+    let commit_receipt = kura
+        .store_v2_finality_artifact(&finality)
+        .expect("exact first-carrier finality");
+    assert_v2_commit_receipt_matches_artifact(&commit_receipt, &finality);
+    let expected = kura
+        .native_amx_publication_capacity_reserved_bytes()
+        .expect("unpublished Native allocation");
+    assert!(expected > 0);
+    let mut ordinary: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+        .chain(0, Some(block.as_ref()))
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+        .unpack(|_| {})
+        .into();
+    attach_ok_results_to_block(&mut ordinary);
+    kura.store_block(ordinary)
+        .expect("ordinary successor is independent of Native publication");
+    assert_eq!(kura.blocks_count(), 2);
+    assert_eq!(
+        kura.native_amx_publication_capacity_reserved_bytes()
+            .expect("live Native owner survives ordinary successor"),
+        expected
+    );
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart after ordinary successor");
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .expect("exact older Native recovery allocation"),
+        expected
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn native_amx_owned_carrier_body_pin_overrides_remote_replica_eviction() {
+    // Exercise the eviction boundary with its existing signed complete-wire fixture.
+    // Real Native carrier registration and completion are exercised separately above.
+    let temp = TempDir::new().expect("Native pending body pin directory");
+    let (_, kura, blocks) = open_eviction_compaction_fixture(&temp, 4);
+    let block = &blocks[1];
+    let carrier = Kura::native_amx_publication_carrier(block).expect("exact signed body pin");
+    let (_, required) = advertise_required_replicas(&kura, nonzero!(2_usize));
+    kura.native_amx_publication_capacity_reservations
+        .lock()
+        .insert(
+            carrier,
+            NativeAmxPublicationCapacityReservation {
+                index_record: None,
+                index_additional_bytes: 0,
+                routes: BTreeMap::new(),
+            },
+        );
+    let before = block.encode_wire().expect("exact original body");
+    assert_eq!(
+        kura.evict_block_bodies(required)
+            .expect("owned-body eviction admission"),
+        0
+    );
+    assert!(
+        !kura
+            .block_store
+            .lock()
+            .read_block_index(1)
+            .expect("pinned inline index")
+            .is_evicted()
+    );
+    assert_eq!(
+        kura.get_block_without_merge_sidecar(nonzero!(2_usize))
+            .expect("pinned local recovery body")
+            .encode_wire()
+            .expect("pinned body wire"),
+        before
+    );
+    // Remove only this fixture owner to demonstrate that remote evidence and all
+    // other eviction requirements were already sufficient; the pin caused the refusal.
+    kura.native_amx_publication_capacity_reservations
+        .lock()
+        .remove(&carrier);
+    assert!(
+        kura.evict_block_bodies(required)
+            .expect("eviction after pin release")
+            > 0
+    );
+    assert!(
+        kura.block_store
+            .lock()
+            .read_block_index(1)
+            .expect("evicted index")
+            .is_evicted()
+    );
+}
+
+#[test]
+fn native_amx_precommit_scope_failure_preserves_before_marker_until_restart() {
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir,
+        kura,
+        block,
+        manifest: _,
+        finality: _,
+        lane_config,
+    } = native_amx_publication_capacity_fixture();
+    let carrier = Kura::native_amx_publication_carrier(&block).expect("precommit exact carrier");
+    let failed: Result<()> = (|| {
+        let _prune = kura.prune_lock.lock();
+        let _canonical = kura.canonical_chain_lock.lock();
+        let mut owner = kura
+            .begin_native_amx_store_capacity_under_prune_and_canonical_guards(&block, None, None)?
+            .expect("Native precommit capacity owner");
+        kura.check_storage_budget(&block, None)?;
+        owner.publish_pending_index()?;
+        // A fallible lane/association stage exits this very same production
+        // guard scope before durable_write_started; no wall-clock assumption.
+        Err(Error::PruneIntentConflict(
+            "injected post-index pre-canonical staging error".to_owned(),
+        ))
+    })();
+    assert!(failed.is_err());
+    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("retained exact locator")
+            .records
+            .contains_key(&carrier)
+    );
+    let ordinary = DummyBlocks::new().next();
+    assert!(matches!(
+        kura.store_block(Arc::clone(&ordinary)),
+        Err(Error::CanonicalStoragePoisoned)
+    ));
+    assert_eq!(
+        kura.block_store
+            .lock()
+            .read_exact_durable_index_count()
+            .expect("unchanged before-marker height"),
+        0
+    );
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("cold exact precommit retirement");
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .expect("closed precommit locator")
+            .records
+            .is_empty()
+    );
+    assert!(
+        reopened
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+    reopened
+        .store_block(ordinary)
+        .expect("ordinary append only after proven durable precommit retirement");
+}
+
+#[test]
+fn native_amx_canonical_prune_retires_only_exact_above_target_pending_carriers() {
+    for target in [0_u64, 1] {
+        let fixture = native_amx_publication_capacity_fixture();
+        let kura = &fixture.kura;
+        kura.store_block(Arc::clone(&fixture.block))
+            .expect("unfinalized Native canonical carrier");
+        let carrier = Kura::native_amx_publication_carrier(&fixture.block)
+            .expect("exact pending prune carrier");
+        let mut ordinary: SignedBlock =
+            BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+                .chain(0, Some(fixture.block.as_ref()))
+                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+                .unpack(|_| {})
+                .into();
+        attach_ok_results_to_block(&mut ordinary);
+        kura.store_block(ordinary)
+            .expect("ordinary unfinalized successor");
+        let before = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("pre-prune pending inventory");
+        assert!(before.records.contains_key(&carrier));
+        kura.prune_to_height(target)
+            .expect("exact canonical Native retirement transaction");
+        let after = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("post-prune pending inventory");
+        assert_eq!(after.records.contains_key(&carrier), target == 1);
+        assert_eq!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .contains_key(&carrier),
+            target == 1
+        );
+        assert_eq!(
+            kura.exact_durable_blocks_count()
+                .expect("pruned canonical marker"),
+            usize::try_from(target).expect("target fits usize")
+        );
+        if target == 1 {
+            assert_eq!(
+                after.records.get(&carrier),
+                before.records.get(&carrier),
+                "retained exact record is unchanged"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_amx_pending_retirement_recovers_only_from_exact_canonical_prune_intent() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir,
+        kura,
+        block,
+        manifest: _,
+        finality: _,
+        lane_config,
+    } = native_amx_publication_capacity_fixture();
+    kura.store_block(Arc::clone(&block))
+        .expect("unfinalized indexed Native carrier");
+    let carrier =
+        Kura::native_amx_publication_carrier(&block).expect("exact interrupted-prune carrier");
+    kura.fail_prune_after_stage
+        .store(PRUNE_STAGE_MEMORY, Ordering::Relaxed);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| kura.prune_to_height(0)));
+    assert!(
+        failed.is_err(),
+        "prune fails after canonical suffix removal but before exact index retirement"
+    );
+    let pending = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+        .expect("pending Native record survives interrupted prune");
+    let record = pending
+        .records
+        .get(&carrier)
+        .expect("exact pre-prune owner retained");
+    let intent = Kura::canonical_prune_intent_artifact_inventory(&kura.store_root)
+        .expect("retained canonical prune authority")
+        .stable
+        .expect("durable prune intent")
+        .intent;
+    assert!(
+        intent
+            .native_amx_retirement_record_hashes
+            .binary_search(&Hash::new(record.encoded().expect("bound record")))
+            .is_ok()
+    );
+    assert!(
+        kura.native_amx_publication_capacity_reservations
+            .lock()
+            .contains_key(&carrier),
+        "failure never releases the live owner"
+    );
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("exact pending Native retirement forward recovery");
+    assert_eq!(
+        reopened
+            .exact_durable_blocks_count()
+            .expect("completed prune height"),
+        0
+    );
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .expect("completed indexed retirement")
+            .records
+            .is_empty()
+    );
+    assert!(
+        reopened
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+    assert!(!Kura::prune_intent_path_for(&reopened.store_root).exists());
+}
+
+#[test]
+fn native_amx_completed_publication_retry_reauthenticates_without_new_index_or_reservation() {
+    let fixture = native_amx_two_route_repair_fixture();
+    let first = {
+        let _publication = fixture.kura.prune_lock.lock();
+        fixture
+            .kura
+            .persist_native_amx_participant_application_evidence_under_publication_guard(
+                &fixture.block,
+                &fixture.plan,
+                NativeAmxParticipantApplicationPublicationMode::PostWsvRepair,
+            )
+            .expect("complete real two-route Native publication")
+    };
+    assert!(
+        fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&fixture.kura.store_root)
+            .expect("retired completed index")
+            .records
+            .is_empty()
+    );
+    let before = snapshot_regular_files_recursively(&fixture.kura.store_root);
+    fixture
+        .kura
+        .store_block(Arc::clone(&fixture.block))
+        .expect("completed exact canonical store retry");
+    let repeated = {
+        let _publication = fixture.kura.prune_lock.lock();
+        fixture
+            .kura
+            .persist_native_amx_participant_application_evidence_under_publication_guard(
+                &fixture.block,
+                &fixture.plan,
+                NativeAmxParticipantApplicationPublicationMode::PostWsvRepair,
+            )
+            .expect("completed exact publication retry")
+    };
+    assert_eq!(repeated, first);
+    assert!(
+        fixture
+            .kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&fixture.kura.store_root),
+        before
+    );
+}
+
+#[test]
+fn native_amx_uncommitted_association_cleanup_failure_blocks_mutation_until_cold_recovery() {
+    for replacing in [false, true] {
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir,
+            kura,
+            block,
+            manifest: _,
+            finality: _,
+            lane_config,
+        } = native_amx_publication_capacity_fixture();
+        let mut ordinary = DummyBlocks::new();
+        let old = replacing.then(|| ordinary.next());
+        if let Some(old) = &old {
+            kura.store_block(Arc::clone(old))
+                .expect("ordinary selected tip before Native replacement");
+        }
+        let before_count = u64::from(replacing);
+        let carrier =
+            Kura::native_amx_publication_carrier(&block).expect("incoming Native carrier");
+        kura.fail_next_block_write.store(true, Ordering::Relaxed);
+        kura.fail_next_canonical_association_cleanup
+            .store(true, Ordering::Relaxed);
+        let error = if replacing {
+            kura.replace_top_block(Arc::clone(&block))
+        } else {
+            kura.store_block(Arc::clone(&block))
+        }
+        .expect_err("actual uncommitted write followed by association cleanup failure");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.to_string() == "injected canonical association cleanup failure"
+                    && *path == kura.canonical_association_stage_path()
+        ));
+        assert!(!kura.fail_next_block_write.load(Ordering::Relaxed));
+        assert!(
+            !kura
+                .fail_next_canonical_association_cleanup
+                .load(Ordering::Relaxed),
+            "the actual association removal boundary must have executed"
+        );
+        assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+        let inventory = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .expect("failed cleanup retains its exact discovery record");
+        let record = inventory
+            .records
+            .get(&carrier)
+            .expect("pending Native record");
+        assert_eq!(record.before_marker.count, before_count);
+        assert_eq!(
+            record.before_marker.tip_hash,
+            old.as_ref().map(|old| old.hash())
+        );
+        assert!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .contains_key(&carrier),
+            "failed cleanup retains the complete capacity owner"
+        );
+        let next = ordinary.next();
+        assert!(matches!(
+            kura.store_block(Arc::clone(&next)),
+            Err(Error::CanonicalStoragePoisoned)
+        ));
+        assert_eq!(
+            kura.block_store
+                .lock()
+                .read_exact_durable_index_count()
+                .expect("failure preserves the selected marker"),
+            before_count
+        );
+        assert!(kura.canonical_association_stage_path().is_file());
+        drop(kura);
+        let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("cold recovery resolves the selected old marker and exact pending index");
+        assert!(
+            Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+                .expect("closed pending-index inventory")
+                .records
+                .is_empty()
+        );
+        assert!(
+            reopened
+                .native_amx_publication_capacity_reservations
+                .lock()
+                .is_empty()
+        );
+        assert!(!reopened.canonical_association_stage_path().exists());
+        if let Some(old) = &old {
+            assert_eq!(
+                reopened
+                    .get_block_without_merge_sidecar(NonZeroUsize::new(1).unwrap())
+                    .expect("selected old replacement body is preserved")
+                    .encode_wire()
+                    .unwrap(),
+                old.encode_wire().unwrap()
+            );
+        }
+        reopened
+            .store_block(next)
+            .expect("new mutation only after exact cold rollback");
+    }
+}
+
+#[test]
+fn native_amx_proven_uncommitted_cleanup_releases_owner_without_poison() {
+    for replacing in [false, true] {
+        let fixture = native_amx_publication_capacity_fixture();
+        let kura = &fixture.kura;
+        let mut ordinary = DummyBlocks::new();
+        if replacing {
+            kura.store_block(ordinary.next())
+                .expect("ordinary selected tip");
+        }
+        let carrier =
+            Kura::native_amx_publication_carrier(&fixture.block).expect("incoming Native carrier");
+        kura.fail_next_block_write.store(true, Ordering::Relaxed);
+        let error = if replacing {
+            kura.replace_top_block(Arc::clone(&fixture.block))
+        } else {
+            kura.store_block(Arc::clone(&fixture.block))
+        }
+        .expect_err("known uncommitted block-write failure");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _) if source.to_string() == "kura store_block injected failure"
+        ));
+        assert!(!kura.fail_next_block_write.load(Ordering::Relaxed));
+        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+        assert!(!kura.canonical_association_stage_path().exists());
+        assert!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .expect("proven rollback inventory")
+                .records
+                .is_empty()
+        );
+        assert!(
+            !kura
+                .native_amx_publication_capacity_reservations
+                .lock()
+                .contains_key(&carrier)
+        );
+        kura.store_block(ordinary.next())
+            .expect("successful exact rollback permits the next ordinary mutation");
+    }
+}
+
+#[test]
+fn native_amx_startup_completion_allows_owned_sibling_change_but_rejects_protected_file_replacement()
+ {
+    for replaced_kind in [
+        None,
+        Some(NativeAmxEvidenceKind::Manifest),
+        Some(NativeAmxEvidenceKind::Receipt),
+    ] {
+        let temp_dir = TempDir::new().expect("Native startup pair identity directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("active primary route");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let _prune = kura.prune_lock.lock();
+        let _canonical = kura.canonical_chain_lock.lock();
+        let _geometry = kura.lane_geometry_lock.lock();
+        let _sidecar = kura.sidecar_lock.lock();
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("exact Native namespace");
+        let admitted = kura
+            .inventory_native_amx_evidence_files_locked(&namespace, false)
+            .expect("protected pair before owned sibling publication");
+        let height = receipt.participant_proposal.descriptor.lane_block_height;
+        let manifest_file = admitted.manifests.get(&height).expect("admitted manifest");
+        let manifest = kura
+            .decode_native_amx_manifest_file_locked(&entry, &namespace, manifest_file)
+            .expect("authenticated manifest payload");
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        fs::write(
+            &latest_path,
+            norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
+                &receipt,
+            ))
+            .expect("exact derived sibling bytes"),
+        )
+        .expect("owned latest-pointer sibling publication");
+        if let Some(kind) = replaced_kind {
+            let old = match kind {
+                NativeAmxEvidenceKind::Manifest => admitted.manifests.get(&height).unwrap(),
+                NativeAmxEvidenceKind::Receipt => admitted.receipts.get(&height).unwrap(),
+            };
+            let bytes = fs::read(&old.path).expect("same protected payload bytes");
+            let replacement = tempfile::NamedTempFile::new_in(old.path.parent().unwrap())
+                .expect("distinct replacement inode while original still exists");
+            fs::write(replacement.path(), &bytes).expect("stage identical protected bytes");
+            replacement
+                .persist(&old.path)
+                .expect("replace exact path with another inode");
+            assert_eq!(fs::read(&old.path).unwrap(), bytes);
+            let current = Kura::regular_sidecar_metadata_for(
+                &kura.store_root,
+                &old.path,
+                old.path.parent().unwrap(),
+            )
+            .expect("replacement metadata")
+            .expect("replacement exists");
+            assert!(!Kura::sidecar_metadata_same_object(
+                &old.metadata.file,
+                &current.file
+            ));
+        }
+        let result = kura.validate_native_amx_startup_completed_pair_locked(
+            &entry, &namespace, &admitted, &manifest, &receipt,
+        );
+        if replaced_kind.is_some() {
+            let error = result
+                .expect_err("identical bytes cannot authorize replacement of a protected file");
+            assert!(
+                error
+                    .to_string()
+                    .contains("changed an admitted protected file"),
+                "{error}"
+            );
+        } else {
+            result.expect("owned sibling changes preserve both exact protected files");
+        }
+    }
 }

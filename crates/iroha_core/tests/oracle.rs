@@ -24,8 +24,8 @@ use iroha_data_model::{
     isi::{
         AggregateOracleFeed, InstructionBox, OpenOracleDispute, ProposeOracleChange,
         RecordTwitterBinding, RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding,
-        RollbackOracleChange, SetAssetTransferAvailability, SubmitOracleObservation,
-        VoteOracleChangeStage,
+        RollbackOracleChange, SetAssetHoldingLimit, SetAssetTransferAvailability,
+        SubmitOracleObservation, VoteOracleChangeStage,
     },
     nexus::UniversalAccountId,
     oracle::{
@@ -3278,6 +3278,14 @@ fn oracle_penalty_is_an_explicit_mandatory_control_exception() {
     )
     .execute(&reward_pool, &mut stx)
     .expect("asset owner can suspend provider debits");
+    let voluntary_transfer = Transfer::asset_quantity(
+        AssetId::new(asset_def_id.clone(), outlier.clone()),
+        Quantity::one(),
+        slash_receiver.clone(),
+    )
+    .execute(&outlier, &mut stx)
+    .expect_err("ordinary provider transfers must still respect outgoing suspension");
+    assert!(format!("{voluntary_transfer:?}").contains("OutgoingDisabled"));
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone(), outlier.clone()],
@@ -3316,6 +3324,86 @@ fn oracle_penalty_is_an_explicit_mandatory_control_exception() {
         asset_value(&stx.world, &receiver_id),
         Quantity::from_str("6").expect("quantity")
     );
+}
+#[test]
+fn oracle_penalty_preserves_receiver_admission() {
+    for incoming_disabled in [true, false] {
+        let (provider_a, signer_a) = iroha_test_samples::gen_account_in("validators");
+        let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
+        let (outlier, outlier_signer) = iroha_test_samples::gen_account_in("validators");
+        let feed_id: FeedId = "penalty_receiver_control".parse().expect("feed id");
+        let (state, asset_def_id, reward_pool, slash_receiver) =
+            oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone(), outlier.clone()]);
+        let mut sb = state.block(header(1));
+        let mut stx = sb.transaction();
+        SetAssetTransferAvailability::new(
+            outlier.clone(),
+            asset_def_id.clone(),
+            0,
+            AssetTransferAvailability::Enabled,
+            AssetTransferAvailability::Disabled,
+            None,
+        )
+        .execute(&reward_pool, &mut stx)
+        .expect("suspend provider debits");
+        let expected_error = if incoming_disabled {
+            SetAssetTransferAvailability::new(
+                slash_receiver.clone(),
+                asset_def_id.clone(),
+                0,
+                AssetTransferAvailability::Disabled,
+                AssetTransferAvailability::Enabled,
+                None,
+            )
+            .execute(&reward_pool, &mut stx)
+            .expect("suspend receiver credits");
+            "IncomingDisabled"
+        } else {
+            SetAssetHoldingLimit::new(
+                slash_receiver.clone(),
+                asset_def_id.clone(),
+                Some(Quantity::from(5_u32)),
+            )
+            .execute(&reward_pool, &mut stx)
+            .expect("limit receiver balance");
+            "HoldingLimitExceeded"
+        };
+        let mut config = feed_config(
+            feed_id.clone(),
+            vec![provider_a.clone(), provider_b.clone(), outlier.clone()],
+        );
+        config.outlier_policy = OutlierPolicy::Absolute(AbsoluteOutlier { max_delta: 5 });
+        RegisterOracleFeed { feed: config }
+            .execute(&provider_a, &mut stx)
+            .expect("register feed");
+        let request = Hash::new(b"penalty-receiver-control");
+        for (provider, signer, value) in [
+            (&provider_a, &signer_a, 10),
+            (&provider_b, &signer_b, 12),
+            (&outlier, &outlier_signer, 100),
+        ] {
+            SubmitOracleObservation {
+                observation: observation(provider.clone(), signer, &feed_id, 1, request, value),
+            }
+            .execute(provider, &mut stx)
+            .expect("submit observation");
+        }
+        let error = AggregateOracleFeed {
+            feed_id,
+            slot: 1,
+            request_hash: request,
+            evidence_hashes: Vec::new(),
+        }
+        .execute(&provider_a, &mut stx)
+        .expect_err("mandatory source debit must preserve receiver admission");
+        assert!(format!("{error:?}").contains(expected_error), "{error:?}");
+        for account in [outlier, slash_receiver] {
+            assert_eq!(
+                asset_value(&stx.world, &AssetId::new(asset_def_id.clone(), account)),
+                Quantity::from(5_u32),
+            );
+        }
+    }
 }
 #[test]
 fn oracle_dispute_bond_and_resolution_flow() {

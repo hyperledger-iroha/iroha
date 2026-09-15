@@ -29,7 +29,7 @@ use iroha::{
             privacy::{
                 RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkX509CertificatePolicyV1,
                 RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
-                RotatePrivacyZkX509CrlV1,
+                RotatePrivacyZkX509CrlV1, TransitionPrivacyProtocolLifecycleV1,
             },
         },
         parameter::{Parameter, TransactionParameter},
@@ -54,7 +54,6 @@ use iroha::{
     },
 };
 use iroha_core::{
-    privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::compiled_privacy_profile_v1,
     privacy_release_evidence::{
         PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1, PRIVACY_RELEASE_STAGE_STACK_BYTES_V1,
@@ -83,7 +82,6 @@ const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509St
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
-const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(240);
 const SEMANTIC_TIME_ADVANCE_TIMEOUT: Duration = Duration::from_secs(240);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -903,44 +901,6 @@ async fn next_incoming_height(client: &Client) -> Result<u64> {
         .checked_add(1)
         .ok_or_else(|| eyre!("incoming ZK-X509 governance height overflowed"))
 }
-async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
-    let start = privacy_capabilities(&client)
-        .await
-        .wrap_err("query height before deterministic ZK-X509 activation advance")?
-        .committed_height;
-    ensure!(
-        start <= target_height,
-        "cannot advance backwards from committed height {start} to {target_height}"
-    );
-    if start < target_height {
-        let first_incoming_height = start
-            .checked_add(1)
-            .ok_or_else(|| eyre!("ZK-X509 activation advance height overflowed"))?;
-        for incoming_height in first_incoming_height..=target_height {
-            submit_instruction(
-                client,
-                Log::new(
-                    Level::INFO,
-                    format!("ZK-X509 activation advance block {incoming_height}"),
-                ),
-                10_000_u64
-                    .checked_add(incoming_height)
-                    .ok_or_else(|| eyre!("ZK-X509 activation tag overflowed"))?,
-                "advance ZK-X509 activation height",
-            )
-            .await?;
-        }
-    }
-    let observed = privacy_capabilities(&client)
-        .await
-        .wrap_err("query height after deterministic ZK-X509 activation advance")?
-        .committed_height;
-    ensure!(
-        observed == target_height,
-        "ZK-X509 activation advance landed at height {observed}, expected {target_height}"
-    );
-    Ok(())
-}
 async fn advance_to_semantic_base_after_crl_second(
     clients: &[Client],
     submitter: &Client,
@@ -1120,13 +1080,9 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         )
         .await?;
         let proposed_at_height = next_incoming_height(&client).await?;
-        let activate_at_height = proposed_at_height
-            .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-            .ok_or_else(|| eyre!("native ZK-X509 activation height overflowed"))?;
         let proposed = compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height,
-                activate_at_height,
             },
         ));
         let (activation_transaction, _) = submit_instruction(
@@ -1153,27 +1109,22 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "exact proposed ZK-X509 capability row",
         )
         .await?;
-        timeout(
-            ACTIVATION_ADVANCE_TIMEOUT,
-            advance_to_exact_height(&client, activate_at_height),
-        )
-        .await
-        .map_err(|_| {
-            eyre!(
-                "advancing through the exact ZK-X509 activation lead exceeded \
-                 {ACTIVATION_ADVANCE_TIMEOUT:?}"
-            )
-        })??;
+        let activated_at_height = next_incoming_height(&client).await?;
         let active = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
             PrivacyActiveLifecycleV1 {
                 proposed_at_height,
-                activated_at_height: activate_at_height,
-                state_since_height: activate_at_height,
+                activated_at_height,
+                state_since_height: activated_at_height,
             },
         ));
+        let (active_transaction, _) = submit_instruction(&client,
+            TransitionPrivacyProtocolLifecycleV1::new(ZK_X509_PROTOCOL, active.lifecycle),
+            50_002, "explicitly activate the exact ZK-X509 profile").await?;
+        wait_for_transaction_on_peers(&all_clients, &active_transaction,
+            "explicit ZK-X509 activation convergence").await?;
         wait_for_available_snapshots(
             &all_clients,
-            activate_at_height,
+            activated_at_height,
             compiled_snapshot,
             active,
             PrivacyCapabilityReadinessV1::Unavailable(

@@ -359,6 +359,10 @@ mod tests {
             label: label.to_owned(),
         }
     }
+    fn cache_absence(label: &str) -> SnsRegistrationNotFoundV1 {
+        let selector = cache_selector(label);
+        SnsRegistrationNotFoundV1::new(selector.suffix_id, selector.label)
+    }
     fn cache_key(label: &str) -> SnsNameRecordCacheKey {
         let selector = cache_selector(label);
         SnsNameRecordCacheKey::from_selector(&selector)
@@ -398,6 +402,28 @@ mod tests {
         let response = access.into_response();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
+    #[tokio::test]
+    async fn registration_absence_http_response_is_typed_and_other_not_found_is_not() {
+        let error: SnsError = CoreSnsError::RegistrationNotFound {
+            suffix_id: iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID,
+            label: "dpn".to_owned(),
+        }.into();
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()["content-type"], "application/json");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.expect("body");
+        let body: SnsRegistrationNotFoundV1 = norito::json::from_slice(&bytes).expect("typed absence");
+        assert!(body.matches_selector(&NameSelectorV1::new(
+            iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID, "dpn").expect("selector")));
+        // Identical human-readable text from an unrelated NotFound must never
+        // gain the machine discriminator merely because its status is 404.
+        let other: SnsError = CoreSnsError::NotFound("registration `dpn` not found".to_owned()).into();
+        let response = other.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_ne!(response.headers()["content-type"], "application/json");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.expect("body");
+        assert!(norito::json::from_slice::<SnsRegistrationNotFoundV1>(&bytes).is_err());
+    }
     #[test]
     fn sns_name_cache_returns_found_within_same_block() {
         let cache = SnsNameRecordCache::new();
@@ -425,14 +451,14 @@ mod tests {
             key.clone(),
             12,
             Some("block-a".to_owned()),
-            "registration `missing-alias@hbl.sbp` not found".to_owned(),
+            cache_absence("missing-alias@hbl.sbp"),
         );
         match cache
             .get(&key, 12, Some("block-a"), 0)
             .expect("cache entry")
         {
-            Err(SnsError::NotFound(message)) => {
-                assert_eq!(message, "registration `missing-alias@hbl.sbp` not found");
+            Err(SnsError::RegistrationNotFound(absence)) => {
+                assert_eq!(absence, cache_absence("missing-alias@hbl.sbp"));
             }
             other => panic!("expected cached not found, got {other:?}"),
         }
@@ -446,7 +472,7 @@ mod tests {
             key.clone(),
             12,
             Some("block-a".to_owned()),
-            "registration `late-alias@hbl.sbp` not found".to_owned(),
+            cache_absence("late-alias@hbl.sbp"),
         );
         assert!(cache.get(&key, 13, Some("block-b"), 0).is_none());
         cache.insert_found(
@@ -471,7 +497,7 @@ mod tests {
             key.clone(),
             12,
             Some("old-tip".to_owned()),
-            "registration `same-height-alias@hbl.sbp` not found".to_owned(),
+            cache_absence("same-height-alias@hbl.sbp"),
         );
         assert!(cache.get(&key, 12, Some("new-tip"), 0).is_none());
         cache.insert_found(
@@ -537,7 +563,7 @@ mod tests {
                 cache_key(&format!("cache-entry-{index}")),
                 12,
                 Some("block-a".to_owned()),
-                "not found".to_owned(),
+                cache_absence(&format!("cache-entry-{index}")),
             );
         }
         assert_eq!(cache.len(), SNS_NAME_CACHE_MAX_ENTRIES);
@@ -546,7 +572,7 @@ mod tests {
             newest.clone(),
             12,
             Some("block-a".to_owned()),
-            "not found".to_owned(),
+            cache_absence("newest-cache-entry"),
         );
         assert_eq!(cache.len(), SNS_NAME_CACHE_MAX_ENTRIES);
         assert!(
@@ -570,7 +596,7 @@ mod tests {
                             cache_key(&format!("concurrent-cache-entry-{worker}-{index}")),
                             12,
                             Some("block-a".to_owned()),
-                            "not found".to_owned(),
+                            cache_absence(&format!("concurrent-cache-entry-{worker}-{index}")),
                         );
                     }
                 });

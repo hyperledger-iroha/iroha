@@ -2,7 +2,12 @@ const MERGE_CARRIERS_DIR: &str = "merge_carriers";
 const MERGE_CARRIER_MAX_BYTES: usize = 4 * 1024;
 const PRUNE_INTENT_FILE_NAME: &str = "prune_intent.norito";
 const PRUNE_INTENT_TEMP_FILE_NAME: &str = "prune_intent.norito.tmp";
-const PRUNE_INTENT_MAX_BYTES: usize = 4 * 1024;
+// Fixed framing plus a bounded canonical Vec<Hash>: Hash payload is 32 bytes,
+// with at most one u64 element prefix and 16 bytes of vector length framing.
+// Admission still charges the actual encoded intent, never this decoding ceiling.
+const PRUNE_INTENT_MAX_BYTES: usize = 4 * 1024
+    + 16
+    + MAX_NATIVE_AMX_PUBLICATION_INDEX_RECORDS * (Hash::LENGTH + std::mem::size_of::<u64>());
 const PRUNE_STAGE_INTENT: usize = 1;
 const PRUNE_STAGE_BLOCK_MARKER: usize = 2;
 const PRUNE_STAGE_BLOCK_INDEX: usize = 3;
@@ -351,8 +356,8 @@ struct KuraPruneCapacityAdmissionV3 {
     source_physical_bytes: u64,
     /// Pending canonical bytes excluded from the physical scan.
     pending_canonical_bytes: u64,
-    /// Outstanding post-WSV carrier reservation bytes.
-    post_wsv_reserved_bytes: u64,
+    /// Outstanding merge and Native publication reservation bytes.
+    lane_publication_reserved_bytes: u64,
     /// Outstanding certified frontier/bundle reservation bytes.
     certified_bundle_reserved_bytes: u64,
     /// Outstanding autonomous terminal-outcome reservation bytes.
@@ -369,7 +374,7 @@ struct KuraPruneCapacityAdmissionV3 {
 impl KuraPruneCapacityAdmissionV3 {
     fn reserved_bytes(self) -> Option<u64> {
         self.pending_canonical_bytes
-            .checked_add(self.post_wsv_reserved_bytes)
+            .checked_add(self.lane_publication_reserved_bytes)
             .and_then(|bytes| bytes.checked_add(self.certified_bundle_reserved_bytes))
             .and_then(|bytes| bytes.checked_add(self.autonomous_terminal_reserved_bytes))
     }
@@ -423,6 +428,9 @@ struct KuraPruneIntentV3 {
     retained_merge_tip_hash: Option<HashOf<MergeLedgerEntry>>,
     /// Exact authenticated retained sidecar rewrite and allocation projection.
     sidecar_rewrite: KuraPruneSidecarRewriteProjectionV3,
+    /// Sorted unique hashes of exact pending Native index records authorized for
+    /// above-target retirement. Missing listed records are completed forward progress.
+    native_amx_retirement_record_hashes: Vec<Hash>,
     /// Exact capacity proof admitted before publication and reused after crash.
     capacity: KuraPruneCapacityAdmissionV3,
 }

@@ -230,6 +230,20 @@ fn unit_hash(path: &Path) -> Result<String> {
     Ok(hash)
 }
 
+fn validate_candidate_inrou_scope(
+    scope: QualificationScopeV1,
+    slug: &str,
+    inrou: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> Result<()> {
+    match scope {
+        QualificationScopeV1::CoreTestnet if !inrou.enabled => Ok(()),
+        QualificationScopeV1::CoreTestnet => Err(eyre!(
+            "core_testnet requires the candidate Inrou runtime to be disabled"
+        )),
+        QualificationScopeV1::FullInrou => host::stopped_runtime::validate_config_slot(slug, inrou),
+    }
+}
+
 #[cfg(unix)]
 fn derive_validator_identities(
     inventory: &mut InventoryV1,
@@ -281,13 +295,11 @@ fn derive_validator_identities(
             &inventory.faucet_policy.asset_definition_id,
         )?;
         revalidate_pinned(&input, "validator config")?;
-        if inventory.qualification_scope.includes_inrou() || config.soracloud_runtime.inrou.enabled
-        {
-            host::stopped_runtime::validate_config_slot(
-                &validator.slug,
-                &config.soracloud_runtime.inrou,
-            )?;
-        }
+        validate_candidate_inrou_scope(
+            inventory.qualification_scope,
+            &validator.slug,
+            &config.soracloud_runtime.inrou,
+        )?;
         validate_candidate_probe_bind(&client.probe_origin, config.torii.address.value())?;
         if config.common.chain.to_string() != inventory.chain_id
             || config.common.peer.id.to_string() != client.peer_id

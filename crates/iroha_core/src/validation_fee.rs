@@ -4003,7 +4003,6 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge,
         iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge,
         iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase,
-        iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
         iroha_data_model::isi::zk::RegisterZkAsset,
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
@@ -4045,30 +4044,6 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::smart_contract_code::OfferContractOwnership,
         iroha_data_model::isi::smart_contract_code::AcceptContractOwnership,
         iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer,
-        // Privacy governance and bootstrap instructions affect only typed
-        // privacy state and rollback-safe privacy budgets. Proof admission is
-        // classified above because ZK-ACE can authorize a transparent transfer.
-        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
-        iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1,
-        iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
-        iroha_data_model::isi::privacy::PublishPrivacyRootV1,
-        iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1,
-        iroha_data_model::isi::privacy::BootstrapPrivacyProofManagedPoolV1,
-        iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1,
-        iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1,
-        iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1,
-        iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
-        iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
-        iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
-        // The complete all-Prepare control-lock carrier is still an ordinary
-        // sponsor-paid transaction; this classification only avoids requiring
-        // a second legacy inline treasury transfer inside its one-ISI payload.
-        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
-        iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
-        // The global private-settlement carrier mutates only opaque roots,
-        // nullifiers, commitments, ciphertexts, and its receipt. Its public
-        // network fee is charged by the ordinary signed fee path.
-        iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         // Kaigi only mutates domain metadata and emits diagnostic summaries;
         // its billing fields do not move assets or change supply.
         iroha_data_model::isi::kaigi::CreateKaigi,
@@ -4099,6 +4074,21 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::SetAssetDefinitionAlias,
         SetKeyValue<Trigger>,
     );
+    // Consult orthogonal, reviewed metadata only after payload-dependent asset guards.
+    // No Initial-executor authority disposition implies any fee-policy exemption.
+    if let Some((type_name, effect)) =
+        crate::smartcontracts::isi::registered_native_instruction_asset_effect(instruction)
+    {
+        use crate::smartcontracts::isi::NativeInstructionAssetEffect;
+        return match effect {
+            NativeInstructionAssetEffect::NoNumericAssetEffect => {
+                NativeInstructionDsEffectDisposition::AuditedNoDsEffect
+            }
+            NativeInstructionAssetEffect::MayAffectNumericAssets => {
+                NativeInstructionDsEffectDisposition::RejectKnownDsCapable(type_name)
+            }
+        };
+    }
     match crate::smartcontracts::isi::registered_native_instruction_type_name(instruction) {
         Some(type_name) => {
             NativeInstructionDsEffectDisposition::UnclassifiedDispatchable(type_name)

@@ -1012,7 +1012,6 @@ class HttpClientTransportTest {
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
         ).encodeTransaction(
             TransactionPayload(
-                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 networkId = networkId,
                 authority = authority,
                 creationTimeMs = creationTimeMs,
@@ -1154,7 +1153,6 @@ class HttpClientTransportTest {
         )
         val feePayment = testFeePayment(5_000L)
         val base = TransactionPayload(
-            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             networkId = networkId,
             authority = authority,
             creationTimeMs = 123_456L,
@@ -1233,7 +1231,6 @@ class HttpClientTransportTest {
         val invocation = ContractInvocation(contractAddress, codeHash, "ping")
         val intent = ContractCallDraftIntent(invocation, emptyMap())
         val payload = TransactionPayload(
-            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             networkId = networkId,
             authority = authority,
             creationTimeMs = 654_321L,

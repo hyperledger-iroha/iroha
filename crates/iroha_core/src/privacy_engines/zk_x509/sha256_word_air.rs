@@ -19,7 +19,7 @@ use super::io_air::{
     ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
 };
 #[cfg(test)]
-use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
+use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
@@ -1365,8 +1365,14 @@ mod tests {
         ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_TARGET_SOUNDNESS_BITS_V1,
     };
     use sha2::{Digest as _, Sha256};
-    fn test_digest_v1(value: u64) -> GoldilocksDigest384V1 {
-        GoldilocksDigest384V1::new([value; 6]).expect("canonical test digest")
+    fn test_digest_v1(value: u64) -> PrivacyOuterDigestV1 {
+        PrivacyOuterDigestV1::from_bytes(
+            value
+                .to_be_bytes()
+                .repeat(6)
+                .try_into()
+                .expect("48 fixture bytes"),
+        )
     }
     fn word_memory_challenges() -> ZkX509WordMemoryChallengesV1 {
         ZkX509WordMemoryChallengesV1 {
@@ -1409,8 +1415,8 @@ mod tests {
             &test_digest_v1(0x62),
         )
         .expect("I/O transcript");
-        let execution_root = test_digest_v1(0x63).to_le_bytes();
-        let sorted_root = test_digest_v1(0x64).to_le_bytes();
+        let execution_root = test_digest_v1(0x63).to_bytes();
+        let sorted_root = test_digest_v1(0x64).to_bytes();
         transcript
             .absorb(
                 b"zk-x509-io-trace-commitments-v1",
@@ -1612,8 +1618,8 @@ mod tests {
     fn word_memory_challenges_are_commitment_bound_and_fail_closed() {
         let profile = test_digest_v1(0x11);
         let public = test_digest_v1(0x22);
-        let main_root = test_digest_v1(0x33).to_le_bytes();
-        let sorted_root = test_digest_v1(0x44).to_le_bytes();
+        let main_root = test_digest_v1(0x33).to_bytes();
+        let sorted_root = test_digest_v1(0x44).to_bytes();
         let mut transcript = TransparentTranscriptV1::new(
             super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"zk-x509-test-suite",

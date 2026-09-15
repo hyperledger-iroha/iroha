@@ -34,8 +34,96 @@ pub(super) fn reconcile(admitted: &HostAdmission, cleanup: bool) -> Result<()> {
     };
     let slot = owner_slot(&validator.slug)?;
     let vacant = || require_vacant_unit(admitted, true);
+    // The candidate scope cannot erase ownership left by the admitted old runtime.
+    // A core-only candidate never starts Inrou, so a vacant/disabled prior runtime
+    // needs no guest tooling. Still prove absence of the reserved worker identity
+    // and owner paths before accepting this boundary.
+    if !admitted.inventory.qualification_scope.includes_inrou()
+        && !prior_inrou_enabled(validator)?
+        && !retained_owner_lock(slot)?
+    {
+        vacant()?;
+        let check = || stopped_owner_deadline(admitted.action_deadline);
+        let identity =
+            iroha_config::parameters::defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE
+                + u32::try_from(slot)?;
+        require_identity_absent(Path::new("/proc"), identity, &check)?;
+        preflight_cgroups(
+            Path::new("/sys/fs/cgroup/iroha-inrou-v1"),
+            slot,
+            false,
+            &stopped_cgroup_custody,
+            &check,
+        )?;
+        return vacant();
+    }
     let plan = preflight_stopped_owner(slot, cleanup, cleanup, admitted.action_deadline, &vacant)?;
     apply_stopped_owner(&plan, cleanup, &vacant)
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn retained_owner_lock(slot: usize) -> Result<bool> {
+    let path = PathBuf::from(format!("/run/iroha-inrou-firewall-v1-slot-{slot}.lock"));
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true), // Full custody validation happens before any cleanup.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn prior_inrou_enabled(validator: &ValidatorV1) -> Result<bool> {
+    use iroha_config::{
+        base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
+        parameters::actual,
+    };
+    if validator.is_vacant() {
+        return Ok(false);
+    }
+    let entry = validator.admitted_release()?.artifact("config")?;
+    let path = Path::new(&entry.path);
+    require_root_no_symlink_ancestors(path, "stopped prior validator config")?;
+    let (file, snapshot) = open_pinned_regular(path, "stopped prior validator config")?;
+    if snapshot.uid != 0
+        || snapshot.mode & 0o7777 != u32::from(entry.mode)
+        || snapshot.len != entry.size
+    {
+        return Err(eyre!("stopped prior validator config custody drifted"));
+    }
+    let bytes = zeroize::Zeroizing::new(read_pinned_bytes(
+        path,
+        "stopped prior validator config",
+        file,
+        &snapshot,
+        MAX_TOML_SOURCE_BYTES as u64,
+    )?);
+    if sha256_hex(&bytes) != entry.sha256 {
+        return Err(eyre!(
+            "stopped prior validator config differs from the admitted bytes"
+        ));
+    }
+    let text =
+        std::str::from_utf8(&bytes).map_err(|_| eyre!("prior validator config is not UTF-8"))?;
+    let table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("prior validator config is not TOML"))?;
+    let config = actual::Root::from_toml_source(TomlSource::new_sensitive(
+        path.to_path_buf(),
+        table,
+        crate::soracloud::zeroize_taira_toml_table,
+    ))
+    .map_err(|_| eyre!("prior validator config failed typed admission"))?;
+    prior_inrou_config_enabled(&validator.slug, &config.soracloud_runtime.inrou)
+}
+
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn prior_inrou_config_enabled(
+    slug: &str,
+    inrou: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> Result<bool> {
+    if inrou.enabled {
+        validate_config_slot(slug, inrou)?;
+    }
+    Ok(inrou.enabled)
 }
 
 /// One authenticated stopped owner held across cohort preflight and mutation.
@@ -1052,11 +1140,14 @@ mod tests {
                 ..Default::default()
             };
             validate_config_slot(slug, &config)?;
+            assert!(prior_inrou_config_enabled(slug, &config)?);
             config.portable_vm_gid = NonZeroU32::new(70000 + (u32::try_from(slot)? + 1) % 4);
             assert!(validate_config_slot(slug, &config).is_err());
+            assert!(prior_inrou_config_enabled(slug, &config).is_err());
             config.portable_vm_gid = identity;
             config.enabled = false;
             assert!(validate_config_slot(slug, &config).is_err());
+            assert!(!prior_inrou_config_enabled(slug, &config)?);
         }
         assert!(owner_slot("taira-validator-0").is_err());
         Ok(())

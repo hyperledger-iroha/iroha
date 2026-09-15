@@ -3011,8 +3011,8 @@ mod tests {
                 wire_magic: Default::default(),
                 catalog_commitment: Default::default(),
                 protocol_id: PrivacyProtocolIdV1::PqMaspStarkV1,
-                proof_system_id: PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64,
-                engine_id: PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64,
+                proof_system_id: PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
+                engine_id: PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
                 parameter_id: statement.context.parameter_id,
                 parameter_digest: statement.context.parameter_digest,
                 verifier_digest: statement.context.verifier_digest,
@@ -5956,7 +5956,6 @@ mod tests {
         let mut proposed = activation;
         proposed.lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
             proposed_at_height: 1,
-            activate_at_height: 20,
         });
         assert!(matches!(
             verify_privacy_envelope_v1(

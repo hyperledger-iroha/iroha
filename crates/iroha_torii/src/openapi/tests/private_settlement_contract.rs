@@ -618,6 +618,44 @@ fn private_settlement_tagged_v1_dtos_have_exact_closed_variants() {
         .as_array()
         .expect("receipt variants");
     assert_eq!(receipt.len(), 3);
+    let pending = receipt
+        .iter()
+        .find(|choice| choice["properties"]["status"]["const"].as_str() == Some("pending"))
+        .expect("pending receipt variant");
+    let pending_value = &pending["properties"]["value"];
+    assert_eq!(pending_value["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(
+        pending_value["properties"]
+            .as_object()
+            .expect("pending properties")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["bundle_id"])
+    );
+    assert_eq!(
+        pending_value["required"]
+            .as_array()
+            .expect("pending required")
+            .iter()
+            .map(|field| field.as_str().expect("required name"))
+            .collect::<Vec<_>>(),
+        vec!["bundle_id"]
+    );
+    let typed_pending = iroha_torii_shared::private_settlement_api::PrivateSettlementBundleReceiptResponseV1::Pending {
+        bundle_id: iroha_crypto::Hash::new(b"public terminal absence"),
+    };
+    let typed_pending = norito::json::to_value(&typed_pending).expect("typed pending JSON");
+    assert_eq!(typed_pending["status"].as_str(), Some("pending"));
+    assert_eq!(
+        typed_pending["value"]
+            .as_object()
+            .expect("typed pending value")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["bundle_id"])
+    );
     let statuses = receipt
         .iter()
         .map(|choice| {

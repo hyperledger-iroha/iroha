@@ -405,7 +405,11 @@ fn validate_paid_plan(
     Ok(instructions)
 }
 
-fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Result<BlockingClient> {
+fn preflight<C: RunContext>(
+    context: &C,
+    manifest: &ManifestV1,
+    require_write_permissions: bool,
+) -> Result<BlockingClient> {
     require(
         !context.input_instructions()
             && !context.output_instructions()
@@ -897,6 +901,35 @@ fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
 }
 
 fn saved<C: RunContext>(context: &mut C, args: SavedArgs, apply: bool) -> Result<()> {
+    let report = run_saved(context, args, apply)?;
+    context.print_data(&report)
+}
+
+/// Read-only native entry point for the anchored finality/four-peer verification layer.
+/// The returned request never asserts that those independent verifications succeeded.
+pub(crate) fn verification_request<C: RunContext>(
+    context: &C,
+    journal_dir: &Path,
+    operation_id: &str,
+) -> Result<VerificationRequestV1> {
+    require(
+        context.config().chain.to_string() == "fc56984b-2be7-431d-840e-21514d1883f0"
+            && context.config().account_chain_discriminant == 369,
+        "verification requires the canonical Taira profile",
+    )?;
+    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+    Ok(run_saved(
+        context,
+        SavedArgs {
+            journal_dir: journal_dir.to_owned(),
+            operation_id: operation_id.into(),
+        },
+        false,
+    )?
+    .verification)
+}
+
+fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result<ReportV1> {
     operation_id(&args.operation_id)?;
     let journal = Journal::open(&args.journal_dir.join(&args.operation_id), false)?;
     let plan: PlanV1 = journal.read_json("plan.json")?;
@@ -1005,7 +1038,7 @@ fn saved<C: RunContext>(context: &mut C, args: SavedArgs, apply: bool) -> Result
             break;
         }
     }
-    context.print_data(&phase_report(&plan, observations))
+    Ok(phase_report(&plan, observations))
 }
 
 #[derive(JsonSerialize)]
