@@ -83,21 +83,29 @@ impl Client {
         builder
     }
 
-    /// Fetch the exact canonical, result-bearing executed block wire containing `committed`.
+    /// Fetch canonical block wire bound to an independently authenticated execution commitment.
     ///
     /// The returned bytes are accepted only when the route yields bounded Norito, the block
     /// round-trips to the byte-identical canonical [`SignedBlock`] wire, its requested height and
-    /// block hash match, its entrypoint/result Merkle material is internally consistent, and the
-    /// supplied successful committed transaction verifies against that exact carrier block.
+    /// block hash match, its external-entrypoint/result roots and execution context match the
+    /// header commitments, its Merkle caches/counts are consistent, and the supplied successful
+    /// transaction verifies at its exact ordinary index or certified-merge reference.
+    ///
+    /// The required commitment must come from an independently verified, externally anchored
+    /// native finality proof for this carrier. Its exact wire hash and length authenticate results
+    /// and time triggers, which the consensus header hash alone does not bind. This reader verifies
+    /// that binding; it does not establish finality or trust in a caller-supplied commitment.
     ///
     /// # Errors
     ///
     /// Returns an error for transport, status, media-type, size, decode, canonicality, height,
-    /// hash, result-shape, Merkle-cache, transaction-result, or inclusion-proof failures.
+    /// hash, result-shape, Merkle-cache, execution-commitment, transaction-result, or inclusion-proof
+    /// failures.
     pub fn get_canonical_executed_block_wire(
         &self,
         height: NonZeroU64,
         committed: &CommittedTransaction,
+        execution_commitment: &iroha_data_model::block::consensus_v2::ExecutionCommitment,
     ) -> Result<Vec<u8>> {
         self.ensure_data_model_compatibility()?;
         let path =
@@ -150,9 +158,9 @@ impl Client {
                 "committed transaction carries a rejected execution result"
             ));
         }
-        if !committed.verify_inclusion_in_block(&block) {
+        if !committed.verify_inclusion_in_authenticated_execution(&block, execution_commitment) {
             return Err(eyre!(
-                "committed transaction does not verify against the exact executed block"
+                "committed transaction does not verify against the authenticated execution commitment"
             ));
         }
         Ok(canonical)

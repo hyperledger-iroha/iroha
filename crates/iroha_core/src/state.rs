@@ -1478,7 +1478,7 @@ macro_rules! build_world_transaction_from_fields {
         [$($suffix:ident,)*]
     ) => {
         WorldTransaction {
-            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
+            dataspace_catalog: $state.dataspace_catalog.clone(),
             axt_last_authorization_identities: axt_authorization_identities($state),
             axt_authorization_transitioned: BTreeSet::new(),
             $($prefix: $state.$prefix.transaction(),)*
@@ -1489,6 +1489,7 @@ macro_rules! build_world_transaction_from_fields {
             axt_lane_map: $axt_lane_map,
             current_dataspace_id: None,
             external_event_sink: &mut $state.external_event_buf,
+            dataspace_catalog_sink: &mut $state.dataspace_catalog,
             external_event_buf: Vec::new(),
             #[cfg(feature = "telemetry")]
             telemetry: $telemetry,
@@ -3937,6 +3938,9 @@ impl MergeAdmissionState {
 /// Errors surfaced when applying lane lifecycle updates.
 #[derive(Debug, ThisError)]
 pub enum LaneLifecycleError {
+    /// A committed runtime catalog request or retained payload failed validation.
+    #[error("invalid committed Nexus runtime catalog: {0}")]
+    RuntimeCatalog(String),
     /// Prospective geometry must leave room for a complete merge execution transcript.
     #[error(transparent)]
     MergeAuthorityGeometry(#[from] iroha_data_model::merge::MergeLaneAuthorityGeometryError),
@@ -7026,6 +7030,8 @@ impl WorldBlock<'_> {
 pub struct WorldTransaction<'block, 'world> {
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
+    /// Publish the transaction's derived catalog only when its World changes are applied.
+    dataspace_catalog_sink: &'block mut iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellTransaction<'block, 'world, Parameters>,
     /// Identifications of discovered peers.
@@ -14548,6 +14554,10 @@ pub struct StateTransaction<'block, 'state> {
     block_lane_incarnation_activation_heights: &'block mut BTreeMap<LaneId, u64>,
     /// Parent block Nexus snapshot updated only when this transaction is applied.
     block_nexus: &'block mut iroha_config::parameters::actual::Nexus,
+    /// Parent block manifest snapshot published with accepted lifecycle geometry.
+    block_lane_manifests: &'block mut LaneManifestRegistryHandle,
+    /// Parent block privacy snapshot published with accepted lifecycle manifests.
+    block_lane_privacy_registry: &'block mut LanePrivacyRegistryHandle,
     /// Parent block incarnation map updated only when this transaction is applied.
     block_lane_incarnations: &'block mut BTreeMap<LaneId, Hash>,
     /// Parent block incarnation lineage updated only when this transaction is applied.
@@ -25934,9 +25944,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn apply(self) {
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
-            // Runtime-only alias context; the canonical stores below carry all
-            // persisted effects.
-            dataspace_catalog: _,
+            dataspace_catalog,
+            dataspace_catalog_sink,
             parameters,
             peers,
             domain_committees,
@@ -26227,6 +26236,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             axt_authorization_transitioned: _,
             current_dataspace_id: _,
         } = self;
+        *dataspace_catalog_sink = dataspace_catalog;
         if !external_event_buf.is_empty() {
             external_event_sink.append(&mut external_event_buf);
         }
@@ -30927,8 +30937,8 @@ impl State {
                     referenda_with_expired: u64::try_from(referenda_with_retained_expired.len())
                         .unwrap_or(u64::MAX),
                 };
+                stx.apply();
             }
-            stx.apply();
         }
         {
             let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
@@ -44911,6 +44921,7 @@ impl State {
         &mut self,
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
+        nexus = self.nexus_with_committed_catalog(nexus)?;
         iroha_data_model::merge::validate_merge_lane_authority_geometry(
             &nexus.lane_catalog,
             &nexus.dataspace_catalog,
@@ -46176,6 +46187,7 @@ impl State {
             let mut nexus = self.nexus.write();
             nexus.lane_catalog = update.updated_catalog.clone();
             nexus.lane_config = update.updated_lane_config.clone();
+            nexus.dataspace_catalog = update.updated_dataspace_catalog.clone();
             if pending.transition.advances_autoscale_cooldown() {
                 nexus.autoscale.last_transition_height = pending.transition_height;
             }
@@ -46415,22 +46427,84 @@ impl State {
                 block_height,
             );
         }
-        let expected_update = prepare_lane_lifecycle_update(
-            &nexus,
+        let mut prospective_nexus = nexus.clone();
+        if let Some(runtime) = &pending.runtime_catalog {
+            if pending.transition != PendingAutoscaleTransition::Manual {
+                return Err(runtime_catalog_invalid(
+                    "only signed manual transitions may add runtime catalog authority",
+                ));
+            }
+            prospective_nexus.dataspace_catalog = runtime_catalog_transition_dataspaces(
+                &nexus,
+                self.lane_manifests.read().as_ref(),
+                &self.world.view(),
+                runtime,
+                &pending.plan,
+            )?;
+        }
+        let derivation_header_hash = if let Some(batch) = staged_merge_entry
+            .filter(|_| pending.runtime_catalog.is_some())
+            .and_then(|entry| entry.execution_batch.as_ref())
+        {
+            let entry = staged_merge_entry.expect("the exact execution batch has its owning entry");
+            if !crate::merge::merge_execution_batch_commitments_match(batch) {
+                return Err(runtime_catalog_invalid(
+                    "catalog effect has invalid certified execution batch commitments",
+                ));
+            }
+            if batch.application_block_header.height().get() != block_height
+                || entry.merge_qc.carrier_height != block_height
+                || batch.application_block_header.prev_block_hash()
+                    != Some(entry.merge_qc.carrier_parent_hash)
+                || batch.application_block_header.view_change_index() != entry.merge_qc.view
+            {
+                return Err(runtime_catalog_invalid(
+                    "catalog effect differs from its certified application header",
+                ));
+            }
+            // State admission and final commit bind this batch to the exact carrier. Its
+            // application header predates the carrier roots and owns incarnation derivation.
+            batch.application_block_header.hash()
+        } else {
+            block_header_hash
+        };
+        let mut expected_update = prepare_lane_lifecycle_update(
+            &prospective_nexus,
             &lane_incarnations,
             &lane_incarnation_lineage,
             &lane_incarnation_activation_heights,
             &self.network_id,
-            block_header_hash,
+            derivation_header_hash,
             &pending.plan,
             pending.transition_height,
             allow_autoscale_managed_changes,
         )?;
-        let committed_lane_manifests = rebind_lane_manifests_for_lifecycle(
-            self.lane_manifests.read().as_ref(),
+        ensure_runtime_catalog_lanes_preserved(
+            &self.world.view(),
+            &nexus.lane_catalog,
             &expected_update.updated_catalog,
-            &nexus.governance,
         )?;
+        expected_update.previous_dataspace_catalog = nexus.dataspace_catalog.clone();
+        expected_update.updated_dataspace_catalog = prospective_nexus.dataspace_catalog.clone();
+        let committed_lane_manifests = if let Some(runtime) = &pending.runtime_catalog {
+            Arc::new(
+                self.lane_manifests
+                    .read()
+                    .with_runtime_additions(
+                        &runtime.manifests,
+                        &expected_update.updated_catalog,
+                        &prospective_nexus.dataspace_catalog,
+                        &nexus.governance,
+                    )
+                    .map_err(runtime_catalog_invalid)?,
+            )
+        } else {
+            rebind_lane_manifests_for_lifecycle(
+                self.lane_manifests.read().as_ref(),
+                &expected_update.updated_catalog,
+                &nexus.governance,
+            )?
+        };
         if committed_lane_manifests.consensus_policy_digest()
             != pending.updated_lane_manifests.consensus_policy_digest()
         {
@@ -46446,6 +46520,7 @@ impl State {
                 reason: err.message(),
             })?;
         if expected_update.updated_catalog != update.updated_catalog
+            || expected_update.updated_dataspace_catalog != update.updated_dataspace_catalog
             || !lane_config_entries_match(
                 &expected_update.updated_lane_config,
                 &update.updated_lane_config,
@@ -46587,7 +46662,11 @@ impl State {
             }
         }
         for lane in update.updated_catalog.lanes() {
-            if nexus.dataspace_catalog.by_id(lane.dataspace_id).is_none() {
+            if prospective_nexus
+                .dataspace_catalog
+                .by_id(lane.dataspace_id)
+                .is_none()
+            {
                 return Err(LaneLifecycleError::UnknownDataspace(lane.dataspace_id));
             }
         }
@@ -46600,7 +46679,7 @@ impl State {
         validate_nexus_routing_policy(
             &nexus.routing_policy,
             &update.updated_catalog,
-            &nexus.dataspace_catalog,
+            &prospective_nexus.dataspace_catalog,
         )
     }
     fn validate_committed_autoscale_drain_metadata_update(
@@ -46612,7 +46691,11 @@ impl State {
         block_height: u64,
     ) -> Result<(), LaneLifecycleError> {
         let update = &pending.catalog_update;
-        if !pending.plan.additions.is_empty() || !pending.plan.retire.is_empty() {
+        if !pending.plan.additions.is_empty()
+            || !pending.plan.retire.is_empty()
+            || pending.runtime_catalog.is_some()
+            || update.updated_dataspace_catalog != nexus.dataspace_catalog
+        {
             return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
                 transition: pending.transition.name(),
                 reason: "drain metadata transitions must not change lane geometry",
@@ -47512,6 +47595,10 @@ impl State {
     }
 }
 include!("state/lane_lifecycle_support.rs");
+include!("state/runtime_catalog.rs");
+include!("state/runtime_catalog_startup.rs");
+include!("state/runtime_catalog_commit.rs");
+include!("state/merge_runtime_effects.rs");
 fn prepare_lane_lifecycle_update(
     nexus: &iroha_config::parameters::actual::Nexus,
     previous_lane_incarnations: &BTreeMap<LaneId, Hash>,
@@ -47675,6 +47762,7 @@ fn prepare_lane_lifecycle_update(
     Ok(LaneLifecycleCatalogUpdate {
         previous_catalog: nexus.lane_catalog.clone(),
         previous_dataspace_catalog: nexus.dataspace_catalog.clone(),
+        updated_dataspace_catalog: nexus.dataspace_catalog.clone(),
         previous_routing_policy: nexus.routing_policy.clone(),
         previous_autoscale: nexus.autoscale,
         updated_catalog,
@@ -51591,7 +51679,7 @@ fn compute_execution_policy_digest_v1(
         iroha_config::parameters::actual::nexus_consensus_policy_digest_with_runtime_policies(
             nexus,
             compliance_policy_digest,
-            Some(lane_manifests.consensus_policy_digest()),
+            Some(lane_manifests.baseline_consensus_policy_digest()),
         )?;
     Ok(
         iroha_config::parameters::actual::execution_policy_digest_v1(
@@ -52589,6 +52677,8 @@ impl<'state> StateBlock<'state> {
         let sccp_verifier_work_after_block = self.sccp_verifier_work_in_block;
         let privacy_budget_after_block = self.privacy_budget_in_block;
         let nexus = self.nexus.clone();
+        let lane_manifests = Arc::clone(&self.lane_manifests);
+        let lane_privacy_registry = Arc::clone(&self.lane_privacy_registry);
         let lane_incarnations = self.lane_incarnations.clone();
         let lane_incarnation_lineage = self.lane_incarnation_lineage.clone();
         let lane_incarnation_activation_heights = self.lane_incarnation_activation_heights.clone();
@@ -52630,13 +52720,15 @@ impl<'state> StateBlock<'state> {
             block_lane_incarnation_activation_heights: &mut self
                 .lane_incarnation_activation_heights,
             block_nexus: &mut self.nexus,
+            block_lane_manifests: &mut self.lane_manifests,
+            block_lane_privacy_registry: &mut self.lane_privacy_registry,
             block_lane_incarnations: &mut self.lane_incarnations,
             block_lane_incarnation_lineage: &mut self.lane_incarnation_lineage,
             block_pending_lane_lifecycle: &mut self.pending_autoscale_lifecycle,
             lane_lifecycle_already_staged_in_block,
             pending_lane_lifecycle: None,
-            lane_manifests: self.lane_manifests.clone(),
-            lane_privacy_registry: self.lane_privacy_registry.clone(),
+            lane_manifests,
+            lane_privacy_registry,
             lane_compliance: self.lane_compliance.clone(),
             fraud_monitoring: self.fraud_monitoring.clone(),
             zk,
@@ -52815,17 +52907,20 @@ impl<'state> StateBlock<'state> {
         Self::merge_execution_write_set_root_from_overlay(
             &self.world,
             &self.merge_carrier_entrypoints,
+            self.merge_execution_runtime_effects().as_ref(),
         )
     }
     fn merge_execution_write_set_root_from_overlay(
         world: &WorldBlock<'_>,
         merge_carrier_entrypoints: &HashSet<HashOf<TransactionEntrypoint>>,
+        runtime_effects: Option<&MergeRuntimeCatalogEffectsV1>,
     ) -> Hash {
         let external_event_bytes = Self::merge_execution_external_event_bytes(world);
         Self::merge_execution_write_set_root_from_overlay_with_external_events(
             world,
             merge_carrier_entrypoints,
             external_event_bytes.as_deref(),
+            runtime_effects,
         )
     }
     fn merge_execution_external_event_bytes(world: &WorldBlock<'_>) -> Option<Vec<u8>> {
@@ -52835,8 +52930,13 @@ impl<'state> StateBlock<'state> {
         world: &WorldBlock<'_>,
         merge_carrier_entrypoints: &HashSet<HashOf<TransactionEntrypoint>>,
         external_event_bytes: Option<&[u8]>,
+        runtime_effects: Option<&MergeRuntimeCatalogEffectsV1>,
     ) -> Hash {
         let mut encoded = world.merge_execution_write_set_bytes();
+        if let Some(runtime_effects) = runtime_effects {
+            append_merge_write_set_component(&mut encoded, b"runtime_catalog_effects_v1");
+            append_merge_write_set_component(&mut encoded, &runtime_effects.encode());
+        }
         if let Some(external_event_bytes) = external_event_bytes {
             append_merge_write_set_component(&mut encoded, b"external_events");
             append_merge_write_set_component(&mut encoded, external_event_bytes);
@@ -53209,6 +53309,7 @@ impl<'state> StateBlock<'state> {
                 &self.world,
                 &self.merge_carrier_entrypoints,
                 authorization.external_event_bytes.as_deref(),
+                self.merge_execution_runtime_effects().as_ref(),
             );
         if !Self::canonical_wsv_merge_commit_authorization_matches(
             authorization,
@@ -53301,12 +53402,10 @@ impl<'state> StateBlock<'state> {
                 "autonomous merge carrier metadata differs from the required {required_surface} surface"
             )));
         }
-        if self.pending_autoscale_lifecycle.is_some()
-            || self.pending_da_commitments.is_some()
+        if self.pending_da_commitments.is_some()
             || self.pending_da_pin_intents.is_some()
             || !self.verified_lane_relay_records.is_empty()
             || topology_metadata_invalid
-            || self.world.parameters.is_dirty()
             || !self.axt_envelopes.is_empty()
             || !self.fastpq_transcripts.is_empty()
             || !self.batch_transfer_outcomes.is_empty()
@@ -53319,24 +53418,7 @@ impl<'state> StateBlock<'state> {
                     .to_owned(),
             ));
         }
-        let state_nexus = self.state_ref.nexus_snapshot();
-        let nexus_changed = self.nexus.lane_catalog != state_nexus.lane_catalog
-            || iroha_config::parameters::actual::nexus_consensus_policy_digest(&self.nexus)
-                != iroha_config::parameters::actual::nexus_consensus_policy_digest(&state_nexus);
-        if nexus_changed
-            || self.lane_incarnations != self.state_ref.lane_incarnations_snapshot()
-            || self.lane_incarnation_lineage != self.state_ref.lane_incarnation_lineage_snapshot()
-            || self.lane_incarnation_activation_heights
-                != self
-                    .state_ref
-                    .lane_incarnation_activation_heights_snapshot()
-            || compute_zk_consensus_policy_hash(&self.zk)
-                != compute_zk_consensus_policy_hash(&self.state_ref.zk_snapshot())
-        {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "autonomous merge execution changed runtime lane configuration".to_owned(),
-            ));
-        }
+        self.validate_merge_runtime_catalog_effects()?;
         Ok(())
     }
     fn stage_queue_plan_admissions(
@@ -54439,6 +54521,7 @@ impl<'state> StateBlock<'state> {
         } else {
             Ok(())
         };
+        let merge_runtime_effects = self.merge_execution_runtime_effects();
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
             state_ref,
@@ -54541,6 +54624,7 @@ impl<'state> StateBlock<'state> {
                         &world,
                         &merge_carrier_entrypoints,
                         authorization.external_event_bytes.as_deref(),
+                        merge_runtime_effects.as_ref(),
                     );
                 if !Self::canonical_wsv_merge_commit_authorization_matches(
                     &authorization,
@@ -54698,6 +54782,19 @@ impl<'state> StateBlock<'state> {
             } else {
                 None
             };
+        if let Err(err) = state_ref.validate_runtime_catalog_block_overlay(
+            &world,
+            pending_autoscale_lifecycle.as_ref(),
+            block_height,
+        ) {
+            error!(
+                block_height,
+                block = %block_header_hash,
+                ?err,
+                "final block overlay differs from its accepted runtime catalog transition"
+            );
+            return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+        }
         if let Some(pending) = &pending_autoscale_lifecycle {
             let staking_validation_result = {
                 let nexus = state_ref.nexus.read();
@@ -55251,6 +55348,7 @@ impl<'state> StateBlock<'state> {
                 &self.world,
                 &self.merge_carrier_entrypoints,
                 authorization.external_event_bytes.as_deref(),
+                self.merge_execution_runtime_effects().as_ref(),
             );
         if !Self::canonical_wsv_merge_commit_authorization_matches(
             authorization,
@@ -55266,8 +55364,8 @@ impl<'state> StateBlock<'state> {
                 "finalized carrier economic authorization is stale or mismatched".to_owned(),
             ));
         }
-        if self.pending_autoscale_lifecycle.is_some()
-            || self.pending_da_commitments.is_some()
+        self.validate_merge_runtime_catalog_effects()?;
+        if self.pending_da_commitments.is_some()
             || self.pending_da_pin_intents.is_some()
             || !self.verified_lane_relay_records.is_empty()
         {
@@ -56002,6 +56100,7 @@ impl<'state> StateBlock<'state> {
         let update = LaneLifecycleCatalogUpdate {
             previous_catalog: self.nexus.lane_catalog.clone(),
             previous_dataspace_catalog: self.nexus.dataspace_catalog.clone(),
+            updated_dataspace_catalog: self.nexus.dataspace_catalog.clone(),
             previous_routing_policy: self.nexus.routing_policy.clone(),
             previous_autoscale: self.nexus.autoscale,
             updated_catalog,
@@ -56032,6 +56131,7 @@ impl<'state> StateBlock<'state> {
             transition,
             transition_height,
             expected_incarnation_root,
+            runtime_catalog: None,
         });
         Ok(())
     }
@@ -56386,6 +56486,7 @@ impl<'state> StateBlock<'state> {
             transition,
             transition_height: 0,
             expected_incarnation_root,
+            runtime_catalog: None,
         });
         let _ = self.refresh_axt_policies_from_directory();
         #[cfg(feature = "telemetry")]
@@ -63461,6 +63562,11 @@ impl StateTransaction<'_, '_> {
             block_height,
             false,
         )?;
+        ensure_runtime_catalog_lanes_preserved(
+            &self.world,
+            &self.nexus.lane_catalog,
+            &lifecycle_update.updated_catalog,
+        )?;
         let mut prospective_nexus = self.nexus.clone();
         prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
         prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
@@ -63476,6 +63582,10 @@ impl StateTransaction<'_, '_> {
             &lifecycle_update.updated_catalog,
             &self.nexus.governance,
         )?;
+        self.lane_manifests = Arc::clone(&updated_lane_manifests);
+        self.lane_privacy_registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(
+            updated_lane_manifests.as_ref(),
+        ));
         self.world.mark_axt_lane_incarnation_transitions(
             &self.lane_incarnations,
             &lifecycle_update.updated_lane_incarnations,
@@ -63494,6 +63604,7 @@ impl StateTransaction<'_, '_> {
             transition: PendingAutoscaleTransition::Manual,
             transition_height: block_height,
             expected_incarnation_root: payload.expected_incarnation_root,
+            runtime_catalog: None,
         });
         Ok(())
     }
@@ -64638,6 +64749,8 @@ impl StateTransaction<'_, '_> {
             lane_incarnation_lineage,
             lane_incarnation_activation_heights,
             block_nexus,
+            block_lane_manifests,
+            block_lane_privacy_registry,
             block_lane_incarnations,
             block_lane_incarnation_lineage,
             block_lane_incarnation_activation_heights,
@@ -64691,6 +64804,10 @@ impl StateTransaction<'_, '_> {
         } = self;
         if let Some(pending) = pending_lane_lifecycle {
             *block_nexus = nexus.clone();
+            *block_lane_manifests = Arc::clone(&pending.updated_lane_manifests);
+            *block_lane_privacy_registry = Arc::new(LanePrivacyRegistry::from_manifest_registry(
+                pending.updated_lane_manifests.as_ref(),
+            ));
             *block_lane_incarnations = lane_incarnations;
             *block_lane_incarnation_lineage = lane_incarnation_lineage;
             *block_lane_incarnation_activation_heights = lane_incarnation_activation_heights;

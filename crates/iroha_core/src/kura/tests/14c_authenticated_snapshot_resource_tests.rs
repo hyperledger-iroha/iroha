@@ -111,7 +111,8 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
         kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
             &state,
-        ),
+        )
+        .expect("valid committed catalog"),
         execution_policy_hash: crate::sumeragi::v2_recovery::committed_execution_policy_hash(
             &state,
         )
@@ -213,10 +214,15 @@ fn authenticate_signed_snapshot_physical_fixture(
     let plan = crate::sumeragi::plan_v2_startup_replay(&fixture.kura).unwrap();
     assert_eq!(plan.audited_bootstrap_prefix_height(), 3);
     assert_eq!(plan.first_full_body_height(), None);
-    let authorization =
-        crate::sumeragi::authenticate_v2_snapshot_startup(&fixture.kura, &state, &plan, &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state).expect("fixture startup policy"))
-            .unwrap()
-            .expect("the public exact-boundary verifier must mint the consumed token");
+    let authorization = crate::sumeragi::authenticate_v2_snapshot_startup(
+        &fixture.kura,
+        &state,
+        &plan,
+        &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+            .expect("fixture startup policy"),
+    )
+    .unwrap()
+    .expect("the public exact-boundary verifier must mint the consumed token");
     assert_eq!(authorization.mode(), fixture.record.context.mode);
     authorization
 }

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-12.
+Last updated: 2026-09-14.
 
 This is the outstanding-outcome view for Iroha 3's first release. Component owners
 below are code responsibilities, not invented individual assignments. Local
@@ -15,7 +15,7 @@ migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
 
-Basic Taira and API21/FE14 are deployed on `test.inori.co.il`, with public Applied confirmation and authenticated no-funds login/wallet/balance acceptance; see [current evidence](status.md). Continue BPNG-specific allocation, contract and workflow qualification using the existing accounts and current native constructors, and configure partner commissioning inputs before claiming its invoice flow. Preserve keys outside Git and reuse warm build lanes. Subsequent consensus work must separate durable causal identity from process-generation completion fences and qualify retained gossip across delayed State publication; these broader crash/concurrency obligations are not established by the basic sunny-day release. Advanced workload and full release matrices remain separate; prior attempt history is [retained here](docs/history/2026-09-11/taira-before-core-release94.md).
+Finish native118 retained-history qualification and rollout, verify validator catch-up and two fresh coherent anchored 3-of-4 observations while attempting all four validators, then activate the approved additive BPNG catalog through its authenticated on-chain transition. Recover current application readiness through the maintained API22/FE17 deployment and fresh commissioning inventory; expired API21 admission cannot be renewed by changing dates. September 13 native117/API21/FE14 acceptance is historical; see [current evidence](status.md). Preserve keys outside Git, keep configured execution-policy equality strict, and reuse warm build lanes. Broader crash/concurrency, advanced workloads and full release matrices remain separate from basic BPNG acceptance.
 
 ## Architecture and build ownership
 

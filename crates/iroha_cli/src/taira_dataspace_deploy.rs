@@ -1,0 +1,1649 @@
+//! Durable native deployment of one physical dataspace and its paid namespace.
+//!
+//! A phase is submitted at most once from this journal. An uncertain submission is
+//! reconciled by its retained signed transaction; it is never replaced or retried.
+//! Applied observations are not a finality proof or a deployment-complete claim.
+
+use crate::{Run, RunContext, quote_and_sign_transaction};
+use eyre::{Result, WrapErr, eyre};
+use iroha::{blocking::Client as BlockingClient, client::Client, sns::SnsNamespacePath};
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    alias_setup::{
+        AccountProvisionV1, AliasDataspaceBootstrapGrantV1, AliasIntentV1, AliasPlanDispositionV1,
+        AliasSetupPlanRequestV1, AliasTransactionPlanV1,
+    },
+    asset::AssetDefinitionId,
+    isi::{InstructionBox, SetParameter},
+    nexus::{
+        LaneConfig, LaneLifecycleStatusV1, NexusCatalogTransitionV1, NexusRuntimeCatalogV1,
+        RuntimeDataSpaceAdditionV1, RuntimeLaneManifestV1,
+    },
+    parameter::{Parameter, Parameters},
+    transaction::{
+        Executable, FeePaymentIntent, SignedTransaction,
+        signed::{FeeChargeKind, TransactionEntrypoint},
+    },
+};
+use iroha_model_base::metadata::Metadata;
+use iroha_primitives::numeric::Quantity;
+use iroha_torii_shared::{
+    FeeQuoteResponse, PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
+};
+use iroha_version::codec::DecodeVersioned as _;
+use norito::json::{self, JsonDeserialize, JsonSerialize};
+use sha2::{Digest, Sha256};
+use std::{
+    fs::{self, File},
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+const MAX_BYTES: usize = 8 * 1024 * 1024;
+const PHASES: [&str; 3] = ["catalog", "bootstrap", "aliases"];
+
+/// Plan, advance, or inspect a single durable dataspace deployment.
+#[derive(Debug, clap::Subcommand)]
+pub(crate) enum Command {
+    /// Validate live capabilities and the exact intent, then retain an immutable plan.
+    Plan(PlanArgs),
+    /// Advance from the saved plan; uncertain submissions are only observed again.
+    Apply(SavedArgs),
+    /// Read the exact saved transactions and current observations without submitting.
+    Status(SavedArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct PlanArgs {
+    #[arg(long)]
+    manifest: PathBuf,
+    /// Existing owner-private directory containing operation-ID subdirectories.
+    #[arg(long)]
+    journal_dir: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct SavedArgs {
+    #[arg(long)]
+    journal_dir: PathBuf,
+    #[arg(long)]
+    operation_id: String,
+}
+
+/// One first-release intent, expressed entirely in maintained native model types.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct ManifestV1 {
+    pub(crate) schema_version: u8,
+    #[norito(required)]
+    pub(crate) operation_id: Option<String>,
+    pub(crate) network_id: NetworkId,
+    pub(crate) owner: AccountId,
+    pub(crate) dataspace: RuntimeDataSpaceAdditionV1,
+    pub(crate) lane: LaneConfig,
+    pub(crate) lane_manifest: RuntimeLaneManifestV1,
+    pub(crate) alias_request: AliasSetupPlanRequestV1,
+    pub(crate) spending: SpendingV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct SpendingV1 {
+    pub(crate) asset_definition_id: AssetDefinitionId,
+    pub(crate) alias_create_maximum: Quantity,
+    pub(crate) transaction_fee_maximum: Quantity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PlanV1 {
+    schema_version: u8,
+    operation_id: String,
+    intent_sha256: String,
+    manifest: ManifestV1,
+    baseline: LaneLifecycleStatusV1,
+    #[norito(required)]
+    baseline_overlay: Option<NexusRuntimeCatalogV1>,
+    catalog_transition: NexusCatalogTransitionV1,
+    bootstrap_grant: AliasDataspaceBootstrapGrantV1,
+    initial_alias_plan: AliasTransactionPlanV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreparedV1 {
+    schema_version: u8,
+    operation_id: String,
+    intent_sha256: String,
+    phase: String,
+    signed_transaction_wire_hex: String,
+    transaction_hash: String,
+    instructions: Vec<InstructionBox>,
+    fee_quote: FeeQuoteResponse,
+    #[norito(required)]
+    alias_plan: Option<AliasTransactionPlanV1>,
+}
+
+/// Inputs for the separate anchored finality, inclusion, and four-peer verifier.
+/// This is a request for verification, not evidence that those checks ran.
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct VerificationRequestV1 {
+    pub(crate) schema_version: u8,
+    pub(crate) operation_id: String,
+    pub(crate) intent_sha256: String,
+    pub(crate) network_id: NetworkId,
+    pub(crate) owner: AccountId,
+    pub(crate) dataspace: RuntimeDataSpaceAdditionV1,
+    pub(crate) lane: LaneConfig,
+    pub(crate) lane_manifest: RuntimeLaneManifestV1,
+    pub(crate) bootstrap_grant: AliasDataspaceBootstrapGrantV1,
+    pub(crate) alias_request: AliasSetupPlanRequestV1,
+    pub(crate) baseline: LaneLifecycleStatusV1,
+    #[norito(required)]
+    pub(crate) baseline_overlay: Option<NexusRuntimeCatalogV1>,
+    pub(crate) transactions: Vec<PhaseObservationV1>,
+    pub(crate) independently_anchored_finality_required: bool,
+    pub(crate) authenticated_execution_commitment_required: bool,
+    pub(crate) all_four_state_observations_required: bool,
+}
+
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct PhaseObservationV1 {
+    pub(crate) phase: String,
+    pub(crate) state: String,
+    #[norito(required)]
+    pub(crate) transaction_hash: Option<String>,
+    pub(crate) instructions: Vec<InstructionBox>,
+    pub(crate) signed_transaction_wire_sha256: String,
+    #[norito(required)]
+    pub(crate) alias_plan: Option<AliasTransactionPlanV1>,
+    #[norito(required)]
+    pub(crate) global_status: Option<PipelineTransactionStatusResponse>,
+    #[norito(required)]
+    pub(crate) peer_status: Option<PipelineTransactionStatusResponse>,
+    #[norito(required)]
+    pub(crate) committed: Option<PipelineTransactionDetailsResponse>,
+}
+
+#[derive(Debug, Clone, JsonSerialize)]
+struct ReportV1 {
+    schema_version: u8,
+    operation_id: String,
+    state: String,
+    deployment_complete: bool,
+    verification: VerificationRequestV1,
+}
+
+fn require(condition: bool, message: &str) -> Result<()> {
+    if !condition {
+        eyre::bail!("{message}");
+    }
+    Ok(())
+}
+
+fn digest(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn operation_id(value: &str) -> Result<()> {
+    require(
+        !value.is_empty()
+            && value.len() <= 96
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "operation ID must contain 1..96 ASCII letters, digits, '-' or '_'",
+    )
+}
+
+impl ManifestV1 {
+    fn validate(&self) -> Result<AliasDataspaceBootstrapGrantV1> {
+        require(
+            self.schema_version == 1,
+            "unsupported dataspace manifest version",
+        )?;
+        if let Some(id) = &self.operation_id {
+            operation_id(id)?;
+        }
+        self.dataspace.validate_structure()?;
+        self.lane_manifest.validate_structure()?;
+        let grant = AliasDataspaceBootstrapGrantV1::try_new(
+            &self.dataspace.descriptor.alias,
+            self.owner.clone(),
+        )?;
+        require(
+            self.dataspace.descriptor.id == grant.dataspace.dataspace_id
+                && self.dataspace.manifest_hash == grant.name_hash
+                && self.lane.dataspace_id == grant.dataspace.dataspace_id
+                && self.lane.id == self.lane_manifest.lane_id,
+            "dataspace, selector hash, lane and manifest must bind the same native identity",
+        )?;
+        require(
+            !self.spending.alias_create_maximum.is_zero()
+                && !self.spending.transaction_fee_maximum.is_zero(),
+            "spending caps must be positive",
+        )?;
+        require(
+            self.alias_request.schema_version == AliasSetupPlanRequestV1::VERSION
+                && self.alias_request.intents.len() == 2,
+            "deployment requires exactly one dataspace and one existing-owner account alias",
+        )?;
+        let mut dataspace = false;
+        let mut account = false;
+        for ensure in &self.alias_request.intents {
+            require(
+                ensure.acquisition.term_years > 0
+                    && ensure.quote_guard.expected_payment_asset
+                        == self.spending.asset_definition_id
+                    && ensure.quote_guard.max_amount <= self.spending.alias_create_maximum,
+                "alias intent exceeds its exact asset or acquisition cap",
+            )?;
+            match &ensure.intent {
+                AliasIntentV1::Dataspace(intent) => {
+                    require(
+                        !dataspace
+                            && intent.dataspace == grant.dataspace
+                            && intent.owner == self.owner,
+                        "dataspace alias intent differs from the deployment owner or identity",
+                    )?;
+                    dataspace = true;
+                }
+                AliasIntentV1::AccountAlias(intent) => {
+                    require(
+                        !account
+                            && intent.target_account == self.owner
+                            && intent.provision == AccountProvisionV1::Existing
+                            && intent.alias.dataspace_id == grant.dataspace.dataspace_id
+                            && intent.alias.canonical_name.dataspace
+                                == grant.dataspace.canonical_name
+                            && intent.alias.canonical_name.domain.is_none(),
+                        "account alias must target the existing owner directly in this dataspace",
+                    )?;
+                    account = true;
+                }
+                AliasIntentV1::Domain(_) => {
+                    eyre::bail!("domain creation is outside this deployment contract")
+                }
+            }
+        }
+        require(
+            dataspace && account,
+            "deployment alias intent set is incomplete",
+        )?;
+        Ok(grant)
+    }
+
+    fn intent_digest(&self) -> Result<String> {
+        let mut canonical = self.clone();
+        canonical.operation_id = None;
+        canonical
+            .alias_request
+            .intents
+            .sort_by(|a, b| a.intent.cmp(&b.intent));
+        Ok(digest(&json::to_vec(&canonical)?))
+    }
+
+    fn resolved_id(&self) -> Result<String> {
+        Ok(self.operation_id.clone().unwrap_or(self.intent_digest()?))
+    }
+}
+
+impl PlanV1 {
+    fn verify(&self) -> Result<()> {
+        require(
+            self.schema_version == 1
+                && self.intent_sha256 == self.manifest.intent_digest()?
+                && self.operation_id == self.manifest.resolved_id()?
+                && self.bootstrap_grant == self.manifest.validate()?
+                && self.catalog_transition == transition(&self.manifest, &self.baseline)?
+                && self
+                    .baseline_overlay
+                    .as_ref()
+                    .map(NexusRuntimeCatalogV1::canonical_hash)
+                    .transpose()?
+                    == self.baseline.runtime_catalog_hash,
+            "immutable plan is not self-consistent",
+        )?;
+        validate_paid_plan(&self.manifest, &self.initial_alias_plan)?;
+        Ok(())
+    }
+}
+
+fn transition(
+    manifest: &ManifestV1,
+    baseline: &LaneLifecycleStatusV1,
+) -> Result<NexusCatalogTransitionV1> {
+    baseline.validate()?;
+    require(
+        !baseline.lanes.iter().any(|lane| {
+            lane.id == manifest.lane.id
+                || lane.alias == manifest.lane.alias
+                || lane.dataspace_id == manifest.lane.dataspace_id
+        }),
+        "new dataspace or lane is already present; this first-release plan cannot overwrite it",
+    )?;
+    let value = NexusCatalogTransitionV1 {
+        version: NexusCatalogTransitionV1::VERSION,
+        expected_catalog_hash: baseline.catalog_hash,
+        expected_incarnation_root: baseline.incarnation_root,
+        expected_runtime_catalog_hash: baseline.runtime_catalog_hash,
+        dataspace_additions: vec![manifest.dataspace.clone()],
+        lane_additions: vec![manifest.lane.clone()],
+        manifest_additions: vec![manifest.lane_manifest.clone()],
+    };
+    value.validate_structure()?;
+    Ok(value)
+}
+
+fn overlay(
+    parameters: &Parameters,
+    status: &LaneLifecycleStatusV1,
+) -> Result<Option<NexusRuntimeCatalogV1>> {
+    let value = parameters
+        .custom
+        .get(&NexusRuntimeCatalogV1::parameter_id())
+        .map(NexusRuntimeCatalogV1::from_custom_parameter)
+        .transpose()?
+        .flatten();
+    require(
+        value
+            .as_ref()
+            .map(NexusRuntimeCatalogV1::canonical_hash)
+            .transpose()?
+            == status.runtime_catalog_hash,
+        "parameter overlay and lifecycle status are not the same committed snapshot",
+    )?;
+    Ok(value)
+}
+
+fn validate_alias_plan(
+    manifest: &ManifestV1,
+    plan: &AliasTransactionPlanV1,
+    client: &Client,
+) -> Result<Vec<InstructionBox>> {
+    client.verify_alias_setup_plan_for_request(&manifest.alias_request, plan)?;
+    validate_paid_plan(manifest, plan)
+}
+
+fn validate_paid_plan(
+    manifest: &ManifestV1,
+    plan: &AliasTransactionPlanV1,
+) -> Result<Vec<InstructionBox>> {
+    require(
+        plan.body.authority == manifest.owner && plan.body.network_id == manifest.network_id,
+        "alias plan changed owner or network",
+    )?;
+    let instructions = iroha::client::decode_and_verify_alias_setup_plan_for_request(
+        &manifest.alias_request,
+        plan,
+    )?;
+    require(
+        plan.body.resources.len() == 2 && instructions.len() == 2,
+        "deployment requires exactly two native EnsureAlias instructions",
+    )?;
+    for resource in &plan.body.resources {
+        require(
+            resource.disposition == AliasPlanDispositionV1::Create,
+            "first-release namespace must contain exactly two paid Create resources",
+        )?;
+        let quote = resource
+            .quote
+            .as_ref()
+            .ok_or_else(|| eyre!("Create resource has no native quote"))?;
+        require(
+            !quote.exact_amount.is_zero()
+                && quote.guard.expected_payment_asset == manifest.spending.asset_definition_id
+                && quote.exact_amount <= manifest.spending.alias_create_maximum
+                && quote.guard.max_amount <= manifest.spending.alias_create_maximum,
+            "native alias quote exceeds the reviewed acquisition asset or cap",
+        )?;
+    }
+    Ok(instructions)
+}
+
+fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Result<BlockingClient> {
+    require(
+        !context.input_instructions()
+            && !context.output_instructions()
+            && context.transaction_metadata().is_none(),
+        "dataspace deployment cannot combine instruction piping or unbound transaction metadata",
+    )?;
+    require(
+        context.config().network_id == manifest.network_id
+            && context.config().account == manifest.owner,
+        "configured signer or NetworkId differs from the manifest",
+    )?;
+    let client = BlockingClient::from_client(context.client_from_config()?)?;
+    client.refresh_capabilities()?;
+    require(
+        client
+            .client()
+            .get_account_read(&manifest.owner)?
+            .account_id
+            == manifest.owner,
+        "native account read differs from the deployment owner",
+    )?;
+    if require_write_permissions {
+        let permissions = crate::account::list_effective_permissions(
+            client.client(),
+            &manifest.owner,
+            None,
+            0,
+            None,
+        )?;
+        for name in ["CanSetParameters", "CanReadAllLedgerData"] {
+            require(
+                permissions
+                    .iter()
+                    .any(|p| p.name() == name && p.payload().get() == "null"),
+                &format!("deployment owner lacks exact {name} permission"),
+            )?;
+        }
+    }
+    Ok(client)
+}
+
+fn check_fee(manifest: &ManifestV1, quote: &FeeQuoteResponse) -> Result<()> {
+    let FeePaymentIntent::Authority(intent) = &quote.intent else {
+        eyre::bail!("deployment must pay from its authority");
+    };
+    require(
+        intent.gas_limit.is_none() && !quote.components.is_empty(),
+        "invalid instruction transaction fee quote",
+    )?;
+    let mut total = Quantity::zero();
+    for component in &quote.components {
+        require(
+            component.kind == FeeChargeKind::Nexus
+                && component.asset_definition_id == manifest.spending.asset_definition_id,
+            "transaction quote changed fee kind or asset",
+        )?;
+        total = total.checked_add(&component.max_amount)?;
+    }
+    require(
+        total <= manifest.spending.transaction_fee_maximum,
+        "native transaction fee exceeds its explicit cap",
+    )
+}
+
+fn check_funding(client: &Client, manifest: &ManifestV1, remaining_phases: usize) -> Result<()> {
+    use iroha_data_model::{
+        asset::{AssetBalanceScope, AssetId},
+        prelude::FindAssetById,
+    };
+    let id = AssetId::with_scope(
+        manifest.spending.asset_definition_id.clone(),
+        manifest.owner.clone(),
+        AssetBalanceScope::Global,
+    );
+    let balance = client.query_single(FindAssetById::new(id.clone()))?;
+    require(
+        balance.id == id,
+        "funding read returned another asset/account/scope",
+    )?;
+    let mut reserve = manifest
+        .spending
+        .alias_create_maximum
+        .checked_add(&manifest.spending.alias_create_maximum)?;
+    for _ in 0..remaining_phases {
+        reserve = reserve.checked_add(&manifest.spending.transaction_fee_maximum)?;
+    }
+    require(
+        balance.value() >= &reserve,
+        "global owner balance does not cover the remaining explicit deployment caps",
+    )
+}
+
+fn physical_matches(plan: &PlanV1, client: &Client) -> Result<()> {
+    let status = client.get_lane_lifecycle_status()?;
+    status.validate()?;
+    let current = overlay(&client.get_parameters()?, &status)?
+        .ok_or_else(|| eyre!("committed runtime catalog overlay is absent"))?;
+    let mut lanes = plan.baseline.lanes.clone();
+    lanes.push(plan.manifest.lane.clone());
+    lanes.sort_by_key(|lane| lane.id);
+    require(
+        status.lanes == lanes
+            && status.lane_count
+                == plan.baseline.lane_count.max(
+                    plan.manifest
+                        .lane
+                        .id
+                        .as_u32()
+                        .checked_add(1)
+                        .ok_or_else(|| eyre!("lane namespace overflow"))?,
+                ),
+        "committed catalog differs from the exact additive plan",
+    )?;
+    require(
+        plan.baseline
+            .incarnations
+            .iter()
+            .all(|entry| status.incarnations.contains(entry)),
+        "an existing lane incarnation changed",
+    )?;
+    let mut dataspaces = plan
+        .baseline_overlay
+        .as_ref()
+        .map(|v| v.dataspaces.clone())
+        .unwrap_or_default();
+    let mut manifests = plan
+        .baseline_overlay
+        .as_ref()
+        .map(|v| v.manifests.clone())
+        .unwrap_or_default();
+    dataspaces.push(plan.manifest.dataspace.clone());
+    manifests.push(plan.manifest.lane_manifest.clone());
+    dataspaces.sort_by_key(|value| value.descriptor.id);
+    manifests.sort_by_key(|value| value.lane_id);
+    require(
+        current.dataspaces == dataspaces && current.manifests == manifests,
+        "committed overlay contains missing, changed or unexpected additions",
+    )?;
+    if let Some(before) = &plan.baseline_overlay {
+        require(
+            current.baseline_dataspaces_hash == before.baseline_dataspaces_hash
+                && current.baseline_manifests_hash == before.baseline_manifests_hash,
+            "runtime overlay changed its startup baseline",
+        )?;
+    }
+    Ok(())
+}
+
+fn bootstrap_present(plan: &PlanV1, client: &Client) -> Result<bool> {
+    let parameters = client.get_parameters()?;
+    let Some(value) = parameters.custom.get(&plan.bootstrap_grant.parameter_id()?) else {
+        return Ok(false);
+    };
+    require(
+        AliasDataspaceBootstrapGrantV1::from_custom_parameter(value)?.as_ref()
+            == Some(&plan.bootstrap_grant),
+        "existing immutable bootstrap grant differs from the planned native grant",
+    )?;
+    Ok(true)
+}
+
+fn phase_instructions(
+    plan: &PlanV1,
+    phase: &str,
+    client: &Client,
+) -> Result<(Vec<InstructionBox>, Option<AliasTransactionPlanV1>)> {
+    match phase {
+        "catalog" => {
+            require(
+                client.get_lane_lifecycle_status()? == plan.baseline,
+                "catalog CAS changed since planning; retained plan cannot be rebased",
+            )?;
+            Ok((
+                vec![
+                    SetParameter::new(Parameter::Custom(
+                        plan.catalog_transition.clone().into_custom_parameter()?,
+                    ))
+                    .into(),
+                ],
+                None,
+            ))
+        }
+        "bootstrap" => {
+            physical_matches(plan, client)?;
+            require(
+                !bootstrap_present(plan, client)?,
+                "bootstrap grant already exists outside this phase's transaction",
+            )?;
+            let name = plan.bootstrap_grant.dataspace.canonical_name.as_ref();
+            require(
+                client
+                    .sns()
+                    .get_name_optional(SnsNamespacePath::Dataspace, name)?
+                    .is_none(),
+                "bootstrap must precede the first dataspace SNS record",
+            )?;
+            Ok((
+                vec![
+                    SetParameter::new(Parameter::Custom(
+                        plan.bootstrap_grant.clone().into_custom_parameter()?,
+                    ))
+                    .into(),
+                ],
+                None,
+            ))
+        }
+        "aliases" => {
+            physical_matches(plan, client)?;
+            require(
+                bootstrap_present(plan, client)?,
+                "paid namespace requires the exact committed bootstrap grant",
+            )?;
+            let alias_plan = client.plan_alias_setup(&plan.manifest.alias_request)?;
+            let instructions = validate_alias_plan(&plan.manifest, &alias_plan, client)?;
+            Ok((instructions, Some(alias_plan)))
+        }
+        _ => eyre::bail!("unknown deployment phase"),
+    }
+}
+
+impl PreparedV1 {
+    fn verify(&self, plan: &PlanV1, phase: &str) -> Result<SignedTransaction> {
+        require(
+            self.schema_version == 1
+                && self.operation_id == plan.operation_id
+                && self.intent_sha256 == plan.intent_sha256
+                && self.phase == phase,
+            "prepared phase belongs to another exact intent",
+        )?;
+        let wire = hex::decode(&self.signed_transaction_wire_hex)?;
+        require(
+            !wire.is_empty()
+                && wire.len() <= MAX_BYTES
+                && hex::encode(&wire) == self.signed_transaction_wire_hex,
+            "invalid retained transaction wire",
+        )?;
+        let transaction = SignedTransaction::decode_all_versioned(&wire)?;
+        transaction.verify_signature()?;
+        require(
+            transaction.attachments().is_none() && transaction.multisig_signatures().is_none(),
+            "deployment requires one configured signer without unrelated attachments",
+        )?;
+        require(
+            (phase == "aliases") == self.alias_plan.is_some(),
+            "phase has a missing or unexpected alias plan",
+        )?;
+        if let Some(alias) = &self.alias_plan {
+            require(
+                transaction.creation_time().as_millis() <= u128::from(alias.body.valid_until_ms),
+                "retained transaction was created after the native alias plan deadline",
+            )?;
+        }
+
+        require(
+            transaction.encode_wire_v1()? == wire
+                && hex::encode(transaction.hash().as_ref()) == self.transaction_hash
+                && transaction.authority() == &plan.manifest.owner
+                && transaction.network_id() == Some(&plan.manifest.network_id)
+                && transaction.instructions() == &Executable::from(self.instructions.clone())
+                && transaction.fee_payment_intent() == &self.fee_quote.intent,
+            "retained signed transaction differs from its exact native phase",
+        )?;
+        self.fee_quote
+            .validate_for_signed_payload(transaction.payload())
+            .map_err(|error| eyre!(error))?;
+        require(transaction.admission_intent() == iroha_data_model::transaction::signed::TransactionAdmissionIntent::QueuePlanSynced,
+            "deployment transaction is not QueuePlan-synchronized")?;
+        require(
+            transaction.metadata().is_empty(),
+            "retained deployment carries unbound metadata",
+        )?;
+        check_fee(&plan.manifest, &self.fee_quote)?;
+        let expected: Vec<InstructionBox> = match phase {
+            "catalog" => vec![
+                SetParameter::new(Parameter::Custom(
+                    plan.catalog_transition.clone().into_custom_parameter()?,
+                ))
+                .into(),
+            ],
+            "bootstrap" => vec![
+                SetParameter::new(Parameter::Custom(
+                    plan.bootstrap_grant.clone().into_custom_parameter()?,
+                ))
+                .into(),
+            ],
+            "aliases" => validate_paid_plan(
+                &plan.manifest,
+                self.alias_plan
+                    .as_ref()
+                    .ok_or_else(|| eyre!("paid phase omitted its native plan"))?,
+            )?,
+            _ => eyre::bail!("unknown retained phase"),
+        };
+        require(
+            !expected.is_empty() && expected == self.instructions,
+            "retained instructions differ from the reviewed native intent",
+        )?;
+        Ok(transaction)
+    }
+}
+
+fn observe(
+    client: &Client,
+    prepared: &PreparedV1,
+    transaction: &SignedTransaction,
+) -> Result<PhaseObservationV1> {
+    let hash = transaction.hash();
+    let global = client.get_transaction_status_response_global(hash)?;
+    let peer = client.get_transaction_status_response_local(hash)?;
+    let mut result = PhaseObservationV1 {
+        phase: prepared.phase.clone(),
+        state: "pending".into(),
+        transaction_hash: Some(prepared.transaction_hash.clone()),
+        instructions: prepared.instructions.clone(),
+        signed_transaction_wire_sha256: digest(&transaction.encode_wire_v1()?),
+        alias_plan: prepared.alias_plan.clone(),
+        global_status: global,
+        peer_status: peer,
+        committed: None,
+    };
+    for (value, scope) in [
+        (&result.global_status, "global"),
+        (&result.peer_status, "local"),
+    ] {
+        if let Some(value) = value {
+            require(
+                value.hash == prepared.transaction_hash && value.scope == scope,
+                "transaction observation changed its hash or scope",
+            )?;
+            if matches!(value.status.kind.as_str(), "Rejected" | "Expired") {
+                result.state = "failed".into();
+                return Ok(result);
+            }
+        }
+    }
+    if matching_applied_height(
+        &prepared.transaction_hash,
+        &result.global_status,
+        &result.peer_status,
+    )?
+    .is_some()
+    {
+        let details =
+            client.get_successful_transaction_details(transaction.hash_as_entrypoint())?;
+        let TransactionEntrypoint::External(actual) = details.transaction.entrypoint() else {
+            eyre::bail!("committed phase is not an external transaction");
+        };
+        require(
+            actual.encode_wire_v1()? == transaction.encode_wire_v1()?,
+            "committed phase differs from the retained exact signed transaction",
+        )?;
+        result.state = "applied_verification_pending".into();
+        result.committed = Some(details);
+    }
+    Ok(result)
+}
+
+fn matching_applied_height(
+    hash: &str,
+    global: &Option<PipelineTransactionStatusResponse>,
+    peer: &Option<PipelineTransactionStatusResponse>,
+) -> Result<Option<u64>> {
+    let mut heights = Vec::new();
+    for (value, scope) in [(global, "global"), (peer, "local")] {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        require(
+            value.hash == hash && value.scope == scope,
+            "status changed requested hash or scope",
+        )?;
+        require(
+            matches!(
+                value.status.kind.as_str(),
+                "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
+            ),
+            "unknown native pipeline status kind",
+        )?;
+        if value.resolved_from != "state" || value.status.kind != "Applied" {
+            return Ok(None);
+        }
+        heights.push(
+            value
+                .status
+                .block_height
+                .filter(|height| *height > 0)
+                .ok_or_else(|| eyre!("state Applied observation has no nonzero height"))?,
+        );
+    }
+    require(
+        heights[0] == heights[1],
+        "global and peer Applied heights differ",
+    )?;
+    Ok(Some(heights[0]))
+}
+
+fn phase_report(plan: &PlanV1, observations: Vec<PhaseObservationV1>) -> ReportV1 {
+    let state = if observations.len() == PHASES.len()
+        && observations
+            .iter()
+            .all(|v| v.state == "applied_verification_pending")
+    {
+        "applied_verification_pending"
+    } else if observations.iter().any(|v| v.state == "failed") {
+        "failed"
+    } else {
+        "pending"
+    };
+    ReportV1 {
+        schema_version: 1,
+        operation_id: plan.operation_id.clone(),
+        state: state.into(),
+        deployment_complete: false,
+        verification: VerificationRequestV1 {
+            schema_version: 1,
+            operation_id: plan.operation_id.clone(),
+            intent_sha256: plan.intent_sha256.clone(),
+            network_id: plan.manifest.network_id,
+            owner: plan.manifest.owner.clone(),
+            dataspace: plan.manifest.dataspace.clone(),
+            lane: plan.manifest.lane.clone(),
+            lane_manifest: plan.manifest.lane_manifest.clone(),
+            bootstrap_grant: plan.bootstrap_grant.clone(),
+            alias_request: plan.manifest.alias_request.clone(),
+            baseline: plan.baseline.clone(),
+            baseline_overlay: plan.baseline_overlay.clone(),
+            transactions: observations,
+            independently_anchored_finality_required: true,
+            authenticated_execution_commitment_required: true,
+            all_four_state_observations_required: true,
+        },
+    }
+}
+
+impl Run for Command {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        require(
+            context.config().chain.to_string() == "fc56984b-2be7-431d-840e-21514d1883f0"
+                && context.config().account_chain_discriminant == 369,
+            "Taira dataspace deployment requires the canonical chain and account profile369",
+        )?;
+        let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+        match self {
+            Self::Plan(args) => plan(context, args),
+            Self::Apply(args) => saved(context, args, true),
+            Self::Status(args) => saved(context, args, false),
+        }
+    }
+}
+
+fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
+    let bytes = read_public_input(&args.manifest)?;
+    let manifest: ManifestV1 = json::from_slice(&bytes)?;
+    let grant = manifest.validate()?;
+    let id = manifest.resolved_id()?;
+    let client = preflight(context, &manifest, true)?;
+    let path = args.journal_dir.join(&id);
+    if path.try_exists()? {
+        let journal = Journal::open(&path, false)?;
+        let existing: PlanV1 = journal.read_json("plan.json")?;
+        existing.verify()?;
+        require(
+            existing.manifest == manifest && existing.intent_sha256 == manifest.intent_digest()?,
+            "operation ID is already bound to another manifest",
+        )?;
+        return context.print_data(&existing);
+    }
+    let baseline = client.client().get_lane_lifecycle_status()?;
+    let baseline_overlay = overlay(&client.client().get_parameters()?, &baseline)?;
+    let catalog_transition = transition(&manifest, &baseline)?;
+    check_funding(client.client(), &manifest, PHASES.len())?;
+    let initial_alias_plan = client.client().plan_alias_setup(&manifest.alias_request)?;
+    validate_alias_plan(&manifest, &initial_alias_plan, client.client())?;
+    let result = PlanV1 {
+        schema_version: 1,
+        operation_id: id,
+        intent_sha256: manifest.intent_digest()?,
+        manifest,
+        baseline,
+        baseline_overlay,
+        catalog_transition,
+        bootstrap_grant: grant,
+        initial_alias_plan,
+    };
+    result.verify()?;
+    let journal = Journal::open(&path, true)?;
+    journal.install_json("plan.json", &result)?;
+    context.print_data(&result)
+}
+
+fn saved<C: RunContext>(context: &mut C, args: SavedArgs, apply: bool) -> Result<()> {
+    operation_id(&args.operation_id)?;
+    let journal = Journal::open(&args.journal_dir.join(&args.operation_id), false)?;
+    let plan: PlanV1 = journal.read_json("plan.json")?;
+    plan.verify()?;
+    require(
+        plan.operation_id == args.operation_id,
+        "operation directory contains another plan",
+    )?;
+    let client = preflight(context, &plan.manifest, apply)?;
+    let mut observations = Vec::new();
+    for (phase_index, phase) in PHASES.into_iter().enumerate() {
+        let prepared_name = format!("{phase}.prepared.json");
+        let claim_name = format!("{phase}.submitted.json");
+        let mut prepared: Option<PreparedV1> = journal.optional_json(&prepared_name)?;
+        if prepared.is_none() && apply {
+            check_funding(client.client(), &plan.manifest, PHASES.len() - phase_index)?;
+            let (instructions, alias_plan) = phase_instructions(&plan, phase, client.client())?;
+            require(
+                !instructions.is_empty(),
+                "empty deployment transactions are forbidden",
+            )?;
+            let (transaction, quote) = quote_and_sign_transaction(
+                &client,
+                Executable::from(instructions.clone()),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )?;
+            check_fee(&plan.manifest, &quote)?;
+            let value = PreparedV1 {
+                schema_version: 1,
+                operation_id: plan.operation_id.clone(),
+                intent_sha256: plan.intent_sha256.clone(),
+                phase: phase.into(),
+                signed_transaction_wire_hex: hex::encode(transaction.encode_wire_v1()?),
+                transaction_hash: hex::encode(transaction.hash().as_ref()),
+                instructions,
+                fee_quote: quote,
+                alias_plan,
+            };
+            value.verify(&plan, phase)?;
+            journal.install_json(&prepared_name, &value)?;
+            prepared = Some(value);
+        }
+        let Some(prepared) = prepared else {
+            break;
+        };
+        let transaction = prepared.verify(&plan, phase)?;
+        let claim: Option<String> = journal.optional_json(&claim_name)?;
+        if let Some(claim) = &claim {
+            require(
+                claim == &digest(&json::to_vec(&prepared)?),
+                "dispatch claim does not bind the retained transaction",
+            )?;
+        }
+        if apply && claim.is_none() {
+            check_funding(client.client(), &plan.manifest, PHASES.len() - phase_index)?;
+            // Revalidate current native conditions without preparing another transaction.
+            let (instructions, fresh_alias_plan) =
+                phase_instructions(&plan, phase, client.client())?;
+            require(
+                instructions == prepared.instructions,
+                "phase changed before first dispatch",
+            )?;
+            if let Some(fresh) = fresh_alias_plan {
+                // Anchors may move; the exact retained plan, guards and instructions may not.
+                validate_alias_plan(&plan.manifest, &fresh, client.client())?;
+                client
+                    .client()
+                    .verify_alias_setup_plan(prepared.alias_plan.as_ref().unwrap())?;
+            }
+            let deadline = transaction
+                .creation_time()
+                .checked_add(
+                    transaction
+                        .time_to_live()
+                        .ok_or_else(|| eyre!("retained transaction has no finite lifetime"))?,
+                )
+                .ok_or_else(|| eyre!("transaction lifetime overflow"))?;
+            require(
+                SystemTime::now().duration_since(UNIX_EPOCH)? < deadline,
+                "retained transaction expired before dispatch; it will not be replaced",
+            )?;
+            require(
+                record_dispatch_claim(&journal, &claim_name, &prepared)?,
+                "phase was already dispatched",
+            )?;
+            // The claim is durable before this sole mutation call. Transport failure is pending.
+            let outcome = client.submit_transaction(&transaction);
+            if let Ok(hash) = &outcome {
+                require(
+                    hash == &transaction.hash(),
+                    "submit response changed the retained transaction hash",
+                )?;
+            }
+            let receipt = SubmissionResultV1 {
+                transaction_hash: prepared.transaction_hash.clone(),
+                accepted: outcome.is_ok(),
+                error: outcome.err().map(|error| format!("{error:#}")),
+            };
+            journal.install_json(&format!("{phase}.submission-result.json"), &receipt)?;
+        }
+        let observation = observe(client.client(), &prepared, &transaction)?;
+        let advance = observation.state == "applied_verification_pending";
+        observations.push(observation);
+        if !advance {
+            break;
+        }
+    }
+    context.print_data(&phase_report(&plan, observations))
+}
+
+#[derive(JsonSerialize)]
+struct SubmissionResultV1 {
+    transaction_hash: String,
+    accepted: bool,
+    #[norito(required)]
+    error: Option<String>,
+}
+
+fn record_dispatch_claim(journal: &Journal, name: &str, prepared: &PreparedV1) -> Result<bool> {
+    let expected = digest(&json::to_vec(prepared)?);
+    if let Some(current) = journal.optional_json::<String>(name)? {
+        require(
+            current == expected,
+            "dispatch claim changed its exact signed phase",
+        )?;
+        return Ok(false);
+    }
+    journal.install_json(name, &expected)?;
+    Ok(true)
+}
+
+/// Descriptor-relative immutable storage. A held flock serializes each operation.
+struct Journal {
+    path: PathBuf,
+    directory: File,
+    _lock: File,
+}
+
+#[cfg(unix)]
+fn private_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    require(
+        metadata.uid() == rustix::process::geteuid().as_raw()
+            && metadata.permissions().mode() & 0o077 == 0
+            && if directory {
+                metadata.is_dir()
+            } else {
+                metadata.is_file() && metadata.nlink() == 1
+            },
+        "journal must be a current-owner private directory with direct single-link files",
+    )
+}
+
+impl Journal {
+    #[cfg(unix)]
+    fn open(path: &Path, create: bool) -> Result<Self> {
+        use rustix::fs::{Mode, OFlags};
+        let name = path
+            .file_name()
+            .ok_or_else(|| eyre!("operation directory has no name"))?;
+        let parent_path = path
+            .parent()
+            .ok_or_else(|| eyre!("operation directory has no parent"))?
+            .canonicalize()?;
+        let parent = File::from(rustix::fs::open(
+            &parent_path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?);
+        private_metadata(&parent.metadata()?, true)?;
+        if create {
+            rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700))?;
+            parent.sync_all()?;
+        }
+        let directory = File::from(rustix::fs::openat(
+            &parent,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?);
+        private_metadata(&directory.metadata()?, true)?;
+        let lock = File::from(rustix::fs::openat(
+            &directory,
+            "lock",
+            OFlags::RDWR
+                | OFlags::CLOEXEC
+                | OFlags::NOFOLLOW
+                | OFlags::NONBLOCK
+                | if create {
+                    OFlags::CREATE | OFlags::EXCL
+                } else {
+                    OFlags::empty()
+                },
+            Mode::from_raw_mode(0o600),
+        )?);
+        private_metadata(&lock.metadata()?, false)?;
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)?;
+        directory.sync_all()?;
+        let value = Self {
+            path: parent_path.join(name),
+            directory,
+            _lock: lock,
+        };
+        value.revalidate()?;
+        Ok(value)
+    }
+
+    #[cfg(not(unix))]
+    fn open(_: &Path, _: bool) -> Result<Self> {
+        eyre::bail!("durable deployments require Unix descriptor custody")
+    }
+
+    #[cfg(unix)]
+    fn revalidate(&self) -> Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+        let actual = fs::symlink_metadata(&self.path)?;
+        let pinned = self.directory.metadata()?;
+        private_metadata(&actual, true)?;
+        require(
+            actual.dev() == pinned.dev() && actual.ino() == pinned.ino(),
+            "operation journal directory was replaced",
+        )
+    }
+
+    #[cfg(not(unix))]
+    fn revalidate(&self) -> Result<()> {
+        eyre::bail!("Unix required")
+    }
+
+    fn optional_json<T: JsonDeserialize + JsonSerialize>(&self, name: &str) -> Result<Option<T>> {
+        self.read_optional(name)?
+            .map(|bytes| {
+                let value: T = json::from_slice(&bytes)?;
+                require(
+                    json::to_vec(&value)? == bytes,
+                    "retained JSON is not canonical or is incomplete",
+                )?;
+                Ok(value)
+            })
+            .transpose()
+    }
+    fn read_json<T: JsonDeserialize + JsonSerialize>(&self, name: &str) -> Result<T> {
+        self.optional_json(name)?
+            .ok_or_else(|| eyre!("operation preparation is incomplete"))
+    }
+    fn install_json<T: JsonSerialize>(&self, name: &str, value: &T) -> Result<()> {
+        self.install(name, &json::to_vec(value)?)
+    }
+
+    #[cfg(unix)]
+    fn read_optional(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        use rustix::fs::{Mode, OFlags};
+        self.revalidate()?;
+        let fd = match rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let mut file = File::from(fd);
+        private_metadata(&file.metadata()?, false)?;
+        let mut bytes = Vec::new();
+        std::io::Read::by_ref(&mut file)
+            .take((MAX_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        require(bytes.len() <= MAX_BYTES, "journal file exceeds bound")?;
+        private_metadata(&file.metadata()?, false)?;
+        self.revalidate()?;
+        Ok(Some(bytes))
+    }
+
+    #[cfg(unix)]
+    fn install(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        use rustix::fs::{Mode, OFlags};
+        require(bytes.len() <= MAX_BYTES, "journal output exceeds bound")?;
+        self.revalidate()?;
+        let mut file = File::from(rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::from_raw_mode(0o600),
+        )?);
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        self.directory.sync_all()?;
+        private_metadata(&file.metadata()?, false)?;
+        self.revalidate()
+    }
+
+    #[cfg(not(unix))]
+    fn read_optional(&self, _: &str) -> Result<Option<Vec<u8>>> {
+        eyre::bail!("Unix required")
+    }
+    #[cfg(not(unix))]
+    fn install(&self, _: &str, _: &[u8]) -> Result<()> {
+        eyre::bail!("Unix required")
+    }
+}
+
+fn read_public_input(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    require(
+        metadata.is_file() && metadata.len() <= MAX_BYTES as u64,
+        "manifest must be a bounded direct regular file",
+    )?;
+    #[cfg(unix)]
+    let mut file = {
+        use rustix::fs::{Mode, OFlags};
+        File::from(rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )?)
+    };
+    #[cfg(not(unix))]
+    let mut file = File::open(path)?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    require(bytes.len() <= MAX_BYTES, "manifest exceeds bound")?;
+    Ok(bytes)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        alias_setup::{
+            AccountAliasRoleV1, AliasAccountIntentV1, AliasAssetTotalV1, AliasDataSpaceIntentV1,
+            AliasFramedInstructionV1, AliasLeaseAcquisitionV1, AliasLeaseQuoteV1,
+            AliasPlanAnchorV1, AliasPlanResourceV1, AliasQuoteGuardV1, AliasTransactionPlanBodyV1,
+            ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::EnsureAlias,
+        nexus::{DataSpaceMetadata, FeeDebitSource, LaneCatalog},
+        transaction::{
+            TransactionBuilder,
+            signed::{FeeChargeLimit, TransactionAdmissionIntent},
+        },
+    };
+    use iroha_model_base::topology::{DataSpaceId, LaneId};
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_torii_shared::{
+        FeeQuoteComponent, FeeQuoteDecision, FeeQuoteObservation, PipelineTransactionStatus,
+    };
+    use std::{collections::BTreeMap, num::NonZeroU32};
+
+    fn amount(value: u32, scale: u32) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap()
+    }
+    fn key() -> KeyPair {
+        KeyPair::try_from_seed(vec![37; 32], Algorithm::Ed25519).unwrap()
+    }
+    fn manifest() -> ManifestV1 {
+        let owner = AccountId::new(key().public_key().clone());
+        let grant = AliasDataspaceBootstrapGrantV1::try_new("devex", owner.clone()).unwrap();
+        let asset: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap();
+        let guard = AliasQuoteGuardV1 {
+            expected_policy_version: 1,
+            expected_payment_asset: asset.clone(),
+            max_amount: amount(5, 1),
+            valid_until_ms: u64::MAX,
+        };
+        let ds = EnsureAlias::new(
+            AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                dataspace: grant.dataspace.clone(),
+                owner: owner.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            guard.clone(),
+        );
+        let account = EnsureAlias::new(
+            AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: ResolvedAccountAliasV1::new(
+                    "admin@devex".parse().unwrap(),
+                    grant.dataspace.dataspace_id,
+                ),
+                target_account: owner.clone(),
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Additional,
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            guard,
+        );
+        ManifestV1 {
+            schema_version: 1,
+            operation_id: None,
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"controller test genesis",
+            ))),
+            owner,
+            dataspace: RuntimeDataSpaceAdditionV1 {
+                descriptor: DataSpaceMetadata {
+                    id: grant.dataspace.dataspace_id,
+                    alias: "devex".into(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                manifest_hash: grant.name_hash,
+            },
+            lane: LaneConfig {
+                id: LaneId::new(6),
+                alias: "devex".into(),
+                dataspace_id: grant.dataspace.dataspace_id,
+                ..LaneConfig::default()
+            },
+            lane_manifest: RuntimeLaneManifestV1 {
+                lane_id: LaneId::new(6),
+                manifest: Json::new(norito::json!({"version":1})),
+            },
+            alias_request: AliasSetupPlanRequestV1::new(vec![ds, account]),
+            spending: SpendingV1 {
+                asset_definition_id: asset,
+                alias_create_maximum: amount(5, 1),
+                transaction_fee_maximum: amount(1, 0),
+            },
+        }
+    }
+    fn alias_plan(manifest: &ManifestV1) -> AliasTransactionPlanV1 {
+        let mut frames = Vec::new();
+        let resources = manifest
+            .alias_request
+            .intents
+            .iter()
+            .enumerate()
+            .map(|(index, ensure)| {
+                let instruction: InstructionBox = ensure.clone().into();
+                let (wire_id, framed_payload) =
+                    iroha_data_model::isi::framed_instruction_payload(&instruction).unwrap();
+                frames.push(AliasFramedInstructionV1 {
+                    wire_id: wire_id.into(),
+                    framed_payload,
+                });
+                AliasPlanResourceV1 {
+                    intent: ensure.intent.clone(),
+                    disposition: AliasPlanDispositionV1::Create,
+                    quote: Some(AliasLeaseQuoteV1 {
+                        target: ensure.intent.target(),
+                        pricing_class: 0,
+                        exact_amount: amount(5, 1),
+                        guard: ensure.quote_guard.clone(),
+                        expires_at_ms: 100,
+                        grace_expires_at_ms: 200,
+                        redemption_expires_at_ms: 300,
+                    }),
+                    instruction_index: Some(index as u32),
+                }
+            })
+            .collect();
+        AliasTransactionPlanV1::new(AliasTransactionPlanBodyV1 {
+            version: 1,
+            authority: manifest.owner.clone(),
+            network_id: manifest.network_id,
+            anchor: AliasPlanAnchorV1 {
+                block_height: 1,
+                block_hash: Hash::new(b"alias anchor"),
+            },
+            resources,
+            instructions: frames,
+            totals_by_asset: vec![AliasAssetTotalV1 {
+                payment_asset: manifest.spending.asset_definition_id.clone(),
+                amount: amount(1, 0),
+            }],
+            warnings: Vec::new(),
+            blockers: Vec::new(),
+            valid_until_ms: u64::MAX,
+        })
+    }
+    fn fixture_plan() -> PlanV1 {
+        let manifest = manifest();
+        let lanes = vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: LaneId::new(7),
+                alias: "is".into(),
+                dataspace_id: DataSpaceId::new(77),
+                ..LaneConfig::default()
+            },
+        ];
+        let incarnations: BTreeMap<_, _> = lanes
+            .iter()
+            .map(|lane| (lane.id, Hash::new(lane.alias.as_bytes())))
+            .collect();
+        let catalog = LaneCatalog::new(NonZeroU32::new(8).unwrap(), lanes).unwrap();
+        let baseline = LaneLifecycleStatusV1::new(&catalog, &incarnations, None).unwrap();
+        PlanV1 {
+            schema_version: 1,
+            operation_id: manifest.resolved_id().unwrap(),
+            intent_sha256: manifest.intent_digest().unwrap(),
+            bootstrap_grant: manifest.validate().unwrap(),
+            catalog_transition: transition(&manifest, &baseline).unwrap(),
+            initial_alias_plan: alias_plan(&manifest),
+            manifest,
+            baseline,
+            baseline_overlay: None,
+        }
+    }
+    fn prepared(plan: &PlanV1) -> PreparedV1 {
+        let instructions: Vec<InstructionBox> = vec![
+            SetParameter::new(Parameter::Custom(
+                plan.catalog_transition
+                    .clone()
+                    .into_custom_parameter()
+                    .unwrap(),
+            ))
+            .into(),
+        ];
+        let intent = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                plan.manifest.spending.asset_definition_id.clone(),
+                amount(1, 1),
+            )],
+            None,
+        );
+        let transaction = TransactionBuilder::new(
+            plan.manifest.network_id,
+            plan.manifest.owner.clone(),
+            intent.clone(),
+        )
+        .with_instructions(instructions.clone())
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .try_sign(key().private_key())
+        .unwrap();
+        let quote = FeeQuoteResponse {
+            intent,
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 1,
+                next_block_height: 2,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            components: vec![FeeQuoteComponent {
+                kind: FeeChargeKind::Nexus,
+                asset_definition_id: plan.manifest.spending.asset_definition_id.clone(),
+                max_amount: amount(1, 1),
+            }],
+            capacities: Vec::new(),
+            decision: FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(plan.manifest.owner.clone()),
+                program_revision: None,
+            },
+        };
+        PreparedV1 {
+            schema_version: 1,
+            operation_id: plan.operation_id.clone(),
+            intent_sha256: plan.intent_sha256.clone(),
+            phase: "catalog".into(),
+            signed_transaction_wire_hex: hex::encode(transaction.encode_wire_v1().unwrap()),
+            transaction_hash: hex::encode(transaction.hash().as_ref()),
+            instructions,
+            fee_quote: quote,
+            alias_plan: None,
+        }
+    }
+
+    #[test]
+    fn manifest_binds_native_identity_and_spending_limits() {
+        let value = manifest();
+        value.validate().unwrap();
+        let mut wrong = value.clone();
+        wrong.dataspace.manifest_hash[0] ^= 1;
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.lane_manifest.lane_id = LaneId::new(5);
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.alias_request.intents[0].quote_guard.max_amount = amount(6, 1);
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.alias_request.intents.pop();
+        assert!(wrong.validate().is_err());
+        let mut json = json::to_value(&value).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .insert("unknown".into(), norito::json!(1));
+        assert!(json::from_value::<ManifestV1>(json).is_err());
+    }
+    #[test]
+    fn operation_id_is_stable_for_equivalent_intent() {
+        let value = manifest();
+        let mut reordered = value.clone();
+        reordered.alias_request.intents.reverse();
+        assert_eq!(
+            value.resolved_id().unwrap(),
+            reordered.resolved_id().unwrap()
+        );
+        let mut changed = value.clone();
+        changed.spending.transaction_fee_maximum = amount(2, 0);
+        assert_ne!(value.resolved_id().unwrap(), changed.resolved_id().unwrap());
+        assert!(operation_id("../escape").is_err());
+        assert!(operation_id("").is_err());
+        let mut explicit = value;
+        explicit.operation_id = Some("release-one".into());
+        assert_eq!(explicit.resolved_id().unwrap(), "release-one");
+    }
+    #[test]
+    fn catalog_transition_preserves_sparse_baseline_and_cas() {
+        let value = fixture_plan();
+        assert_eq!(value.baseline.lane_count, 8);
+        assert!(
+            !value
+                .baseline
+                .lanes
+                .iter()
+                .any(|lane| lane.id == LaneId::new(5))
+        );
+        assert_eq!(
+            value.catalog_transition.expected_catalog_hash,
+            value.baseline.catalog_hash
+        );
+        assert_eq!(
+            value.catalog_transition.expected_incarnation_root,
+            value.baseline.incarnation_root
+        );
+        assert_eq!(
+            value.catalog_transition.lane_additions,
+            vec![value.manifest.lane.clone()]
+        );
+        let mut collision = value.manifest.clone();
+        collision.lane.id = LaneId::new(7);
+        assert!(transition(&collision, &value.baseline).is_err());
+        let mut forged = value.baseline.clone();
+        forged.catalog_hash = Hash::new(b"foreign catalog");
+        assert!(transition(&value.manifest, &forged).is_err());
+    }
+    #[test]
+    fn retained_phase_rejects_changed_wire_owner_fee_or_instructions() {
+        let plan = fixture_plan();
+        let value = prepared(&plan);
+        value.verify(&plan, "catalog").unwrap();
+        let mut wrong = value.clone();
+        wrong.signed_transaction_wire_hex.push_str("00");
+        assert!(wrong.verify(&plan, "catalog").is_err());
+        let mut wrong = value.clone();
+        wrong.instructions.clear();
+        assert!(wrong.verify(&plan, "catalog").is_err());
+        let mut wrong = value.clone();
+        wrong.fee_quote.components[0].max_amount = amount(1, 2);
+        assert!(wrong.verify(&plan, "catalog").is_err());
+        let mut wrong = plan.clone();
+        wrong.manifest.owner = AccountId::new(
+            KeyPair::try_from_seed(vec![38; 32], Algorithm::Ed25519)
+                .unwrap()
+                .public_key()
+                .clone(),
+        );
+        assert!(value.verify(&wrong, "catalog").is_err());
+        assert!(value.verify(&plan, "bootstrap").is_err());
+    }
+    #[test]
+    fn namespace_plan_requires_two_bounded_paid_creates() {
+        let manifest = manifest();
+        let plan = alias_plan(&manifest);
+        assert_eq!(validate_paid_plan(&manifest, &plan).unwrap().len(), 2);
+        let mut changed = plan.clone();
+        changed.body.resources[0].disposition = AliasPlanDispositionV1::NoOp;
+        changed = AliasTransactionPlanV1::new(changed.body);
+        assert!(validate_paid_plan(&manifest, &changed).is_err());
+        let mut changed = manifest.clone();
+        changed.spending.alias_create_maximum = amount(4, 1);
+        assert!(validate_paid_plan(&changed, &plan).is_err());
+        let mut changed = plan.clone();
+        changed.body.instructions[0].framed_payload.push(0);
+        changed = AliasTransactionPlanV1::new(changed.body);
+        assert!(validate_paid_plan(&manifest, &changed).is_err());
+    }
+    #[test]
+    fn journal_dispatch_claim_is_durable_and_exclusive() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("operation");
+        let value = prepared(&fixture_plan());
+        let journal = Journal::open(&path, true).unwrap();
+        journal
+            .install_json("catalog.prepared.json", &value)
+            .unwrap();
+        assert!(record_dispatch_claim(&journal, "catalog.submitted.json", &value).unwrap());
+        assert!(!record_dispatch_claim(&journal, "catalog.submitted.json", &value).unwrap());
+        assert!(Journal::open(&path, false).is_err());
+        drop(journal);
+        let journal = Journal::open(&path, false).unwrap();
+        assert!(!record_dispatch_claim(&journal, "catalog.submitted.json", &value).unwrap());
+        let mut other = value;
+        other.transaction_hash.push('0');
+        assert!(record_dispatch_claim(&journal, "catalog.submitted.json", &other).is_err());
+    }
+    #[test]
+    fn journal_rejects_links_replacement_and_incomplete_records() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("operation");
+        let journal = Journal::open(&path, true).unwrap();
+        journal.install("broken.json", b"{ incomplete").unwrap();
+        assert!(journal.optional_json::<ManifestV1>("broken.json").is_err());
+        symlink(path.join("broken.json"), path.join("linked.json")).unwrap();
+        assert!(journal.read_optional("linked.json").is_err());
+        fs::hard_link(path.join("broken.json"), path.join("hard.json")).unwrap();
+        assert!(journal.read_optional("hard.json").is_err());
+        fs::rename(&path, root.path().join("moved")).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(journal.revalidate().is_err());
+    }
+    #[test]
+    fn status_requires_exact_global_and_peer_state_applied() {
+        let hash = "ab".repeat(32);
+        let status = |scope: &str| {
+            Some(PipelineTransactionStatusResponse {
+                hash: hash.clone(),
+                scope: scope.into(),
+                resolved_from: "state".into(),
+                status: PipelineTransactionStatus {
+                    kind: "Applied".into(),
+                    block_height: Some(3),
+                },
+            })
+        };
+        let global = status("global");
+        let peer = status("local");
+        assert_eq!(
+            matching_applied_height(&hash, &global, &peer).unwrap(),
+            Some(3)
+        );
+        let mut cache = peer.clone();
+        cache.as_mut().unwrap().resolved_from = "cache".into();
+        assert_eq!(
+            matching_applied_height(&hash, &global, &cache).unwrap(),
+            None
+        );
+        assert!(matching_applied_height(&hash, &global, &global).is_err());
+        let mut other = peer.clone();
+        other.as_mut().unwrap().status.block_height = Some(4);
+        assert!(matching_applied_height(&hash, &global, &other).is_err());
+        let mut zero = peer;
+        zero.as_mut().unwrap().status.block_height = Some(0);
+        assert!(matching_applied_height(&hash, &global, &zero).is_err());
+        let report = phase_report(&fixture_plan(), Vec::new());
+        assert!(!report.deployment_complete);
+        assert!(
+            report
+                .verification
+                .authenticated_execution_commitment_required
+        );
+    }
+}

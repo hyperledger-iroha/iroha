@@ -49,9 +49,9 @@ class ProofGraphTests(unittest.TestCase):
         self.network_failure = False
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
-        for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES",
+        for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES",
                       "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES",
-                      "TORII_STAGES", "DAEMON_STAGES"):
+                      "TORII_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES"):
             stack.enter_context(patch.object(gate, group, ()))
         stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", tuple(self.names["cli"])),)))
         stack.enter_context(patch.object(gate, "NETWORK_STAGES", (("network fixture", tuple(self.names["network"])),)))

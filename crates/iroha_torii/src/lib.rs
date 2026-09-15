@@ -1586,6 +1586,11 @@ struct LiveResolvedAccountAlias {
 }
 fn live_dataspace_resolution_error(error: iroha_core::sns::SnsError) -> Error {
     match error {
+        error @ iroha_core::sns::SnsError::RegistrationNotFound { .. } => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(error.to_string()),
+            ))
+        }
         iroha_core::sns::SnsError::Conflict(message) => Error::AppConflict {
             code: iroha_core::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE,
             message,
@@ -9044,7 +9049,7 @@ async fn handler_account_permissions(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    AxQuery(p): AxQuery<crate::filter::Pagination>,
+    AxQuery(p): AxQuery<routing::PaginationParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let rate_limit_bypassed =
@@ -29336,6 +29341,9 @@ fn resolve_active_soradns_gateway_host(
         now_ms,
     )
     .map_err(|error| match error {
+        error @ iroha_core::sns::SnsError::RegistrationNotFound { .. } => {
+            soradns_public_gateway_error(StatusCode::NOT_FOUND, error.to_string())
+        }
         iroha_core::sns::SnsError::BadRequest(message) => {
             soradns_public_gateway_error(StatusCode::BAD_REQUEST, message)
         }

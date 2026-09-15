@@ -187,6 +187,13 @@ fn route_multilane_genesis_post_topology_transactions(
     vec![bootstrap_tx, validator_tx]
 }
 pub(super) fn network_builder() -> NetworkBuilder {
+    network_builder_with_genesis_transactions(Vec::new())
+}
+
+/// Include fixture instructions in the custom genesis that every peer executes.
+pub(super) fn network_builder_with_genesis_transactions(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+) -> NetworkBuilder {
     let mut lane_universal = Table::new();
     lane_universal.insert("index".into(), TomlValue::Integer(0));
     lane_universal.insert(
@@ -284,11 +291,11 @@ pub(super) fn network_builder() -> NetworkBuilder {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .without_npos_genesis_bootstrap()
-        .with_genesis_block(|topology, topology_entries| {
+        .with_genesis_block(move |topology, topology_entries| {
             let post_topology =
                 route_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = unexecuted_genesis_factory_with_post_topology(
-                Vec::new(),
+                extra_transactions.clone(),
                 post_topology,
                 topology,
                 topology_entries,

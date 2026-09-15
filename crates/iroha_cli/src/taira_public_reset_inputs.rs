@@ -8,6 +8,9 @@ use zeroize::Zeroizing;
 /// Actual local inputs whose derived identities are written into the inventory.
 #[derive(clap::Args, Debug)]
 pub(super) struct LocalInputs {
+    /// Complete native bundle produced by prepare-public-inputs; no handwritten identity fields.
+    #[arg(long, value_name = "DIR")]
+    public_inputs: PathBuf,
     #[arg(long, value_name = "PATH")]
     runtime_client_config: PathBuf,
     #[arg(long, value_name = "PATH", num_args = 4)]
@@ -18,7 +21,7 @@ pub(super) struct LocalInputs {
     #[arg(long, value_name = "PATH")]
     validator_operator_key: PathBuf,
     #[arg(long, value_name = "DIR")]
-    inrou_stage_dir: PathBuf,
+    inrou_stage_dir: Option<PathBuf>,
     /// Four exact local systemd units in validator order.
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_unit: Vec<PathBuf>,
@@ -139,6 +142,9 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     }
     // Reject an impossible signed execution plan before source/artifact scans or custody reads.
     validate_timeout_policy(inventory)?;
+    let public = public_inputs::load(&inputs.public_inputs)?;
+    inventory.next_genesis_hash = public.genesis_hash;
+    inventory.canary_onboarding_request = public.canary_onboarding_request;
     let (source, source_bytes) = read_json::<SourceManifestV1>(
         Path::new(&inventory.revision.source_manifest_path),
         "source manifest",
@@ -188,7 +194,13 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
         artifact.target = BUILD_TARGET.to_owned();
     }
     for (validator, path) in inventory.validators.iter_mut().zip(&inputs.validator_unit) {
-        validator.systemd_unit_sha256 = unit_hash(path)?;
+        let unit = artifact(&validator.artifacts, "validator_unit")?;
+        if Path::new(&unit.local_path) != path || unit.sha256 != unit_hash(path)? {
+            return Err(eyre!(
+                "validator unit input is not its exact candidate artifact"
+            ));
+        }
+        validator.systemd_unit_sha256 = unit.sha256.clone();
     }
     inventory.edge.systemd_unit_sha256 = unit_hash(&inputs.edge_unit)?;
     derive_validator_identities(inventory, build_identity)?;
@@ -269,10 +281,13 @@ fn derive_validator_identities(
             &inventory.faucet_policy.asset_definition_id,
         )?;
         revalidate_pinned(&input, "validator config")?;
-        host::stopped_runtime::validate_config_slot(
-            &validator.slug,
-            &config.soracloud_runtime.inrou,
-        )?;
+        if inventory.qualification_scope.includes_inrou() || config.soracloud_runtime.inrou.enabled
+        {
+            host::stopped_runtime::validate_config_slot(
+                &validator.slug,
+                &config.soracloud_runtime.inrou,
+            )?;
+        }
         validate_candidate_probe_bind(&client.probe_origin, config.torii.address.value())?;
         if config.common.chain.to_string() != inventory.chain_id
             || config.common.peer.id.to_string() != client.peer_id
@@ -335,6 +350,10 @@ fn derive_validator_identities(
 }
 
 fn derive_runtime_stage(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result<()> {
+    inventory
+        .qualification_scope
+        .validate_stage_argument(inputs.inrou_stage_dir.as_deref())?;
+    inventory.validate_inrou_scope()?;
     let runtime = pin_owner_private_file(&inputs.runtime_client_config, "runtime client config")?;
     let token = pin_owner_private_file(&inputs.onboarding_token, "onboarding token")?;
     let clients = inputs
@@ -352,31 +371,32 @@ fn derive_runtime_stage(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Re
             "runtime client config does not bind the explicit public Taira canary"
         ));
     }
-    let (stage_hash, stage_bytes, files, fixed) =
-        host::pin_stage_tree(&inputs.inrou_stage_dir, None)?;
-    let identity = crate::soracloud::load_taira_inrou_stage_identity(
-        &config,
-        &inputs.inrou_stage_dir,
-        crate::taira::InrouCanaryMode::Deploy,
-    )?;
-    if host::revalidate_stage_files(&inputs.inrou_stage_dir, &files, None)?
-        != (stage_hash.clone(), stage_bytes)
-    {
-        return Err(eyre!("Inrou stage changed during inventory assembly"));
-    }
     inventory.runtime_client_config_sha256 =
         host::hash_pinned_input(&runtime, "runtime config", None)?;
     inventory.onboarding_token_sha256 = host::hash_pinned_input(&token, "onboarding token", None)?;
     inventory.validator_client_configs_sha256 =
         host::validator_config_closure_sha256(&clients, None)?;
-    inventory.inrou_stage_tree_sha256 = stage_hash.clone();
+    let Some(stage_dir) = inputs.inrou_stage_dir.as_deref() else {
+        return Ok(());
+    };
+    let (stage_hash, stage_bytes, files, fixed) = host::pin_stage_tree(stage_dir, None)?;
+    let identity = crate::soracloud::load_taira_inrou_stage_identity(
+        &config,
+        stage_dir,
+        crate::taira::InrouCanaryMode::Deploy,
+    )?;
+    if host::revalidate_stage_files(stage_dir, &files, None)? != (stage_hash.clone(), stage_bytes) {
+        return Err(eyre!("Inrou stage changed during inventory assembly"));
+    }
+
+    inventory.inrou_stage_tree_sha256 = Some(stage_hash.clone());
     let file_hash = |path: &str| {
         fixed
             .get(path)
             .cloned()
             .ok_or_else(|| eyre!("Inrou stage omits a mandatory fixed file"))
     };
-    inventory.inrou_canary = InrouCanaryV1 {
+    inventory.inrou_canary = Some(InrouCanaryV1 {
         public_root: PUBLIC_ROOT.to_owned(),
         replicas: 4,
         service_name: identity.service_name,
@@ -410,11 +430,11 @@ fn derive_runtime_stage(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Re
         guest_manifest_sha256: file_hash("manifests/aarch64.to")?,
         discovery_document_sha256: file_hash("payloads/discovery/index.json")?,
         discovery_manifest_sha256: file_hash("manifests/discovery.to")?,
-    };
+    });
     Ok(())
 }
 
-fn validate_taira_genesis_mode(
+pub(super) fn validate_taira_genesis_mode(
     mode: iroha::data_model::parameter::system::SumeragiConsensusMode,
 ) -> Result<()> {
     if mode != iroha::data_model::parameter::system::SumeragiConsensusMode::Npos {

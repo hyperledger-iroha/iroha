@@ -1443,7 +1443,8 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             ),
         );
         recovered_context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog");
         recovered_context.execution_policy_hash =
             super::super::v2_recovery::committed_execution_policy_hash(state.as_ref())
                 .expect("derive marker-replay execution policy");

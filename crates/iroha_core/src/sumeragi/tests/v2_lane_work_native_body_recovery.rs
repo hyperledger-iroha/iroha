@@ -451,7 +451,8 @@ fn native_body_recovery_adapter_with_kura(
         .state
         .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
     adapter.context.nexus_amx_context_hash =
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid committed catalog");
     adapter.context.execution_policy_hash =
         super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
             .expect("derive catalog-bound Native fixture policy");
@@ -1441,7 +1442,8 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
                 &fixture.state.view(),
                 crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                     fixture.state.as_ref(),
-                ),
+                )
+                .expect("valid committed catalog"),
             )
             .expect("derive successor exclusively from actual finalized State");
         let restart = LaneAdapterRestartParts::capture(&adapter);

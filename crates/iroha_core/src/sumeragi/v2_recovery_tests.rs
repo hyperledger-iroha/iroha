@@ -657,7 +657,8 @@ fn snapshot_record_for_state(
         snapshot_block_creation_time_ms: anchor_height,
         snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(&state),
     });
-    context.nexus_amx_context_hash = committed_nexus_amx_context_hash(&state);
+    context.nexus_amx_context_hash =
+        committed_nexus_amx_context_hash(&state).expect("valid committed catalog");
     context.execution_policy_hash =
         committed_execution_policy_hash(state).expect("derive snapshot execution policy");
     let record = wire::SnapshotV2BootstrapRecord {

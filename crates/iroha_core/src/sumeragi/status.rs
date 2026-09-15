@@ -5754,7 +5754,7 @@ pub fn update_lane_governance_from_statuses(statuses: &[LaneManifestStatus]) {
         .iter()
         .map(|status| {
             let manifest_required = status.governance.is_some();
-            let manifest_ready = manifest_required && status.manifest_path.is_some();
+            let manifest_ready = manifest_required && status.governance_rules.is_some();
             let manifest_path = status
                 .manifest_path
                 .as_ref()

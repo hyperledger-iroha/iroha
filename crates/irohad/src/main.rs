@@ -6642,12 +6642,13 @@ fn nexus_config_for_startup_replay(
     let Some(restored) = restored else {
         return configured;
     };
-    // A snapshot is a committed WSV checkpoint. Preserve its effective lane
-    // topology and autoscale cooldown while refreshing all static policy knobs
-    // from local configuration. Silently replacing either stateful value here
-    // can recreate a retired lane or permit an immediate duplicate transition.
+    // A snapshot is a committed WSV checkpoint. Preserve its effective catalogs
+    // and autoscale cooldown while refreshing static policy from local configuration.
+    // The State helper must verify restored dataspaces against the protected World overlay;
+    // this projection does not authenticate them or replace the configured baselines.
     configured.lane_catalog = restored.lane_catalog.clone();
     configured.lane_config = restored.lane_config.clone();
+    configured.dataspace_catalog = restored.dataspace_catalog.clone();
     configured.autoscale.last_transition_height = restored.autoscale.last_transition_height;
     configured
 }
@@ -6659,17 +6660,20 @@ fn nexus_config_for_startup_replay(
 fn nexus_for_runtime_surfaces(state: &State) -> iroha_config::parameters::actual::Nexus {
     state.nexus_snapshot()
 }
-/// Freeze the exact manifest source snapshot used while reconstructing State from Kura.
+/// Freeze the immutable configured manifest baseline used to reconstruct State from Kura.
 ///
-/// Replay executes ordinary transaction admission, so its registry must cover the same active
-/// catalog as the configured Nexus geometry. Loading this snapshot before replay also makes later
-/// catalog rebinding independent of filesystem changes during startup.
+/// Runtime lane manifests come only from the protected cumulative World overlay. They must never
+/// enter the local source scan or replace the digest of retained predecessor execution policy.
+/// The caller derives effective coverage with `State::lane_manifests_with_committed_catalog`.
 fn freeze_lane_manifests_for_startup_replay(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<LaneManifestRegistryHandle, GovernanceGuardError> {
-    let registry =
-        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
-    registry.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
+    let registry = LaneManifestRegistry::from_config(
+        &nexus.configured_lane_catalog,
+        &nexus.governance,
+        &nexus.registry,
+    );
+    registry.validate_active_coverage_for_catalog(&nexus.configured_lane_catalog)?;
     Ok(Arc::new(registry))
 }
 /// Freeze compliance once before snapshot authentication or transaction replay.
@@ -6693,15 +6697,16 @@ fn freeze_lane_compliance_for_startup_replay(
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
     Ok(Some(Arc::new(engine)))
 }
-/// Rebind the frozen startup sources to the effective catalog produced by replay.
+/// Reconstruct the effective sources, including catalog transitions committed during replay.
 fn rebind_frozen_lane_manifests_after_startup_replay(
-    frozen: &LaneManifestRegistryHandle,
+    state: &State,
     nexus: &iroha_config::parameters::actual::Nexus,
-) -> Result<LaneManifestRegistryHandle, GovernanceGuardError> {
-    let rebound = frozen.rebind(&nexus.lane_catalog, &nexus.governance);
-    rebound.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
-    Ok(Arc::new(rebound))
+) -> Result<LaneManifestRegistryHandle, iroha_core::state::LaneLifecycleError> {
+    let installed = state.lane_manifests.read().clone();
+    state.lane_manifests_with_committed_catalog(&installed, nexus)
 }
+#[cfg(test)]
+mod startup_runtime_catalog_tests;
 #[cfg(test)]
 mod startup_runtime_policy_tests;
 #[cfg(test)]
@@ -6977,10 +6982,12 @@ mod snapshot_read_error_tests {
         );
     }
     #[test]
-    fn startup_nexus_merge_preserves_snapshot_topology_and_cooldown_only() {
+    fn startup_nexus_merge_preserves_snapshot_catalogs_and_cooldown_only() {
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
-        use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
-        use iroha_model_base::topology::LaneId;
+        use iroha_data_model::nexus::{
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+        };
+        use iroha_model_base::topology::{DataSpaceId, LaneId};
         use std::num::{NonZeroU32, NonZeroU64};
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane namespace"),
@@ -6994,10 +7001,22 @@ mod snapshot_read_error_tests {
             ],
         )
         .expect("snapshot catalog");
+        let dataspaces = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(42),
+                alias: "snapshot-dataspace".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("snapshot dataspace projection");
         let mut restored = iroha_config::parameters::actual::Nexus {
             lane_config: RuntimeLaneConfig::from_catalog(&catalog),
             lane_catalog: catalog.clone(),
             configured_lane_catalog: catalog.clone(),
+            dataspace_catalog: dataspaces.clone(),
+            configured_dataspace_catalog: dataspaces.clone(),
             ..Default::default()
         };
         restored.autoscale.last_transition_height = 17;
@@ -7006,6 +7025,7 @@ mod snapshot_read_error_tests {
         configured.autoscale.target_block_ms = NonZeroU64::new(321).expect("nonzero target");
         let merged = nexus_config_for_startup_replay(configured, Some(&restored));
         assert_eq!(merged.lane_catalog, catalog);
+        assert_eq!(merged.dataspace_catalog, dataspaces);
         assert_eq!(merged.lane_config.entries().len(), 2);
         assert_eq!(merged.autoscale.last_transition_height, 17);
         assert_eq!(merged.autoscale.target_block_ms.get(), 321);
@@ -7013,6 +7033,11 @@ mod snapshot_read_error_tests {
             merged.configured_lane_catalog,
             iroha_data_model::nexus::LaneCatalog::default(),
             "snapshot topology must not replace the process-configured baseline"
+        );
+        assert_eq!(
+            merged.configured_dataspace_catalog,
+            DataSpaceCatalog::default(),
+            "snapshot dataspaces must not replace the immutable configured baseline"
         );
     }
     #[test]
@@ -7126,9 +7151,15 @@ mod snapshot_read_error_tests {
         let frozen = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect("ungoverned default lane is ready without a manifest");
         assert!(!frozen.has_manifest_source_alias("default"));
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.install_lane_manifests(&frozen);
         std::fs::write(manifest_dir.path().join("default.manifest.json"), b"{}")
             .expect("replace manifest source set after the startup freeze");
-        let rebound = rebind_frozen_lane_manifests_after_startup_replay(&frozen, &nexus)
+        let rebound = rebind_frozen_lane_manifests_after_startup_replay(&state, &nexus)
             .expect("frozen source set deterministically rebinds");
         assert!(!rebound.has_manifest_source_alias("default"));
         assert_eq!(
@@ -7981,7 +8012,18 @@ impl Iroha {
         // policy from configured static settings and authenticated restored topology without
         // replacing State's canonical snapshot projection. Freeze filesystem-backed policy once.
         let startup_policy_nexus = if provisional_imported_prefix {
-            nexus_config_for_startup_replay(config.nexus.clone(), Some(&state.nexus_snapshot()))
+            let candidate = nexus_config_for_startup_replay(
+                config.nexus.clone(),
+                Some(&state.nexus_snapshot()),
+            );
+            state
+                .nexus_with_committed_catalog(candidate)
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+                .map_err(|report| {
+                    report.attach(
+                        "restored physical dataspaces differ from protected catalog authority",
+                    )
+                })?
         } else {
             nexus_for_runtime_surfaces(&state)
         };
@@ -7991,9 +8033,13 @@ impl Iroha {
             );
             (Arc::new(LaneManifestRegistry::empty()), None)
         } else {
-            let manifests = freeze_lane_manifests_for_startup_replay(&startup_policy_nexus)
+            let baseline = freeze_lane_manifests_for_startup_replay(&startup_policy_nexus)
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))
                 .map_err(|report| report.attach("lane manifest registry is not ready before snapshot authentication and Kura replay"))?;
+            let manifests = state
+                .lane_manifests_with_committed_catalog(&baseline, &startup_policy_nexus)
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+                .map_err(|report| report.attach("committed lane manifests are invalid before snapshot authentication and Kura replay"))?;
             let compliance = freeze_lane_compliance_for_startup_replay(&startup_policy_nexus)?;
             (manifests, compliance)
         };
@@ -8272,20 +8318,16 @@ impl Iroha {
             &dataspace_catalog,
             lane_compliance.clone(),
         ));
-        // Replay may have committed lane lifecycle transitions. Rebind the same immutable source
-        // snapshot used by replay to the effective catalog, rather than rescanning mutable files
-        // at a second startup boundary.
+        // Replay may have committed catalog transitions. Reconstruct its effective registry from
+        // the retained immutable baseline plus protected World additions, without rescanning files.
         let lane_manifests = if emergency_fast {
             Arc::clone(&frozen_startup_lane_manifests)
         } else {
-            rebind_frozen_lane_manifests_after_startup_replay(
-                &frozen_startup_lane_manifests,
-                &runtime_nexus,
-            )
-            .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-            .map_err(|report| {
-                report.attach("lane manifest registry is not ready after atomic Kura replay")
-            })?
+            rebind_frozen_lane_manifests_after_startup_replay(&state, &runtime_nexus)
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+                .map_err(|report| {
+                    report.attach("lane manifest registry is not ready after atomic Kura replay")
+                })?
         };
         queue.install_lane_manifests_with_state(&lane_manifests, &state);
         state
@@ -8391,8 +8433,12 @@ impl Iroha {
         let compliance_policy_digest = state
             .lane_compliance_engine()
             .map(|engine| engine.consensus_policy_digest());
-        let lane_manifest_policy_digest =
-            (!emergency_fast).then(|| state.lane_manifests.read().consensus_policy_digest());
+        let lane_manifest_policy_digest = (!emergency_fast).then(|| {
+            state
+                .lane_manifests
+                .read()
+                .baseline_consensus_policy_digest()
+        });
         let config_caps = if emergency_fast {
             build_consensus_config_caps(
                 &config.nexus,
@@ -14432,7 +14478,14 @@ fn validate_genesis_execution_offline(
                 "lane manifest registry is not ready for genesis validation: {error}"
             ))
         })?;
-    state.install_lane_manifests(&frozen_lane_manifests);
+    let lane_manifests = state
+        .lane_manifests_with_committed_catalog(&frozen_lane_manifests, &replay_nexus)
+        .map_err(|error| {
+            Report::new(error)
+                .change_context(MainError::Config)
+                .attach("committed lane manifests are invalid for genesis validation")
+        })?;
+    state.install_lane_manifests(&lane_manifests);
     let frozen_compliance = freeze_lane_compliance_for_startup_replay(&replay_nexus)
         .change_context(MainError::Config)?;
     state.install_lane_compliance_engine(frozen_compliance);
@@ -18625,6 +18678,9 @@ mod tests {
             let nexus = nexus_for_runtime_surfaces(&state);
             let lane_manifests = freeze_lane_manifests_for_startup_replay(&nexus)
                 .expect("fixture lane manifests must be ready for genesis replay");
+            let lane_manifests = state
+                .lane_manifests_with_committed_catalog(&lane_manifests, &nexus)
+                .expect("fixture committed manifests must match their protected catalog");
             state.install_lane_manifests(&lane_manifests);
             let compliance = freeze_lane_compliance_for_startup_replay(&nexus)
                 .expect("fixture compliance must be ready for genesis replay");

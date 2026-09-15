@@ -21,7 +21,7 @@ class CollectIndependentRegressionTests(unittest.TestCase):
         ("crypto", "CRYPTO_STAGES"), ("p2p", "P2P_STAGES"),
         ("core", "CORE_STAGES"), ("test-network", "TEST_NETWORK_STAGES"),
         ("client", "CLIENT_STAGES"), ("torii-unit", "TORII_UNIT_STAGES"),
-        ("torii", "TORII_STAGES"), ("daemon", "DAEMON_STAGES"), ("cli", "STAGES"),
+        ("torii", "TORII_STAGES"), ("torii-lifecycle", "TORII_LIFECYCLE_STAGES"), ("daemon", "DAEMON_STAGES"), ("cli", "STAGES"),
     )
 
     def run_fixtures(self, *, failed=(), ignored=(), missing=None, custody_failure=None):
@@ -61,7 +61,7 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 env = dict(os.environ, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR=str(root))
                 for name, group in self.groups:
                     stack.enter_context(patch.object(gate, group, ((name, (name + "_first", name + "_second")),)))
-                for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
+                for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
                     stack.enter_context(patch.object(gate, group, ()))
                 for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
                     stack.enter_context(patch.object(gate, function))
@@ -82,10 +82,10 @@ class CollectIndependentRegressionTests(unittest.TestCase):
             return caught.exception, executed.read_text().splitlines() if executed.exists() else [], released
 
     def test_all_independent_libraries_daemon_and_cli_report_failures_before_any_network_build(self):
-        error, executed, released = self.run_fixtures(failed=("core", "torii", "cli"))
+        error, executed, released = self.run_fixtures(failed=("core", "torii", "torii-lifecycle", "cli"))
         self.assertIsInstance(error, gate.SelectedRegressionFailures)
-        self.assertEqual(len(error.failures), 3)
-        self.assertTrue(all(name + "_first" in str(error) for name in ("core", "torii", "cli")))
+        self.assertEqual(len(error.failures), 4)
+        self.assertTrue(all(name + "_first" in str(error) for name in ("core", "torii", "torii-lifecycle", "cli")))
         self.assertEqual(executed, [name + suffix for name, _ in self.groups[-1:] + self.groups[:-1] for suffix in ("_first", "_second")])
         self.assertEqual(released, [name for name, _ in self.groups[-1:] + self.groups[:-1]])
 
@@ -95,8 +95,8 @@ class CollectIndependentRegressionTests(unittest.TestCase):
         self.assertEqual(len(error.failures), 2)
         self.assertIn("daemon_first (exit 0)", str(error))
         self.assertIn("cli_first (exit 101)", str(error))
-        self.assertEqual(len(executed), 18)
-        self.assertEqual(len(released), 9)
+        self.assertEqual(len(executed), 20)
+        self.assertEqual(len(released), 10)
 
     def test_missing_required_test_stops_immediately_without_becoming_a_regression(self):
         error, executed, released = self.run_fixtures(missing="core")

@@ -277,7 +277,8 @@ def native_journal_progress(path):
             value.get("schema") == "iroha.taira.public-reset.journal.v1"
             and value.get("phase") in phases
             and type(value.get("next_step")) is int
-            and 0 <= value["next_step"] <= 15
+            and 0 <= value["next_step"] <= len(qualification_steps(value.get("qualification_scope")))
+            and (value["phase"] != "preseed" or value["qualification_scope"] == "full_inrou")
             and isinstance(value.get("touched_validators"), list)
             and len(value["touched_validators"]) <= 4
             and type(value.get("edge_touched")) is bool,
@@ -352,9 +353,15 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
     return result
 
 
+def qualification_steps(scope):
+    """Exact first-release native journal sequence; never reinterpret old indices."""
+    require(scope in ("core_testnet", "full_inrou"), "one explicit canonical qualification scope is required")
+    return ("preflight", "stage", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "convergence", "canary", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
+
+
 def require_candidate_probe_inventory(inventory):
     """Reject obsolete or ambiguous public drafts before any retirement mutation."""
-    require(inventory.get("qualification_scope") in ("core_testnet", "inrou"),
+    require(inventory.get("qualification_scope") in ("core_testnet", "full_inrou"),
             "one explicit qualification scope is required")
     operator_key = inventory.get("operator_public_key")
     # PublicKey Display uses a lowercase multihash prefix and uppercase payload.
@@ -1059,7 +1066,8 @@ def _retire_validate_terminal(inventory, value, *, expected_commit=None, expecte
         and value.get("deployment_id") == inventory["deployment_id"]
         and value.get("status") == value.get("phase") == "rolled_back"
         and type(value.get("next_step")) is int
-        and 5 <= value["next_step"] <= 12
+        and value.get("qualification_scope") == inventory.get("qualification_scope")
+        and 5 <= value["next_step"] <= len(qualification_steps(inventory.get("qualification_scope"))) - 3
         and value.get("recovery_intent") is None
         and value.get("touched_validators") == list(RETIRE_SLUGS[:-1])
         and type(value.get("edge_touched")) is bool
@@ -1474,6 +1482,8 @@ def _retire_prune_marker(g, path, context, slug, kind):
 
 def _retire_prune_scopes(g, context, inventory):
     """Derive closed exact file slots and three public manifest chunk scopes."""
+    qualification_steps(inventory.get("qualification_scope"))
+    full_inrou = inventory["qualification_scope"] == "full_inrou"
     exact, chunk_dirs, protected, stores = {}, set(), {}, []
     staged = RETIRE_RUNTIME / "journal-v1/staged-artifacts-v1" / context["inventory_sha256"]
     runtime_stage = RETIRE_RUNTIME / "journal-v1/runtime-stage-v1" / context["authorization_sha256"]
@@ -1486,7 +1496,7 @@ def _retire_prune_scopes(g, context, inventory):
                  "archived host stage coordination differs from the physical host")
     host_stage = (RETIRE_WORK / "retired-control" / context["coordination_relative"]
                   / "inrou-stage-v1" / context["nonce"])
-    if os.path.lexists(host_stage):
+    if full_inrou and os.path.lexists(host_stage):
         _retire_need(stat.S_IMODE(_retire_prune_info(host_stage, directory=True).st_mode) == 0o700,
                      "archived host stage must remain owner-private")
         carrier = next(host for host in inventory["validators"]
@@ -1517,7 +1527,7 @@ def _retire_prune_scopes(g, context, inventory):
                 if release.exists():
                     _retire_prune_marker(g, release, context, slug, "release")
                     exact[release / "bin" / release_name] = (artifact["size"], 0o755)
-        if slug != "taira-edge":
+        if full_inrou and slug != "taira-edge":
             fresh = RETIRE_WORK / "retired-control" / slug / "rollback" / context["nonce"] / "fresh-state.after"
             if fresh.exists():
                 _retire_prune_marker(g, fresh, context, slug, "fresh_state")
@@ -1525,7 +1535,7 @@ def _retire_prune_scopes(g, context, inventory):
                 _retire_prune_marker(g, store, context, slug, "fresh_state_entry")
                 _retire_prune_info(store, directory=True)
                 stores.append(store)
-    for name in ("rootfs.ext4", "vmlinux", "initrd.img"):
+    for name in (("rootfs.ext4", "vmlinux", "initrd.img") if full_inrou else ()):
         source = CONTINUITY_PREP / "inrou-stage/payloads/guest/aarch64" / name
         info = _retire_prune_info(source)
         _retire_need(info.st_size > 0, "canonical guest image is empty")
@@ -3421,15 +3431,17 @@ def _boot_main(request):
     print(json.dumps(result, sort_keys=True))
 
 
-def local_arguments(raw):
+def local_arguments(raw, qualification_scope):
     """Admit the exact recorded native input argument shape, containing paths only."""
     value = decode(raw)
+    qualification_steps(qualification_scope)
     shape = (
+        ("--public-inputs", 1),
         ("--runtime-client-config", 1),
         ("--validator-client-config", 4),
         ("--validator-operator-key", 1),
         ("--onboarding-token", 1),
-        ("--inrou-stage-dir", 1),
+    ) + ((("--inrou-stage-dir", 1),) if qualification_scope == "full_inrou" else ()) + (
         ("--validator-unit", 4),
         ("--edge-unit", 1),
         ("--known-hosts", 1),
@@ -3494,7 +3506,7 @@ def preflight_identity(attempt, inventory):
         report["schema"] == "iroha.taira.public-reset.report.v1"
         and report["command"] == "preflight"
         and report["status"] == "ok"
-        and inventory.get("qualification_scope") in ("core_testnet", "inrou")
+        and inventory.get("qualification_scope") in ("core_testnet", "full_inrou")
         and report.get("qualification_scope") == inventory["qualification_scope"]
         and report["deployment_id"] == inventory["deployment_id"]
         and report["revision"] == inventory["revision"]["commit"]
@@ -3542,7 +3554,7 @@ def completed_attempt(plan, attempt, *, required=False):
         "authorization_nonce": inventory["authorization_nonce"],
         "status": "completed",
         "phase": "completed",
-        "next_step": 15,
+        "next_step": len(qualification_steps(inventory["qualification_scope"])),
         "recovery_intent": None,
         "touched_validators": [row["slug"] for row in inventory["validators"]],
         "edge_touched": True,
@@ -3562,7 +3574,7 @@ def completed_attempt(plan, attempt, *, required=False):
         public_record(journal / "deployment-proven" / name, owner=0, private=True)
     )
     require(
-        proven == dict(expected, status="sealing", phase="seal", next_step=13),
+        proven == dict(expected, status="sealing", phase="seal", next_step=len(qualification_steps(inventory["qualification_scope"])) - 2),
         "native completed receipt lacks its exact deployment proof",
     )
     return {
@@ -3780,9 +3792,17 @@ def capacity_module(source):
     return namespace
 
 
-def validate_full_capacity(module, plan):
+def validate_full_capacity(module, plan, qualification_scope):
     """Require the complete native cohost model, including four writable runtimes."""
+    qualification_steps(qualification_scope)
     rows = module["validate_plan"](plan)
+    if qualification_scope == "core_testnet":
+        expected = {"coordinator artifact snapshot", "per-role artifact uploads", "per-role installed artifacts", "guest filesystem headroom"}
+        require(len(rows) == 4 and {row["label"] for row in rows} == expected,
+                "core capacity requires exactly3A plus headroom, without Inrou allocations")
+        require(all(row["bytes"] > 0 and row["inodes"] > 0 for row in rows), "core allocation bounds must be positive")
+        require(next(row for row in rows if row["label"] == "guest filesystem headroom")["bytes"] >= 2 * 1024**3, "core capacity requires explicit2GiB headroom")
+        return
     expected = {
         "coordinator artifact snapshot",
         "per-role artifact uploads",
@@ -3905,12 +3925,15 @@ def derive_runtime_paths(plan, binary, inventory, arguments):
         arguments["--runtime-client-config"] == [str(prep / "runtime-client.toml")]
         and arguments["--validator-client-config"]
         == [str(prep / f"validator-{index}-client.toml") for index in range(1, 5)]
-        and arguments["--inrou-stage-dir"] == [str(prep / "inrou-stage")]
+        and arguments["--public-inputs"] == [str(prep / "public-inputs")]
+        and ((arguments.get("--inrou-stage-dir") == [str(prep / "inrou-stage")])
+             if inventory["qualification_scope"] == "full_inrou" else "--inrou-stage-dir" not in arguments)
         and arguments["--onboarding-token"]
         == [str(prep / "network/runtime/onboarding.token")],
         "retained native arguments do not identify one canonical preparation",
     )
     value.update(
+        qualification_scope=inventory["qualification_scope"],
         attempts_root=str(runtime / "retry-v1"),
         binary_manifest=str(
             Path(binary["destination"]).parent / "verified-manifest.json"
@@ -3954,7 +3977,9 @@ def public_file_metadata(path):
 
 def measured_capacity_inputs(inventory, stage):
     """Measure the retained public SF1 stage and artifact lengths without secret reads."""
-    stage = direct(stage)
+    scope = inventory.get("qualification_scope")
+    qualification_steps(scope)
+    require((scope == "core_testnet" and stage is None) or (scope == "full_inrou" and stage is not None), "stage argument does not match signed capacity scope")
     rows = []
     for host in inventory["validators"] + [inventory["edge"]]:
         for artifact in host["artifacts"]:
@@ -3971,6 +3996,18 @@ def measured_capacity_inputs(inventory, stage):
                     "local_metadata": metadata,
                 }
             )
+    if scope == "core_testnet":
+        require("inrou_canary" in inventory and inventory["inrou_canary"] is None
+                and "inrou_stage_tree_sha256" in inventory and inventory["inrou_stage_tree_sha256"] is None,
+                "core_testnet must not carry Inrou capacity inputs")
+        require(rows, "core artifact metadata is empty")
+        space = os.statvfs(rows[0]["local_metadata"]["path"])
+        return {"schema": "taira.public-capacity-inputs.v1", "qualification_scope": scope,
+                "secret_contents_read": False, "commit": inventory["revision"]["commit"], "artifacts": rows,
+                "inventory_inrou_stage_bytes": None, "stage_files": [], "stage_directories": [],
+                "native_sf1_manifest_bindings": None,
+                "filesystem": {"fragment_bytes": space.f_frsize or space.f_bsize}}, None
+    stage = direct(stage)
     directories, files = [], []
     for parent, children, names in os.walk(stage, followlinks=False):
         require(
@@ -3993,6 +4030,7 @@ def measured_capacity_inputs(inventory, stage):
     space = os.statvfs(stage)
     inputs = {
         "schema": "taira.public-capacity-inputs.v1",
+        "qualification_scope": scope,
         "secret_contents_read": False,
         "commit": inventory["revision"]["commit"],
         "artifacts": rows,
@@ -4119,7 +4157,7 @@ def validate_execution_capacity(request, capacity, postconditions, resume_id):
                                              len(plan["retired_public_imports"]))
         require(plan["capacity_plan"] == expected["guest_plan"], "exact bounded retirement capacity required")
     else:
-        validate_retry_capacity(capacity, plan["capacity_plan"], postconditions)
+        validate_retry_capacity(capacity, plan["capacity_plan"], postconditions, plan["qualification_scope"])
         if not postconditions:
             expected = request.get("retirement_attempt_id")
             require(isinstance(expected, str) and re.fullmatch(r"retry-[0-9]{16,24}-[0-9a-f]{8}", expected)
@@ -4158,7 +4196,7 @@ def guest_admit(request):
     _, arguments = local_arguments(
         public_record(
             inventory_path.parent / "native-local-args.json", owner=0, private=True
-        )
+        ), inventory["qualification_scope"]
     )
     plan = derive_runtime_paths(plan, request["binary"], inventory, arguments)
     plan["previous_terminal"] = str(
@@ -4191,7 +4229,7 @@ def guest_admit(request):
                                            len(plan["retired_public_imports"]))
     else:
         inputs, runtime = measured_capacity_inputs(
-            inventory, arguments["--inrou-stage-dir"][0]
+            inventory, arguments["--inrou-stage-dir"][0] if inventory["qualification_scope"] == "full_inrou" else None
         )
         capacity = capacity_module(request["capacity_source"])
         services = [
@@ -4213,17 +4251,17 @@ def guest_admit(request):
             store_paths=[
                 str(Path(host["state_root"]) / "sorafs-data")
                 for host in inventory["validators"]
-            ],
+            ] if inventory["qualification_scope"] == "full_inrou" else [],
             runtime_paths=[
                 str(Path(host["state_root"]) / "inrou-data")
                 for host in inventory["validators"]
-            ],
+            ] if inventory["qualification_scope"] == "full_inrou" else [],
             guest_headroom_path=plan["runtime_root"],
             backing_path=request["backing_path"],
         )
     plan["capacity_plan"] = result["guest_plan"]
     if intent == "deployment" or postconditions:
-        validate_retry_capacity(capacity, plan["capacity_plan"], postconditions)
+        validate_retry_capacity(capacity, plan["capacity_plan"], postconditions, plan["qualification_scope"])
     observed = check_capacity(capacity, plan["capacity_plan"], intent + "-admission")
     result.update(
         schema="taira.retry-admission.v1",
@@ -4288,9 +4326,9 @@ def postcondition_capacity_plans(runtime_root, backing_path):
     }
 
 
-def validate_retry_capacity(capacity, plan, postconditions):
+def validate_retry_capacity(capacity, plan, postconditions, qualification_scope):
     if not postconditions:
-        return validate_full_capacity(capacity, plan)
+        return validate_full_capacity(capacity, plan, qualification_scope)
     rows = capacity["validate_plan"](plan)
     require(
         len(rows) == 2
@@ -4396,8 +4434,9 @@ def guest_locked(request, capacity, root):
                 "retired attempt changed before deployment lock")
     inventory = decode(public_record(inventory_path, owner=0, private=True))
     require_candidate_probe_inventory(inventory)
+    require(inventory["qualification_scope"] == plan["qualification_scope"], "capacity scope differs from exact native inventory")
     require_same_inventory_artifacts(inventory, binary, source)
-    args, arguments = local_arguments(public_record(args_path, owner=0, private=True))
+    args, arguments = local_arguments(public_record(args_path, owner=0, private=True), inventory["qualification_scope"])
     require(
         arguments["--known-hosts"] == [plan["known_hosts"]],
         "native SSH authority differs",
@@ -4570,7 +4609,7 @@ def guest_locked(request, capacity, root):
             attempt / "apply-started.json", preflight_identity(attempt, assembled)
         )
         run_native(
-            [*cli, "apply", *authentication, *args[: args.index("--validator-unit")]],
+            [*cli, "apply", *authentication, *args[args.index("--runtime-client-config"): args.index("--validator-unit")]],
             logs / phase,
             phase=phase,
             journal_path=Path(plan["runtime_root"])
@@ -4707,7 +4746,7 @@ def public_validation(binary, inventory, directory):
     """Run the exact released doctor without loading a client config or credentials."""
     qualification_scope = inventory.get("qualification_scope")
     require(
-        qualification_scope in ("core_testnet", "inrou"),
+        qualification_scope in ("core_testnet", "full_inrou"),
         "public validation requires the signed qualification scope",
     )
     doctor_scope = "basic" if qualification_scope == "core_testnet" else "full"
@@ -4866,7 +4905,7 @@ def resume_postconditions(request, attempt, terminal_path):
         _, arguments = local_arguments(
             public_record(
                 attempt / "assembly/native-local-args.json", owner=0, private=True
-            )
+            ), inventory["qualification_scope"]
         )
         configure_protocols(
             plan,

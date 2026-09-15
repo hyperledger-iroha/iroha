@@ -32,6 +32,10 @@ fn apply_sora_profile_sets_catalogs_on_defaults() {
         "the profile catalog must become the immutable consensus-policy baseline"
     );
     assert_eq!(root.nexus.dataspace_catalog, sora_dataspace_catalog());
+    assert_eq!(
+        root.nexus.configured_dataspace_catalog, root.nexus.dataspace_catalog,
+        "the profile must initialize the immutable dataspace baseline before runtime replay"
+    );
     assert_eq!(root.nexus.routing_policy, sora_routing_policy());
     assert_eq!(
         root.nexus.lane_config.entries().len(),

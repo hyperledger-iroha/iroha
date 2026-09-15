@@ -655,7 +655,8 @@ impl StrictReplayFixture {
             &self.materialized_state.view(),
             crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                 self.materialized_state.as_ref(),
-            ),
+            )
+            .expect("valid committed catalog"),
         )
         .expect("derive unique successor from committed parent authority")
     }

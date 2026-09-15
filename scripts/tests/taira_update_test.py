@@ -575,36 +575,9 @@ class CoordinatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'cohort stop incomplete'):
                     guest.stop_all()
 
-    def test_cohort_retry_waits_for_process_http_and_readiness_under_one_deadline(self):
-        props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
-                 'MainPID': '42', 'InvocationID': 'a' * 32}
-        old = {'role': guest.ROLES[0], 'config_stamp': [1], 'config_sha256': 'same',
-               'state_root_identity': [2], 'current_target': 'same', 'systemd': props,
-               'public': {'height': 221, 'commit': guest.OLD}}
-        tip = {'height': 221, 'hash': 'c' * 64}
-        now = [0.0]
-        with patch.object(guest.time, 'monotonic', side_effect=lambda: now[0]), \
-             patch.object(guest.time, 'sleep', side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
-             patch.object(guest, 'observe', side_effect=[RuntimeError('curl before HTTP start'),
-                                                      old, old]) as observe, \
-             patch.object(guest, 'systemd', return_value=props), \
-             patch.object(guest, 'native_kura_hash', return_value=tip['hash']), \
-             patch.object(guest, 'command', side_effect=[RuntimeError('readyz 503'), b'']) as http:
-            result = guest.wait_for_cohort([{'role': guest.ROLES[0]}], [old], after=False,
-                                          commit=guest.OLD, retained_tip=tip, timeout=5)
-            self.assertEqual(result, [old])
-            self.assertEqual(observe.call_count, 3)
-            self.assertEqual(now[0], 4)
-            self.assertIn('http://127.0.0.1:8080/readyz', http.call_args.args[0])
-            observe.side_effect = RuntimeError('still not ready')
-            with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
-                guest.wait_for_cohort([{}], [old], after=True, commit='a' * 40,
-                                      retained_tip=tip, timeout=5)
-            self.assertEqual(now[0], 9)
-
     def test_public_probe_errors_identify_role_endpoint_and_exit_without_native_content(self):
         private = b'never expose this response, stderr or argv'
-        for route, code in (('/status', 7), ('/readyz', 22),
+        for route, code in (('/status', 7), ('/readyz', 56),
                             ('/v1/accounts/faucet/puzzle', 28)):
             with self.subTest(route=route, code=code), \
                  patch.object(guest.subprocess, 'run', return_value=SimpleNamespace(
@@ -628,6 +601,71 @@ class CoordinatorTests(unittest.TestCase):
                 self.assertIn(f'role={guest.ROLES[0]} endpoint=/status', str(failure.exception))
                 self.assertNotIn('never expose', str(failure.exception))
                 self.assertNotIn('private', str(failure.exception))
+
+    def test_public_probe_classifies_only_transport_and_exact_503_as_transient(self):
+        for status in (200, 400, 401, 403, 404, 429, 500, 502, 503, 504):
+            raw = b'public body\n' + str(status).encode()
+            with self.subTest(status=status), patch.object(guest.subprocess, 'run',
+                    return_value=SimpleNamespace(returncode=0 if status == 200 else 22,
+                                                 stdout=raw, stderr=b'private diagnostic')):
+                if status == 200:
+                    self.assertEqual(guest.public_probe(0, '/status'), b'public body')
+                else:
+                    with self.assertRaises(RuntimeError) as failed:
+                        guest.public_probe(0, '/status')
+                    self.assertEqual(isinstance(failed.exception, guest.StartupProbeUnavailable), status == 503)
+                    self.assertIn('http_status=' + str(status), str(failed.exception))
+                    self.assertNotIn('body', str(failed.exception))
+                    self.assertNotIn('private', str(failed.exception))
+        for code in (6, 7, 23, 28, 35, 52, 56, 60):
+            with self.subTest(exit_code=code), patch.object(guest.subprocess, 'run',
+                    return_value=SimpleNamespace(returncode=code, stdout=b'', stderr=b'')):
+                with self.assertRaises(RuntimeError) as failed:
+                    guest.public_probe(0, '/readyz')
+                self.assertEqual(isinstance(failed.exception, guest.StartupProbeUnavailable),
+                                 code in (7, 28, 52, 56))
+
+    def test_malformed_http_status_and_native_tool_failures_are_permanent(self):
+        for raw in (b'', b'200', b'private body\nxyz', b'body\n200\n'):
+            with self.subTest(raw=raw), patch.object(guest.subprocess, 'run',
+                    return_value=SimpleNamespace(returncode=0, stdout=raw, stderr=b'')):
+                with self.assertRaises(RuntimeError) as failed:
+                    guest.public_probe(0, '/status')
+                self.assertNotIsInstance(failed.exception, guest.StartupProbeUnavailable)
+                self.assertIn('HTTP status is malformed', str(failed.exception))
+        with patch.object(guest.subprocess, 'run', side_effect=OSError('private diagnostics')):
+            with self.assertRaises(RuntimeError) as failed:
+                guest.public_probe(0, '/status')
+            self.assertNotIsInstance(failed.exception, guest.StartupProbeUnavailable)
+            self.assertNotIn('private diagnostics', str(failed.exception))
+
+    def test_http200_ready_body_is_exact_native_contract(self):
+        for body in (b'Ready', b'', b'NotReady', b'Ready\n', b'{"ready":true}'):
+            with self.subTest(body=body), patch.object(guest.subprocess, 'run',
+                    return_value=SimpleNamespace(returncode=0, stdout=body + b'\n200', stderr=b'')):
+                if body == b'Ready':
+                    self.assertEqual(guest.public_probe(0, '/readyz'), body)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'readiness body differs') as failed:
+                        guest.public_probe(0, '/readyz')
+                    self.assertNotIsInstance(failed.exception, guest.StartupProbeUnavailable)
+
+    def test_invalid_status_fails_before_transient_puzzle_can_hide_it(self):
+        good = {'blocks': 220, 'build': {'git_commit_sha': guest.CANDIDATE_COMMIT}}
+        bad_statuses = [dict(good, build={'git_commit_sha': 'f' * 40}),
+                        dict(good, build=[]), dict(good, blocks=True),
+                        dict(good, blocks=0), dict(good, blocks=199)]
+        for status in bad_statuses:
+            with self.subTest(status=status), patch.object(guest, 'public_get',
+                    side_effect=[status, guest.StartupProbeUnavailable('puzzle 503')]) as read:
+                with self.assertRaises(RuntimeError) as failed:
+                    guest.public_identity(3, expected_commit=guest.CANDIDATE_COMMIT, minimum_height=200)
+                self.assertNotIsInstance(failed.exception, guest.StartupProbeUnavailable)
+                self.assertEqual(read.call_args_list, [unittest.mock.call(3, '/status')])
+        with patch.object(guest, 'public_get',
+                side_effect=[good, guest.StartupProbeUnavailable('puzzle 503')]):
+            with self.assertRaises(guest.StartupProbeUnavailable):
+                guest.public_identity(3, expected_commit=guest.CANDIDATE_COMMIT, minimum_height=200)
 
     def test_failed_http_observation_reports_process_restart_without_config_or_body(self):
         old = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
@@ -680,38 +718,20 @@ class CoordinatorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'checkpoint cohort differs'):
             guest.cohort_retained_tip(checkpoints[::-1])
 
-    def test_cohort_requires_common_prefix_without_requiring_empty_blocks(self):
-        rows = [{'role': role} for role in guest.ROLES]
-        props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
-                 'MainPID': '42', 'InvocationID': 'a' * 32}
-        before = [{'role': role, 'config_stamp': [1], 'state_root_identity': [2],
-                   'current_target': 'same', 'systemd': props,
-                   'public': {'height': height, 'commit': guest.OLD}}
-                  for role, height in zip(guest.ROLES, [1260, 1260, 1023, 1260], strict=True)]
-        current = copy.deepcopy(before)
-        tip = {'height': 1260, 'hash': 'c' * 64}
-        now = [0.0]
-        with patch.object(guest.time, 'monotonic', side_effect=lambda: now[0]), \
-             patch.object(guest.time, 'sleep', side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)), \
-             patch.object(guest, 'observe', side_effect=lambda row, **kw: current[guest.ROLES.index(row['role'])]), \
-             patch.object(guest, 'systemd', return_value=props) as states, \
-             patch.object(guest, 'native_kura_hash', return_value=tip['hash']) as hashes, \
-             patch.object(guest, 'command', return_value=b'') as ready:
-            with self.assertRaisesRegex(RuntimeError, 'common retained cohort height is not ready'):
-                guest.wait_for_cohort(rows, before, after=True, commit=guest.OLD,
-                                      retained_tip=tip, timeout=3)
-            self.assertGreater(ready.call_count, 0, 'catch-up extensions require readiness')
-            self.assertGreater(states.call_count, 0, 'catch-up extensions require stable processes')
-            current[2]['public']['height'] = 1260
-            hashes.reset_mock()
-            self.assertEqual(guest.wait_for_cohort(rows, before, after=True, commit=guest.OLD,
-                                                 retained_tip=tip, timeout=3), current)
-            self.assertEqual([call.args for call in hashes.call_args_list],
-                             [(role, 1260) for role in guest.ROLES])
-            self.assertEqual(now[0], 3, 'an idle converged chain needs no delay or new block')
-            hashes.return_value = 'd' * 64
+    def test_stopped_cohort_checks_every_overlapping_prefix_before_startup(self):
+        checkpoints = [{'role': role, 'kura_tip': {'height': height, 'hash': digest * 64}}
+                       for role, height, digest in zip(guest.ROLES,
+                           [1260, 1260, 1023, 1260], ['c', 'c', 'b', 'c'], strict=True)]
+        with patch.object(guest, 'native_kura_hash',
+                          side_effect=lambda role, height: ('b' if height == 1023 else 'c') * 64) as hashes:
+            self.assertEqual(guest.verify_stopped_cohort_prefixes(checkpoints),
+                             {'height': 1260, 'hash': 'c' * 64})
+            self.assertEqual(hashes.call_count, 13)
+            hashes.side_effect = lambda role, height: ('a' if role == guest.ROLES[0]
+                                                       and height == 1023 else
+                                                       'b' if height == 1023 else 'c') * 64
             with self.assertRaisesRegex(RuntimeError, 'retained Kura prefix hash changed'):
-                guest.observe_cohort(rows, before, after=True, commit=guest.OLD, retained_tip=tip)
+                guest.verify_stopped_cohort_prefixes(checkpoints)
 
     def test_cohort_final_process_sweep_rejects_restart_after_individual_observation(self):
         props = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
@@ -920,7 +940,7 @@ class CoordinatorTests(unittest.TestCase):
                                'network_id': guest.NETWORK,
                                'height': 200 if after else 199}}
 
-        def observe(row, *, after=False):
+        def observe(row, *, after=False, allow_unavailable=False, **kwargs):
             if not after:
                 raise AssertionError('stopped predecessor has no live Torii observation')
             events.append('observe-' + row['role'])
@@ -968,6 +988,11 @@ class CoordinatorTests(unittest.TestCase):
                 records[name] = value
             stack.enter_context(patch.object(guest, 'record', side_effect=record))
             stack.enter_context(patch.object(guest, 'command', side_effect=native))
+            stack.enter_context(patch.object(guest, 'public_probe', return_value=b'Ready'))
+            now = [0.0]
+            stack.enter_context(patch.object(guest.time, 'monotonic', side_effect=lambda: now[0]))
+            stack.enter_context(patch.object(guest.time, 'sleep',
+                side_effect=lambda seconds: now.__setitem__(0, now[0] + seconds)))
             stack.enter_context(patch.object(guest, 'native_private_command', side_effect=lambda *a, **k: events.append(k['name'])))
             stack.enter_context(patch.object(guest, 'observe', side_effect=observe))
             def observing_owner():
@@ -1044,6 +1069,10 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(records['cohort-ready.json']['retained_tip'], records['cohort-retained-tip.json'])
         self.assertTrue(records['cohort-ready.json']['startup_processes_unchanged'])
         self.assertTrue(records['result.json']['cohort_processes_verified_after_public_doctor'])
+        self.assertTrue(records['result.json']['all_own_retained_tips_verified_after_public_doctor'])
+        self.assertEqual(records['result.json']['cohort_fresh_quorum_confirmations'], 2)
+        self.assertEqual(len(records['cohort-initial-quorum.json']['samples']), 2)
+        self.assertEqual(len(records['cohort-ready.json']['quorum_confirmations']), 2)
         doctor = events.index('public-doctor')
         for role in guest.ROLES:
             for event in ('observe-' + role, 'hash-' + role, 'systemd-iroha3d-' + role + '.service'):
@@ -1252,11 +1281,16 @@ class CohortProgressTests(unittest.TestCase):
                         'public': {'height': 200, 'commit': guest.OLD}}
                        for index, role in enumerate(guest.ROLES)]
 
-    def run_catchup(self, sample, *, target=220, timeout=6, max_timeout=30, ready=None, systemd=None):
+    def run_catchup(self, sample, *, target=220, timeout=6, max_timeout=30, ready=None, systemd=None,
+                    minimum_heights=None, receipts=None, digest=None):
         def observation(row, **_kwargs):
             index = guest.ROLES.index(row['role'])
             result = copy.deepcopy(self.before[index])
-            result['public']['height'] = sample(index, self.now, result)
+            try:
+                result['public']['height'] = sample(index, self.now, result)
+            except guest.StartupProbeUnavailable as error:
+                result['public'] = None
+                result['public_unavailable'] = str(error)
             return result
 
         def sleep(seconds):
@@ -1266,37 +1300,168 @@ class CohortProgressTests(unittest.TestCase):
              patch.object(guest.time, 'sleep', side_effect=sleep), \
              patch.object(guest, 'observe', side_effect=observation), \
              patch.object(guest, 'systemd', side_effect=systemd or (lambda unit: self.props[guest.UNITS.index(unit)])), \
-             patch.object(guest, 'native_kura_hash', return_value='c' * 64), \
-             patch.object(guest, 'command', side_effect=ready, return_value=b''), \
+             patch.object(guest, 'native_kura_hash', side_effect=digest, return_value='c' * 64), \
+             patch.object(guest, 'public_probe', side_effect=ready, return_value=b'Ready'), \
              patch.object(guest, 'stop_all') as stop:
             try:
                 return guest.wait_for_cohort(
                     self.rows, self.before, after=True, commit=guest.OLD,
                     retained_tip={'height': target, 'hash': 'c' * 64},
-                    timeout=timeout, max_timeout=max_timeout)
+                    timeout=timeout, max_timeout=max_timeout,
+                    minimum_heights=minimum_heights, sample_receipts=receipts)
             finally:
                 stop.assert_not_called()
 
-    def test_advancing_peer_can_finish_after_original_deadline_without_empty_blocks(self):
-        result = self.run_catchup(lambda index, now, row: 200 + int(now) if index == 2 else 220)
-        self.assertEqual(self.now, 20)
+    def test_observe_cohort_accepts_three_anchored_peers_and_rejects_two(self):
+        current = copy.deepcopy(self.before)
+        for row in current[:3]:
+            row['public']['height'] = 220
+        with patch.object(guest, 'observe', side_effect=lambda row, **kwargs:
+                          copy.deepcopy(current[guest.ROLES.index(row['role'])])), \
+             patch.object(guest, 'systemd', side_effect=lambda unit: self.props[guest.UNITS.index(unit)]), \
+             patch.object(guest, 'native_kura_hash', return_value='c' * 64), \
+             patch.object(guest, 'public_probe', return_value=b'Ready'):
+            result = guest.observe_cohort(self.rows, self.before, after=True, commit=guest.OLD,
+                                          retained_tip={'height': 220, 'hash': 'c' * 64})
+            self.assertEqual(sum(row['cohort_observation']['anchored_quorum_member'] for row in result), 3)
+            self.assertEqual(result[3]['public']['height'], 200)
+            current[2]['public']['height'] = 200
+            with self.assertRaisesRegex(RuntimeError, 'anchored retained quorum is not ready'):
+                guest.observe_cohort(self.rows, self.before, after=True, commit=guest.OLD,
+                                      retained_tip={'height': 220, 'hash': 'c' * 64})
+
+    def test_two_fresh_samples_record_each_peer_without_synthetic_height_advance(self):
+        receipts = []
+        result = self.run_catchup(lambda index, now, row: 220, receipts=receipts)
+        self.assertEqual(self.now, 2)
+        self.assertEqual(len(receipts), 2)
+        for sample in receipts:
+            self.assertEqual(sample['quorum_roles'], list(guest.ROLES))
+            self.assertEqual(sample['missing_roles'], [])
+            self.assertEqual(sample['unverified_roles'], [])
         self.assertEqual([row['public']['height'] for row in result], [220] * 4)
 
-    def test_another_advancing_peer_cannot_extend_a_stalled_validator(self):
+    def test_temporarily_missing_verified_fourth_is_reported_and_never_counted(self):
+        receipts = []
         def sample(index, now, row):
-            return 200 + int(now) if index == 0 else (200 if index == 2 else 220)
-        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*common retained'):
+            if index == 3 and now >= 2:
+                raise guest.StartupProbeUnavailable('listener unavailable')
+            return 220
+        result = self.run_catchup(sample, receipts=receipts)
+        self.assertEqual(self.now, 2)
+        self.assertEqual(receipts[-1]['quorum_roles'], list(guest.ROLES[:3]))
+        self.assertEqual(receipts[-1]['missing_roles'], [guest.ROLES[3]])
+        self.assertEqual(result[3]['public']['height'], 220)
+        self.assertFalse(result[3]['cohort_observation']['public_fresh'])
+        self.assertFalse(result[3]['cohort_observation']['anchored_quorum_member'])
+
+    def test_never_observed_fourth_cannot_borrow_predecessor_source_identity(self):
+        def sample(index, now, row):
+            if index == 3:
+                raise guest.StartupProbeUnavailable('listener unavailable')
+            return 220
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*unverified_roles'):
             self.run_catchup(sample)
         self.assertEqual(self.now, 6)
+
+    def test_own_stopped_tip_must_be_restored_even_with_three_ready_peers(self):
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*unverified_roles'):
+            self.run_catchup(lambda index, now, row: 200 if index == 3 else 220,
+                             minimum_heights=[200, 200, 200, 205])
+        self.assertEqual(self.now, 6)
+
+    def test_known_fourth_may_be_unready_without_blocking_three_ready_peers(self):
+        receipts = []
+        def ready(index, route, **kwargs):
+            if index == 3:
+                raise guest.StartupProbeUnavailable('HTTP 503')
+            return b''
+        result = self.run_catchup(lambda index, now, row: 220, ready=ready, receipts=receipts)
+        self.assertEqual(self.now, 2)
+        self.assertEqual(receipts[-1]['unready_roles'], [guest.ROLES[3]])
+        self.assertFalse(result[3]['cohort_observation']['anchored_quorum_member'])
+
+    def test_missing_samples_break_confirmation_sequence_and_stale_peers_cannot_vote(self):
+        receipts = []
+        def sample(index, now, row):
+            if now == 2 and index >= 2:
+                raise guest.StartupProbeUnavailable('listener unavailable')
+            return 220
+        self.run_catchup(sample, receipts=receipts)
+        self.assertEqual(self.now, 6, 'the failed second sample requires two new samples')
+        self.assertEqual(len(receipts), 2)
+        self.assertTrue(all(sample['missing_roles'] == [] for sample in receipts))
+
+    def test_two_ready_peers_and_two_stalled_peers_cannot_form_quorum(self):
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
+            self.run_catchup(lambda index, now, row: 220 if index < 2 else 200)
+        self.assertEqual(self.now, 6)
+
+    def test_wrong_revision_or_malformed_response_on_fourth_is_immediately_fatal(self):
+        for failure in ('revision', 'json'):
+            with self.subTest(failure=failure):
+                self.now = 0
+                def sample(index, now, row):
+                    if index == 3:
+                        if failure == 'json':
+                            raise RuntimeError('public identity is not valid JSON')
+                        row['public']['commit'] = 'f' * 40
+                    return 220
+                with self.assertRaisesRegex(RuntimeError, 'revision differs|not valid JSON'):
+                    self.run_catchup(sample)
+                self.assertEqual(self.now, 0)
+
+    def test_verified_minority_wrong_status_cannot_be_hidden_by_puzzle_503(self):
+        def sample(index, now, row):
+            if index == 3 and now >= 2:
+                status = guest.public_identity(index, expected_commit=guest.OLD, minimum_height=220)
+                row['public'].update(status)
+            return 220
+        with patch.object(guest, 'public_get', side_effect=[
+                {'blocks': 220, 'build': {'git_commit_sha': 'f' * 40}},
+                guest.StartupProbeUnavailable('puzzle 503')]) as read:
+            with self.assertRaisesRegex(RuntimeError, 'candidate revision differs'):
+                self.run_catchup(sample)
+        self.assertEqual(self.now, 2, 'a completed first sample must not mask the new mismatch')
+        self.assertEqual(read.call_args_list, [unittest.mock.call(3, '/status')])
+
+    def test_conflicting_anchor_on_fourth_is_immediately_fatal_even_with_quorum(self):
+        with self.assertRaisesRegex(RuntimeError, 'retained Kura prefix hash changed'):
+            self.run_catchup(lambda index, now, row: 220,
+                digest=lambda role, height: ('d' if role == guest.ROLES[3] else 'c') * 64)
+        self.assertEqual(self.now, 0)
+
+    def test_restart_count_on_fourth_is_fatal_even_if_pid_is_unchanged(self):
+        def systemd(unit):
+            props = dict(self.props[guest.UNITS.index(unit)])
+            if unit == guest.UNITS[3]:
+                props['NRestarts'] = '1'
+            return props
+        with self.assertRaisesRegex(RuntimeError, 'validator process changed'):
+            self.run_catchup(lambda index, now, row: 220, systemd=systemd)
+        self.assertEqual(self.now, 0)
+
+    def test_three_ready_peers_do_not_wait_for_fourth_or_empty_blocks(self):
+        result = self.run_catchup(lambda index, now, row: 200 + int(now) if index == 2 else 220)
+        self.assertEqual(self.now, 2)
+        self.assertEqual([row['public']['height'] for row in result], [220, 220, 202, 220])
+        self.assertFalse(result[2]['cohort_observation']['anchored_quorum_member'])
+
+    def test_needed_third_advancing_peer_can_finish_without_stalled_fourth(self):
+        def sample(index, now, row):
+            return 200 + int(now) if index == 0 else (200 if index == 2 else 220)
+        result = self.run_catchup(sample)
+        self.assertEqual(self.now, 22)
+        self.assertEqual(sum(row['cohort_observation']['anchored_quorum_member'] for row in result), 3)
 
     def test_dead_listener_cannot_borrow_another_peers_progress_budget(self):
         def sample(index, now, row):
             if index == 2 and now >= 2:
                 raise RuntimeError('validator not running')
             return 200 + int(now)
-        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*not running'):
+        with self.assertRaisesRegex(RuntimeError, 'not running'):
             self.run_catchup(sample)
-        self.assertEqual(self.now, 6)
+        self.assertEqual(self.now, 2)
 
     def test_restart_or_wrong_candidate_never_earns_more_observation_time(self):
         for change in ('restart', 'commit'):
@@ -1316,10 +1481,10 @@ class CohortProgressTests(unittest.TestCase):
                         props['InvocationID'] = 'f' * 32
                     return props
                 expected_error = ('validator process changed' if change == 'restart'
-                                  else 'cohort observation deadline')
+                                  else 'candidate revision differs')
                 with self.assertRaisesRegex(RuntimeError, expected_error):
                     self.run_catchup(sample, systemd=systemd)
-                self.assertEqual(self.now, 2 if change == 'restart' else 6)
+                self.assertEqual(self.now, 2)
 
     def test_startup_restart_fails_before_any_healthy_http_observation(self):
         startup = [{'role': role, 'systemd': dict(props)}
@@ -1331,30 +1496,36 @@ class CohortProgressTests(unittest.TestCase):
             return props
         def sleep(seconds):
             self.now += seconds
+        def unavailable(row, **kwargs):
+            result = copy.deepcopy(self.before[guest.ROLES.index(row['role'])])
+            result['public'] = None
+            result['public_unavailable'] = 'listener warming'
+            return result
         with patch.object(guest.time, 'monotonic', side_effect=lambda: self.now), \
              patch.object(guest.time, 'sleep', side_effect=sleep), \
              patch.object(guest, 'systemd', side_effect=systemd), \
-             patch.object(guest, 'observe_healthy_cohort', side_effect=RuntimeError('listener warming')) as read:
+             patch.object(guest, 'public_probe', side_effect=guest.StartupProbeUnavailable('listener warming')), \
+             patch.object(guest, 'observe', side_effect=unavailable) as read:
             with self.assertRaisesRegex(RuntimeError, 'validator process changed'):
                 guest.wait_for_cohort(self.rows, self.before, after=True, commit=guest.OLD,
                     retained_tip={'height': 220, 'hash': 'c' * 64}, startup_processes=startup,
                     timeout=600, max_timeout=600)
         self.assertEqual(self.now, 2)
-        self.assertEqual(read.call_count, 1)
+        self.assertEqual(read.call_count, 4)
 
     def test_advancing_but_unready_peer_does_not_extend_the_deadline(self):
-        def ready(argv, **kwargs):
+        def ready(index, route, **kwargs):
             if self.now >= 2:
-                raise RuntimeError('readyz 503')
+                raise guest.StartupProbeUnavailable('readyz 503')
             return b''
-        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*readyz'):
+        with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline.*unready_roles'):
             self.run_catchup(lambda index, now, row: 200 + int(now), ready=ready)
         self.assertEqual(self.now, 6)
 
     def test_first_healthy_late_sample_alone_does_not_extend_the_deadline(self):
         def sample(index, now, row):
             if now < 4:
-                raise RuntimeError('warming')
+                raise guest.StartupProbeUnavailable('warming')
             return 219
         with self.assertRaisesRegex(RuntimeError, 'cohort observation deadline'):
             self.run_catchup(sample)

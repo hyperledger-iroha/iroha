@@ -39692,6 +39692,11 @@ state_test! { sync block_leaves_governance_unlock_audit_clean_when_no_locks_are_
     let state = blank_test_state();
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
+    assert_eq!(block.committed_fragment_count(), 0);
+    assert!(
+        !block.has_committed_fragments(),
+        "an idle governance sweep must not make an empty block commit-eligible"
+    );
     assert_eq!(
         *block.world.governance_unlock_stats,
         GovernanceUnlockStatsSnapshot::default(),
@@ -39738,6 +39743,11 @@ state_test! { sync block_sweeps_expired_governance_locks_and_records_height
     }
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
+    assert_eq!(block.committed_fragment_count(), 1);
+    assert!(
+        block.has_committed_fragments(),
+        "a due governance sweep must retain its committed work"
+    );
     assert!(!block.world.merge_execution_write_set_bytes().is_empty());
     let recorded_height = *block.world.governance_last_unlock_sweep_height;
     assert_eq!(
@@ -39786,6 +39796,11 @@ state_test! { sync block_retains_expired_governance_lock_when_atomic_release_fai
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
     let_row! { locks_after = block .world .governance_locks .get(&referendum_id) .expect("failed release must retain the referendum entry") };
+    assert_eq!(block.committed_fragment_count(), 1);
+    assert!(
+        block.has_committed_fragments(),
+        "a failed due release must still commit its governance audit"
+    );
     assert!(
         locks_after.locks.contains_key(&voter),
         "failed release must retain the exact lock"

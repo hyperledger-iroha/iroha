@@ -10252,7 +10252,7 @@ fn lifecycle_status() -> LaneLifecycleStatusV1 {
         LaneId::SINGLE,
         Hash::new(b"client-lifecycle-status-incarnation"),
     )]);
-    LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
+    LaneLifecycleStatusV1::new(&catalog, &incarnations, None).expect("valid lifecycle status")
 }
 #[cfg(test)]
 mod status_tests {
@@ -10357,21 +10357,52 @@ mod status_tests {
     }
     #[test]
     fn lane_lifecycle_status_decodes_json_and_norito() {
+        for runtime_catalog_hash in [None, Some(Hash::new(b"committed runtime overlay"))] {
+            let mut status = lifecycle_status();
+            status.runtime_catalog_hash = runtime_catalog_hash;
+            let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
+            let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
+            assert_eq!(
+                Client::decode_lane_lifecycle_status_for_test(&response)
+                    .expect("decode lifecycle status JSON"),
+                status
+            );
+            let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
+            let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
+            assert_eq!(
+                Client::decode_lane_lifecycle_status_for_test(&response)
+                    .expect("decode lifecycle status Norito"),
+                status
+            );
+        }
+    }
+    #[test]
+    fn lane_lifecycle_status_rejects_missing_or_empty_runtime_catalog_hash() {
         let status = lifecycle_status();
-        let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
-        let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status JSON"),
-            status
+        let mut value = norito::json::to_value(&status).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("runtime_catalog_hash");
+        let response = mk_response(
+            StatusCode::OK,
+            norito::json::to_vec(&value).unwrap(),
+            Some(APPLICATION_JSON),
         );
-        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
-        let response = mk_response(StatusCode::OK, bytes, Some(APPLICATION_NORITO));
-        assert_eq!(
-            Client::decode_lane_lifecycle_status_for_test(&response)
-                .expect("decode lifecycle status Norito"),
-            status
-        );
+        let error = Client::decode_lane_lifecycle_status_for_test(&response)
+            .expect_err("old response without runtime hash must fail");
+        assert!(error.to_string().contains("runtime_catalog_hash"));
+        let mut status = status;
+        status.runtime_catalog_hash = Some(Hash::prehashed([0; Hash::LENGTH]));
+        for (body, media_type) in [
+            (norito::json::to_vec(&status).unwrap(), APPLICATION_JSON),
+            (norito::to_bytes(&status).unwrap(), APPLICATION_NORITO),
+        ] {
+            let response = mk_response(StatusCode::OK, body, Some(media_type));
+            let error = Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect_err("empty runtime hash must fail");
+            assert!(format!("{error:#}").contains("empty runtime catalog hash"));
+        }
     }
     #[test]
     fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
@@ -17514,7 +17545,10 @@ impl Client {
                 .max_response_bytes(SORACLOUD_STATUS_RESPONSE_MAX_BYTES),
         )
     }
-    /// Fetch and validate the exact current Nexus lane catalog and incarnation commitments.
+    /// Fetch the committed Nexus lane catalog, incarnation commitments, and runtime overlay hash.
+    ///
+    /// The runtime hash is an authoritative node read for catalog-transition concurrency checks;
+    /// the lane-only response does not contain the complete overlay needed to recompute it.
     ///
     /// # Errors
     /// Returns an error for non-success responses, malformed JSON/Norito,
@@ -18585,8 +18619,12 @@ impl Client {
     }
     /// Account-signed page of effective permissions for one exact account.
     ///
-    /// Query pagination is included before canonical request signing and count mode is always
-    /// `exact`, allowing callers to fail closed while traversing a response larger than one page.
+    /// Pagination and `count_mode=exact` are included before canonical request signing. Exact
+    /// counts apply per route; the routed response's `total` is the deduplicated union of the
+    /// current route pages, not a global permission count or an exhaustion witness. Callers must
+    /// keep `offset + limit` within the server's configured fetch budget, require complete
+    /// successful fanout, and independently establish exhaustion before treating the returned
+    /// permissions as a complete policy view.
     ///
     /// # Errors
     /// Returns an error if request signing, construction, or the HTTP call fails.
@@ -26660,7 +26698,7 @@ mod tests {
             LaneId::SINGLE,
             Hash::new(b"client-http-lifecycle-incarnation"),
         )]);
-        LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
+        LaneLifecycleStatusV1::new(&catalog, &incarnations, None).expect("valid lifecycle status")
     }
     struct FailingClientRng;
     #[derive(Debug)]

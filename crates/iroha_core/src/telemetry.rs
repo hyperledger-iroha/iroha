@@ -1943,7 +1943,7 @@ impl StateTelemetry {
             && let Some(status) = registry.status(lane_id)
         {
             entry.manifest_required = status.governance.is_some();
-            entry.manifest_ready = status.manifest_path.is_some();
+            entry.manifest_ready = registry.has_manifest(lane_id);
             entry.manifest_path = status
                 .manifest_path
                 .as_ref()
@@ -2000,8 +2000,17 @@ impl StateTelemetry {
         let mut current_sealed = BTreeSet::new();
         self.metrics.nexus_lane_governance_sealed.reset();
         let mut sealed_aliases = Vec::new();
+        let registry = self
+            .lane_manifest_registry
+            .read()
+            .expect("manifest registry lock poisoned")
+            .clone();
         for status in statuses {
-            let sealed = status.governance.is_some() && status.manifest_path.is_none();
+            let manifest_present = registry.as_ref().map_or_else(
+                || status.manifest_path.is_some(),
+                |registry| registry.has_manifest(status.lane),
+            );
+            let sealed = status.governance.is_some() && !manifest_present;
             self.metrics
                 .nexus_lane_governance_sealed
                 .with_label_values(&[status.alias.as_str()])

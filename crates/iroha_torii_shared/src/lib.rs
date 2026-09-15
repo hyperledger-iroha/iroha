@@ -33,6 +33,8 @@ pub mod private_settlement_api;
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
+/// Typed absence response for authoritative SNS registration lookups.
+pub mod sns;
 /// Canonical wire types for the authenticated SoraFS hedging and billing API.
 pub mod sorafs_hedging_billing_api;
 /// Canonical wire types for externally signed SoraFS moderation recovery.

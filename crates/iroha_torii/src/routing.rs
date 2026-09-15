@@ -72926,10 +72926,17 @@ pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<impl IntoRespo
 /// Return the exact current lane catalog and optimistic concurrency commitment.
 pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycleStatusV1> {
     // `State::view` retries across the state generation barrier, so catalog and
-    // active incarnations cannot be mixed across a concurrent lifecycle commit.
+    // active incarnations and the protected runtime overlay cannot be mixed across a commit.
     let view = state.view();
-    LaneLifecycleStatusV1::new(&view.nexus.lane_catalog, &view.lane_incarnations)
-        .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
+    let runtime_catalog_hash = view
+        .runtime_catalog_hash()
+        .map_err(|err| conversion_error(format!("invalid committed runtime catalog: {err}")))?;
+    LaneLifecycleStatusV1::new(
+        &view.nexus.lane_catalog,
+        &view.lane_incarnations,
+        runtime_catalog_hash,
+    )
+    .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
 }
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {

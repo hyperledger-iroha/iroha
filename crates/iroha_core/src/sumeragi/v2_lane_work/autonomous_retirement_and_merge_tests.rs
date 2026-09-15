@@ -2019,7 +2019,8 @@ fn fixture_with_durable_relay_parent() -> (V2LaneWorkAdapter, Vec<KeyPair>) {
     context.parent_commit_qc = Some(finality.commit_qc);
     context.snapshot_bootstrap = None;
     context.nexus_amx_context_hash =
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid committed catalog");
     context.execution_policy_hash =
         super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
             .expect("derive successor execution policy after relay registration");

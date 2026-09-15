@@ -2304,11 +2304,100 @@ mod model {
     }
 }
 impl CommittedTransaction {
+    /// Verify inclusion against an independently authenticated native execution commitment.
+    ///
+    /// The caller must obtain `execution_commitment` from an independently verified, externally
+    /// anchored finality proof for this carrier. This method does not authenticate a caller-supplied
+    /// commitment. It binds the exact canonical executed wire by hash and length before checking
+    /// the header's context, external-entrypoint and result commitments, retained Merkle caches,
+    /// count alignment, exact ordinary index, and ordinary or certified-merge inclusion proofs.
+    ///
+    /// The execution commitment is mandatory: `BlockHeader::hash()` excludes the result root,
+    /// and the header's entrypoint root excludes time triggers. Authenticated executed wire covers
+    /// both, so ordinary, time-trigger and certified-merge evidence use the same trust boundary.
+    /// Transaction signature, execution policy and successful-result checks remain caller-owned.
+    #[must_use]
+    pub fn verify_inclusion_in_authenticated_execution(
+        &self,
+        block: &SignedBlock,
+        execution_commitment: &crate::block::consensus_v2::ExecutionCommitment,
+    ) -> bool {
+        const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
+        if block.hash() != self.block_hash
+            || !block.has_results()
+            || execution_commitment.validate().is_err()
+        {
+            return false;
+        }
+        let Ok(wire) = block.encode_wire() else {
+            return false;
+        };
+        if u64::try_from(wire.len()).ok() != Some(execution_commitment.executed_block_wire_len)
+            || Hash::new(&wire) != execution_commitment.executed_block_wire_hash
+            || execution_commitment.merge_carrier
+                != block.execution_context().and_then(|context| {
+                    context.merge_entry.as_ref().map(|reference| {
+                        crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                            reference.entry_hash,
+                        )
+                    })
+                })
+            || block.header().execution_context_hash() != block.execution_context().map(HashOf::new)
+            || block
+                .execution_context()
+                .is_some_and(|context| !context.has_current_version())
+            || block.validate_entrypoint_merkle_cache().is_err()
+            || block.validate_result_merkle_cache().is_err()
+        {
+            return false;
+        }
+        let entrypoint_count = block.entrypoint_hashes().len();
+        let external_count = block.external_entrypoint_count();
+        if entrypoint_count != block.result_hashes().len()
+            || external_count > entrypoint_count
+            || u64::try_from(entrypoint_count).map_or(true, |count| count > MAX_MERKLE_LEAF_COUNT)
+        {
+            return false;
+        }
+        let external_root = MerkleTree::root_from_typed_leaves(
+            block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash()),
+        );
+        let result_root = MerkleTree::root_from_typed_leaves(block.result_hashes());
+        if external_root != block.header().merkle_root()
+            || result_root != block.header().result_merkle_root()
+        {
+            return false;
+        }
+        if self.merge_inclusion.is_none() {
+            let Ok(index) = usize::try_from(self.entrypoint_proof.leaf_index()) else {
+                return false;
+            };
+            if index >= entrypoint_count
+                || block.entrypoint_cloned_at(index).as_ref() != Some(&self.entrypoint)
+                || (matches!(
+                    &self.entrypoint,
+                    crate::transaction::signed::TransactionEntrypoint::External(_)
+                ) && index >= external_count)
+            {
+                return false;
+            }
+        }
+        self.verify_inclusion_in_block(block)
+    }
+
     /// Verify this committed transaction's inclusion proofs against its exact carrier block.
     ///
     /// Ordinary transactions are checked against the carrier block's entrypoint and result
-    /// Merkle roots. Certified merge transactions are checked against the merge reference
-    /// committed by the carrier block's execution context.
+    /// Merkle roots. Certified merge transactions are checked against the merge reference in
+    /// the carrier block's execution context.
+    ///
+    /// This low-level check assumes the carrier's full executed wire is already authenticated.
+    /// Internal caches and a matching header hash alone do not establish that assumption. Use
+    /// [`Self::verify_inclusion_in_authenticated_execution`] to bind a separately authenticated
+    /// native execution commitment, or an authenticated executed-wire capability such as
+    /// [`crate::block::proofs::TrustedBlockProofAnchor`].
     #[must_use]
     pub fn verify_inclusion_in_block(&self, block: &SignedBlock) -> bool {
         const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
@@ -2401,6 +2490,10 @@ impl CommittedTransaction {
     /// This additionally binds the compact merge reference to `block_hash`, so
     /// callers cannot accidentally verify a valid sidecar proof against a
     /// reference copied from a different canonical block.
+    /// The supplied block's full wire must already be authenticated; this low-level check does
+    /// not establish the execution-context/header commitment. Callers must
+    /// use [`Self::verify_inclusion_in_authenticated_execution`] to bind an authenticated native
+    /// execution commitment before trusting unvalidated block material.
     #[must_use]
     pub fn verify_certified_merge_inclusion_in_block(&self, block: &SignedBlock) -> bool {
         block.hash() == self.block_hash

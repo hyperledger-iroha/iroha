@@ -99,7 +99,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             assert_eq!(
                 crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                     fixture.state.as_ref(),
-                ),
+                )
+                .expect("valid committed catalog"),
                 fixture.context.nexus_amx_context_hash,
                 "apply-fixture Nexus/AMX context drifted {stage}"
             );
@@ -1868,7 +1869,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 &state_view,
                 crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                     fixture.state.as_ref(),
-                ),
+                )
+                .expect("valid committed catalog"),
             )
             .expect("derive exact height-four startup context")
         };

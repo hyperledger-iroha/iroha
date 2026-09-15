@@ -24685,6 +24685,13 @@
             "minItems": 1,
             "type": "array"
           },
+          "runtime_catalog_hash": {
+            "description": "Canonical native commitment to the complete committed runtime catalog overlay. Explicit null only before the protected overlay exists. Copy this value into expected_runtime_catalog_hash of nexus_catalog_transition_v1; the lane-only response cannot reconstruct this commitment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "version": {
             "description": "Lifecycle status layout version.",
             "enum": [
@@ -24700,7 +24707,8 @@
           "lanes",
           "catalog_hash",
           "incarnations",
-          "incarnation_root"
+          "incarnation_root",
+          "runtime_catalog_hash"
         ],
         "type": "object"
       },

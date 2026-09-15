@@ -397,10 +397,19 @@ def fetch_text(url: str, timeout: int, insecure: bool) -> str:
         return response.read().decode(charset)
 
 
+def _unique_json_object(pairs: List[Tuple[str, object]]) -> Dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise SmokeError(f"JSON payload contains duplicate key `{key}`")
+        result[key] = value
+    return result
+
+
 def fetch_json(url: str, timeout: int, insecure: bool) -> Dict:
     text = fetch_text(url, timeout=timeout, insecure=insecure)
     try:
-        return json.loads(text)
+        return json.loads(text, object_pairs_hook=_unique_json_object)
     except json.JSONDecodeError as exc:
         raise SmokeError(f"JSON endpoint returned invalid payload: {exc}") from exc
 
@@ -445,7 +454,7 @@ def read_json_file(path: str, *, label: str) -> Dict:
     except OSError as exc:
         raise SmokeError(f"unable to read {label} file `{path}`: {exc}") from exc
     try:
-        return json.loads(contents)
+        return json.loads(contents, object_pairs_hook=_unique_json_object)
     except json.JSONDecodeError as exc:
         raise SmokeError(f"{label} file `{path}` contained invalid JSON: {exc}") from exc
 
@@ -509,6 +518,7 @@ def validate_lane_lifecycle(payload: Dict) -> Dict[str, LaneCheck]:
         "catalog_hash",
         "incarnations",
         "incarnation_root",
+        "runtime_catalog_hash",
     }
     if set(payload) != expected_fields:
         raise SmokeError(
@@ -519,6 +529,12 @@ def validate_lane_lifecycle(payload: Dict) -> Dict[str, LaneCheck]:
     lane_count = _require_uint(payload.get("lane_count"), "lane_count", positive=True)
     _require_hash(payload.get("catalog_hash"), "catalog_hash")
     _require_hash(payload.get("incarnation_root"), "incarnation_root")
+    if payload["runtime_catalog_hash"] is not None:
+        runtime_catalog_hash = _require_hash(
+            payload["runtime_catalog_hash"], "runtime_catalog_hash"
+        )
+        if runtime_catalog_hash[5:69] == "0" * 63 + "1":
+            raise SmokeError("lane lifecycle reported empty `runtime_catalog_hash` commitment")
 
     lanes = payload.get("lanes")
     incarnations = payload.get("incarnations")

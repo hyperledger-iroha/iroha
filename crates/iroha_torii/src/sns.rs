@@ -13,12 +13,15 @@ use iroha_core::{
     state::{StateReadOnly, StateReadOnlyWithTransactions},
 };
 use iroha_data_model::sns::{NameRecordV1, NameSelectorV1, NameStatus, SuffixId};
+use iroha_torii_shared::sns::SnsRegistrationNotFoundV1;
 use parking_lot::Mutex;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 const SNS_NAME_CACHE_MAX_ENTRIES: usize = 4096;
 /// HTTP-friendly error wrapper for SNS routes.
 #[derive(Debug)]
 pub enum SnsError {
+    /// The exact canonical registration is absent from authoritative storage.
+    RegistrationNotFound(SnsRegistrationNotFoundV1),
     /// Entity was not found.
     NotFound(String),
     /// Request failed validation.
@@ -33,6 +36,9 @@ pub enum SnsError {
 impl From<CoreSnsError> for SnsError {
     fn from(error: CoreSnsError) -> Self {
         match error {
+            CoreSnsError::RegistrationNotFound { suffix_id, label } => {
+                Self::RegistrationNotFound(SnsRegistrationNotFoundV1::new(suffix_id, label))
+            }
             CoreSnsError::NotFound(msg) => Self::NotFound(msg),
             CoreSnsError::BadRequest(msg) => Self::BadRequest(msg),
             CoreSnsError::Conflict(msg) => Self::Conflict(msg),
@@ -43,6 +49,9 @@ impl From<CoreSnsError> for SnsError {
 impl IntoResponse for SnsError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            Self::RegistrationNotFound(body) => {
+                return (StatusCode::NOT_FOUND, JsonBody(body)).into_response();
+            }
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             Self::Conflict(msg) => (StatusCode::CONFLICT, msg),
@@ -85,7 +94,7 @@ impl SnsNameRecordCacheKey {
 #[derive(Clone, Debug)]
 enum CachedSnsNameRecord {
     Found(NameRecordV1),
-    NotFound(String),
+    NotFound(SnsRegistrationNotFoundV1),
 }
 #[derive(Clone, Debug)]
 struct SnsNameRecordCacheEntry {
@@ -139,14 +148,14 @@ impl SnsNameRecordCache {
         key: SnsNameRecordCacheKey,
         block_height: u64,
         block_hash: Option<String>,
-        message: String,
+        absence: SnsRegistrationNotFoundV1,
     ) {
         self.insert(
             key,
             block_height,
             block_hash,
             None,
-            CachedSnsNameRecord::NotFound(message),
+            CachedSnsNameRecord::NotFound(absence),
         );
     }
     fn insert(
@@ -195,7 +204,7 @@ impl SnsNameRecordCacheInner {
         }
         Some(match entry.outcome.clone() {
             CachedSnsNameRecord::Found(record) => Ok(record),
-            CachedSnsNameRecord::NotFound(message) => Err(SnsError::NotFound(message)),
+            CachedSnsNameRecord::NotFound(absence) => Err(SnsError::RegistrationNotFound(absence)),
         })
     }
     fn insert(&mut self, key: SnsNameRecordCacheKey, entry: SnsNameRecordCacheEntry) {
@@ -283,16 +292,17 @@ pub async fn handle_get_name(
                 sns_name_record_cache_valid_until_ms(record),
                 record.clone(),
             ),
-            Err(SnsError::NotFound(message)) => {
+            Err(SnsError::RegistrationNotFound(absence)) => {
                 cache.insert_not_found(
                     cache_key,
                     block_height,
                     block_hash.clone(),
-                    message.clone(),
+                    absence.clone(),
                 );
             }
             Err(
-                SnsError::BadRequest(_)
+                SnsError::NotFound(_)
+                | SnsError::BadRequest(_)
                 | SnsError::Conflict(_)
                 | SnsError::Internal(_)
                 | SnsError::Access(_),

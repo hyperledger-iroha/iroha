@@ -40,6 +40,174 @@ fn canonical_executed_block_fixture() -> (NonZeroU64, SignedBlock, CommittedTran
     (height, block, committed)
 }
 
+fn synthetic_executed_commitment(
+    block: &SignedBlock,
+) -> iroha_data_model::block::consensus_v2::ExecutionCommitment {
+    let wire = block.encode_wire().expect("fixture executed wire");
+    // The HTTP tests supply a trust input; they do not claim consensus qualification.
+    let mut commitment = iroha_data_model::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+        Hash::new(b"fixture parent state"), Hash::new(b"fixture post state"),
+        Hash::new(b"fixture ordinary writes"), wire.len() as u64, Hash::new(&wire),
+    );
+    commitment.merge_carrier = block
+        .execution_context()
+        .and_then(|context| context.merge_entry.as_ref())
+        .map(|reference| {
+            iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                reference.entry_hash,
+            )
+        });
+    commitment
+}
+
+fn canonical_executed_merge_fixture() -> (NonZeroU64, SignedBlock, CommittedTransaction) {
+    use iroha_data_model::{
+        block::{
+            BlockExecutionContextBundle, CertifiedMergeLedgerReference, builder::BlockBuilder,
+        },
+        merge::MergeQuorumCertificate,
+        query::CertifiedMergeTransactionInclusion,
+    };
+    let (_, ordinary, mut committed) = canonical_executed_block_fixture();
+    let height = NonZeroU64::new(5).expect("merge carrier height");
+    let parent = HashOf::from_untyped_unchecked(Hash::new(b"fixture merge parent"));
+    let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"fixture merge entry"));
+    let execution_batch_hash = Hash::new(b"fixture merge batch");
+    let validators = Vec::<iroha_model_base::peer::PeerId>::new();
+    let reference = CertifiedMergeLedgerReference {
+        version: 1,
+        entry_hash,
+        encoded_len: 1,
+        epoch_id: 7,
+        execution_batch_hash: Some(execution_batch_hash),
+        entrypoint_count: Some(1),
+        entrypoint_merkle_root: ordinary.full_entry_merkle_root(),
+        result_merkle_root: ordinary.header().result_merkle_root(),
+        base_state_height: Some(4),
+        base_state_hash: Some(parent),
+        merge_qc: MergeQuorumCertificate::new(
+            0,
+            7,
+            5,
+            parent,
+            test_network_id(),
+            1,
+            HashOf::new(&validators),
+            validators,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Hash::new(b"fixture merge message"),
+        ),
+    };
+    committed.merge_inclusion = Some(CertifiedMergeTransactionInclusion {
+        version: 1,
+        merge_entry_hash: entry_hash,
+        merge_epoch_id: 7,
+        execution_batch_hash,
+        entrypoint_count: 1,
+        entrypoint_merkle_root: reference.entrypoint_merkle_root.unwrap(),
+        result_merkle_root: reference.result_merkle_root.unwrap(),
+    });
+    let mut builder = BlockBuilder::new(BlockHeader::new(height, Some(parent), None, None, 10, 0));
+    builder.set_execution_context(Some(
+        BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(reference),
+    ));
+    let block = builder.build(std::collections::BTreeSet::default());
+    committed.block_hash = block.hash();
+    (height, block, committed)
+}
+
+#[test]
+fn canonical_executed_block_reader_requires_authenticated_execution_commitment() {
+    let client = client_with_base_url(base_url());
+    for (height, block, committed) in [
+        canonical_executed_block_fixture(),
+        canonical_executed_merge_fixture(),
+    ] {
+        let expected = synthetic_executed_commitment(&block);
+        let wire = block.encode_wire().expect("fixture wire");
+        let response = capture_request(
+            mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+            |transport| {
+                let client = client.clone().with_test_http_transport(transport);
+                mark_data_model_compatible(&client);
+                client.get_canonical_executed_block_wire(height, &committed, &expected)
+            },
+        )
+        .0;
+        assert_eq!(response.expect("ordinary and merge carriers verify"), wire);
+        for wrong_length in [false, true] {
+            let mut wrong = expected.clone();
+            if wrong_length {
+                wrong.executed_block_wire_len += 1;
+            } else {
+                wrong.executed_block_wire_hash = Hash::new(b"wrong wire");
+            }
+            let response = capture_request(
+                mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+                |transport| {
+                    let client = client.clone().with_test_http_transport(transport);
+                    mark_data_model_compatible(&client);
+                    client.get_canonical_executed_block_wire(height, &committed, &wrong)
+                },
+            )
+            .0;
+            assert!(
+                response
+                    .expect_err("wrong exact execution commitment must fail")
+                    .to_string()
+                    .contains("authenticated execution commitment")
+            );
+        }
+    }
+    let (height, accepted, committed) = canonical_executed_block_fixture();
+    let mut actually_rejected = accepted.clone();
+    let entry_hashes = actually_rejected.entrypoint_hashes().collect::<Vec<_>>();
+    actually_rejected
+        .set_transaction_results(
+            Vec::new(),
+            &entry_hashes,
+            vec![Err(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(
+                        "authenticated rejected execution".into(),
+                    ),
+                ),
+            )],
+        )
+        .expect("native rejected result carrier");
+    assert_eq!(
+        accepted.hash(),
+        actually_rejected.hash(),
+        "result root is outside consensus hash"
+    );
+    assert_ne!(
+        accepted.header().result_merkle_root(),
+        actually_rejected.header().result_merkle_root()
+    );
+    let expected = synthetic_executed_commitment(&actually_rejected);
+    let response = capture_request(
+        mk_response(
+            StatusCode::OK,
+            accepted.encode_wire().unwrap(),
+            Some(APPLICATION_NORITO),
+        ),
+        |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_canonical_executed_block_wire(height, &committed, &expected)
+        },
+    )
+    .0;
+    assert!(
+        response
+            .expect_err("forged successful result with unchanged consensus hash must fail")
+            .to_string()
+            .contains("authenticated execution commitment")
+    );
+}
+
 #[test]
 fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
     let mut client = client_with_base_url(base_url());
@@ -59,7 +227,11 @@ fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
-            client.get_canonical_executed_block_wire(height, &committed)
+            client.get_canonical_executed_block_wire(
+                height,
+                &committed,
+                &synthetic_executed_commitment(&block),
+            )
         },
     );
     assert_eq!(actual.expect("verified executed block wire"), wire);
@@ -95,7 +267,11 @@ fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash(
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
-            client.get_canonical_executed_block_wire(height, &committed)
+            client.get_canonical_executed_block_wire(
+                height,
+                &committed,
+                &synthetic_executed_commitment(&block),
+            )
         },
     )
     .0
@@ -120,7 +296,11 @@ fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash(
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
-            client.get_canonical_executed_block_wire(height, &wrong_carrier)
+            client.get_canonical_executed_block_wire(
+                height,
+                &wrong_carrier,
+                &synthetic_executed_commitment(&block),
+            )
         },
     )
     .0

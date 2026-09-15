@@ -304,7 +304,7 @@ def derive_capacity(
     Config contents are never inputs. Each freshly rebased config is charged at
     the native materializer's 1 MiB output limit, not its previous measured size.
     Unknown stage/service layouts fail rather than silently omit new allocations.
-    Binary weights come from all 26 native roles, not four unique uploaded files.
+    Binary weights come from all 30 native roles, not four unique uploaded files.
     """
     _require_derivation(
         re.fullmatch("[0-9a-f]{40}", expected_commit or "") is not None,
@@ -335,19 +335,8 @@ def derive_capacity(
     _require_derivation(
         inputs.get("schema") == "taira.public-capacity-inputs.v1"
         and inputs.get("secret_contents_read") is False
-        and runtime.get("schema") == "taira.public-runtime-capacity-inputs.v1"
-        and runtime.get("secret_contents_read") is False,
+        and inputs.get("qualification_scope") in ("core_testnet", "full_inrou"),
         "metadata-only capacity and runtime input receipts required",
-    )
-    bindings = inputs.get("native_sf1_manifest_bindings")
-    _require_derivation(
-        isinstance(bindings, dict)
-        and set(bindings) == {"bundle", "guest", "discovery"}
-        and all(
-            isinstance(value, str) and re.fullmatch("[0-9a-f]{64}", value)
-            for value in bindings.values()
-        ),
-        "existing native SF1 admission must bind all three current manifests",
     )
     fragment = _positive_derivation(
         inputs["filesystem"]["fragment_bytes"], "guest allocation unit"
@@ -366,12 +355,13 @@ def derive_capacity(
             "config",
             "genesis",
             "genesis_hash",
+            "validator_unit",
         )
     }
     expected_roles |= {("taira-edge", "iroha_cli"), ("taira-edge", "edge_config")}
     rows = inputs["artifacts"]
     _require_derivation(
-        len(rows) == 26 and {(r["slug"], r["role"]) for r in rows} == expected_roles,
+        len(rows) == 30 and {(r["slug"], r["role"]) for r in rows} == expected_roles,
         "exact four-validator and edge role inventory required",
     )
     binary_roles = {
@@ -393,8 +383,60 @@ def derive_capacity(
             size = observed
         role_sizes.append({"slug": row["slug"], "role": row["role"], "bytes": size})
     artifact_logical = sum(row["bytes"] for row in role_sizes)
-    a = allocation_bound(artifact_logical, 26, 64, fragment)
+    a = allocation_bound(artifact_logical, 30, 64, fragment)
 
+    scope = inputs["qualification_scope"]
+    if scope == "core_testnet":
+        _require_derivation(
+            runtime is None and store_paths == [] and runtime_paths == []
+            and inputs.get("inventory_inrou_stage_bytes", "absent") is None
+            and inputs.get("native_sf1_manifest_bindings", "absent") is None
+            and inputs.get("stage_files") == [] and inputs.get("stage_directories") == [],
+            "core_testnet forbids Inrou stage, SF1, store and runtime inputs",
+        )
+        allocations = [
+            {"path": path, "label": label, **a}
+            for path, label in (
+                (coordinator_path, "coordinator artifact snapshot"),
+                (upload_path, "per-role artifact uploads"),
+                (service_path, "per-role installed artifacts"),
+            )
+        ] + [{"path": guest_headroom_path, "label": "guest filesystem headroom", "bytes": 2 * GIB, "inodes": 16384}]
+        guest_plan = {"schema": PLAN_SCHEMA, "allocations": allocations}
+        validate_plan(guest_plan)
+        required_bytes = sum(row["bytes"] for row in allocations)
+        required_inodes = sum(row["inodes"] for row in allocations)
+        backing_plan = {"schema": PLAN_SCHEMA, "allocations": [
+            {"path": backing_path, "label": "full additional guest allocation including guest reserve", "bytes": required_bytes, "inodes": 1},
+            {"path": backing_path, "label": "Mac physical backing headroom", "bytes": 2 * GIB, "inodes": 1024},
+        ]}
+        validate_plan(backing_plan)
+        return {"guest_plan": guest_plan, "backing_plan": backing_plan, "derivation": {
+            "schema": "taira.disk-derivation.v1", "qualification_scope": scope, "commit": expected_commit,
+            "formula": "3A + 2 GiB guest headroom", "artifacts": a,
+            "stage": None, "per_store": None, "per_replica_runtime": None,
+            "artifact_role_sizes": role_sizes, "artifact_logical_bytes": artifact_logical,
+            "config_per_role_bytes_bound": MIB, "required_bytes": required_bytes,
+            "required_inodes": required_inodes, "backing_required_bytes": required_bytes + 2 * GIB,
+            "requires_completed_transfer_before_admission": True, "existing_inputs_credited": False,
+            "secret_contents_read": False, "free_space_observed": False, "reservation_created": False,
+        }}
+    _require_derivation(
+        isinstance(runtime, dict)
+        and runtime.get("schema") == "taira.public-runtime-capacity-inputs.v1"
+        and runtime.get("secret_contents_read") is False,
+        "full_inrou requires metadata-only runtime inputs",
+    )
+    bindings = inputs.get("native_sf1_manifest_bindings")
+    _require_derivation(
+        isinstance(bindings, dict)
+        and set(bindings) == {"bundle", "guest", "discovery"}
+        and all(
+            isinstance(value, str) and re.fullmatch("[0-9a-f]{64}", value)
+            for value in bindings.values()
+        ),
+        "existing native SF1 admission must bind all three current manifests",
+    )
     stage_root = direct_path(runtime["source_stage"])
     stage_rows = inputs["stage_files"]
     stage_files = {
@@ -545,6 +587,7 @@ def derive_capacity(
     validate_plan(backing_plan)
     derivation = {
         "schema": "taira.disk-derivation.v1",
+        "qualification_scope": scope,
         "commit": expected_commit,
         "formula": "3A + 2S + 4P + 4R + 2 GiB guest headroom",
         "artifacts": a,

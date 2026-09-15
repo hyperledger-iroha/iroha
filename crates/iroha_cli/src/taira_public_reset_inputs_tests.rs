@@ -334,11 +334,12 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
     let mut inventory = sample_inventory_fixture();
     inventory.validators.pop();
     let inputs = LocalInputs {
+        public_inputs: PathBuf::from("/missing"),
         runtime_client_config: PathBuf::from("/missing"),
         validator_client_config: vec![],
         onboarding_token: PathBuf::from("/missing"),
         validator_operator_key: PathBuf::from("/missing"),
-        inrou_stage_dir: PathBuf::from("/missing"),
+        inrou_stage_dir: Some(PathBuf::from("/missing")),
         validator_unit: vec![],
         edge_unit: PathBuf::from("/missing"),
         known_hosts: PathBuf::from("/missing"),
@@ -384,6 +385,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         artifact.local_path = absent.join(&artifact.role).display().to_string();
     }
     let local = || LocalInputs {
+        public_inputs: absent.join("public-inputs"),
         runtime_client_config: absent.join("runtime-client.toml"),
         validator_client_config: VALIDATOR_SLUGS
             .iter()
@@ -391,7 +393,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
             .collect(),
         onboarding_token: absent.join("onboarding-token"),
         validator_operator_key: absent.join("operator.key"),
-        inrou_stage_dir: absent.join("stage"),
+        inrou_stage_dir: Some(absent.join("stage")),
         validator_unit: VALIDATOR_SLUGS
             .iter()
             .map(|slug| absent.join(format!("{slug}.service")))

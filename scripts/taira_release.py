@@ -15,6 +15,10 @@ fresh matching Cargo artifact copies and the real four-peer gate are still
 required. Failed attempt directories and logs remain intact.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
+For a mutable-source prequalification diagnostic, check accepts repeatable
+--focus-regression HARNESS=EXACT_TEST: compile every native harness in the shared
+graph, then run mandatory configuration and those exact selected tests. It writes
+no qualification checkpoint and cannot be selected by prepare.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
@@ -927,15 +931,23 @@ def cargo_lane(root: Path, target_dir: Path, role: str):
 
 
 def development_check(root: Path, target: Path | None, inherited: dict[str, str],
-                      *, native_check_scope: str = "basic") -> None:
+                      *, native_check_scope: str = "basic", focused_regressions=None) -> None:
+    if focused_regressions is not None:
+        gate.focused_regression_stages(native_check_scope, focused_regressions)
     root = real_path(root)
     target_dir = development_target(root, target, inherited)
     with cargo_lane(root, target_dir, "development") as lock_fd:
         env = child_environment(inherited, target_dir)
         env, _ = isolated_cargo_environment(root, root, env)
         print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
-        gate.run_checks(root, environment=native_check_environment(env, inherited), lock_fds=(lock_fd,),
-                        qualification_scope=native_check_scope)
+        native = native_check_environment(env, inherited)
+        if focused_regressions is None:
+            gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
+                            qualification_scope=native_check_scope)
+        else:
+            gate.run_prequalification(root, focused_regressions=focused_regressions,
+                                      environment=native, lock_fds=(lock_fd,),
+                                      qualification_scope=native_check_scope)
 
 
 @contextlib.contextmanager
@@ -1162,6 +1174,9 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--target-dir", type=Path, help="existing warm Cargo lane (check: sibling routine lane; prepare: repo target/)")
         command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
                              help="basic Taira deployment checks (default), or full regression qualification")
+        if name == "check":
+            command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
+                                 help="development diagnostic: compile all native harnesses, run configuration plus exact focused tests; not qualification")
         if name == "prepare":
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
@@ -1178,8 +1193,10 @@ def main() -> int:
     try:
         require(sys.platform in {"darwin", "linux"}, "Taira preparation requires macOS or Linux")
         if args.command == "check":
-            development_check(args.repo_root, args.target_dir, dict(os.environ),
-                              native_check_scope=args.native_check_scope)
+            options = {"native_check_scope": args.native_check_scope}
+            if args.focus_regression is not None:
+                options["focused_regressions"] = tuple(args.focus_regression)
+            development_check(args.repo_root, args.target_dir, dict(os.environ), **options)
         else:
             args.target_dir = args.target_dir or args.repo_root / "target"
             prepared = prepare(args)

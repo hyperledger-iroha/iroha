@@ -24,6 +24,8 @@ use tokio::time::{Instant, sleep, timeout_at};
 
 #[path = "support/multiroute.rs"]
 mod multiroute;
+#[path = "support/runtime_catalog_transition.rs"]
+mod runtime_catalog_transition;
 
 // The unoptimized four-peer fixture also performs signed-snapshot recovery.
 // This is a functional finality gate, not a production latency SLO; use the
@@ -205,6 +207,21 @@ fn published_snapshot_height(peer: &NetworkPeer) -> Result<Option<u64>> {
     Ok(Some(u64::try_from(hashes.len())?))
 }
 
+fn signed_snapshot_restart_layers<'a>(
+    network: &'a Network,
+    peer: &'a NetworkPeer,
+) -> impl Iterator<Item = std::borrow::Cow<'a, toml::Table>> {
+    // Preserve every shared and node-local layer; only this recovery phase enables writes.
+    let snapshot = toml::Table::from_iter([(
+        "mode".to_owned(),
+        toml::Value::String("read_write".to_owned()),
+    )]);
+    let layer = toml::Table::from_iter([("snapshot".to_owned(), toml::Value::Table(snapshot))]);
+    network
+        .config_layers_for_peer(peer)
+        .chain(std::iter::once(std::borrow::Cow::Owned(layer)))
+}
+
 async fn restart_validator_from_applied_snapshot(
     network: &Network,
     applied_height: u64,
@@ -244,7 +261,8 @@ async fn restart_validator_from_applied_snapshot(
     let genesis = network.genesis();
     let restart_deadline = Instant::now() + Duration::from_secs(180);
     timeout_at(restart_deadline, async {
-        peer.start_checked(network.config_layers_for_peer(peer), Some(&genesis)).await?;
+        peer.start_checked(signed_snapshot_restart_layers(network, peer), Some(&genesis))
+            .await?;
         ensure!(peer.latest_stdout_log_path() != previous_log, "restart did not create a new daemon run");
         loop {
             if validator_admission_ready(peer, restart_deadline).await {

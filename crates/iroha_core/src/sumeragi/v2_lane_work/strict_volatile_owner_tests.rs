@@ -1012,7 +1012,8 @@ fn corrupt_native_application_receipt_retains_exact_pending_producer_reservation
     context.parent_commit_qc = Some(finality.commit_qc.clone());
     context.snapshot_bootstrap = None;
     context.nexus_amx_context_hash =
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid committed catalog");
     let slot = plan_autonomous_lane_reservation_slot(
         adapter.state.as_ref(),
         adapter.kura.as_ref(),

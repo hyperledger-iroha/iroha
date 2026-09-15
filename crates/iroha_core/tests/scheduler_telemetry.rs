@@ -709,6 +709,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         lane_config: RuntimeLaneConfig::from_catalog(&lane_catalog),
         configured_lane_catalog: lane_catalog.clone(),
         lane_catalog,
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         dataspace_catalog,
         dataspace_fee_sponsor_program_ids: BTreeMap::new(),
         routing_policy,

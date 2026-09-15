@@ -31,6 +31,7 @@ mod staking;
 mod subscriptions;
 mod sumeragi;
 mod taira;
+mod taira_dataspace_deploy;
 mod taira_public_reset;
 mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
@@ -2402,10 +2403,11 @@ mod account {
     ///
     /// Torii's list fanout applies the requested window independently to every route and
     /// returns a deduplicated page whose `total` is that page's size, not a global count.
-    /// Only an empty page from a fully successful fanout establishes exhaustion. The
-    /// permission handler rejects limits above its configured cap; it never clamps an
-    /// accepted page size, so advancing by the requested size cannot skip a shard row.
-    fn list_effective_permissions(
+    /// A fully successful merged page shorter than the requested size establishes that
+    /// every route is exhausted: any full route contributes at least that many distinct
+    /// rows to the union. The handler rejects oversized windows rather than clamping
+    /// them, so advancing by the requested size cannot skip a shard row.
+    pub(crate) fn list_effective_permissions(
         client: &Client,
         account_id: &AccountId,
         limit: Option<u64>,
@@ -2479,10 +2481,11 @@ mod account {
             if page.total != u64::try_from(page.items.len())? {
                 eyre::bail!("account permissions merged page total does not match its items");
             }
-            if page.items.is_empty() {
+            let exhausted = page.total < page_size;
+            permissions.extend(page.items);
+            if exhausted {
                 break;
             }
-            permissions.extend(page.items);
             page_offset = page_offset
                 .checked_add(page_size)
                 .ok_or_else(|| eyre!("account permissions page offset overflow"))?;

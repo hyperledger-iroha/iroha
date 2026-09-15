@@ -17241,7 +17241,8 @@ pub(crate) mod valid {
                 },
             );
             snapshot_context.nexus_amx_context_hash =
-                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state);
+                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state)
+                    .expect("valid committed catalog");
             snapshot_context.execution_policy_hash =
                 crate::sumeragi::v2_recovery::committed_execution_policy_hash(&state)
                     .expect("snapshot execution policy");
@@ -17859,7 +17860,8 @@ pub(crate) mod valid {
                     kagemusha_mint_finality_epoch_id,
                     kagemusha_mint_finality_epoch_roster,
                     nexus_amx_context_hash:
-                        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state),
+                        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
+                            .expect("valid committed catalog"),
                     execution_policy_hash: Hash::prehashed(parameters.execution_policy_hash),
                     da_layout: parameters.da_layout,
                     leader_seed: [0x41; 32],
@@ -17875,7 +17877,8 @@ pub(crate) mod valid {
                     crate::sumeragi::v2_context::build_successor_height_context_from_state(
                         &parent,
                         &state.view(),
-                        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state),
+                        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
+                            .expect("valid committed catalog"),
                     )
                     .expect("derive predecessor context from its exact parent authority");
                 assert_eq!(context.roster, roster);

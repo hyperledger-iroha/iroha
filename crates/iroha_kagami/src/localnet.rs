@@ -653,6 +653,14 @@ const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
 const LOCALNET_KAGEMUSHA_ASSET_NAME: &str = "usd";
 const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland.universal";
 const LOCALNET_KAGEMUSHA_INITIAL_QUANTITY: u64 = 100;
+const TAIRA_DIGITAL_SHEKEL_ASSET_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+const TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS: &str = "ds#boi.is";
+const TAIRA_IS_DATASPACE_ID: u64 = 6_647_857_470_246_403_404;
+const TAIRA_IS_LANE_INDEX: u32 = 7;
+/// Sparse first-release namespace: lanes 5 and 6 remain reserved for BPNG and DPN.
+const TAIRA_LANE_COUNT: i64 = 8;
+/// Match the canonical Taira template reserve while assigning it to the fresh generated operator.
+const TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY: u64 = 1_000_000_000;
 const LOCALNET_GAS_ACCOUNT_DOMAIN: &[u8] = b"iroha:localnet:gas-custody:v1";
 /// Minimum faucet reserve before startup auto-mints a replenishment.
 const LOCALNET_FEE_ASSET_RESERVE_MIN: u128 = 1_000_000_000_000_000_000_000_000;
@@ -901,17 +909,36 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
 fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
+#[cfg(test)]
 fn localnet_kagemusha_asset_literal() -> String {
     LOCALNET_KAGEMUSHA_ASSET_ID.to_owned()
 }
-fn localnet_kagemusha_asset_spec_for_client(client_account_id: &AccountId) -> AssetSpec {
+fn localnet_kagemusha_asset_spec_for_client(
+    client_account_id: &AccountId,
+    taira: bool,
+) -> AssetSpec {
+    let (id, name, alias, quantity) = if taira {
+        (
+            TAIRA_DIGITAL_SHEKEL_ASSET_ID,
+            "ds",
+            TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS,
+            TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY,
+        )
+    } else {
+        (
+            LOCALNET_KAGEMUSHA_ASSET_ID,
+            LOCALNET_KAGEMUSHA_ASSET_NAME,
+            LOCALNET_KAGEMUSHA_ASSET_ALIAS,
+            LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
+        )
+    };
     AssetSpec {
-        id: localnet_kagemusha_asset_literal(),
-        name: LOCALNET_KAGEMUSHA_ASSET_NAME.to_owned(),
-        alias: Some(LOCALNET_KAGEMUSHA_ASSET_ALIAS.to_owned()),
+        id: id.to_owned(),
+        name: name.to_owned(),
+        alias: Some(alias.to_owned()),
         owned_by: client_account_id.clone(),
         mint_to: client_account_id.clone(),
-        quantity: LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
+        quantity,
     }
 }
 fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec> {
@@ -933,14 +960,18 @@ fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec>
 }
 #[cfg(test)]
 fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
-    effective_localnet_assets_for_client(extra_assets, &localnet_client_account_id())
+    effective_localnet_assets_for_client(extra_assets, &localnet_client_account_id(), false)
 }
 fn effective_localnet_assets_for_client(
     extra_assets: &[AssetSpec],
     client_account_id: &AccountId,
+    taira: bool,
 ) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
-    assets.push(localnet_kagemusha_asset_spec_for_client(client_account_id));
+    assets.push(localnet_kagemusha_asset_spec_for_client(
+        client_account_id,
+        taira,
+    ));
     let default_client = localnet_client_account_id();
     for asset in extra_assets {
         let mut asset = asset.clone();
@@ -955,15 +986,19 @@ fn effective_localnet_assets_for_client(
     assets
 }
 
-fn validate_localnet_asset_specs(extra_assets: &[AssetSpec]) -> Result<()> {
+fn validate_localnet_asset_specs(extra_assets: &[AssetSpec], taira: bool) -> Result<()> {
+    let builtin = localnet_kagemusha_asset_spec_for_client(&localnet_client_account_id(), taira);
     let mut seen_asset_ids = BTreeSet::new();
     let mut seen_aliases = BTreeSet::new();
     seen_asset_ids.insert(
-        AssetDefinitionId::parse_address_literal(&localnet_kagemusha_asset_literal())
+        AssetDefinitionId::parse_address_literal(&builtin.id)
             .expect("built-in localnet asset definition id must parse"),
     );
     seen_aliases.insert(
-        LOCALNET_KAGEMUSHA_ASSET_ALIAS
+        builtin
+            .alias
+            .as_deref()
+            .expect("built-in asset always has an alias")
             .parse::<AssetDefinitionAlias>()
             .expect("built-in localnet asset alias must parse")
             .to_string(),
@@ -1211,8 +1246,8 @@ pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWrite
     generate_localnet_inner(opts, writer, None)
 }
 #[allow(clippy::too_many_lines)]
-fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
-    validate_localnet_asset_specs(&opts.assets)?;
+fn validate_localnet_options(opts: &LocalnetOptions, taira: bool) -> Result<ResolvedHosts> {
+    validate_localnet_asset_specs(&opts.assets, taira)?;
     if let Some(block_ms) = opts.block_cadence_ms
         && block_ms == 0
     {
@@ -1308,10 +1343,10 @@ fn generate_localnet_inner<T: Write>(
     chain_id: Option<&str>,
 ) -> Outcome {
     init_instruction_registry();
-    let hosts = validate_localnet_options(opts)?;
-    validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     let chain_id = resolve_localnet_chain_id(chain_id)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
+    let hosts = validate_localnet_options(opts, taira)?;
+    validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     if taira
         && (opts.peers.get() != TAIRA_TESTNET_PEERS
             || opts.consensus_mode != SumeragiConsensusMode::Npos
@@ -1349,8 +1384,13 @@ fn generate_localnet_inner<T: Write>(
         opts.base_p2p_port,
     )
     .wrap_err("failed to generate localnet peer keys")?;
-    let lane_manifest_directory =
-        write_localnet_lane_manifests(&out_dir, opts.sora_profile, &peers, chain_discriminant)?;
+    let lane_manifest_directory = write_localnet_lane_manifests(
+        &out_dir,
+        opts.sora_profile,
+        &peers,
+        chain_discriminant,
+        taira,
+    )?;
     let client_identity = localnet_ephemeral_identity(seed_bytes, b"operator-root")?;
     let onboarding_identity = localnet_ephemeral_identity(seed_bytes, b"onboarding-root")?;
     let runtime_bundle =
@@ -1389,7 +1429,8 @@ fn generate_localnet_inner<T: Write>(
     let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
         .wrap_err("failed to generate localnet genesis key pair")?;
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
-    let assets = effective_localnet_assets_for_client(&opts.assets, &client_identity.account_id);
+    let assets =
+        effective_localnet_assets_for_client(&opts.assets, &client_identity.account_id, taira);
     let gas_account_id = if npos_bootstrap {
         Some(localnet_gas_account_id(&genesis_public_key))
     } else {
@@ -1848,6 +1889,7 @@ fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u1
 fn localnet_dataspace_catalog(
     sora_profile: Option<SoraProfile>,
     fault_tolerance: u32,
+    taira: bool,
 ) -> Vec<toml::Value> {
     use toml::{Table, Value};
     let fault_tolerance = i64::from(fault_tolerance);
@@ -1880,6 +1922,14 @@ fn localnet_dataspace_catalog(
         Some(SoraProfile::Dataspace | SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
         | None => Vec::new(),
     };
+    if taira {
+        assert_eq!(sora_profile, Some(SoraProfile::Nexus));
+        extra_dataspaces.push((
+            "is",
+            i64::try_from(TAIRA_IS_DATASPACE_ID).expect("IS dataspace id fits i64"),
+            "Digital Shekel restricted dataspace",
+        ));
+    }
     if let Some(spec) = private_dataspace_spec(sora_profile) {
         extra_dataspaces.push((
             spec.alias,
@@ -1919,9 +1969,16 @@ fn write_localnet_lane_manifests(
     sora_profile: Option<SoraProfile>,
     peers: &[Peer],
     chain_discriminant: Option<u16>,
+    taira: bool,
 ) -> Result<Option<PathBuf>> {
-    let Some(spec) = private_dataspace_spec(sora_profile) else {
-        return Ok(None);
+    let alias = if taira {
+        assert_eq!(sora_profile, Some(SoraProfile::Nexus));
+        "is"
+    } else {
+        let Some(spec) = private_dataspace_spec(sora_profile) else {
+            return Ok(None);
+        };
+        spec.alias
     };
     let manifest_directory = out_dir.join("lane-manifests");
     fs::create_dir(&manifest_directory).wrap_err_with(|| {
@@ -1933,7 +1990,7 @@ fn write_localnet_lane_manifests(
     let validators = peers
         .iter()
         .map(|peer| {
-            let account_id = AccountId::new(peer.public_key.clone());
+            let account_id = peer.validator_account_id(taira);
             LocalnetLaneManifestValidator {
                 validator: account_id_runtime_literal(&account_id, chain_discriminant),
                 peer_id: PeerId::from(peer.public_key.clone()).to_string(),
@@ -1954,23 +2011,19 @@ fn write_localnet_lane_manifests(
         ));
     }
     let manifest = LocalnetLaneManifest {
-        lane: spec.alias.to_owned(),
+        lane: alias.to_owned(),
         governance: "parliament".to_owned(),
         version: 1,
         validators,
         quorum,
     };
-    let raw = norito::json::to_json_pretty(&manifest).wrap_err_with(|| {
-        format!(
-            "serialize localnet {} lane manifest",
-            spec.alias.to_uppercase()
-        )
-    })?;
-    let manifest_path = manifest_directory.join(format!("{}.manifest.json", spec.alias));
+    let raw = norito::json::to_json_pretty(&manifest)
+        .wrap_err_with(|| format!("serialize localnet {} lane manifest", alias.to_uppercase()))?;
+    let manifest_path = manifest_directory.join(format!("{alias}.manifest.json"));
     fs::write(&manifest_path, raw).wrap_err_with(|| {
         format!(
             "failed to write localnet {} lane manifest {}",
-            spec.alias.to_uppercase(),
+            alias.to_uppercase(),
             manifest_path.display()
         )
     })?;
@@ -1990,7 +2043,10 @@ fn localnet_dataspace_manifest_hash(id: i64) -> String {
     clippy::too_many_lines,
     reason = "the canonical lane matrices stay together so profile ordering remains auditable"
 )]
-fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<toml::Value>)> {
+fn localnet_lane_catalog(
+    sora_profile: Option<SoraProfile>,
+    taira: bool,
+) -> Option<(i64, Vec<toml::Value>)> {
     use toml::{Table, Value};
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
         return None;
@@ -2074,7 +2130,19 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
                     None,
                 ),
             ]);
-            LOCALNET_NEXUS_ALIAS_LANE_COUNT
+            if taira {
+                lane_specs.push((
+                    i64::from(TAIRA_IS_LANE_INDEX),
+                    "is",
+                    "Digital Shekel restricted dataspace lane",
+                    "is",
+                    "restricted",
+                    Some("parliament"),
+                ));
+                TAIRA_LANE_COUNT
+            } else {
+                LOCALNET_NEXUS_ALIAS_LANE_COUNT
+            }
         }
         Some(SoraProfile::Dataspace | SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae) => {
             let spec = private_dataspace_spec(sora_profile)
@@ -2099,6 +2167,9 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         entry.insert("description".into(), Value::String(description.to_owned()));
         entry.insert("dataspace".into(), Value::String(dataspace.to_owned()));
         entry.insert("visibility".into(), Value::String(visibility.to_owned()));
+        if taira && index == i64::from(TAIRA_IS_LANE_INDEX) {
+            entry.insert("storage".into(), Value::String("full_replica".to_owned()));
+        }
         if let Some(governance) = governance {
             entry.insert("governance".into(), Value::String(governance.to_owned()));
         }
@@ -2112,7 +2183,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
     clippy::too_many_lines,
     reason = "the canonical routing matrices stay together so first-match ordering remains auditable"
 )]
-fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Table> {
+fn localnet_routing_policy(sora_profile: Option<SoraProfile>, taira: bool) -> Option<toml::Table> {
     use toml::{Table, Value};
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
         return None;
@@ -2152,7 +2223,7 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
         rule.insert("matcher".into(), Value::Table(matcher));
         Value::Table(rule)
     }
-    let rules = match sora_profile {
+    let mut rules = match sora_profile {
         Some(SoraProfile::Nexus) => vec![
             rule(1, "universal", "instruction", "governance", None),
             rule(2, "universal", "instruction", "smartcontract::deploy", None),
@@ -2238,6 +2309,13 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
         }
         None => return None,
     };
+    if taira {
+        assert_eq!(sora_profile, Some(SoraProfile::Nexus));
+        rules.extend([
+            rule(TAIRA_IS_LANE_INDEX, "is", "account", "*@is", None),
+            rule(TAIRA_IS_LANE_INDEX, "is", "account", "*@*.is", None),
+        ]);
+    }
     let mut policy = Table::new();
     policy.insert("default_lane".into(), Value::Integer(0));
     policy.insert(
@@ -2614,21 +2692,21 @@ fn render_peer_config(
         );
         nexus.insert("fees".into(), Value::Table(fees));
     }
-    if let Some((lane_count, lane_catalog)) = localnet_lane_catalog(sora_profile) {
+    if let Some((lane_count, lane_catalog)) = localnet_lane_catalog(sora_profile, taira) {
         nexus.insert("lane_count".into(), Value::Integer(lane_count));
         nexus.insert("lane_catalog".into(), Value::Array(lane_catalog));
     }
     if let Some(fault_tolerance) = dataspace_fault_tolerance {
-        let catalog = localnet_dataspace_catalog(sora_profile, fault_tolerance);
+        let catalog = localnet_dataspace_catalog(sora_profile, fault_tolerance, taira);
         nexus.insert("dataspace_catalog".into(), Value::Array(catalog));
     }
-    if let Some(policy) = localnet_routing_policy(sora_profile) {
+    if let Some(policy) = localnet_routing_policy(sora_profile, taira) {
         nexus.insert("routing_policy".into(), Value::Table(policy));
     }
     if let Some(manifest_directory) = lane_manifest_directory {
         assert!(
-            private_dataspace_spec(sora_profile).is_some(),
-            "lane manifests are only generated for restricted dataspace profiles"
+            taira || private_dataspace_spec(sora_profile).is_some(),
+            "lane manifests require a generated restricted dataspace"
         );
         let mut registry = Table::new();
         registry.insert(
@@ -2651,10 +2729,12 @@ fn render_peer_config(
         let mut modules = Table::new();
         modules.insert("parliament".into(), Value::Table(parliament));
         let mut governance = Table::new();
-        governance.insert(
-            "default_module".into(),
-            Value::String("parliament".to_owned()),
-        );
+        if !taira {
+            governance.insert(
+                "default_module".into(),
+                Value::String("parliament".to_owned()),
+            );
+        }
         governance.insert("modules".into(), Value::Table(modules));
         nexus.insert("governance".into(), Value::Table(governance));
     }
@@ -3378,6 +3458,7 @@ fn extend_genesis(
     extra_accounts: u16,
     assets: &[AssetSpec],
 ) -> Result<RawGenesisTransaction> {
+    let taira = genesis.chain_id().to_string() == PUBLIC_TAIRA_CHAIN_ID;
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let mut builder = genesis.into_builder().next_transaction();
     for idx in 0..extra_accounts {
@@ -3399,14 +3480,34 @@ fn extend_genesis(
         }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
+        let (spec, metadata) = if taira && asset.id == TAIRA_DIGITAL_SHEKEL_ASSET_ID {
+            // This is the exact public asset contract in the canonical Taira genesis template.
+            // Generic localnet assets keep their independent numeric and metadata defaults.
+            let mut metadata = Metadata::default();
+            for (key, value) in [
+                ("currency_code", "DS"),
+                ("display_code", "DS"),
+                ("display_name", "Digital Shekel"),
+                ("iso_currency_code", "ILS"),
+                ("symbol", "₪"),
+            ] {
+                metadata.insert(
+                    key.parse().expect("static asset metadata key"),
+                    Json::new(value),
+                );
+            }
+            (NumericSpec::fractional(2), metadata)
+        } else {
+            (NumericSpec::default(), Metadata::default())
+        };
         let definition = AssetDefinition::new(
             asset_def.clone(),
             asset.name.clone(),
-            NumericSpec::default(),
+            spec,
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
-        .with_metadata(Metadata::default());
+        .with_metadata(metadata);
         builder = builder.append_instruction(Register::asset_definition(definition));
         if let Some(alias_literal) = asset.alias.as_deref() {
             let alias = alias_literal
@@ -6086,6 +6187,20 @@ fn write_localnet_readme(
     alias_setup_intent_path: &Path,
     shell_out_dir: &str,
 ) -> Result<()> {
+    let builtin = localnet_kagemusha_asset_spec_for_client(
+        &localnet_client_account_id(),
+        chain_id == PUBLIC_TAIRA_CHAIN_ID,
+    );
+    let taira_catalog_note = if chain_id == PUBLIC_TAIRA_CHAIN_ID {
+        format!(
+            "- Digital Shekel namespace: `is` (dataspace `{TAIRA_IS_DATASPACE_ID}`, restricted full-replica lane `{TAIRA_IS_LANE_INDEX}`)\n\
+             - Public lane manifest: `{}`; retain this exact directory with the generated peer configs\n\
+             - Registered lanes: `0,1,2,3,4,7`; lanes `5` (BPNG) and `6` (DPN) are reserved and absent\n",
+            out_dir.join("lane-manifests/is.manifest.json").display()
+        )
+    } else {
+        String::new()
+    };
     let readme_path = out_dir.join("README.md");
     let start_command = localnet_script_command("start.sh");
     let stop_command = localnet_script_command("stop.sh");
@@ -6114,6 +6229,8 @@ fn write_localnet_readme(
             "## Built-in App API bootstrap\n\n",
             "- KAGEMUSHA V1 asset definition: `{kagemusha_asset}`\n",
             "- KAGEMUSHA V1 asset alias: `{kagemusha_alias}`\n",
+            "- Initial KAGEMUSHA asset reserve: `{kagemusha_quantity}`\n",
+            "{taira_catalog_note}",
             "- Ephemeral operator authority: `{operator_account_id}`\n",
             "- Ephemeral onboarding authority: `{onboarding_account_id}`\n",
             "- Operator signer sidecar: `{operator_signer_key}`\n",
@@ -6150,8 +6267,10 @@ fn write_localnet_readme(
         genesis_public_key = genesis_public_key_path.display(),
         genesis_private_key = genesis_private_key_path.display(),
         client_config = client_config_path.display(),
-        kagemusha_asset = LOCALNET_KAGEMUSHA_ASSET_ID,
-        kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS,
+        kagemusha_asset = builtin.id,
+        kagemusha_alias = builtin.alias.as_deref().expect("built-in asset alias"),
+        kagemusha_quantity = builtin.quantity,
+        taira_catalog_note = taira_catalog_note,
         operator_account_id = operator_account_id,
         onboarding_account_id = onboarding_account_id,
         operator_signer_key = runtime_bundle.operator_signer_key.display(),
@@ -6267,10 +6386,134 @@ mod tests {
                 .expect("rebuild deterministic operator identity");
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated Taira genesis");
+        let definitions = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<RegisterBox>() {
+                    Some(RegisterBox::AssetDefinition(register)) => Some(register.object()),
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let digital_shekel_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_SHEKEL_ASSET_ID)
+                .expect("Digital Shekel identity");
+        let digital_shekels = definitions
+            .iter()
+            .filter(|definition| definition.id == digital_shekel_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            digital_shekels.len(),
+            1,
+            "one canonical Digital Shekel definition"
+        );
+        let template: json::Value = json::from_str(include_str!(
+            "../../../configs/soranexus/taira/genesis.template.json"
+        ))
+        .expect("canonical public Taira template");
+        let expected = template["transactions"]
+            .as_array()
+            .expect("template transactions")
+            .iter()
+            .flat_map(|transaction| transaction["instructions"].as_array().into_iter().flatten())
+            .filter_map(|instruction| instruction.pointer("/Register/AssetDefinition"))
+            .find(|definition| definition["id"].as_str() == Some(TAIRA_DIGITAL_SHEKEL_ASSET_ID))
+            .expect("template Digital Shekel definition");
+        assert_eq!(
+            json::to_value(*digital_shekels[0]).expect("native definition JSON"),
+            *expected
+        );
+        assert!(
+            definitions
+                .iter()
+                .all(|definition| definition.id.to_string() != LOCALNET_KAGEMUSHA_ASSET_ID)
+        );
+        let digital_shekel_alias = TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS
+            .parse::<AssetDefinitionAlias>()
+            .expect("Digital Shekel alias");
+        assert_eq!(
+            manifest
+                .instructions()
+                .filter(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<SetAssetDefinitionAlias>()
+                        .is_some_and(|binding| {
+                            binding.asset_definition_id() == &digital_shekel_id
+                                && binding.alias().as_ref() == Some(&digital_shekel_alias)
+                        })
+                })
+                .count(),
+            1,
+        );
+        let operator_asset = AssetId::new(
+            digital_shekel_id.clone(),
+            operator_identity.account_id.clone(),
+        );
+        let minted = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
+                    Some(MintBox::Asset(mint)) if mint.destination() == &operator_asset => {
+                        Some(mint.object().clone())
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(
+            minted,
+            vec![Quantity::from(TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY)]
+        );
+        assert!(manifest.instructions().any(|instruction| {
+            matches!(instruction.as_any().downcast_ref::<TransferBox>(),
+                Some(TransferBox::AssetDefinition(transfer))
+                    if transfer.object() == &digital_shekel_id
+                        && transfer.destination() == &operator_identity.account_id)
+        }));
+        let readme =
+            fs::read_to_string(temp.path().join("README.md")).expect("generated public guide");
+        assert!(readme.contains(TAIRA_DIGITAL_SHEKEL_ASSET_ID));
+        assert!(readme.contains(TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS));
+        assert!(!readme.contains(LOCALNET_KAGEMUSHA_ASSET_ID));
+        assert!(!readme.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
+        assert!(readme.contains("Registered lanes: `0,1,2,3,4,7`"));
+        assert!(readme.contains("lane-manifests/is.manifest.json"));
         let peer_config_text = fs::read_to_string(temp.path().join("peer0.toml"))
             .expect("read generated Taira peer config");
         let peer_config: toml::Value =
             toml::from_str(&peer_config_text).expect("parse generated Taira peer config");
+        let nexus_config = peer_config["nexus"].as_table().expect("Taira Nexus config");
+        assert_eq!(nexus_config["lane_count"].as_integer(), Some(8));
+        let dataspace_config = nexus_config["dataspace_catalog"]
+            .as_array()
+            .expect("Taira physical dataspace catalog");
+        let is_config = dataspace_config
+            .iter()
+            .find(|entry| entry["alias"].as_str() == Some("is"))
+            .expect("Digital Shekel physical dataspace");
+        assert_eq!(
+            is_config["id"].as_integer(),
+            Some(6_647_857_470_246_403_404)
+        );
+        assert_eq!(
+            is_config["manifest_hash"].as_str(),
+            Some("4cbd76b725ef415c000000000000000000000000000000000000000000000000")
+        );
+        let routing = nexus_config["routing_policy"]
+            .as_table()
+            .expect("Taira routes");
+        let rules = routing["rules"].as_array().expect("Taira route rules");
+        assert_eq!(
+            rules.len(),
+            6,
+            "four baseline routes plus two is authority routes"
+        );
+        for (rule, pattern) in rules[4..].iter().zip(["*@is", "*@*.is"]) {
+            assert_eq!(rule["lane"].as_integer(), Some(7));
+            assert_eq!(rule["dataspace"].as_str(), Some("is"));
+            assert_eq!(rule["matcher"]["account"].as_str(), Some(pattern));
+        }
         let soracloud_runtime = peer_config
             .get("soracloud_runtime")
             .and_then(toml::Value::as_table)
@@ -6397,6 +6640,34 @@ mod tests {
             .filter(|registration| registration.lane_id == LaneId::SINGLE)
             .collect::<Vec<_>>();
         assert_eq!(validator_records.len(), usize::from(TAIRA_TESTNET_PEERS));
+        let public_registrations = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(public_registrations.len(), 12);
+        assert_eq!(
+            public_registrations
+                .iter()
+                .map(|registration| registration.lane_id.as_u32())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0, 3, 4]),
+            "the admin-managed is lane must not gain a public staking pool"
+        );
+
+        // Generation already executes this exact body through native State/Kura and
+        // ValidBlock validation; require the persisted result to retain that success.
+        let signed = read_signed_genesis(&temp.path().join("genesis.signed.nrt"))
+            .expect("read native executed Taira genesis");
+        for index in 0..signed.external_transactions().count() {
+            assert!(
+                signed.error(index).is_none(),
+                "genesis transaction {index} failed"
+            );
+        }
 
         let start_script = fs::read_to_string(temp.path().join("start.sh"))
             .expect("read generated Taira start script");
@@ -6414,6 +6685,97 @@ mod tests {
             let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read Taira peer config");
             let parsed = actual::Root::from_toml_source(source).expect("parse Taira peer config");
+            assert!(parsed.nexus.governance.default_module.is_none());
+            assert!(
+                parsed
+                    .nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .filter(|lane| lane.id.as_u32() < 5)
+                    .all(|lane| lane.governance.is_none()),
+                "IS governance must not change the baseline lanes"
+            );
+            assert_eq!(parsed.nexus.lane_catalog.lane_count().get(), 8);
+            assert_eq!(
+                parsed
+                    .nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .map(|lane| lane.id.as_u32())
+                    .collect::<Vec<_>>(),
+                vec![0, 1, 2, 3, 4, 7],
+                "BPNG5 and DPN6 remain absent in the fresh baseline"
+            );
+            assert_eq!(
+                parsed
+                    .nexus
+                    .dataspace_catalog
+                    .entries()
+                    .iter()
+                    .map(|dataspace| (
+                        dataspace.id.as_u64(),
+                        dataspace.alias.as_str(),
+                        dataspace.fault_tolerance
+                    ))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (0, "universal", 1),
+                    (10, "paynet", 1),
+                    (12, "nexus", 1),
+                    (6_647_857_470_246_403_404, "is", 1)
+                ]
+            );
+            let is_lane = parsed
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|lane| lane.id.as_u32() == 7)
+                .expect("native parsed IS lane");
+            assert_eq!(
+                is_lane.dataspace_id,
+                DataSpaceId::new(TAIRA_IS_DATASPACE_ID)
+            );
+            assert_eq!(
+                is_lane.visibility,
+                iroha_data_model::nexus::LaneVisibility::Restricted
+            );
+            assert_eq!(
+                is_lane.storage,
+                iroha_data_model::nexus::LaneStorageProfile::FullReplica
+            );
+            assert_eq!(is_lane.governance.as_deref(), Some("parliament"));
+            let _manifest_scope = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
+            let registry = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+                &parsed.nexus.lane_catalog,
+                &parsed.nexus.governance,
+                &parsed.nexus.registry,
+            );
+            registry
+                .validate_active_coverage_for_catalog(&parsed.nexus.lane_catalog)
+                .expect("native authenticated manifest coverage");
+            let is_lane_id = LaneId::new(TAIRA_IS_LANE_INDEX);
+            assert_eq!(registry.lane_quorum(is_lane_id), Some(3));
+            assert_eq!(
+                registry
+                    .lane_validator_bindings(is_lane_id)
+                    .expect("IS manifest validator bindings")
+                    .into_iter()
+                    .map(|binding| {
+                        assert!(binding.torii_url.is_none());
+                        (binding.validator, binding.peer_id)
+                    })
+                    .collect::<BTreeSet<_>>(),
+                peers
+                    .iter()
+                    .map(|peer| (
+                        peer.validator_account_id(true),
+                        PeerId::from(peer.public_key.clone())
+                    ))
+                    .collect::<BTreeSet<_>>()
+            );
             assert_eq!(
                 parsed.network.soranet_vpn.operator_account_id,
                 operator_identity.account_id
@@ -6641,7 +7003,7 @@ mod tests {
         let assets = if uses_default_client {
             effective_localnet_assets(&opts.assets)
         } else {
-            effective_localnet_assets_for_client(&opts.assets, client_account_id)
+            effective_localnet_assets_for_client(&opts.assets, client_account_id, false)
         };
         let mut genesis = generate_raw_genesis(
             &genesis_public_key,
@@ -6860,6 +7222,51 @@ mod tests {
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         actual::Root::from_toml_source(source).expect("generated config must parse");
     }
+    #[test]
+    fn localnet_asset_defaults_are_selected_by_exact_taira_chain_context() {
+        let client = localnet_client_account_id();
+        let taira = effective_localnet_assets_for_client(&[], &client, true);
+        assert_eq!(taira.len(), 1);
+        assert_eq!(taira[0].id, TAIRA_DIGITAL_SHEKEL_ASSET_ID);
+        assert_eq!(
+            taira[0].alias.as_deref(),
+            Some(TAIRA_DIGITAL_SHEKEL_ASSET_ALIAS)
+        );
+        assert_eq!(taira[0].name, "ds");
+        assert_eq!(taira[0].quantity, 1_000_000_000);
+        assert_eq!(taira[0].owned_by, client);
+        assert_eq!(taira[0].mint_to, client);
+        let generic = effective_localnet_assets_for_client(&[], &client, false);
+        assert_eq!(generic.len(), 1);
+        assert_eq!(generic[0].id, LOCALNET_KAGEMUSHA_ASSET_ID);
+        assert_eq!(
+            generic[0].alias.as_deref(),
+            Some(LOCALNET_KAGEMUSHA_ASSET_ALIAS)
+        );
+        assert_eq!(generic[0].name, LOCALNET_KAGEMUSHA_ASSET_NAME);
+        assert_eq!(generic[0].quantity, 100);
+        assert_eq!(generic[0].owned_by, client);
+        assert_eq!(generic[0].mint_to, client);
+    }
+
+    #[test]
+    fn localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision() {
+        let client = localnet_client_account_id();
+        for taira in [false, true] {
+            let builtin = localnet_kagemusha_asset_spec_for_client(&client, taira);
+            let by_id =
+                requested_localnet_asset_spec(&builtin.id).expect("requested builtin identity");
+            assert!(validate_localnet_asset_specs(&[by_id], taira).is_err());
+            let mut by_alias = requested_localnet_asset_spec(&localnet_sample_asset_literal())
+                .expect("distinct requested identity");
+            by_alias.alias = builtin.alias;
+            assert!(validate_localnet_asset_specs(&[by_alias], taira).is_err());
+            let other_profile = localnet_kagemusha_asset_spec_for_client(&client, !taira);
+            validate_localnet_asset_specs(&[other_profile], taira)
+                .expect("the other workflow's independent asset can be explicitly requested");
+        }
+    }
+
     #[test]
     fn requested_localnet_asset_spec_trims_and_uses_client_owner_with_initial_reserve() {
         let asset_id = localnet_sample_asset_literal();
@@ -8132,7 +8539,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-        let err = validate_localnet_options(&opts).expect_err("mismatch should fail");
+        let err = validate_localnet_options(&opts, false).expect_err("mismatch should fail");
         assert!(
             err.to_string().contains("perf-profile"),
             "unexpected error: {err}"
@@ -9096,7 +9503,7 @@ mod tests {
         ];
         for case in cases {
             let profile = Some(case.profile);
-            let dataspace_catalog = localnet_dataspace_catalog(profile, 1);
+            let dataspace_catalog = localnet_dataspace_catalog(profile, 1, false);
             assert_eq!(
                 dataspace_catalog,
                 vec![
@@ -9111,7 +9518,7 @@ mod tests {
                 "private dataspace catalog must exactly match the canonical PK catalog"
             );
             let (lane_count, lane_catalog) =
-                localnet_lane_catalog(profile).expect("private lane catalog");
+                localnet_lane_catalog(profile, false).expect("private lane catalog");
             assert_eq!(lane_count, case.lane_count);
             assert_eq!(
                 lane_catalog,
@@ -9144,7 +9551,7 @@ mod tests {
                 ],
                 "private lane catalog must exactly match the canonical PK catalog (CBUAE leaves lane 3 sparse)"
             );
-            let routing = localnet_routing_policy(profile).expect("private routing policy");
+            let routing = localnet_routing_policy(profile, false).expect("private routing policy");
             let observed = routing
                 .get("rules")
                 .and_then(toml::Value::as_array)
@@ -9216,7 +9623,7 @@ mod tests {
         ] {
             let temp = tempfile::tempdir().expect("tmp dir");
             let manifest_directory =
-                write_localnet_lane_manifests(temp.path(), Some(profile), &peers, None)
+                write_localnet_lane_manifests(temp.path(), Some(profile), &peers, None, false)
                     .expect("write private lane manifest")
                     .expect("private lane manifest directory");
             assert_eq!(manifest_directory, temp.path().join("lane-manifests"));
@@ -10572,7 +10979,8 @@ mod tests {
             block_cadence_ms: Some(0),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-        let err = validate_localnet_options(&opts).expect_err("zero block cadence should fail");
+        let err =
+            validate_localnet_options(&opts, false).expect_err("zero block cadence should fail");
         assert!(
             err.to_string().contains("--block-cadence-ms"),
             "unexpected error: {err}"
@@ -10597,7 +11005,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-        let error = validate_localnet_options(&opts)
+        let error = validate_localnet_options(&opts, false)
             .expect_err("the CLI must reject a roster above the wire-protocol limit");
         let expected = format!(
             "`--peers` ({oversized}) exceeds the Sumeragi v2 protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
@@ -10624,7 +11032,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-        let error = validate_localnet_options(&opts)
+        let error = validate_localnet_options(&opts, false)
             .expect_err("the CLI must reject a non-3f+1 validator roster");
         assert!(
             error.to_string().contains("exact Sumeragi v2 3f+1"),
@@ -10648,7 +11056,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-        let err = validate_localnet_options(&opts)
+        let err = validate_localnet_options(&opts, false)
             .expect_err("every generated localnet should enforce the minimum peer count");
         assert!(
             err.to_string().contains("`--peers` must be at least 4"),
@@ -10672,7 +11080,8 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-        let err = validate_localnet_options(&opts).expect_err("sora nexus should require NPoS");
+        let err =
+            validate_localnet_options(&opts, false).expect_err("sora nexus should require NPoS");
         assert!(
             err.to_string().contains("sora-profile"),
             "unexpected error: {err}"
@@ -10695,7 +11104,8 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-        let err = validate_localnet_options(&opts).expect_err("sora profile should require NPoS");
+        let err =
+            validate_localnet_options(&opts, false).expect_err("sora profile should require NPoS");
         assert!(
             err.to_string().contains("sora-profile"),
             "unexpected error: {err}"
@@ -10718,7 +11128,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-        validate_localnet_options(&opts).expect("permissioned localnet should be allowed");
+        validate_localnet_options(&opts, false).expect("permissioned localnet should be allowed");
     }
     #[test]
     fn permissioned_localnet_uses_mandatory_nexus_default() {

@@ -782,6 +782,11 @@ class TairaPrepareTests(unittest.TestCase):
                     controller.write_bytes(original + b"uncommitted controller change\n")
                 if change == "staged":
                     self.fixture_git("add", "--", relative)
+                if change == "mode":
+                    # Low-level diff-files can report a stale stat cache after
+                    # chmod even when filemode is ignored. Confirm unchanged
+                    # bytes through Git before asserting this hidden drift.
+                    self.fixture_git("update-index", "--refresh", "--", relative)
                 if change in ("mode", "assume-unchanged", "skip-worktree"):
                     self.fixture_git("diff-files", "--quiet", "--", relative)
                 with patch.object(release, "capture_source") as capture:
@@ -1318,6 +1323,69 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "development_check") as check:
             self.assertEqual(release.gate.main(), 0)
         self.assertEqual(check.call_args.args[:2], (repo, routine))
+
+    def test_focused_prequalification_keeps_development_lock_and_sanitized_environment(self):
+        repo, routine = self.development_paths()
+        focused = ("core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay",)
+        held = []
+        def diagnostic(root, *, focused_regressions, environment, lock_fds, qualification_scope):
+            self.assertEqual((root, focused_regressions, qualification_scope), (repo, focused, "basic"))
+            self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
+            self.assertNotIn("PRIVATE_KEY", environment)
+            self.assertNotIn("RUSTFLAGS", environment)
+            self.assertEqual(len(lock_fds), 1)
+            held.extend(lock_fds)
+            os.fstat(lock_fds[0])
+            with self.assertRaisesRegex(release.PrepareError, "still running"):
+                with release.cargo_lane(repo, routine, "development"):
+                    self.fail("prequalification must hold the shared development lane")
+        with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+             patch.object(release.gate, "run_prequalification", side_effect=diagnostic) as prequalify, \
+             patch.object(release.gate, "run_checks") as qualify, contextlib.redirect_stdout(io.StringIO()):
+            release.development_check(repo, None, {"PRIVATE_KEY": "never forward", "RUSTFLAGS": "bad"},
+                                      focused_regressions=focused)
+        prequalify.assert_called_once()
+        qualify.assert_not_called()
+        with self.assertRaises(OSError):
+            os.fstat(held[0])
+        self.assertFalse((routine / "checks.json").exists())
+        self.assertFalse((routine / "result.json").exists())
+
+    def test_invalid_focus_stops_before_target_or_tool_setup(self):
+        repo, routine = self.development_paths()
+        with patch.object(release, "isolated_cargo_environment") as tools, \
+             patch.object(release.gate, "run_prequalification") as prequalify:
+            with self.assertRaises(release.gate.CheckError):
+                release.development_check(repo, routine, {}, focused_regressions=("core=*",))
+        tools.assert_not_called()
+        prequalify.assert_not_called()
+        self.assertFalse((routine / ".taira-build-lane").exists())
+
+    def test_prequalification_cannot_use_the_authenticated_release_target(self):
+        repo, _ = self.development_paths()
+        with patch.object(release, "isolated_cargo_environment") as tools, \
+             patch.object(release.gate, "run_prequalification") as prequalify:
+            with self.assertRaisesRegex(release.PrepareError, "authenticated release lane"):
+                release.development_check(repo, repo / "target", {}, focused_regressions=(
+                    "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay",))
+        tools.assert_not_called()
+        prequalify.assert_not_called()
+
+    def test_only_check_parser_admits_focus_and_forwards_exact_names(self):
+        focus = "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
+        with patch.object(release.sys, "argv", ["taira_release.py", "check", "--focus-regression", focus]), \
+             patch.object(release, "development_check") as check:
+            self.assertEqual(release.main(), 0)
+        self.assertEqual(check.call_args.kwargs, {"native_check_scope": "basic", "focused_regressions": (focus,)})
+        arguments = ["prepare", "--expected-commit", "a" * 40, "--expected-signer", "A" * 40,
+                     "--output-dir", str(self.out), "--zig", str(self.zig), "--zig-sha256", "a" * 64,
+                     "--cargo-zigbuild", str(self.zigbuild), "--cargo-zigbuild-sha256", "b" * 64,
+                     "--focus-regression", focus]
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as failed:
+            release.parser().parse_args(arguments)
+        self.assertEqual(failed.exception.code, 2)
+        self.assertIn("unrecognized arguments: --focus-regression", errors.getvalue())
 
     def test_prepare_default_ignores_the_development_environment_selector(self):
         repo, routine = self.development_paths()

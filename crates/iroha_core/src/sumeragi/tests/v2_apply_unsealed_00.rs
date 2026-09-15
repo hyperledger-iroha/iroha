@@ -586,7 +586,8 @@ impl ApplyFixture {
             install_fixture_native_lane(&mut state, &mut context);
         }
         context.nexus_amx_context_hash =
-            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state);
+            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&state)
+                .expect("valid committed catalog");
         context.execution_policy_hash =
             crate::sumeragi::v2_recovery::committed_execution_policy_hash(&state)
                 .expect("derive apply fixture execution policy");

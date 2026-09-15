@@ -799,7 +799,8 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
         leader_seed: [0xF5; 32],
     });
     boundary_context.nexus_amx_context_hash =
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid committed catalog");
     boundary_context.execution_policy_hash =
         super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
             .expect("derive boundary fixture execution policy");
@@ -1248,7 +1249,8 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     );
     let context = crate::sumeragi::v2_context::build_successor_height_context(
         &finality,
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()),
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid committed catalog"),
         None,
     )
     .expect("derive successor exclusively from the authenticated boundary snapshot");

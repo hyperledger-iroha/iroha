@@ -3872,6 +3872,7 @@ impl V2LaneWorkAdapter {
         } else {
             authenticated_genesis_nexus_amx_context.is_none()
                 && super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                    .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?
                     == context.nexus_amx_context_hash
         };
         let recovered_applied_tip_matches = recovered_applied_height.is_some_and(|pending| {
@@ -15683,6 +15684,26 @@ impl V2LaneWorkAdapter {
                     "canonical lane hydration conflicts with retained recovery sources: {error}"
                 ))
             })?;
+        // A carrier change can retire a drained output while the cache keeps
+        // its complete lane certificate. The global hint is advisory, so
+        // canonical rebinding preserves that certificate and its drained bit.
+        // Restore only an orphaned handoff for the authenticated, unapplied
+        // canonical source; active downstream owners remain exactly-once.
+        for proposal in &raw_proposals {
+            let has_owner = self
+                .pending_committed_lanes
+                .iter()
+                .chain(self.historical_recovery_sessions.iter())
+                .any(|session| session.proposal.same_consensus_identity(proposal))
+                || self
+                    .committed_lane_outputs
+                    .iter()
+                    .any(|output| output.session.proposal.same_consensus_identity(proposal));
+            if !has_owner {
+                self.lane_sessions
+                    .restore_missing_committed_handoff(proposal);
+            }
+        }
         self.historical_autonomous_recovery_records = recovered_historical_records;
         self.pending_autonomous_anchor_payloads = pending_autonomous_anchor_payloads;
         for record in historical_ready_records {
@@ -21509,7 +21530,8 @@ pub(super) mod tests {
             kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
-            ),
+            )
+            .expect("valid committed catalog"),
             execution_policy_hash: super::super::v2_recovery::committed_execution_policy_hash(
                 state.as_ref(),
             )
@@ -21713,7 +21735,8 @@ pub(super) mod tests {
                 BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
             )));
         adapter.context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+                .expect("valid committed catalog");
         adapter.context.execution_policy_hash =
             super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
                 .expect("derive multi-lane test execution policy");
@@ -21746,7 +21769,7 @@ pub(super) mod tests {
         let_row! { dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dataspace_id, alias: "independent-dataspace".to_owned(), description: None, fault_tolerance: 1, }]) .expect("single custom-dataspace test catalog") };
         stmt_row! { { let mut nexus = adapter.state.nexus.write(); nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy { default_lane: lane_id, default_dataspace: dataspace_id, rules: Vec::new(), }; nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog); nexus.lane_catalog = lane_catalog; nexus.dataspace_catalog = dataspace_catalog; } }
         adapter.state.reseed_static_lane_incarnations_for_tests();
-        stmt_row! { adapter.context.nexus_amx_context_hash = super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()); }
+        stmt_row! { adapter.context.nexus_amx_context_hash = super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()).expect("valid committed catalog"); }
         stmt_row! { adapter.context.execution_policy_hash = super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).expect("derive single custom-lane test execution policy"); }
         stmt_row! { assert!(!proposal_lookahead_enabled(&adapter.state.nexus_snapshot(), adapter.context.height,), "one custom route must retain the narrow proposal scan"); }
         stmt_row! { assert_eq!(adapter.state.consensus_lane_routes_at_height(adapter.context.height).into_keys().collect::<Vec<_>>(), vec![(lane_id, dataspace_id)], "fixture must expose exactly one enabled custom route"); }
@@ -25787,7 +25810,8 @@ pub(super) mod tests {
         drop(adapter);
         assert_eq!(
             context.nexus_amx_context_hash,
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog"),
             "the default fresh-genesis fixture starts with the empty committed projection"
         );
         assert!(matches!(
@@ -25806,7 +25830,8 @@ pub(super) mod tests {
         context.nexus_amx_context_hash = Hash::new(b"staged post-genesis Nexus/AMX projection");
         assert_ne!(
             context.nexus_amx_context_hash,
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog"),
             "fixture must distinguish the staged post-genesis projection from empty committed state"
         );
         assert!(matches!(
@@ -25917,7 +25942,8 @@ pub(super) mod tests {
         drop(adapter);
         state.nexus.write().fees.base_fee = Quantity::from(1_u32);
         context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog");
         assert_ne!(
             super::super::v2_recovery::committed_execution_policy_hash(state.as_ref())
                 .expect("changed execution policy"),
@@ -25992,7 +26018,8 @@ pub(super) mod tests {
         }
         assert_ne!(
             context.nexus_amx_context_hash,
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog"),
             "fixture must exercise the post-application context-hash exception without changing the frozen context id"
         );
         let block_hash = block.as_ref().hash();
@@ -26324,7 +26351,8 @@ pub(super) mod tests {
             context.network_id,
         ));
         context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog");
         context.execution_policy_hash =
             super::super::v2_recovery::committed_execution_policy_hash(state.as_ref())
                 .expect("derive initially absent validator execution policy");
@@ -27786,6 +27814,86 @@ pub(super) mod tests {
         assert_eq!(durable.commit_qc, retained.commit_qc);
     }
     #[test]
+    fn canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let mut losing = proposal.clone();
+        losing
+            .payload_block_hint
+            .as_mut()
+            .expect("carrier hint")
+            .proposal_block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"losing-canonical-carrier"));
+        assert!(losing.same_consensus_identity(&proposal));
+        adapter
+            .lane_sessions
+            .insert_proposal(losing.clone())
+            .expect("retain lane proposal");
+        for phase in [CertPhase::Prepare, CertPhase::Commit] {
+            let qc = lane_qc_for_phase(&losing, &keys[..3], phase);
+            let pops = adapter.pops_for_lane_qc(&qc);
+            adapter
+                .lane_sessions
+                .insert_qc_with_pops(qc, &pops)
+                .expect("verified lane quorum");
+        }
+        let mut sessions = adapter.lane_sessions.drain_committed_sessions();
+        assert_eq!(sessions.len(), 1);
+        let session = sessions.pop().expect("drained certificate owner");
+        adapter.pending_committed_lanes.push_back(session.clone());
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                session,
+                next_validator: 0,
+            });
+        adapter
+            .kura
+            .store_block(block.clone())
+            .expect("canonical body");
+        let (round, subject) = global_lock_for_block(&adapter, &block);
+        let artifact = finality_artifact_for_block(&adapter, &keys, &block);
+        let verified = verified_finality_artifact_for_block(&adapter, &keys, &block);
+        adapter
+            .kura
+            .store_v2_finality_artifact(&verified)
+            .expect("canonical finality");
+        let committed = ValidBlock::committed_from_replay_signed_block(block);
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        adapter
+            .retain_merge_sidecars_for_global_view(round.view, Some(subject), Some(subject))
+            .expect("retire losing carrier outputs");
+        assert!(adapter.pending_committed_lanes.is_empty());
+        assert!(adapter.committed_lane_outputs.is_empty());
+        assert!(
+            !adapter
+                .durable_completion_matches_finality(&artifact)
+                .expect("missing certificate")
+        );
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("recover orphaned handoff"),
+            1
+        );
+        assert!(
+            adapter
+                .durable_completion_matches_finality(&artifact)
+                .expect("complete canonical evidence")
+        );
+        assert!(
+            adapter
+                .kura
+                .lane_block_application_receipt_available(&proposal)
+        );
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("idempotent recovery"),
+            0
+        );
+    }
+    #[test]
     fn globally_applied_lane_body_without_certificate_remains_recoverable() {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
         adapter.limits.session_capacity = NonZeroUsize::new(1).expect("one exact recovery slot");
@@ -28543,7 +28651,8 @@ pub(super) mod tests {
         context.parent_commit_qc = Some(finality.commit_qc);
         context.snapshot_bootstrap = None;
         context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+                .expect("valid committed catalog");
         context
     }
     fn globally_anchored_lane_block_fixture(
