@@ -130,6 +130,32 @@ impl AuthenticatedV2SnapshotStartup {
     }
 }
 impl V2StartupReplayPlan {
+    /// Replay the authenticated complete prefix and carry its exact geometry publication
+    /// into subsequent active-height recovery. No identity is adopted after WSV installation.
+    ///
+    /// # Errors
+    /// Returns an error for changed storage, invalid replay, or a mismatched geometry operation.
+    pub fn replay_complete_prefix(
+        &mut self,
+        kura: &std::sync::Arc<Kura>,
+        state: &mut State,
+    ) -> eyre::Result<()> {
+        self.validate_restored_state_height(state.committed_height())?;
+        self.validate_exact_kura_boundary(kura)?;
+        let binding = self.storage_binding.as_ref().ok_or_else(|| {
+            eyre::eyre!("startup replay plan has no authenticated storage binding")
+        })?;
+        let start_height = state.committed_height().saturating_add(1);
+        let next = crate::state::replay_blocks_from_kura_range_with_binding(
+            kura,
+            state,
+            start_height,
+            self.complete_prefix_height,
+            Some(binding),
+        )?;
+        self.storage_binding = next;
+        Ok(())
+    }
     /// Total canonical height durably recorded by Kura.
     #[must_use]
     pub const fn durable_height(&self) -> usize {

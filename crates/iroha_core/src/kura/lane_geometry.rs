@@ -2491,6 +2491,7 @@ impl Kura {
             replaced_lane_ids,
             certified_retirements,
             transition_height,
+            None,
         )
     }
     pub(super) fn validate_certified_lane_drain_frontier(
@@ -2611,6 +2612,7 @@ impl Kura {
             replaced_lane_ids,
             certified_retirements,
             Some(transition_height),
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -2627,6 +2629,7 @@ impl Kura {
         replaced_lane_ids: &BTreeSet<LaneId>,
         certified_retirements: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
         transition_height: Option<u64>,
+        mut namespace_receipts: Option<&mut Vec<StartupReplayNamespaceCreation>>,
     ) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
@@ -2757,10 +2760,11 @@ impl Kura {
                     current_applied_count,
                 )?;
             }
-            self.ensure_authoritative_lane_markers(
+            self.ensure_authoritative_lane_markers_with_receipts(
                 previous,
                 previous_incarnations,
                 previous_activation_heights,
+                namespace_receipts.as_deref_mut(),
             )?;
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
             return if journal_was_present || journal != LaneGeometryJournal::default() {
@@ -2778,10 +2782,11 @@ impl Kura {
                 &journal.records[published_index].operations,
                 GeometryEvidencePolicy::RequireDurableEvidence,
             )?;
-            self.ensure_authoritative_lane_markers(
+            self.ensure_authoritative_lane_markers_with_receipts(
                 updated,
                 updated_incarnations,
                 updated_activation_heights,
+                namespace_receipts.as_deref_mut(),
             )?;
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
             return Ok(());
@@ -2800,10 +2805,11 @@ impl Kura {
             previous_lineage_root,
             desired_previous_count,
         )?;
-        self.ensure_authoritative_lane_markers(
+        self.ensure_authoritative_lane_markers_with_receipts(
             previous,
             previous_incarnations,
             previous_activation_heights,
+            namespace_receipts.as_deref_mut(),
         )?;
         if let Some(existing_index) = existing_index {
             let existing = &journal.records[existing_index];
@@ -2835,6 +2841,12 @@ impl Kura {
             )?;
             journal.records[existing_index].phase = LaneGeometryPhase::FilesApplied;
             self.write_lane_geometry_journal(&journal)?;
+            self.ensure_authoritative_lane_markers_with_receipts(
+                updated,
+                updated_incarnations,
+                updated_activation_heights,
+                namespace_receipts.as_deref_mut(),
+            )?;
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
             return Ok(());
         }
@@ -2923,6 +2935,12 @@ impl Kura {
         }
         journal.records[record_index].phase = LaneGeometryPhase::FilesApplied;
         self.write_lane_geometry_journal(&journal)?;
+        self.ensure_authoritative_lane_markers_with_receipts(
+            updated,
+            updated_incarnations,
+            updated_activation_heights,
+            namespace_receipts.as_deref_mut(),
+        )?;
         *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
         Ok(())
     }
@@ -11561,6 +11579,20 @@ impl Kura {
         incarnations: &BTreeMap<LaneId, Hash>,
         activation_heights: &BTreeMap<LaneId, u64>,
     ) -> Result<()> {
+        self.ensure_authoritative_lane_markers_with_receipts(
+            lane_config,
+            incarnations,
+            activation_heights,
+            None,
+        )
+    }
+    fn ensure_authoritative_lane_markers_with_receipts(
+        &self,
+        lane_config: &LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        mut receipts: Option<&mut Vec<StartupReplayNamespaceCreation>>,
+    ) -> Result<()> {
         for entry in lane_config.entries() {
             let binding = self.geometry_binding(entry, incarnations, activation_heights)?;
             let blocks = self.binding_blocks_path(&binding);
@@ -11594,7 +11626,11 @@ impl Kura {
             } else {
                 self.require_lane_marker(&binding)?;
             }
-            self.ensure_authoritative_lane_artifact_namespace(&binding, &blocks)?;
+            self.ensure_authoritative_lane_artifact_namespace(
+                &binding,
+                &blocks,
+                receipts.as_deref_mut(),
+            )?;
         }
         Ok(())
     }
@@ -11609,15 +11645,36 @@ impl Kura {
         &self,
         binding: &LaneGeometryBinding,
         blocks: &Path,
+        mut receipts: Option<&mut Vec<StartupReplayNamespaceCreation>>,
     ) -> Result<()> {
         let blocks_identity = self.geometry_path_identity(blocks, true)?;
         let lane_artifacts = Self::lane_artifact_dir(blocks);
-        match fs::create_dir(&lane_artifacts) {
-            Ok(()) => {}
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        let created = match fs::create_dir(&lane_artifacts) {
+            Ok(()) => true,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => false,
             Err(error) => return Err(Error::MkDir(error, lane_artifacts)),
-        }
+        };
         let namespace = Self::open_bound_progress_directory(&self.store_root, &lane_artifacts)?;
+        if created && let Some(receipts) = receipts.as_deref_mut() {
+            let inventory = self.stable_sidecar_directory_inventory_with_recognized_child(
+                &lane_artifacts,
+                Some(&lane_artifacts.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)),
+            )?;
+            receipts.push(StartupReplayNamespaceCreation {
+                blocks_identity,
+                held: BoundProgressDirectory {
+                    expected_path: namespace.expected_path.clone(),
+                    canonical_path: namespace.canonical_path.clone(),
+                    entry_name: namespace.entry_name.clone(),
+                    file: namespace
+                        .file
+                        .try_clone()
+                        .map_err(|error| Error::IO(error, lane_artifacts.clone()))?,
+                    metadata: namespace.metadata.clone(),
+                },
+                inventory,
+            });
+        }
         namespace
             .file
             .sync_all()
@@ -13785,3 +13842,5 @@ mod tests {
     include!("lane_geometry_tests/03_gc_and_startup.rs");
     include!("lane_geometry_tests/04_physical_resource_accounting.rs");
 }
+
+include!("startup_replay_geometry_binding.rs");

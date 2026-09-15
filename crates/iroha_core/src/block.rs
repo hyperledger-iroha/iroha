@@ -4089,6 +4089,7 @@ pub(crate) mod valid {
     use crate::state::{StateBlock, StateTransaction, storage_transactions::TransactionsReadOnly};
     use crate::sumeragi::network_topology::Role;
     use commit::CommittedBlock;
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
     use iroha_data_model::events::pipeline::PipelineEventBox;
     use iroha_data_model::nexus::AxtPolicySnapshot;
     use iroha_logger::warn;
@@ -10884,6 +10885,8 @@ pub(crate) mod valid {
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             let _ = static_data.aggregate_lane;
+            // Rayon workers must use the caller's configured account address profile.
+            let account_discriminant = chain_discriminant();
             let max_clock_drift = static_data.max_clock_drift;
             let tx_params = static_data.tx_params;
             let expected_block_height = static_data.expected_block_height;
@@ -11115,6 +11118,7 @@ pub(crate) mod valid {
                 (&SignedTransaction, &PreparedBlockTransaction),
             )|
              -> Option<BlockValidationError> {
+                let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                 let prechecked_signature_result = prechecked_signature_results
                     .get(idx)
                     .and_then(|result| result.as_ref().cloned());
@@ -12029,6 +12033,9 @@ pub(crate) mod valid {
                 },
             };
             use rayon::prelude::*;
+            // Carry one profile through every parallel callback, including permission JSON.
+            // Each guard restores the worker's prior profile when its callback returns.
+            let account_discriminant = chain_discriminant();
             let to_ms = |duration: Duration| -> u64 {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
@@ -12234,6 +12241,8 @@ pub(crate) mod valid {
                         pool.install(|| {
                             txs.par_iter()
                                 .map(|tx| {
+                                    let _profile =
+                                        ChainDiscriminantGuard::enter(account_discriminant);
                                     let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                         Cow::Borrowed(*tx),
                                     );
@@ -12251,6 +12260,7 @@ pub(crate) mod valid {
                     } else {
                         txs.par_iter()
                             .map(|tx| {
+                                let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                     Cow::Borrowed(*tx),
                                 );
@@ -12774,6 +12784,7 @@ pub(crate) mod valid {
             let t_stateless_start = Instant::now();
             let mut stateless_rejections: Vec<Option<TransactionRejectionReason>> = {
                 let validate_tx = |(idx, tx): (usize, &&SignedTransaction)| {
+                    let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                     if !skip_stateless_checks && tx.creation_time() >= block_creation_time {
                         return Some(TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(format!(
@@ -12976,6 +12987,7 @@ pub(crate) mod valid {
                             .par_iter_mut()
                             .enumerate()
                             .for_each(|(i, slot)| {
+                                let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                                 let tx = txs[i];
                                 if uses_live_batch_scheduler(tx.instructions()) {
                                     if stateless_rejections[i].is_none() {
@@ -13042,6 +13054,7 @@ pub(crate) mod valid {
                         .par_iter_mut()
                         .enumerate()
                         .for_each(|(i, slot)| {
+                            let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                             let tx = txs[i];
                             if uses_live_batch_scheduler(tx.instructions()) {
                                 if stateless_rejections[i].is_none() {
@@ -13294,6 +13307,7 @@ pub(crate) mod valid {
             let t_access_start = Instant::now();
             let access_start = timings.as_ref().map(|_| Instant::now());
             let derive_access = |(idx, tx): (usize, &&SignedTransaction)| {
+                let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                 if stateless_rejections[idx].is_some() {
                     return (crate::pipeline::access::AccessSet::new(), None);
                 }
@@ -14220,6 +14234,7 @@ pub(crate) mod valid {
                     #[cfg(feature = "telemetry")]
                     let t_layer_prep = Instant::now();
                     let prepare_entry = |idx: usize| {
+                        let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                         let tx = txs[idx];
                         let overlay = match overlays[idx].as_ref() {
                             None => None,
@@ -14457,6 +14472,7 @@ pub(crate) mod valid {
                             })
                     };
                     let eval_detached = |p: &PreparedEntry| {
+                        let _profile = ChainDiscriminantGuard::enter(account_discriminant);
                         if detached_sequential_required {
                             return (p.idx, None, Some(DetachedFallbackReason::DurableState));
                         }
@@ -30514,6 +30530,7 @@ pub(crate) mod tests {
         );
     }
     include!("block/native_amx_and_dag_tests.rs");
+    include!("block/parallel_account_profile_tests.rs");
     fn state_with_transaction_policy(
         chain_id: &ChainId,
         authority: &AccountId,

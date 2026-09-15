@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 785
+EXPECTED_REGRESSION_COUNT = 804
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -95,9 +95,43 @@ class FixtureCopies(dict):
 
 
 class BasicReleaseQualificationTests(unittest.TestCase):
+    def test_both_scopes_require_geometry_writer_and_profile_recovery(self):
+        required = {
+            "core": (
+                "kura::tests::startup_replay_geometry_transition_preserves_shared_binding_for_added_lane",
+                "kura::tests::startup_replay_geometry_transition_rejects_checkpoint_and_manifest_drift",
+                "kura::tests::startup_replay_geometry_transition_rejects_restored_lane_sidecar_drift",
+                "kura::tests::startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guards",
+                "kura::tests::startup_replay_geometry_transition_rejects_unretained_request",
+                "kura::tests::startup_replay_geometry_transition_creates_only_missing_retained_namespace_and_cleans_failure",
+                "sumeragi::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes",
+                "sumeragi::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery",
+                "sumeragi::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
+                "sumeragi::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
+                "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
+                "block::tests::parallel_account_profile_preserves_delegated_metadata_results",
+                "block::tests::parallel_account_profile_rejects_foreign_permission_payloads",
+            ),
+            "test-network": (
+                "tests::profile_account_defaults_materialize_selected_chain_before_root_parse",
+                "tests::profile_account_defaults_preserve_explicit_foreign_and_invalid_overrides",
+                "tests::peer_clients_preserve_selected_network_profile_after_builder_scope",
+                "tests::genesis_preexecution_preserves_selected_profile_across_threads",
+                "tests::validated_genesis_cache_reuses_exact_block_and_network_identity",
+                "tests::file_backed_genesis_keeps_fresh_preexecution_validation",
+            ),
+        }
+        for scope in gate.QUALIFICATION_SCOPES:
+            stages = gate.qualification_stages(scope)
+            for harness, names in required.items():
+                selected = [name for _, tests in stages[harness] for name in tests]
+                for name in names:
+                    with self.subTest(scope=scope, harness=harness, regression=name):
+                        self.assertEqual(selected.count(name), 1)
+
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 604)
+        self.assertEqual(gate.selected_regression_count(), 623)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -622,7 +656,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
         focused = gate.focused_regression_stages("basic", ("core=" + self.core,))
         self.assertEqual([name for _, names in focused["core"] for name in names], [self.core])
 
-    def test_prequalification_compiles_the_same_complete_graph_as_scope_checks(self):
+    def test_prequalification_checks_only_requested_harnesses_while_qualification_keeps_complete_graph(self):
         for scope in gate.QUALIFICATION_SCOPES:
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
@@ -642,10 +676,10 @@ class FocusedPrequalificationTests(unittest.TestCase):
             compile.assert_called_once()
             self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
             self.metadata.reset_mock()
-            self.assertEqual(compile.call_args.kwargs["harnesses"], complete_graph)
+            self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core"))
             self.assertEqual(compile.call_args.kwargs["lock_fds"], (91,))
-            self.assertIn("network", complete_graph, "unfocused network harness still compiles")
-            self.assertIn("proof-flows", complete_graph, "scope keeps its full feature graph")
+            self.assertIn("network", complete_graph, "immutable qualification still compiles network")
+            self.assertIn("proof-flows", complete_graph, "immutable qualification keeps its full graph")
             self.assertEqual([call.args[0] for call in run.call_args_list], ["/copies/config", "/copies/core"])
             self.assertEqual(run.call_args_list[0].args[3], gate.CONFIG_STAGES)
             self.assertEqual([name for _, names in run.call_args_list[1].args[3] for name in names], [self.core])
@@ -671,7 +705,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
         def execute(harness, *args):
             if harness != "/copies/config":
                 raise gate.SelectedRegressionFailures([harness + " failed"])
-        with patch.object(gate, "compile_test_harnesses", return_value=copies), \
+        with patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
              patch.object(gate, "run_stages", side_effect=execute) as run, \
              patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(gate.SelectedRegressionFailures) as failed:
@@ -680,6 +714,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     environment=self.env, lock_fds=())
         self.assertEqual([call.args[0] for call in run.call_args_list],
                          ["/copies/config", "/copies/core", "/copies/cli"])
+        self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core", "network", "cli"))
         self.assertEqual(failed.exception.failures, ("/copies/core failed", "/copies/cli failed"))
         network.assert_not_called()
 

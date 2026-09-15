@@ -39,6 +39,8 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
         "initialize_recovered_local_proposal(setup_runner)",
         "let height_started_at = Instant::now();",
         "preactivation.activate(height_started_at, local_proposal)",
+        "startup_recovery.take()",
+        "startup_recovery.ready();",
         "run_lifecycle_active_height(",
     ];
     let mut remainder = source;
@@ -62,9 +64,27 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
         "false\n    };",
         "pending.prepare_lane_recovery(",
         "run_pending_active_height(",
+        "let (successor, retained_merge_sidecars) = match completed",
+        "context.height != u64::MAX",
+        "startup_recovery.ready();",
         "super::lifecycle_run_inner::run_non_pending_lifecycle_loop(",
         "reservation_reconciliation_pending,",
     ];
+    assert!(
+        !pending[..pending
+            .find("let completed = run_pending_active_height(")
+            .unwrap()]
+            .contains("startup_recovery.ready();"),
+        "pending Apply must finish before background storage writers are authorized"
+    );
+    let active_start = parent.find("recovered.into_parts()").unwrap();
+    let active_dispatch = parent[active_start..]
+        .find("match pending_kura_apply {")
+        .unwrap();
+    assert!(
+        !parent[active_start..active_start + active_dispatch].contains("startup_recovery.ready();"),
+        "active startup must defer readiness into exact lifecycle completion"
+    );
     let mut remainder = pending;
     for anchor in anchors {
         let offset = remainder
@@ -161,6 +181,7 @@ fn authenticated_terminal_startup_idles_without_constructing_a_successor() {
         "terminal.verified_context().context()",
         "terminal.matches_kura(kura.as_ref())",
         "terminal.predecessor().height() != u64::MAX",
+        "startup_recovery.ready();",
         "wait_for_terminal_shutdown(",
         "return Ok(());",
     ];

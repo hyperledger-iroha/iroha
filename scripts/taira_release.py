@@ -16,8 +16,8 @@ required. Failed attempt directories and logs remain intact.
 The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 For a mutable-source prequalification diagnostic, check accepts repeatable
---focus-regression HARNESS=EXACT_TEST: compile every native harness in the shared
-graph, then run mandatory configuration and those exact selected tests. It writes
+--focus-regression HARNESS=EXACT_TEST: check and compile mandatory configuration
+and only explicitly selected harnesses, then run their exact tests. It writes
 no qualification checkpoint and cannot be selected by prepare.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
@@ -1176,7 +1176,7 @@ def parser() -> argparse.ArgumentParser:
                              help="basic Taira deployment checks (default), or full regression qualification")
         if name == "check":
             command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
-                                 help="development diagnostic: compile all native harnesses, run configuration plus exact focused tests; not qualification")
+                                 help="development diagnostic: check and compile configuration plus explicitly selected harnesses; not qualification")
         if name == "prepare":
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")

@@ -46128,9 +46128,66 @@ impl State {
         certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
         transition_height: u64,
     ) -> Result<(), LaneLifecycleError> {
+        self.apply_lane_geometry_updates_with_replay_receipt(
+            previous,
+            current,
+            previous_incarnations,
+            current_incarnations,
+            previous_activation_heights,
+            current_activation_heights,
+            previous_lineage,
+            current_lineage,
+            replaced_lane_ids,
+            certified_frontiers,
+            transition_height,
+            None,
+        )
+    }
+    fn apply_lane_geometry_updates_with_replay_receipt(
+        &self,
+        previous: &iroha_config::parameters::actual::LaneConfig,
+        current: &iroha_config::parameters::actual::LaneConfig,
+        previous_incarnations: &BTreeMap<LaneId, Hash>,
+        current_incarnations: &BTreeMap<LaneId, Hash>,
+        previous_activation_heights: &BTreeMap<LaneId, u64>,
+        current_activation_heights: &BTreeMap<LaneId, u64>,
+        previous_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
+        current_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
+        replaced_lane_ids: &BTreeSet<LaneId>,
+        certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
+        transition_height: u64,
+        replay_transition: Option<&mut crate::kura::StartupReplayGeometryTransition>,
+    ) -> Result<(), LaneLifecycleError> {
         let diff = lane_topology_diff(previous, current, replaced_lane_ids);
         self.preflight_lane_geometry_updates(previous, current, &diff)?;
-        self.kura
+        if let Some(transition) = replay_transition {
+            if !certified_frontiers.is_empty() {
+                return Err(LaneLifecycleError::Storage(
+                    "startup replay cannot replace live certified drain ownership".to_owned(),
+                ));
+            }
+            let request = crate::kura::ReplayGeometryBindingRequest {
+                previous,
+                updated: current,
+                previous_incarnations,
+                updated_incarnations: current_incarnations,
+                previous_activation_heights,
+                updated_activation_heights: current_activation_heights,
+                previous_lineage_root: lane_incarnation_lineage_root(
+                    &self.network_id,
+                    previous_lineage,
+                ),
+                updated_lineage_root: lane_incarnation_lineage_root(
+                    &self.network_id,
+                    current_lineage,
+                ),
+                transition_height,
+            };
+            self.kura
+                .apply_startup_replay_geometry_transition(&request, replaced_lane_ids, transition)
+                .map_err(|err| LaneLifecycleError::Storage(format!("kura journal: {err:?}")))?;
+        } else {
+            self.kura
             .apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_drain_frontiers(
                 previous,
                 current,
@@ -46145,6 +46202,7 @@ impl State {
                 transition_height,
             )
             .map_err(|err| LaneLifecycleError::Storage(format!("kura journal: {err:?}")))?;
+        }
         let tiered_result = (|| {
             let mut backend = self.tiered_backend.lock();
             backend
@@ -47490,6 +47548,13 @@ impl State {
         self.nexus_storage_budget_last_check_height
             .store(block_height, Ordering::Relaxed);
         true
+    }
+    /// Run deferred budget maintenance after successful consensus startup recovery.
+    /// The startup coordinator must consume its exact replay plan before calling this.
+    pub fn enforce_storage_budget_after_startup(&self) {
+        self.enforce_nexus_storage_budget(
+            u64::try_from(self.committed_height()).unwrap_or(u64::MAX),
+        );
     }
     fn enforce_nexus_storage_budget(&self, block_height: u64) {
         if self.kura.emergency_fast_startup_enabled() {
@@ -62524,11 +62589,24 @@ pub fn replay_blocks_from_kura_range(
     start_height: usize,
     block_count: usize,
 ) -> Result<()> {
+    replay_blocks_from_kura_range_with_binding(kura, state, start_height, block_count, None)
+        .map(|_| ())
+}
+pub(crate) fn replay_blocks_from_kura_range_with_binding(
+    kura: &Arc<Kura>,
+    state: &mut State,
+    start_height: usize,
+    block_count: usize,
+    binding: Option<&crate::kura::V2StartupReplayStorageBinding>,
+) -> Result<Option<crate::kura::V2StartupReplayStorageBinding>> {
     if block_count == 0 || start_height > block_count {
-        return Ok(());
+        return Ok(binding.cloned());
     }
     if start_height == 0 {
         return Err(eyre!("invalid start height during replay: {start_height}"));
+    }
+    if let Some(binding) = binding {
+        kura.validate_v2_startup_replay_storage_binding(binding)?;
     }
     let bundle = ReplayBundle::load(kura, state, start_height, block_count)?;
     // The shared validation API accepts a TimeSource, but the v2 profile never
@@ -62557,7 +62635,7 @@ pub fn replay_blocks_from_kura_range(
         geometry,
         initial_state_hash,
     };
-    publish_replay_receipt(kura, state, &bundle, receipt)
+    publish_replay_receipt(kura, state, &bundle, receipt, binding)
 }
 fn rollback_replay_geometry(
     state: &State,
@@ -62589,6 +62667,7 @@ fn rollback_replay_geometry(
 fn apply_replay_geometry_receipts(
     state: &State,
     geometry: &[PendingAutoscaleLaneLifecycle],
+    mut replay_transition: Option<&mut crate::kura::StartupReplayGeometryTransition>,
 ) -> Result<()> {
     for pending in geometry {
         let update = &pending.catalog_update;
@@ -62644,7 +62723,7 @@ fn apply_replay_geometry_receipts(
             };
         }
         let update = &pending.catalog_update;
-        if let Err(error) = state.apply_lane_geometry_updates(
+        if let Err(error) = state.apply_lane_geometry_updates_with_replay_receipt(
             &update.previous_lane_config,
             &update.updated_lane_config,
             &update.previous_lane_incarnations,
@@ -62654,9 +62733,21 @@ fn apply_replay_geometry_receipts(
             &update.previous_lane_incarnation_lineage,
             &update.updated_lane_incarnation_lineage,
             &update.replaced_lane_ids,
+            &BTreeMap::new(),
             pending.transition_height,
+            replay_transition.as_deref_mut(),
         ) {
-            let rollback_result = rollback_replay_geometry(state, &applied, &tiered_before);
+            // A bound native namespace write can fail after the current files moved.
+            // Its exact retained cursor is rollback authority even before applied.push.
+            // Include that attempted receipt so owned empty-directory cleanup can run
+            // at the original archive, including errors inside the native creator.
+            let rollback_result = if replay_transition.is_some() {
+                let mut attempted = applied.clone();
+                attempted.push(pending.clone());
+                rollback_replay_geometry(state, &attempted, &tiered_before)
+            } else {
+                rollback_replay_geometry(state, &applied, &tiered_before)
+            };
             return match rollback_result {
                 Ok(()) => Err(eyre!(error)).wrap_err_with(|| {
                     format!(
@@ -62807,7 +62898,8 @@ fn publish_replay_receipt(
     state: &mut State,
     bundle: &ReplayBundle,
     receipt: ReplayPublicationReceipt,
-) -> Result<()> {
+    binding: Option<&crate::kura::V2StartupReplayStorageBinding>,
+) -> Result<Option<crate::kura::V2StartupReplayStorageBinding>> {
     // Startup owns `&mut State`, while the cloned lock also excludes mutation
     // through every internally shared commit surface until the whole replay
     // image is installed.
@@ -62819,19 +62911,84 @@ fn publish_replay_receipt(
         ));
     }
     bundle.verify_kura_boundary(kura.as_ref())?;
+    let mut transition = binding
+        .map(|binding| {
+            let requests = receipt
+                .geometry
+                .iter()
+                .map(|pending| {
+                    let update = &pending.catalog_update;
+                    crate::kura::ReplayGeometryBindingRequest {
+                        previous: &update.previous_lane_config,
+                        updated: &update.updated_lane_config,
+                        previous_incarnations: &update.previous_lane_incarnations,
+                        updated_incarnations: &update.updated_lane_incarnations,
+                        previous_activation_heights: &update
+                            .previous_lane_incarnation_activation_heights,
+                        updated_activation_heights: &update
+                            .updated_lane_incarnation_activation_heights,
+                        previous_lineage_root: lane_incarnation_lineage_root(
+                            &state.network_id,
+                            &update.previous_lane_incarnation_lineage,
+                        ),
+                        updated_lineage_root: lane_incarnation_lineage_root(
+                            &state.network_id,
+                            &update.updated_lane_incarnation_lineage,
+                        ),
+                        transition_height: pending.transition_height,
+                    }
+                })
+                .collect::<Vec<_>>();
+            kura.begin_startup_replay_geometry_transition(binding, &requests)
+        })
+        .transpose()?;
     let tiered_before = state.tiered_backend.lock().clone();
-    apply_replay_geometry_receipts(state, &receipt.geometry)?;
-    let kura_publication_lease = kura.canonical_publication_lease();
-    if let Err(error) = bundle.verify_kura_boundary(kura.as_ref()) {
-        drop(kura_publication_lease);
-        return match rollback_replay_geometry(state, &receipt.geometry, &tiered_before) {
-            Ok(()) => Err(error)
-                .wrap_err("exact Kura replay boundary changed while consuming geometry receipts"),
-            Err(rollback) => Err(eyre!(
-                "exact Kura replay boundary changed while consuming geometry receipts: {error:#}; exact geometry rollback also failed: {rollback:#}"
-            )),
-        };
+    if let Err(error) =
+        apply_replay_geometry_receipts(state, &receipt.geometry, transition.as_mut())
+    {
+        if let Some(transition) = transition.as_ref()
+            && let Err(cleanup) = kura.rollback_startup_replay_geometry_preparation(transition)
+        {
+            return Err(eyre!(
+                "replay geometry apply failed: {error:#}; exact prepared namespace cleanup failed: {cleanup}"
+            ));
+        }
+        return Err(error);
     }
+    let kura_publication_lease = kura.canonical_publication_lease();
+    let checked_binding = (|| -> Result<_> {
+        bundle.verify_kura_boundary(kura.as_ref())?;
+        transition
+            .as_ref()
+            .map(|transition| kura.finish_startup_replay_geometry_transition(transition))
+            .transpose()
+            .map_err(Into::into)
+    })();
+    let next_binding = match checked_binding {
+        Ok(next_binding) => next_binding,
+        Err(error) => {
+            drop(kura_publication_lease);
+            let rollback = rollback_replay_geometry(state, &receipt.geometry, &tiered_before)
+                .and_then(|()| {
+                    transition
+                        .as_ref()
+                        .map(|transition| {
+                            kura.rollback_startup_replay_geometry_preparation(transition)
+                        })
+                        .transpose()
+                        .map(|_| ())
+                        .map_err(Into::into)
+                });
+            return match rollback {
+                Ok(()) => Err(error).wrap_err(
+                    "exact Kura replay boundary changed while consuming geometry receipts",
+                ),
+                Err(rollback) => Err(eyre!(
+                    "exact Kura replay boundary changed while consuming geometry receipts: {error:#}; exact geometry rollback also failed: {rollback:#}"
+                )),
+            };
+        }
+    };
     // This is the sole live WSV publication point. Every operation above is
     // fallible; every operation below is an infallible in-memory move or
     // explicitly diagnostic maintenance.
@@ -62845,8 +63002,12 @@ fn publish_replay_receipt(
     drop(state_commit_guard);
     state.persist_da_shard_cursor_journal();
     state.persist_query_index_status(bundle.block_count_u64, state.latest_block_hash_fast());
-    state.enforce_nexus_storage_budget(bundle.block_count_u64);
-    Ok(())
+    // A bound startup still owns an exact replay plan. Maintenance may evict or move
+    // its evidence only after active-height recovery has consumed that plan.
+    if next_binding.is_none() {
+        state.enforce_nexus_storage_budget(bundle.block_count_u64);
+    }
+    Ok(next_binding)
 }
 #[allow(clippy::too_many_lines)]
 fn replay_blocks_from_kura_range_inner(

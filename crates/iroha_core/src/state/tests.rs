@@ -10943,7 +10943,7 @@ state_test! { sync replay_geometry_live_failure_preserves_state_kura_and_nexus_e
     ] {
         REPLAY_PUBLICATION_GEOMETRY_FAILURE_INDEX.with(|index| index.set(failure_index));
         REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(|observed| observed.set(false));
-        let_row! { error = apply_replay_geometry_receipts(&state, &geometry) .expect_err("injected live geometry failure must reject before publication") };
+        let_row! { error = apply_replay_geometry_receipts(&state, &geometry, None) .expect_err("injected live geometry failure must reject before publication") };
         assert!(format!("{error:#}").contains("injected replay publication geometry failure"));
         assert_eq!(
             REPLAY_GEOMETRY_INJECTION_OBSERVED_APPLIED_PREFIX.with(std::cell::Cell::get),

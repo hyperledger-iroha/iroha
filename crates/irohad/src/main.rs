@@ -8237,13 +8237,9 @@ impl Iroha {
                 pending_v2_tip = ?v2_replay_plan.pending_tip_height(),
                 "Replaying authenticated complete Kura prefix"
             );
-            iroha_core::state::replay_blocks_from_kura_range(
-                &kura,
-                &mut state,
-                generic_replay_start,
-                generic_replay_height,
-            )
-            .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            v2_replay_plan
+                .replay_complete_prefix(&kura, &mut state)
+                .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
         // Key admission and rotation read canonical WSV parameters. Local configuration must
         // match that authority rather than overwriting it after replay without a block.
@@ -9518,11 +9514,14 @@ impl Iroha {
                 || config.common.key_pair.clone(),
                 |key| iroha_crypto::KeyPair::from(key.clone()),
             );
-            if let Some(snapshot_maker) =
-                SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key)
-            {
-                supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
-            }
+            let snapshot_maker =
+                SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key);
+            supervisor.monitor(SnapshotMaker::start(
+                snapshot_maker,
+                Arc::clone(&state),
+                sumeragi.startup_recovery(),
+                supervisor.shutdown_signal(),
+            ));
         }
         let sorafs_storage_config = if emergency_fast {
             sorafs_node::config::StorageConfig::builder()

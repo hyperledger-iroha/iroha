@@ -27,11 +27,11 @@ endpoint, compiled in the same native graph; no runtime security policy is relax
 Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
 accept no live configuration, credentials, SSH, deployment or signing inputs.
-Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: first check
-the entire native test graph without harness code generation, then compile that
-same graph and execute mandatory configuration and only the explicit selected
-tests. The metadata pass catches type/import errors early; the mandatory build
-still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
+Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: metadata-check
+and compile mandatory configuration plus only the explicitly selected harnesses,
+then execute configuration and those exact tests. Unselected harnesses wait for
+immutable preparation. The metadata pass catches type/import errors early; the
+selected build still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
 does not replace immutable preparation or its complete gate.
 """
 
@@ -918,6 +918,22 @@ CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay against isolated commit
     "state::tests::retired_lane_cleanup_preserves_frontier_for_historical_drain_recovery",
 )),)
 
+CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred startup writers", (
+    "kura::tests::startup_replay_geometry_transition_preserves_shared_binding_for_added_lane",
+    "kura::tests::startup_replay_geometry_transition_rejects_checkpoint_and_manifest_drift",
+    "kura::tests::startup_replay_geometry_transition_rejects_restored_lane_sidecar_drift",
+    "kura::tests::startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guards",
+    "kura::tests::startup_replay_geometry_transition_rejects_unretained_request",
+    "kura::tests::startup_replay_geometry_transition_creates_only_missing_retained_namespace_and_cleans_failure",
+    "sumeragi::startup_recovery::tests::maintenance_waits_for_recovery_before_budget_or_snapshot_writes",
+    "sumeragi::startup_recovery::tests::maintenance_refuses_failed_dropped_and_shutdown_recovery",
+    "sumeragi::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
+    "sumeragi::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
+    "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
+    "block::tests::parallel_account_profile_preserves_delegated_metadata_results",
+    "block::tests::parallel_account_profile_rejects_foreign_permission_payloads",
+)),)
+
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
@@ -1021,6 +1037,12 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "config::tests::base_config_applies_bounded_storage_caps",
     "config::tests::base_config_preserves_caller_storage_budget_and_smaller_component_cap",
     "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
+    "tests::profile_account_defaults_materialize_selected_chain_before_root_parse",
+    "tests::profile_account_defaults_preserve_explicit_foreign_and_invalid_overrides",
+    "tests::peer_clients_preserve_selected_network_profile_after_builder_scope",
+    "tests::genesis_preexecution_preserves_selected_profile_across_threads",
+    "tests::validated_genesis_cache_reuses_exact_block_and_network_identity",
+    "tests::file_backed_genesis_keeps_fresh_preexecution_validation",
 )),)
 
 NETWORK_OBSERVATION_STAGES = (("complete bounded effective permission observation", (
@@ -2351,7 +2373,7 @@ def focused_regression_stages(qualification_scope: str, requested):
 
 def run_prequalification(root: Path, *, focused_regressions, qualification_scope: str = "basic",
                          environment: dict[str, str], lock_fds: tuple[int, ...]) -> None:
-    """Check and compile every native harness, then run configuration and exact focuses.
+    """Check and compile configuration and requested harnesses, then run exact focuses.
 
     Called only from the coordinated mutable development lane. This function has
     no signed-source, qualification checkpoint, or release-result interface.
@@ -2375,10 +2397,14 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
     shipping = shipping_harnesses(root)
-    _, selections, _ = native_harness_plan(scoped, shipping)
-    if not set(focused).issubset(selections):
+    _, complete_selections, _ = native_harness_plan(scoped, shipping)
+    if not set(focused).issubset(complete_selections):
         raise CheckError("focused regression lacks its selected native compile target")
-    print(f"[taira-prequalify] check and compile all {len(selections)} native harnesses; "
+    # This mutable diagnostic cannot publish qualification evidence. Keep its
+    # compile boundary as narrow as its explicit tests; prepare owns the full graph.
+    selections = tuple(name for name in complete_selections
+                       if name == "config" or name in focused)
+    print(f"[taira-prequalify] check and compile {len(selections)} focused native harnesses; "
           "execute configuration plus explicit focused regressions", flush=True)
     check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
     with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
@@ -2407,7 +2433,7 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
                                cwd=root, env=env, stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during prequalification; rerun the focused diagnostic")
     requested_count = sum(len(names) for stages in focused.values() for _, names in stages)
-    print(f"[taira-prequalify] diagnostic passed: all native harnesses compiled; "
+    print(f"[taira-prequalify] diagnostic passed: {len(selections)} selected harnesses compiled; "
           f"{requested_count} focused regressions and mandatory configuration passed. "
           "NOT release qualification; immutable prepare still runs its complete gate.", flush=True)
 
@@ -2540,7 +2566,7 @@ def main() -> int:
     parser.add_argument("--native-check-scope", choices=QUALIFICATION_SCOPES, default="basic",
                         help="basic application/startup checks (default), or full advanced regressions")
     parser.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
-                        help="development diagnostic: metadata-check and compile all native test harnesses, then run configuration plus exact focused tests; not qualification")
+                        help="development diagnostic: metadata-check and compile configuration plus explicitly selected test harnesses; not qualification")
     args = parser.parse_args()
     # Lazy import keeps the low-level gate loadable from an authenticated source capture.
     import taira_release as release

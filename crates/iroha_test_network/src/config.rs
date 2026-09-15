@@ -78,6 +78,16 @@ use std::{
     sync::Arc,
 };
 use toml::Table;
+#[cfg(test)]
+thread_local! {
+    static GENESIS_PREEXECUTION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn genesis_preexecution_count() -> usize {
+    GENESIS_PREEXECUTION_COUNT.with(std::cell::Cell::get)
+}
+
 /// Exact policy commitments derived by isolated genesis pre-execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StagedGenesisPolicyHashes {
@@ -497,6 +507,13 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
 ) -> (GenesisBlock, StagedGenesisPolicyHashes) {
+    // Permission JSON is materialized here, before native pre-execution begins.
+    // A supplied runtime configuration owns its address profile on every calling thread.
+    let _profile = runtime_config.as_ref().map(|config| {
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            *config.common.chain_discriminant.value(),
+        )
+    });
     let mut extra_transactions = extra_transactions;
     let mut post_topology_transactions = post_topology_transactions;
     strip_handshake_metadata_transactions(&mut extra_transactions);
@@ -1127,6 +1144,8 @@ pub(crate) fn staged_genesis_policy_hashes(
     )
     .map(|(_, hashes)| hashes)
 }
+/// Pre-execute with the supplied runtime address profile. Configuration-free test helpers
+/// use the caller's native address scope for both instruction construction and execution.
 pub(crate) fn preexecute_genesis_with_runtime_config(
     block: &GenesisBlock,
     genesis_account: &AccountId,
@@ -1143,9 +1162,18 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     ),
     Report,
 > {
+    // Parsing ActualRoot scopes only that parse. Cached blocks and independent staging
+    // can reach this execution boundary later, from a different thread and profile.
+    let _profile = runtime_config.map(|config| {
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+            *config.common.chain_discriminant.value(),
+        )
+    });
     if topology.is_empty() {
         return Err(eyre!("genesis topology is empty"));
     }
+    #[cfg(test)]
+    GENESIS_PREEXECUTION_COUNT.with(|count| count.set(count.get() + 1));
     let effective_nexus = runtime_config.map(|config| &config.nexus).or(nexus_config);
     let nexus = resolve_preexec_nexus_config(effective_nexus, block.0.da_proof_policies())?;
     let query_handle = LiveQueryStore::start_test();
