@@ -6,6 +6,10 @@ fn exercise_final_canary_deadline(applied: bool) {
         query::CommittedTransaction,
         transaction::{DataTriggerSequence, TransactionPayload, TransactionResult},
     };
+    use iroha_torii_shared::{
+        ErrorDetails, ErrorEnvelope, PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+        PipelineTransactionStatusNotFoundV1,
+    };
     let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let retained = Arc::new(Mutex::new(None::<SignedTransaction>));
     let server_transaction = Arc::clone(&retained);
@@ -43,10 +47,28 @@ fn exercise_final_canary_deadline(applied: bool) {
         ),
         "/v1/pipeline/transactions/status" => {
             let transaction = server_transaction.lock().unwrap().clone().unwrap();
-            assert!(request.path.contains(&transaction.hash().to_string()));
+            assert_eq!(request.method, "GET");
+            assert_eq!(
+                request.path,
+                format!(
+                    "/v1/pipeline/transactions/status?hash={}&scope=global",
+                    transaction.hash()
+                )
+            );
             if observations.fetch_add(1, Ordering::SeqCst) == 0 {
                 thread::sleep(Duration::from_millis(100));
-                MockResponse::text(404, "absent")
+                // Only Torii's exact hash-and-scope absence permits the initial POST.
+                let absence = ErrorEnvelope::new(
+                    PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                    "Missing status.",
+                )
+                .with_details(ErrorDetails {
+                    pipeline_transaction_status_not_found: Some(
+                        PipelineTransactionStatusNotFoundV1::new(&transaction.hash(), "global"),
+                    ),
+                    ..ErrorDetails::default()
+                });
+                MockResponse::json(404, json::to_value(&absence).unwrap())
             } else {
                 prepared_status_response(
                     &transaction,
