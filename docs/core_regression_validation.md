@@ -5,6 +5,32 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## September 15 block-construction stack overflow
+
+The default-stack `merge_entrypoints_commit_in_canonical_carrier_membership`
+regression aborted while reserving the stack frame for
+`State::block_with_pristine_stage`, during fixture genesis construction after
+Kura stored height one. The debugger identified a 741,304-byte constructor
+frame, with large state values also retained by its callers.
+
+Four existing lifecycle transaction phases now run in separate, non-inlined
+borrowed helpers. Their execution order and transaction apply/drop boundaries
+are preserved. The measured constructor frame is now 581,496 bytes in the
+same unoptimized Linux build. The original test passes without a stack-size
+override. A new pristine-stage failure regression verifies skipped lifecycle
+work, discarded writes, released locks and rollback when a successful scope
+is dropped.
+
+Validation used `scripts/cargo_fast.sh --stable-local-metadata --incremental --
+test -p iroha_core --lib` with exact test selection. The reported case and 34
+additional checks pass, covering normal/replacement source-context ordering,
+merge membership, privacy schedules and expiry, confidential transitions,
+sponsor activation and governance sweeps. Workspace formatting and diff checks
+pass. The Parliament source checker remains blocked by the preexisting missing
+`.endorsing_assignments` / `.windows(2)` binding in unchanged
+`crates/iroha_data_model/src/governance/types.rs`. Full workspace tests were not
+run.
+
 ## September 14 privacy and lifecycle contract repair
 
 The eighteen reported failures exposed incomplete first-release protocol and

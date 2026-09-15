@@ -766,6 +766,79 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
         "a failed start hook must leave the base activation unchanged"
     );
 }
+state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overlay
+    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+
+    let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+    let original_policy = *world.privacy_consensus_policy.view().get();
+    let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(
+        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+    );
+    let original_activation = *world
+        .privacy_activations
+        .view()
+        .get(&activation_key)
+        .expect("scheduled activation");
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = BlockHeader::new(nonzero!(400_u64), None, None, None, 0, 0);
+    let error = match state.block_with_pristine_stage(header, |block| {
+        assert!(!block.start_of_block_effects_applied);
+        assert_eq!(block.world.privacy_consensus_policy.get(), &original_policy);
+        assert_eq!(
+            block.world.privacy_activations.get(&activation_key),
+            Some(&original_activation),
+            "the pristine stage must precede due privacy effects",
+        );
+        let mut staged_activation = original_activation;
+        // If construction continues past the failed stage, the start hook must
+        // reject this missed schedule instead of silently discarding its writes.
+        staged_activation
+            .pending_protocol_limits_tightening
+            .as_mut()
+            .expect("pending protocol tightening")
+            .effective_at_height = 399;
+        block
+            .world
+            .privacy_activations
+            .insert(activation_key, staged_activation);
+        Err("rejected pristine stage")
+    }) {
+        Ok(_) => panic!("a rejected pristine stage must not construct a block"),
+        Err(error) => error,
+    };
+    assert_eq!(error, "rejected pristine stage");
+    assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
+    assert_eq!(
+        state.world.privacy_activations.view().get(&activation_key),
+        Some(&original_activation),
+        "a failed stage must discard its activation write",
+    );
+
+    // Taking a new block scope also proves that failure released every overlay lock.
+    let block = state.block(header);
+    assert!(block.start_of_block_effects_applied);
+    assert_eq!(block.world.privacy_consensus_policy.get().current_limits, next_limits);
+    assert_eq!(block.world.privacy_consensus_policy.get().pending_tightening, None);
+    assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
+    let activation = block
+        .world
+        .privacy_activations
+        .get(&activation_key)
+        .expect("activation survives the discarded stage");
+    assert_eq!(activation.protocol_limits, next_protocol_limits);
+    assert_eq!(activation.pending_protocol_limits_tightening, None);
+    drop(block);
+    assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
+    assert_eq!(
+        state.world.privacy_activations.view().get(&activation_key),
+        Some(&original_activation),
+        "dropping a successful block scope must also discard its start effects",
+    );
+}
 state_test! { sync privacy_action_budget_is_transactional_contiguous_and_fail_closed
     let state = blank_state();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
