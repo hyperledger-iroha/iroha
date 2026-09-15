@@ -65,6 +65,44 @@ mod tests {
         assert_close(round3(1.2344), 1.234);
     }
     #[test]
+    fn config_enforces_final_geometry_before_trace_setup() {
+        let defaults = Config::from_iter(std::iter::empty()).unwrap();
+        assert_eq!(
+            (defaults.rows, defaults.warmups, defaults.iterations),
+            (20_000, 1, 5)
+        );
+        let maximum = Config::from_iter(
+            ["--rows", "65536", "--warmups", "0", "--iterations", "1"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(maximum.geometry().unwrap().padded_rows(), 65_536);
+        for args in [
+            vec!["--rows".into(), "65537".into()],
+            vec!["--rows".into(), usize::MAX.to_string()],
+            vec!["--rows".into(), "0".into()],
+            vec!["--iterations".into(), "0".into()],
+            vec![
+                "--warmups".into(),
+                usize::MAX.to_string(),
+                "--iterations".into(),
+                "1".into(),
+            ],
+            vec![
+                "--warmups".into(),
+                "0".into(),
+                "--iterations".into(),
+                usize::MAX.to_string(),
+            ],
+        ] {
+            let mut traced = args;
+            traced.extend(["--trace-dir".into(), "unused-invalid-geometry-trace".into()]);
+            assert!(Config::from_iter(traced.into_iter()).is_err());
+        }
+    }
+
+    #[test]
     fn config_parses_trace_options() {
         let args = vec![
             "--trace-output".to_owned(),
@@ -695,16 +733,17 @@ mod harness {
         GoldilocksDigest384V1, find_by_name, poseidon::FIELD_MODULUS as GOLDILOCKS_MODULUS,
     };
     use fastpq_prover::{
-        AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, Bn254PoseidonBatchSlice,
-        ColumnStagingPhaseStats, ColumnStagingSample, ColumnStagingStats, CommandLimitSnapshot,
-        Digest384BenchmarkDeviceV1, Digest384BenchmarkInputV1, ExecutionMode, FftTuning,
-        KernelKind, KernelStatsSample, LdeHostStats, Planner, PostTileSample, QueueDepthStats,
-        TraceColumn, TwiddleCacheStats, adaptive_schedule_snapshot, benchmark_digest384_v1,
-        clear_execution_mode_observer, enable_kernel_stats, enable_lde_host_stats,
-        enable_post_tile_stats, enable_queue_depth_stats, enable_twiddle_cache_stats,
-        fft_tuning_snapshot, set_execution_mode_observer, snapshot_queue_depth_stats,
-        take_column_staging_stats, take_kernel_stats, take_lde_host_stats, take_post_tile_stats,
-        take_queue_depth_stats, take_twiddle_cache_stats, try_hash_bn254_poseidon_word_batches,
+        AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, BenchmarkGeometryV1,
+        Bn254PoseidonBatchSlice, ColumnStagingPhaseStats, ColumnStagingSample, ColumnStagingStats,
+        CommandLimitSnapshot, Digest384BenchmarkDeviceV1, Digest384BenchmarkInputV1, ExecutionMode,
+        FftTuning, KernelKind, KernelStatsSample, LdeHostStats, Planner, PostTileSample,
+        QueueDepthStats, TraceColumn, TwiddleCacheStats, adaptive_schedule_snapshot,
+        benchmark_digest384_v1, clear_execution_mode_observer, enable_kernel_stats,
+        enable_lde_host_stats, enable_post_tile_stats, enable_queue_depth_stats,
+        enable_twiddle_cache_stats, fft_tuning_snapshot, preflight_benchmark_geometry_v1,
+        set_execution_mode_observer, snapshot_queue_depth_stats, take_column_staging_stats,
+        take_kernel_stats, take_lde_host_stats, take_post_tile_stats, take_queue_depth_stats,
+        take_twiddle_cache_stats, try_hash_bn254_poseidon_word_batches,
     };
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     use metal::{Device, MTLDeviceLocation};
@@ -730,6 +769,7 @@ mod harness {
             None
         }
     }
+    const BENCH_COLUMN_COUNT: usize = 16;
     pub(super) const DEFAULT_TRACE_TEMPLATE: &str = "Metal System Trace";
     pub(super) const DEFAULT_TRACE_OUTPUT: &str = "fastpq.trace";
     pub(super) const DEFAULT_TRACE_SECONDS: u32 = 60;
@@ -758,6 +798,14 @@ mod harness {
         const DEFAULT_ITERATIONS: usize = 5;
         fn parse() -> Result<Self, String> {
             Self::from_iter(env::args().skip(1))
+        }
+        pub(crate) fn geometry(&self) -> Result<BenchmarkGeometryV1, String> {
+            preflight_benchmark_geometry_v1(
+                self.rows,
+                BENCH_COLUMN_COUNT,
+                self.warmups,
+                self.iterations,
+            )
         }
         pub(crate) fn from_iter<I>(mut args: I) -> Result<Self, String>
         where
@@ -835,12 +883,7 @@ mod harness {
                     }
                 }
             }
-            if rows == 0 {
-                return Err("--rows must be greater than zero".into());
-            }
-            if iterations == 0 {
-                return Err("--iterations must be greater than zero".into());
-            }
+            preflight_benchmark_geometry_v1(rows, BENCH_COLUMN_COUNT, warmups, iterations)?;
             if trace_output.is_some() && trace_auto {
                 return Err("--trace-auto cannot be combined with --trace-output".to_owned());
             }
@@ -2446,19 +2489,17 @@ mod harness {
     }
     pub fn run() -> Result<(), String> {
         let config = Config::parse()?;
+        let geometry = config.geometry()?;
         ensure_trace_environment(&config)?;
         let params = find_by_name("fastpq-state-transition-stark-v1").ok_or_else(|| {
             "canonical parameter set 'fastpq-state-transition-stark-v1' missing".to_owned()
         })?;
         let planner = Planner::new(params);
-        let padded = config
-            .rows
-            .checked_next_power_of_two()
-            .ok_or_else(|| format!("rows {rows} exceed supported range", rows = config.rows))?;
+        let padded = geometry.padded_rows();
         let trace_log = padded.trailing_zeros();
         let blowup_log = planner.blowup_log();
-        let column_count = 16usize;
-        let eval_len = padded << blowup_log;
+        let column_count = BENCH_COLUMN_COUNT;
+        let eval_len = geometry.evaluation_rows();
         let columns = prepare_columns(&planner, padded, column_count);
         let (resolved_mode, backend_label, gpu_available) =
             resolve_execution_metadata(config.gpu_probe);

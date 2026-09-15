@@ -55,6 +55,9 @@ use super::{
     collective::RnsNativeQpcsCompositeAuthorityV2,
     rns_native_global_lookup_z_commitment_view::rns_native_global_inverse_product_sumcheck::RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1,
     rns_native_profile::zk_ams_mkhe_rns_native_profile_manifest_v1,
+    rns_native_proof_hash::{
+        RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+    },
     rns_native_source::ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1,
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
     rns_native_wire::ZkAmsMkheRnsNativeProofEnvelopeV1,
@@ -191,12 +194,12 @@ const _: () = {
     assert!(MIN_WIRE_BYTES_V1 == 126);
     assert!(DIFFERENCE_SCALARS_PER_BLOCK_V1 == 256);
     assert!(SIGNED_SCALARS_PER_BLOCK_V1 == 1_024);
-    assert!(FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1 == 108_464);
+    assert!(FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1 == 107_201);
     assert!(
         FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1
             == RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1
     );
-    assert!(RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SUCCESSOR_MAX_BYTES_V1 == 108_339);
+    assert!(RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SUCCESSOR_MAX_BYTES_V1 == 107_076);
     assert!(IDENTITY_AWARE_POINT_BYTES_V1 == 34);
     assert!(SAME_OPENING_KERNEL_IMPLEMENTED_V1);
     assert!(RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SOURCE_SETTLED_V1);
@@ -295,8 +298,10 @@ impl RnsNativeSourcePackingSafeCoreV1 {
 /// `tau`, `Q`, or Schnorr challenge paths.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativeSourcePackingCombinedOuterBindingsV1 {
-    pub(super) source_statement_anchor_digest: [u8; DIGEST_BYTES_V1],
-    pub(super) source_final_aggregation_schedule_digest: [u8; DIGEST_BYTES_V1],
+    /// Complete native statement anchor; all six canonical lanes remain bound.
+    pub(super) source_statement_anchor_digest: ProofDigestV1,
+    /// Complete native binding to the verified final RLWE aggregation schedule.
+    pub(super) source_final_aggregation_schedule_digest: ProofDigestV1,
     pub(super) enclosing_packing_binding_digest: [u8; DIGEST_BYTES_V1],
     pub(super) inventory_prior_context_digest: [u8; DIGEST_BYTES_V1],
     pub(super) inventory_root: [u8; DIGEST_BYTES_V1],
@@ -318,27 +323,27 @@ pub(super) struct RnsNativeSourcePackingCombinedOuterBindingsV1 {
 }
 
 impl RnsNativeSourcePackingCombinedOuterBindingsV1 {
-    fn component_digests_v1(self) -> [[u8; DIGEST_BYTES_V1]; 19] {
+    fn component_digests_v1(self) -> [DigestIdentityV1; 19] {
         [
-            self.source_statement_anchor_digest,
-            self.source_final_aggregation_schedule_digest,
-            self.enclosing_packing_binding_digest,
-            self.inventory_prior_context_digest,
-            self.inventory_root,
-            self.inventory_continuation_digest,
-            self.inventory_binding_digest,
-            self.direct_binding_digest,
-            self.comparator_binding_digest,
-            self.comparator_range_carry_binding_digest,
-            self.small_sign_disjointness_binding_digest,
-            self.q_mask_linear_relations_binding_digest,
-            self.existing_radix_binding_digest,
-            self.radix_complement_binding_digest,
-            self.centering_subtraction_binding_digest,
-            self.global_lookup_pre_z_binding_digest,
-            self.global_lookup_post_z_binding_digest,
-            self.global_inverse_product_binding_digest,
-            self.global_membership_binding_digest,
+            DigestIdentityV1::from(self.source_statement_anchor_digest),
+            DigestIdentityV1::from(self.source_final_aggregation_schedule_digest),
+            DigestIdentityV1::from(self.enclosing_packing_binding_digest),
+            DigestIdentityV1::from(self.inventory_prior_context_digest),
+            DigestIdentityV1::from(self.inventory_root),
+            DigestIdentityV1::from(self.inventory_continuation_digest),
+            DigestIdentityV1::from(self.inventory_binding_digest),
+            DigestIdentityV1::from(self.direct_binding_digest),
+            DigestIdentityV1::from(self.comparator_binding_digest),
+            DigestIdentityV1::from(self.comparator_range_carry_binding_digest),
+            DigestIdentityV1::from(self.small_sign_disjointness_binding_digest),
+            DigestIdentityV1::from(self.q_mask_linear_relations_binding_digest),
+            DigestIdentityV1::from(self.existing_radix_binding_digest),
+            DigestIdentityV1::from(self.radix_complement_binding_digest),
+            DigestIdentityV1::from(self.centering_subtraction_binding_digest),
+            DigestIdentityV1::from(self.global_lookup_pre_z_binding_digest),
+            DigestIdentityV1::from(self.global_lookup_post_z_binding_digest),
+            DigestIdentityV1::from(self.global_inverse_product_binding_digest),
+            DigestIdentityV1::from(self.global_membership_binding_digest),
         ]
     }
 
@@ -350,27 +355,29 @@ impl RnsNativeSourcePackingCombinedOuterBindingsV1 {
         hash.update(COMBINED_OUTER_BINDING_DOMAIN_V1);
         hash.update(&[VERSION_V1]);
         for digest in self.component_digests_v1() {
-            hash.update(&digest);
+            hash.update(digest.as_bytes());
         }
         hash.finalize()
     }
 
-    fn digests_v1(self) -> [[u8; DIGEST_BYTES_V1]; 20] {
+    fn digests_v1(self) -> [DigestIdentityV1; 20] {
         let components = self.component_digests_v1();
-        let mut digests = [[0_u8; DIGEST_BYTES_V1]; 20];
+        let mut digests = [DigestIdentityV1::EMPTY; 20];
         digests[..components.len()].copy_from_slice(&components);
-        digests[components.len()] = self.combined_outer_binding_digest;
+        digests[components.len()] = DigestIdentityV1::from(self.combined_outer_binding_digest);
         digests
     }
 
     fn validate_v1(self) -> Result<(), RnsNativeSourcePackingSameOpeningErrorV1> {
         let digests = self.digests_v1();
-        if digests.contains(&[0; DIGEST_BYTES_V1])
+        if digests.iter().any(|digest| digest.is_zero())
             || digests
                 .iter()
                 .enumerate()
                 .any(|(index, digest)| digests[index + 1..].contains(digest))
-            || digests.contains(&ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1)
+            || digests.contains(&DigestIdentityV1::from(
+                ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            ))
             || self.combined_outer_binding_digest
                 != self.canonical_combined_outer_binding_digest_v1()
         {
@@ -1843,6 +1850,16 @@ fn verify_equation_kernel_v1<'a, P: RnsNativeSourcePackingAggregateReplayV1>(
     // Reject malformed/cap-exceeding frames before allocating the 16,384-scalar
     // replay destination or touching the one-shot source.
     let frame = FrameViewV1::decode_v1(wire, cap)?;
+    verify_decoded_equation_kernel_v1(context, replay_source, frame)
+}
+
+/// Check the equation from the exact already-decoded frame without repeating
+/// its length, checksum, point or scalar validation.
+fn verify_decoded_equation_kernel_v1<'a, P: RnsNativeSourcePackingAggregateReplayV1>(
+    context: RnsNativeSourcePackingSameOpeningContextV1,
+    replay_source: P,
+    frame: FrameViewV1<'a>,
+) -> Result<EquationVerifiedKernelV1<'a>, RnsNativeSourcePackingSameOpeningErrorV1> {
     let prepared = prepare_relation_v1(context, replay_source)?;
     let challenge = derive_schnorr_challenge_v1(
         prepared.pre_challenge_binding_digest,
@@ -1888,7 +1905,7 @@ fn finalize_verified_kernel_v1<'a>(
     residual_hash.update(RESIDUAL_DOMAIN_V1);
     residual_hash.update(&[VERSION_V1]);
     for digest in combined_outer_bindings.digests_v1() {
-        residual_hash.update(&digest);
+        residual_hash.update(digest.as_bytes());
     }
     residual_hash.update(&equation_verified.proof_digest);
     residual_hash.update(&(equation_verified.residual.len() as u32).to_be_bytes());
@@ -1912,7 +1929,7 @@ fn finalize_verified_kernel_v1<'a>(
         binding.update(&digest);
     }
     for digest in combined_outer_bindings.digests_v1() {
-        binding.update(&digest);
+        binding.update(digest.as_bytes());
     }
     binding.update(&(equation_verified.codec_offset as u32).to_be_bytes());
     let binding_digest = binding.finalize();
@@ -2104,8 +2121,9 @@ where
 /// Consume one concrete owned predecessor into the source-packing child.
 ///
 /// Unlike the fixture-oriented V1 kernel entry, this production-shaped join
-/// accepts no detached context or replay owner.  The predecessor derives the
-/// authenticated context, lends its exact live snapshot/point inventory to a
+/// accepts no detached context or replay owner. It first admits the exact
+/// capped frame. The predecessor then derives the authenticated context and
+/// lends its exact live snapshot/point inventory to a
 /// one-shot replay, and exposes successor-dependent outer bindings only after
 /// the Schnorr equation succeeds.
 pub(super) fn verify_rns_native_source_packing_same_opening_owned_v2<'proof, P>(
@@ -2118,18 +2136,17 @@ where
     P: RnsNativeSourcePackingOwnedReplayPredecessorV2<'proof>,
 {
     let wire: &'proof [u8] = previous.same_opening_successor_v1();
+    // Exact transport and scalar/point admission precede authenticated-context
+    // work and acquisition of the one-shot replay. Retain this decoded view
+    // through equation verification so the checksum is evaluated only once.
+    let frame = FrameViewV1::decode_v1(wire, FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1)?;
     let context = previous.authenticated_same_opening_context_v2()?;
     if context.safe_core != previous.successor_independent_safe_core_v1() {
         return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext);
     }
     let equation_verified = {
         let replay = previous.begin_authenticated_replay_v2()?;
-        verify_equation_kernel_v1(
-            context,
-            replay,
-            wire,
-            FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1,
-        )?
+        verify_decoded_equation_kernel_v1(context, replay, frame)?
     };
     let combined_outer_bindings = previous.combined_outer_bindings_v1();
     let verified = finalize_verified_kernel_v1(equation_verified, combined_outer_bindings)?;

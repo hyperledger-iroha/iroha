@@ -4,6 +4,9 @@ const TEST_SOURCE_V2: &str = include_str!("incremental_source_phase23_source_alg
 const PARENT_SOURCE_V2: &str = include_str!("incremental_source_phase23.rs");
 const GLOBAL_LOOKUP_REPLAY_SOURCE_V1: &str =
     include_str!("incremental_source_phase23_source_algebra/global_lookup_source_replay_v1.rs");
+const GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1: &str = include_str!(
+    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/original_source_ingress_v1.rs"
+);
 const GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1: &str = include_str!(
     "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1_tests.rs"
 );
@@ -12,6 +15,9 @@ const SOURCE_OPENINGS_SOURCE_V1: &str = include_str!(
 );
 const SOURCE_OPENINGS_TEST_SOURCE_V1: &str = include_str!(
     "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1_tests.rs"
+);
+const SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1: &str = include_str!(
+    "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1_mapping_tests.rs"
 );
 const SOURCE_OPENINGS_REOPEN_SOURCE_V1: &str = include_str!(
     "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/canonical_reopen_v1.rs"
@@ -369,7 +375,6 @@ fn hostile_order_top_zero_formula_equation_and_centering_mutations_fail() {
 }
 #[test]
 fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
-    let _ordered = OrderedCiphertextBundleSealV2::TestOnly;
     let _proof = RadixHyraxProofSealV2::TestOnly;
     assert!(!SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V2);
     assert!(!SOURCE_ALGEBRA_VERIFIED_V2);
@@ -381,8 +386,6 @@ fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
     assert!(!RELEASE_COMPLETE_V2);
     for impossible_field in [
-        "ordered_43_ciphertexts: Infallible",
-        "move_only_key_authority: Infallible",
         "packing: Infallible",
         "radix_carry: Infallible",
         "negacyclic_quotient: Infallible",
@@ -401,7 +404,7 @@ fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     assert!(!PRODUCTION_SOURCE_V2.contains("Decode"));
     assert!(!PRODUCTION_SOURCE_V2.contains("into_parts"));
     assert!(!PRODUCTION_SOURCE_V2.contains("as_tuple"));
-    assert_eq!(PRODUCTION_SOURCE_V2.matches("pub(super)").count(), 6);
+    assert_eq!(PRODUCTION_SOURCE_V2.matches("pub(super)").count(), 5);
     let preflight = PRODUCTION_SOURCE_V2
         .split("fn preflight_v2")
         .nth(1)
@@ -411,7 +414,18 @@ fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
         preflight.find(".take()").unwrap() < preflight.find("exact_manifest_preflight_v2").unwrap()
     );
     let freeze = PRODUCTION_SOURCE_V2.split("fn freeze_v2").nth(1).unwrap();
-    assert!(freeze.starts_with("(mut self)"));
+    let freeze_parameters = freeze
+        .split(')')
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .collect::<String>();
+    assert_eq!(
+        freeze_parameters
+            .trim_start_matches('(')
+            .trim_end_matches(','),
+        "mutself"
+    );
     assert!(freeze.find(".take()").unwrap() < freeze.find("live.owner.validate_v1()").unwrap());
     assert!(!freeze.contains("RadixHyraxProofSealV2"));
     assert!(!freeze.contains("_radix_hyrax_proof"));
@@ -460,6 +474,8 @@ fn source_and_test_budgets_remain_bounded() {
     assert!(PRODUCTION_SOURCE_V2.len() <= 52_000);
     assert!(TEST_SOURCE_V2.len() <= 30_000);
     assert!(GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count() <= 900);
+    assert!(GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.lines().count() <= 120);
+    assert!(GLOBAL_LOOKUP_REPLAY_INGRESS_SOURCE_V1.len() <= 6_000);
     assert!(GLOBAL_LOOKUP_REPLAY_TEST_SOURCE_V1.lines().count() <= 400);
     assert!(
         GLOBAL_LOOKUP_REPLAY_SOURCE_V1.lines().count()
@@ -470,6 +486,109 @@ fn source_and_test_budgets_remain_bounded() {
     assert!(SOURCE_OPENINGS_TEST_SOURCE_V1.lines().count() <= 500);
     assert!(SOURCE_OPENINGS_SOURCE_V1.len() <= 52_000);
     assert!(SOURCE_OPENINGS_TEST_SOURCE_V1.len() <= 20_000);
+    assert!(SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1.lines().count() <= 500);
+    assert!(SOURCE_OPENINGS_MAPPING_TEST_SOURCE_V1.len() <= 20_000);
+    assert!(
+        SOURCE_OPENINGS_TEST_SOURCE_V1
+            .contains("#[path = \"source_openings_v1_mapping_tests.rs\"]\nmod mapping;")
+    );
     assert!(SOURCE_OPENINGS_REOPEN_SOURCE_V1.lines().count() <= 300);
     assert!(SOURCE_OPENINGS_REOPEN_SOURCE_V1.len() <= 12_000);
+}
+
+#[test]
+fn consumed_source_is_the_only_ordering_authority_and_empty_ingress_cannot_retry() {
+    let ingress = SourceAlgebraIngressV2::<core::convert::Infallible, (), ()> { live: None };
+    assert!(matches!(
+        ingress.preflight_v2(),
+        Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+    ));
+    let compact = PRODUCTION_SOURCE_V2.split_whitespace().collect::<String>();
+    for retired in [
+        "OrderedCiphertextBundleSealV2",
+        "ordered_43_ciphertexts",
+        "move_only_key_authority",
+        "ordered_ciphertexts:",
+    ] {
+        assert!(!PRODUCTION_SOURCE_V2.contains(retired));
+        assert!(!PARENT_SOURCE_V2.contains(retired));
+    }
+    assert!(
+        compact.contains("SourceAlgebraIngressV2::begin_v2(owner).preflight_v2()?.freeze_v2()")
+    );
+    let preflight = compact
+        .split("fnpreflight_v2(")
+        .nth(1)
+        .unwrap()
+        .split("impl<")
+        .next()
+        .unwrap();
+    assert!(
+        preflight.find("self.live.take()").unwrap()
+            < preflight
+                .find("exact_manifest_preflight_v2(&live.owner)?")
+                .unwrap()
+    );
+    let freeze = compact
+        .split("fnfreeze_v2(")
+        .nth(1)
+        .unwrap()
+        .split("impl<")
+        .next()
+        .unwrap();
+    assert!(
+        freeze.find("self.live.take()").unwrap()
+            < freeze.find("live.owner.validate_v1()?").unwrap()
+    );
+    assert!(
+        freeze.find("live.owner.validate_v1()?").unwrap()
+            < freeze.find("self.axes.preflight_digest==[0;32]").unwrap()
+    );
+    assert!(
+        freeze.find("self.axes.preflight_digest==[0;32]").unwrap()
+            < freeze
+                .find("Ok(Phase23SourceAlgebraPrerequisiteV2")
+                .unwrap()
+    );
+}
+
+#[test]
+fn actual_manifest_preflight_keeps_exact_order_failed_authority_and_snapshot_binding_checks() {
+    let preflight = PRODUCTION_SOURCE_V2
+        .split("fn exact_manifest_preflight_v2")
+        .nth(1)
+        .unwrap()
+        .split("fn aggregate_schedule_digest_v2")
+        .next()
+        .unwrap();
+    for required in [
+        "owner.validate_v1()?",
+        "owner.authority.failed",
+        "owner.manifests.len() != SOURCE_ALGEBRA_RECORDS_V2",
+        "owner.manifests.capacity() != SOURCE_ALGEBRA_RECORDS_V2",
+        "owner.authority.next_sample_index() != SOURCE_ALGEBRA_RECORDS_V2 as u64",
+        "manifest.validate_for_authority_v1(&owner.authority)?",
+        "manifest.sealed_binding_v1()?",
+        "binding.sample_index() != ordinal as u64",
+        "binding.level() != 0",
+        "binding.profile_digest() != owner.materialized.profile_digest",
+        "binding.roster_digest() != owner.materialized.roster_digest",
+        "binding.epoch() != owner.authority.epoch()",
+        "binding.key_transcript_digest() != owner.authority.transcript_digest()",
+        "binding.key_digest() != owner.authority.key_digest()",
+        "binding.key_authority_digest() != owner.authority.authority_digest()",
+        "manifest.topology.layout_digest != position.layout_v1()?.digest",
+        "manifest.topology.plaintext_chunk_index != u32::from(position.chunk_index)",
+        "manifest.topology.plaintext_used_slots != position.used_slots_v1()?",
+        "require_common_snapshot_v2(",
+        "require_common_output_v2(",
+        "common_source_snapshot.is_none()",
+        "common_output_snapshot.is_none()",
+        "common_output_publication.is_none()",
+    ] {
+        assert!(
+            preflight.contains(required),
+            "missing concrete source authority check: {required}"
+        );
+    }
 }

@@ -1078,8 +1078,6 @@ impl CrossFieldConditionalSubtotalPreflightV2 {
         Ok(())
     }
 }
-#[path = "phase23_rns_link_cross_field_v2/joint_z_binding_v3.rs"]
-mod joint_z_binding_v3;
 #[cfg(test)]
 #[path = "phase23_rns_link_cross_field_v2_tests.rs"]
 mod tests;

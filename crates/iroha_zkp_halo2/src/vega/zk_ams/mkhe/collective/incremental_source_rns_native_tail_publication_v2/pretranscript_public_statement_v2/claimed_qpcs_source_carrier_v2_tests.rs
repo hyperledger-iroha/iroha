@@ -1,3 +1,5 @@
+//! Exact current carrier accounting, framing and one-shot ownership controls.
+
 use super::*;
 
 #[test]
@@ -7,21 +9,30 @@ fn claimed_qpcs_source_carrier_pins_exact_retention_and_local_work() {
     assert_eq!(ledger.retained_public_evaluation_bytes, 140_800);
     assert_eq!(ledger.retained_numeric_tail_bytes, 4_800);
     assert_eq!(ledger.retained_numeric_cache_bytes, 145_600);
-    assert_eq!(ledger.retained_terminal_chronology_bytes, 5_384);
-    assert_eq!(ledger.retained_commitment_digest_bytes, 1_344);
-    assert_eq!(ledger.retained_payload_bytes, 152_328);
+    assert_eq!(ledger.retained_terminal_chronology_bytes, 6_264);
+    assert_eq!(ledger.retained_commitment_digest_bytes, 2_016);
+    assert_eq!(ledger.retained_payload_bytes, 153_880);
     assert_eq!(ledger.canonical_checks, 18_200);
     assert_eq!(ledger.ring_power_squarings, 3_400);
     assert_eq!(ledger.modular_multiplications, 3_600);
     assert_eq!(ledger.modular_additions, 200);
     assert_eq!(ledger.numeric_tail_retention_work_units, 4_800);
-    assert_eq!(ledger.pre_binding_local_work_units, 28_144);
-    assert_eq!(ledger.claimed_source_binding_hash_bytes, 5_284);
-    assert_eq!(ledger.carrier_binding_hash_bytes, 1_678);
-    assert_eq!(ledger.combined_binding_hash_bytes, 6_962);
-    assert_eq!(ledger.local_work_units, 35_106);
-    // Historical compatibility floor, not the pre-binding subtotal.
-    assert!(ledger.local_work_units >= 28_808);
+    assert_eq!(ledger.pre_binding_local_work_units, 28_816);
+    assert_eq!(ledger.claimed_source_binding_hash_bytes, 5_444);
+    assert_eq!(ledger.carrier_binding_hash_bytes, 2_382);
+    assert_eq!(ledger.combined_binding_hash_bytes, 7_826);
+    assert_eq!(ledger.local_work_units, 7_199_718);
+    assert_eq!(ledger.binding_lane_permutations, 4_236);
+    assert_eq!(ledger.binding_poseidon_rounds, 275_340);
+    assert_eq!(ledger.binding_field_multiplications, 3_850_524);
+    assert_eq!(ledger.binding_field_additions, 3_312_552);
+    assert_eq!(
+        ledger.local_work_units,
+        ledger.pre_binding_local_work_units
+            + u32::from(ledger.combined_binding_hash_bytes)
+            + ledger.binding_field_multiplications
+            + ledger.binding_field_additions
+    );
     assert_eq!(ledger.new_heap_bytes, 0);
     assert_eq!(ledger.new_spool_bytes, 0);
     assert_eq!(ledger.new_wire_bytes, 0);
@@ -42,7 +53,6 @@ fn claimed_qpcs_source_carrier_keeps_every_downstream_gate_closed() {
         assert!(!RNS_NATIVE_CLAIMED_QPCS_DIRECT_RELATION_INTEGRATED_V2);
         assert!(!RNS_NATIVE_CLAIMED_QPCS_INVENTORY_MEMBERSHIP_INTEGRATED_V2);
         assert!(!RNS_NATIVE_CLAIMED_QPCS_GLOBAL_ROOT_DISCHARGED_V2);
-        assert!(!RNS_NATIVE_CLAIMED_QPCS_ZERO_ROOT_DISCHARGED_V2);
         assert!(!RNS_NATIVE_CLAIMED_QPCS_DIRECT_OPENINGS_AVAILABLE_V2);
         assert!(!RNS_NATIVE_CLAIMED_QPCS_RESOURCE_EVIDENCE_QUALIFIED_V2);
         assert!(!RNS_NATIVE_CLAIMED_QPCS_READINESS_V2);
@@ -72,9 +82,9 @@ fn local_ledger_explicitly_excludes_existing_subtransition_costs() {
     assert!(ledger_docs.contains("zero additive carrier-local"));
     assert!(ledger_docs.contains("4,800-byte"));
     assert!(ledger_docs.contains("retained inline"));
-    assert!(ledger_docs.contains("28,144 before"));
-    assert!(ledger_docs.contains("6,962 binding bytes"));
-    assert!(ledger_docs.contains("35,106 total"));
+    assert!(ledger_docs.contains("28,816 before"));
+    assert!(ledger_docs.contains("7,826 binding bytes"));
+    assert!(ledger_docs.contains("7,199,718 total"));
     assert!(ledger_docs.contains("per canonical check, modular operation"));
     assert!(ledger_docs.contains("not an instruction count"));
     assert!(ledger_docs.contains("excludes control-flow comparisons"));
@@ -489,4 +499,145 @@ fn final_composite_transition_type_excludes_earlier_root_failures() {
     );
     assert!(!transition.contains("GlobalLookupRoot"));
     assert!(!transition.contains("ZeroPaddingRoot"));
+}
+
+fn carrier_test_axes_v1() -> (
+    CarrierBindingContextV1,
+    [ProofDigestV1; 2],
+    [ProofDigestV1; 40],
+) {
+    let proof = |index| {
+        crate::vega::zk_ams::mkhe::rns_native_proof_hash::test_proof_digest_v1(b"carrier", index)
+    };
+    (
+        CarrierBindingContextV1 {
+            public: core::array::from_fn(|i| [i as u8 + 1; 32]),
+            native: [proof(0), proof(1)],
+            objects: 3_520,
+            counters: [123, 456, 789, 1011],
+        },
+        [proof(2), proof(3)],
+        core::array::from_fn(|i| proof(i as u64 + 4)),
+    )
+}
+
+#[test]
+fn carrier_binding_replays_the_exact_current_mixed_role_frame() {
+    let (axes, equations, limbs) = carrier_test_axes_v1();
+    let mut fields = vec![
+        CARRIER_BINDING_DOMAIN_V1.to_vec(),
+        vec![1],
+        40_u16.to_be_bytes().to_vec(),
+        5_u16.to_be_bytes().to_vec(),
+        43_u16.to_be_bytes().to_vec(),
+        200_u16.to_be_bytes().to_vec(),
+        axes.public[0].to_vec(),
+        axes.public[1].to_vec(),
+        axes.native[0].as_bytes().to_vec(),
+        axes.public[2].to_vec(),
+        axes.public[3].to_vec(),
+        axes.public[4].to_vec(),
+        axes.objects.to_be_bytes().to_vec(),
+    ];
+    fields.extend(axes.counters.map(|n| n.to_be_bytes().to_vec()));
+    fields.push(axes.native[1].as_bytes().to_vec());
+    fields.extend(
+        equations
+            .into_iter()
+            .chain(limbs)
+            .map(|digest| digest.as_bytes().to_vec()),
+    );
+    assert_eq!(fields.len(), 60);
+    assert_eq!(fields.iter().map(Vec::len).sum::<usize>(), 2_382);
+    let refs: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
+    let context = RnsNativeProofHashContextV1::canonical().unwrap();
+    let frame = context
+        .frame(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 7,
+                index: 0,
+                counter: 0,
+            },
+            &refs,
+        )
+        .unwrap();
+    assert_eq!(
+        RnsNativeProofHashWorkV1::from_frame(&frame).unwrap(),
+        CARRIER_BINDING_HASH_WORK_V1
+    );
+    assert_eq!(
+        carrier_binding_hash_v1(axes, &equations, &limbs).unwrap(),
+        ProofDigestV1::from_shared(frame.hash())
+    );
+}
+
+#[test]
+fn carrier_binding_binds_every_current_axis_and_every_native_lane() {
+    let (axes, equations, limbs) = carrier_test_axes_v1();
+    let original = carrier_binding_hash_v1(axes, &equations, &limbs).unwrap();
+    for field in 0..5 {
+        let mut changed = axes;
+        changed.public[field][31] ^= 1;
+        assert_ne!(
+            carrier_binding_hash_v1(changed, &equations, &limbs).unwrap(),
+            original
+        );
+        changed.public[field] = [0; 32];
+        assert!(carrier_binding_hash_v1(changed, &equations, &limbs).is_err());
+    }
+    for field in 0..4 {
+        let mut changed = axes;
+        changed.counters[field] += 1;
+        assert_ne!(
+            carrier_binding_hash_v1(changed, &equations, &limbs).unwrap(),
+            original
+        );
+    }
+    let mut changed = axes;
+    changed.objects += 1;
+    assert_ne!(
+        carrier_binding_hash_v1(changed, &equations, &limbs).unwrap(),
+        original
+    );
+    for field in 0..44 {
+        for lane in 0..6 {
+            let (mut changed, mut changed_equations, mut changed_limbs) = (axes, equations, limbs);
+            let digest = match field {
+                0..2 => &mut changed.native[field],
+                2..4 => &mut changed_equations[field - 2],
+                _ => &mut changed_limbs[field - 4],
+            };
+            let mut bytes = digest.to_le_bytes();
+            let word = u64::from_le_bytes(bytes[lane * 8..lane * 8 + 8].try_into().unwrap());
+            bytes[lane * 8..lane * 8 + 8]
+                .copy_from_slice(&((word + 1) % fastpq_isi::poseidon::FIELD_MODULUS).to_le_bytes());
+            *digest = ProofDigestV1::from_le_bytes(bytes).unwrap();
+            assert_ne!(
+                carrier_binding_hash_v1(changed, &changed_equations, &changed_limbs).unwrap(),
+                original,
+                "field{field} lane{lane}"
+            );
+        }
+        let (mut changed, mut changed_equations, mut changed_limbs) = (axes, equations, limbs);
+        match field {
+            0..2 => changed.native[field] = ProofDigestV1::ZERO,
+            2..4 => changed_equations[field - 2] = ProofDigestV1::ZERO,
+            _ => changed_limbs[field - 4] = ProofDigestV1::ZERO,
+        }
+        assert!(carrier_binding_hash_v1(changed, &changed_equations, &changed_limbs).is_err());
+    }
+    let mut swapped = equations;
+    swapped.swap(0, 1);
+    assert_ne!(
+        carrier_binding_hash_v1(axes, &swapped, &limbs).unwrap(),
+        original
+    );
+    let mut swapped = limbs;
+    swapped.swap(0, 39);
+    assert_ne!(
+        carrier_binding_hash_v1(axes, &equations, &swapped).unwrap(),
+        original
+    );
 }

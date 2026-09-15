@@ -573,18 +573,18 @@ mod tests {
             }
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-                    "755bd48dd1ec364da87e9fdc82cb8145bab2ae3422e602acde39f4659a3470c8".to_owned(),
-                    "4bd1d4ed3304d873d3111f0c37a1151df9ac48c99b3e2a760be93f0656ef76a2".to_owned(),
-                    "b566ed92037f905cda0ee5f295ba2c1e70e006398bdedf7f57aac99e5758167d".to_owned(),
+                    "30c6654b8912be68308793715d1334c5e943e27e5a9159a99655f647f12dc43f".to_owned(),
+                    "589ba602c36b1a5a57ee4cfd8e3f7f95aaeecfa710f9f3f2b047f00358b93a16".to_owned(),
+                    "0d0350a7daefa9600102c298c1801dcb47cdb3273949ae48c97ff149355345e2".to_owned(),
                     "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
-                    "ef48407e9fffa1d18f32321136e616ba24a38febefd3700736c8507e9a97d3d3".to_owned(),
+                    "fecc520998b679fcb81adab2233e2ec751bf00c674a9ccb252d5fef42c187101".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV1 => (
-                    "6265e763be8e1f62feb4e34a0b9fe0f4ca7748be2ca5d0ad334996a029b42197".to_owned(),
-                    "c7bee6a60c069cf303c3bc9022a52fe59e1af6dd28ee114dab47718ac0b54129".to_owned(),
-                    "175934207a8a851284551a4f494b07b0b045b2b8008d009564232f6a26d76a55".to_owned(),
+                    "452786a0ddf2943634bd77bf95736f1b33087f76523ef3ffeed366db34ecab09".to_owned(),
+                    "bb7001c3ffb26746796aa3e9ca12e162926449d485fb8dd94d0a19f0caf7a413".to_owned(),
+                    "0cd01f4aee4ead2ed8c59226715f531b9ad5c851dc8e851c142365ba986cd087".to_owned(),
                     "a6314323ab707a3766599aed2d109b3ada63acec793ff2a729c749cd951a332d".to_owned(),
-                    "7c254368cd3b41773cb92fea58df239745467d80aefcde365e224c058f88d87c".to_owned(),
+                    "23b0c01ee7d549664462e9175ee85edc2d7ffb5a371785872ef54cc28773ab3c".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };

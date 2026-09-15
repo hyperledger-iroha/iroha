@@ -701,6 +701,37 @@ def test_nested_release_helper_uses_safe_path_and_ignores_stdlib_shadow(
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert not marker.exists()
 
+    # The canonical filter-array owner is already in the authenticated captured
+    # dependency graph. Exercise the real isolated summary path, not only help.
+    manifest = tmp_path / "manifest.json"
+    summary_json = tmp_path / "summary.json"
+    summary_markdown = tmp_path / "summary.md"
+    for filters, accepted in (
+        (["all", "fft", "lde", "digest384_trace_columns", "digest384_merkle_pairs", "bn254_poseidon_words"], True),
+        (None, True),
+        ([], False),
+        (["fft", "fft"], False),
+        (["lde", "fft"], False),
+        (["fft", "all"], False),
+        (["poseidon_merkle_pairs"], False),
+    ):
+        manifest.write_text(json.dumps({"payload": {"benches": [{
+            "label": "synthetic", "operation_filter": "fft", "matrix_operation_filters": filters,
+        }]}}), encoding="utf-8")
+        for output in (summary_json, summary_markdown):
+            output.unlink(missing_ok=True)
+        invoked = subprocess.run([
+            sys.executable, "-I", "-S", str(scripts / "run_isolated_release_tool.py"),
+            str(fastpq / "rollout_manifest_summary.py"), "--manifest", str(manifest),
+            "--json-out", str(summary_json), "--markdown-out", str(summary_markdown),
+        ], cwd=tmp_path, check=False, capture_output=True, text=True)
+        assert (invoked.returncode == 0) is accepted, invoked.stdout + invoked.stderr
+        assert summary_json.exists() is accepted
+        assert summary_markdown.exists() is accepted
+        assert not marker.exists()
+        if accepted:
+            assert json.loads(summary_json.read_text())["benches"][0]["matrix_operation_filters"] == filters
+
     for unsafe_directory in (fastpq, acceleration):
         unsafe_directory.chmod(0o777)
         rejected = subprocess.run(

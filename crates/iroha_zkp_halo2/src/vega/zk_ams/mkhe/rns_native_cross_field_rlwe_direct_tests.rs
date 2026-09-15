@@ -1,3 +1,5 @@
+//! Direct RLWE mixed native384/curve256 framing and algebra regressions.
+
 use super::super::{
     rns_native_profile::{
         ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_v1,
@@ -29,6 +31,29 @@ fn transcript_digest_fixture_v1(context: u16, ordinal: u16) -> [u8; DIGEST_BYTES
     hash.update(&context.to_be_bytes());
     hash.update(&ordinal.to_be_bytes());
     hash.finalize()
+}
+
+fn proof_digest_v1(tag: u8) -> ProofDigestV1 {
+    super::super::rns_native_proof_hash::test_proof_digest_v1(
+        b"direct-proof-fixture",
+        u64::from(tag),
+    )
+}
+
+fn proof_transcript_fixture_v1(context: u16, ordinal: u16) -> ProofDigestV1 {
+    super::super::rns_native_proof_hash::test_proof_digest_v1(
+        b"direct-transcript-fixture",
+        (u64::from(context) << 16) | u64::from(ordinal),
+    )
+}
+
+fn changed_proof_lane_v1(value: ProofDigestV1, lane: usize) -> ProofDigestV1 {
+    let mut bytes = value.to_le_bytes();
+    let offset = lane * 8;
+    let old = u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("lane"));
+    let next = if old == 0 { 1 } else { old - 1 };
+    bytes[offset..offset + 8].copy_from_slice(&next.to_le_bytes());
+    ProofDigestV1::from_le_bytes(bytes).expect("changed canonical lane")
 }
 
 struct TranscriptTestChunkV1 {
@@ -131,9 +156,9 @@ fn qpcs_transcript_fixture_v1(context: u16) -> ZkAmsMkheRnsNativeQpcsBoundTransc
         .expect("opening transcript");
     let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         transcript.binding_digest(),
-        transcript_digest_fixture_v1(context, 200),
-        transcript_digest_fixture_v1(context, 201),
-        transcript_digest_fixture_v1(context, 202),
+        proof_transcript_fixture_v1(context, 200),
+        proof_transcript_fixture_v1(context, 201),
+        proof_transcript_fixture_v1(context, 202),
     )
     .expect("terminal bridge");
     let transcript = transcript
@@ -142,15 +167,15 @@ fn qpcs_transcript_fixture_v1(context: u16) -> ZkAmsMkheRnsNativeQpcsBoundTransc
     let fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             layer as u8,
-            transcript_digest_fixture_v1(context, 220 + layer as u16),
+            proof_transcript_fixture_v1(context, 220 + layer as u16),
         )
         .expect("FRI root")
     });
     let roots = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
-        transcript_digest_fixture_v1(context, 210),
-        transcript_digest_fixture_v1(context, 211),
-        transcript_digest_fixture_v1(context, 212),
+        proof_transcript_fixture_v1(context, 210),
+        proof_transcript_fixture_v1(context, 211),
+        proof_transcript_fixture_v1(context, 212),
         fri_roots,
     )
     .expect("qPCS roots");
@@ -173,9 +198,11 @@ fn axes_v1() -> RnsNativeCrossFieldRlweFixedAxesV1 {
             digest_v1(8),
         )
         .expect("existing-radix candidate axis"),
-        rns_aggregation_challenge_seed: digest_v1(9),
-        qpcs_parameter_digest: digest_v1(10),
-        qpcs_pre_relation_transcript_digest: digest_v1(11),
+        rns_aggregation_challenge_seed: proof_digest_v1(9),
+        qpcs_parameter_digest:
+            super::super::rns_native_qpcs_initial::canonical_parameter_digest_v1()
+                .expect("canonical parameter"),
+        qpcs_pre_relation_transcript_digest: proof_digest_v1(11),
     }
 }
 
@@ -185,8 +212,8 @@ fn safe_axes_v1() -> RnsNativeCrossFieldPreQpcsSafeAxesV1 {
 
 fn completed_qpcs_with_points_v1(
     context: u16,
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
-    relation_seed: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: ProofDigestV1,
+    relation_seed: ProofDigestV1,
     points: [u64; EVALUATIONS_V1],
 ) -> RnsNativeQpcsCompletedLineageV1 {
     let transcript = qpcs_transcript_fixture_v1(context);
@@ -210,8 +237,8 @@ fn completed_qpcs_with_points_v1(
 
 fn completed_qpcs_v1(
     context: u16,
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
-    relation_seed: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: ProofDigestV1,
+    relation_seed: ProofDigestV1,
     point: u64,
 ) -> RnsNativeQpcsCompletedLineageV1 {
     completed_qpcs_with_points_v1(
@@ -224,7 +251,7 @@ fn completed_qpcs_v1(
 
 fn claimed_relation_fixture_v1(
     schedule: RelationScheduleV1,
-    claimed_root: [u8; DIGEST_BYTES_V1],
+    claimed_root: ProofDigestV1,
     context: u16,
 ) -> RnsNativeCrossFieldRlweClaimedRelationV1 {
     let prior = schedule
@@ -235,8 +262,7 @@ fn claimed_relation_fixture_v1(
     let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
         prior,
         claimed_root,
-        transcript_digest_fixture_v1(context, 900),
-        transcript_digest_fixture_v1(context, 901),
+        proof_transcript_fixture_v1(context, 900),
     )
     .expect("claimed terminal roots");
     schedule
@@ -248,7 +274,7 @@ fn relation_schedule_fixture_v1() -> RelationScheduleV1 {
     derive_relation_schedule_v1(
         bind_direct_q_mask_schedule_v1(
             axes_v1(),
-            completed_qpcs_v1(400, digest_v1(20), digest_v1(22), 7),
+            completed_qpcs_v1(400, proof_digest_v1(20), proof_digest_v1(22), 7),
         )
         .expect("direct binding fixture"),
     )
@@ -256,8 +282,8 @@ fn relation_schedule_fixture_v1() -> RelationScheduleV1 {
 }
 
 fn claim_equality_pending_fixture_v1<'a>(
-    claimed_root: [u8; DIGEST_BYTES_V1],
-    recomputed_root: [u8; DIGEST_BYTES_V1],
+    claimed_root: ProofDigestV1,
+    recomputed_root: ProofDigestV1,
     successor: &'a [u8],
     context: u16,
 ) -> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
@@ -278,7 +304,7 @@ fn claim_equality_pending_fixture_v1<'a>(
         existing_radix_candidate_root: digest_v1(8),
         direct_core_safe_digest: direct_core_safe_digest_v1(
             recomputed_root,
-            digest_v1(112),
+            proof_digest_v1(112),
             digest_v1(113),
             digest_v1(114),
         )
@@ -291,6 +317,24 @@ fn claim_equality_pending_fixture_v1<'a>(
         cross_field_root_equality_obligation,
         verified_cross_field_core_root,
     }
+}
+
+fn repeated_public_rows_v1<T: Copy, const N: usize>(value: T) -> FixedRowsV1<T, N> {
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(N)
+        .expect("bounded fixture allocation");
+    rows.resize(N, value);
+    FixedRowsV1::from_rows_v1(rows).expect("exact public fixture rows")
+}
+
+fn proof_rows_fixture_v1() -> FixedRowsV1<[u8; CORE_PROOF_BYTES_V1], CORES_V1> {
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(CORES_V1)
+        .expect("bounded proof fixture allocation");
+    for core in 0..CORES_V1 {
+        rows.push(core_proof_fixture_v1(core));
+    }
+    FixedRowsV1::from_rows_v1(rows).expect("exact proof fixture rows")
 }
 
 fn prepared_fixture_v1() -> PreparedInputsV1 {
@@ -317,8 +361,8 @@ fn prepared_fixture_v1() -> PreparedInputsV1 {
     };
     PreparedInputsV1 {
         schedule,
-        evaluations: [evaluation; EVALUATIONS_V1],
-        commitments: [commitments; EVALUATIONS_V1],
+        evaluations: repeated_public_rows_v1(evaluation),
+        commitments: repeated_public_rows_v1(commitments),
         numeric_root: digest_v1(17),
         commitment_root: digest_v1(18),
     }
@@ -351,7 +395,7 @@ fn core_proof_fixture_v1(core: usize) -> [u8; CORE_PROOF_BYTES_V1] {
 }
 
 fn pending_fixture_v1() -> RnsNativeCrossFieldRlweFourCorePendingSealV1 {
-    let proofs = core::array::from_fn(core_proof_fixture_v1);
+    let proofs = proof_rows_fixture_v1();
     let transcript_digests = core::array::from_fn(|core| digest_v1(30 + core as u8));
     RnsNativeCrossFieldRlweFourCorePendingSealV1::from_parts_v1(
         prepared_fixture_v1(),
@@ -454,10 +498,11 @@ impl RnsNativeCrossFieldQuotientOpeningCursorV1 for TouchSourceV1<'_> {
 fn exact_four_core_geometry_and_cap_are_settled() {
     assert_eq!(EVALUATIONS_V1, 200);
     assert_eq!(Q_MASK_S_POINTS_V1, 6_400);
+    assert_eq!(RNS_NATIVE_Q_MASK_POINT_FRAME_BYTES_V1, 262_400);
     assert_eq!(Q_MASK_ROOT_DOMAIN_V1.len(), 71);
     assert_eq!(Q_MASK_ROOT_BYTES_PER_POINT_V1, 41);
-    assert_eq!(Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1, 108);
-    assert_eq!(Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1, 262_508);
+    assert_eq!(Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1, 364);
+    assert_eq!(Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1, 262_764);
     assert_eq!(QUOTIENT_OPENING_SIGNS_V1, 2);
     assert_eq!(QUOTIENT_OPENING_OWNERS_V1, 400);
     assert_eq!(QUOTIENT_OPENING_SCALARS_PER_OWNER_V1, 16_488);
@@ -473,15 +518,15 @@ fn exact_four_core_geometry_and_cap_are_settled() {
     assert_eq!(PROOF_SCALARS_PER_CORE_V1, 5);
     assert_eq!(CORE_PROOF_BYTES_V1, 7_981);
     assert_eq!(ALL_CORE_PROOF_BYTES_V1, 31_924);
-    assert_eq!(OWNED_WIRE_BYTES_V1, 32_271);
-    assert_eq!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1, 32_271);
+    assert_eq!(OWNED_WIRE_BYTES_V1, 32_303);
+    assert_eq!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1, 32_303);
     assert_eq!(
         RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_MAX_BYTES_V1,
         36_020
     );
     assert_eq!(
         RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1,
-        6_747_974
+        6_746_678
     );
 }
 
@@ -605,7 +650,7 @@ fn full_relation_schedule_v1() -> RelationScheduleV1 {
             completed_qpcs_with_points_v1(
                 600,
                 q_mask_s_root,
-                digest_v1(22),
+                proof_digest_v1(22),
                 full_relation_points_v1(),
             ),
         )
@@ -955,7 +1000,7 @@ fn retained_qpcs_schedule_is_combined_with_candidate_pre_direct_axes_only_after_
     let first = derive_relation_schedule_v1(
         bind_direct_q_mask_schedule_v1(
             axes_v1(),
-            completed_qpcs_v1(401, digest_v1(20), digest_v1(22), 7),
+            completed_qpcs_v1(401, proof_digest_v1(20), proof_digest_v1(22), 7),
         )
         .expect("first binding"),
     )
@@ -963,7 +1008,7 @@ fn retained_qpcs_schedule_is_combined_with_candidate_pre_direct_axes_only_after_
     let second = derive_relation_schedule_v1(
         bind_direct_q_mask_schedule_v1(
             axes_v1(),
-            completed_qpcs_v1(402, digest_v1(21), digest_v1(23), 11),
+            completed_qpcs_v1(402, proof_digest_v1(21), proof_digest_v1(23), 11),
         )
         .expect("second binding"),
     )
@@ -983,20 +1028,20 @@ fn retained_qpcs_schedule_is_combined_with_candidate_pre_direct_axes_only_after_
 
 #[test]
 fn completed_qpcs_lineage_rejects_wrong_session_and_is_one_shot() {
-    let legacy_schedule = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
+    let schedule_without_lineage = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
         axes_v1().qpcs_parameter_digest,
-        digest_v1(20),
+        proof_digest_v1(20),
         axes_v1().qpcs_pre_relation_transcript_digest,
-        digest_v1(22),
+        proof_digest_v1(22),
         [7; EVALUATIONS_V1],
     );
-    let legacy_qpcs_transcript = qpcs_transcript_fixture_v1(709);
-    let legacy_qpcs_bound_transcript_state = legacy_qpcs_transcript.binding_digest();
+    let transcript_without_lineage = qpcs_transcript_fixture_v1(709);
+    let state_without_lineage = transcript_without_lineage.binding_digest();
     assert!(matches!(
         RnsNativeQpcsCompletedLineageV1::test_fixture_v1(
-            legacy_schedule,
-            legacy_qpcs_bound_transcript_state,
-            legacy_qpcs_transcript,
+            schedule_without_lineage,
+            state_without_lineage,
+            transcript_without_lineage,
         ),
         Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
     ));
@@ -1006,9 +1051,9 @@ fn completed_qpcs_lineage_rejects_wrong_session_and_is_one_shot() {
     let first_lineage = first_transcript.test_qpcs_relation_lineage_v1();
     let schedule = RnsNativeQpcsRelationScheduleV1::test_fixture_with_lineage_v1(
         axes_v1().qpcs_parameter_digest,
-        digest_v1(20),
+        proof_digest_v1(20),
         axes_v1().qpcs_pre_relation_transcript_digest,
-        digest_v1(22),
+        proof_digest_v1(22),
         [7; EVALUATIONS_V1],
         first_lineage,
     );
@@ -1022,7 +1067,7 @@ fn completed_qpcs_lineage_rejects_wrong_session_and_is_one_shot() {
         Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
     ));
 
-    let mut completed = completed_qpcs_v1(712, digest_v1(20), digest_v1(22), 7);
+    let mut completed = completed_qpcs_v1(712, proof_digest_v1(20), proof_digest_v1(22), 7);
     let _ = completed
         .take_qpcs_transcript_v1()
         .expect("sole qPCS transcript");
@@ -1034,7 +1079,7 @@ fn completed_qpcs_lineage_rejects_wrong_session_and_is_one_shot() {
 
 #[test]
 fn claimed_cross_field_root_mismatch_rejects_and_obligation_is_consumed() {
-    let claimed = digest_v1(91);
+    let claimed = proof_digest_v1(91);
     let RnsNativeCrossFieldRlweClaimedRelationV1 {
         schedule: mut wrong,
         terminal_chronology: _,
@@ -1044,7 +1089,7 @@ fn claimed_cross_field_root_mismatch_rejects_and_obligation_is_consumed() {
             .take_cross_field_root_equality_obligation_v1()
             .expect("claimed-root equality obligation")
             .discharge_v1(
-                RnsNativeCrossFieldRlweVerifiedCoreRootV1::test_fixture_v1(digest_v1(92))
+                RnsNativeCrossFieldRlweVerifiedCoreRootV1::test_fixture_v1(proof_digest_v1(92))
                     .expect("opaque direct-owned wrong-root fixture"),
             ),
         Err(super::super::rns_native_transcript::ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch)
@@ -1072,23 +1117,24 @@ fn claimed_cross_field_root_mismatch_rejects_and_obligation_is_consumed() {
 fn direct_core_safe_digest_has_exact_domain_and_framing_kat() {
     assert_eq!(
         direct_core_safe_digest_v1(
-            [1; DIGEST_BYTES_V1],
-            [2; DIGEST_BYTES_V1],
+            ProofDigestV1::from_le_bytes([1; PROOF_DIGEST_BYTES_V1]).expect("canonical root"),
+            ProofDigestV1::from_le_bytes([2; PROOF_DIGEST_BYTES_V1])
+                .expect("canonical q-mask root"),
             [3; DIGEST_BYTES_V1],
             [4; DIGEST_BYTES_V1],
         )
         .expect("direct-core safe digest KAT"),
         [
-            0x6c, 0x76, 0x23, 0x43, 0x2f, 0x20, 0x18, 0x28, 0x59, 0xba, 0xb7, 0x09, 0xfc, 0x2a,
-            0x7b, 0xa5, 0x38, 0xcb, 0xc4, 0x44, 0x45, 0x3c, 0x7d, 0x89, 0xa2, 0x04, 0x93, 0xc7,
-            0xf1, 0xd0, 0x38, 0xa5,
+            0x67, 0xf2, 0x80, 0x6e, 0xdf, 0x42, 0x0f, 0xba, 0xfa, 0xa5, 0x3e, 0xc6, 0xe7, 0x93,
+            0x2d, 0xfa, 0x92, 0x50, 0x45, 0x4b, 0x60, 0xab, 0x32, 0x47, 0x20, 0x38, 0xe4, 0x4d,
+            0x52, 0x1c, 0xca, 0x79
         ]
     );
 }
 
 #[test]
 fn concrete_direct_root_bridge_is_matching_mismatch_and_one_shot() {
-    let claimed_root = digest_v1(95);
+    let claimed_root = proof_digest_v1(95);
     let successor = [0x5a, 0xa5, 0x33];
     let terminal = claim_equality_pending_fixture_v1(claimed_root, claimed_root, &successor, 725)
         .discharge_claimed_root_equality_v1()
@@ -1104,7 +1150,7 @@ fn concrete_direct_root_bridge_is_matching_mismatch_and_one_shot() {
             existing_radix_candidate_root: digest_v1(8),
             direct_core_safe_digest: direct_core_safe_digest_v1(
                 claimed_root,
-                digest_v1(112),
+                proof_digest_v1(112),
                 digest_v1(113),
                 digest_v1(114),
             )
@@ -1113,7 +1159,7 @@ fn concrete_direct_root_bridge_is_matching_mismatch_and_one_shot() {
     );
 
     assert!(matches!(
-        claim_equality_pending_fixture_v1(claimed_root, digest_v1(96), &successor, 726)
+        claim_equality_pending_fixture_v1(claimed_root, proof_digest_v1(96), &successor, 726)
             .discharge_claimed_root_equality_v1(),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
     ));
@@ -1176,17 +1222,15 @@ fn claimed_relation_owner_keeps_matching_pre_global_and_final_chronology() {
     let schedule = relation_schedule_fixture_v1();
     let expected_qpcs = qpcs_transcript_fixture_v1(400);
     let prior_binding = expected_qpcs.binding_digest();
-    let claimed_root = digest_v1(94);
+    let claimed_root = proof_digest_v1(94);
     let expected_cross_field = expected_qpcs
         .bind_cross_field_root(claimed_root)
         .expect("matching expected cross-field stage");
     let expected_pre_global_binding = expected_cross_field.binding_digest();
     let expected_global_seed = expected_cross_field.global_lookup_challenge_seed();
-    let global_root = transcript_digest_fixture_v1(724, 900);
-    let zero_root = transcript_digest_fixture_v1(724, 901);
-    let roots =
-        ZkAmsMkheRnsNativeTerminalRootsV1::new(prior_binding, claimed_root, global_root, zero_root)
-            .expect("matching terminal roots");
+    let global_root = proof_transcript_fixture_v1(724, 900);
+    let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(prior_binding, claimed_root, global_root)
+        .expect("matching terminal roots");
 
     let claimed = schedule
         .bind_claimed_terminal_roots_v1(roots)
@@ -1224,13 +1268,6 @@ fn claimed_relation_owner_keeps_matching_pre_global_and_final_chronology() {
         claimed
             .terminal_chronology
             .final_challenge_seeds_v1()
-            .zero_padding_root(),
-        zero_root
-    );
-    assert_eq!(
-        claimed
-            .terminal_chronology
-            .final_challenge_seeds_v1()
             .global_lookup_challenge_seed(),
         expected_global_seed
     );
@@ -1242,9 +1279,8 @@ fn claimed_frame_requires_the_inventorys_exact_terminal_transcript() {
     let qpcs = qpcs_transcript_fixture_v1(400);
     let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
         qpcs.binding_digest(),
-        digest_v1(98),
-        transcript_digest_fixture_v1(728, 900),
-        transcript_digest_fixture_v1(728, 901),
+        proof_digest_v1(98),
+        proof_transcript_fixture_v1(728, 900),
     )
     .expect("matching terminal roots");
     let claimed = schedule
@@ -1255,14 +1291,13 @@ fn claimed_frame_requires_the_inventorys_exact_terminal_transcript() {
         .final_challenge_seeds_v1()
         .transcript_digest();
     validate_claimed_inventory_transcript_v1(&claimed, exact).expect("exact inventory transcript");
-    let mut foreign = exact;
-    foreign[0] ^= 1;
+    let foreign = changed_proof_lane_v1(exact, 5);
     assert_eq!(
         validate_claimed_inventory_transcript_v1(&claimed, foreign),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
     );
     assert_eq!(
-        validate_claimed_inventory_transcript_v1(&claimed, [0; DIGEST_BYTES_V1]),
+        validate_claimed_inventory_transcript_v1(&claimed, ProofDigestV1::ZERO),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
     );
 }
@@ -1273,9 +1308,8 @@ fn atomic_claimed_relation_rejects_a_foreign_qpcs_session() {
     let foreign_prior = qpcs_transcript_fixture_v1(723).binding_digest();
     let foreign_roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
         foreign_prior,
-        digest_v1(97),
-        transcript_digest_fixture_v1(723, 900),
-        transcript_digest_fixture_v1(723, 901),
+        proof_digest_v1(97),
+        proof_transcript_fixture_v1(723, 900),
     )
     .expect("foreign terminal roots");
     assert!(matches!(
@@ -1413,7 +1447,7 @@ fn bound_pre_direct_inventory_is_the_only_production_direct_bind_surface() {
         "completed_qpcs: RnsNativeQpcsCompletedLineageV1",
         "terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1",
         "numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1]",
-        "source_binding_digest: [u8; DIGEST_BYTES_V1]",
+        "source_binding_digest: ProofDigestV1",
         "_origin: RnsNativeAuthenticatedClaimedQpcsOriginV2",
     ] {
         assert_eq!(
@@ -1433,8 +1467,23 @@ fn bound_pre_direct_inventory_is_the_only_production_direct_bind_surface() {
 
 #[test]
 fn claimed_source_numeric_binding_is_recomputed_before_direct_chronology() {
-    let digest_axes: [[u8; DIGEST_BYTES_V1]; 13] =
-        core::array::from_fn(|index| digest_v1((index + 1) as u8));
+    let parameter =
+        super::super::rns_native_qpcs_initial::canonical_parameter_digest_v1().expect("parameter");
+    let digest_axes = RnsNativeClaimedNumericBindingAxesV1 {
+        statement_anchor: proof_digest_v1(1),
+        preflight_statement: proof_digest_v1(2),
+        public_bundle: digest_v1(3),
+        source_parameter: parameter,
+        source_transcript: proof_digest_v1(5),
+        source_schedule: proof_digest_v1(6),
+        source_evaluation: proof_digest_v1(7),
+        source_residual: proof_digest_v1(8),
+        schedule_parameter: parameter,
+        q_mask_s_root: proof_digest_v1(10),
+        pre_relation_transcript: proof_digest_v1(11),
+        relation_seed: proof_digest_v1(12),
+        final_transcript: proof_digest_v1(13),
+    };
     let numeric_tails: [(u64, u64, u64); EVALUATIONS_V1] = core::array::from_fn(|relation| {
         let relation = relation as u64;
         (relation + 1, relation + 101, relation + 201)
@@ -1451,7 +1500,7 @@ fn claimed_source_numeric_binding_is_recomputed_before_direct_chronology() {
     );
 
     let mut foreign_axes = digest_axes;
-    foreign_axes[5][0] ^= 1;
+    foreign_axes.source_schedule = changed_proof_lane_v1(foreign_axes.source_schedule, 5);
     let foreign_axis_binding =
         claimed_source_numeric_binding_digest_from_parts_v1(&foreign_axes, numeric_tails)
             .expect("foreign-axis binding remains well formed");
@@ -1481,7 +1530,7 @@ fn claimed_source_numeric_binding_is_recomputed_before_direct_chronology() {
     );
     assert_eq!(
         validate_claimed_source_numeric_binding_from_parts_v1(
-            [0; DIGEST_BYTES_V1],
+            ProofDigestV1::ZERO,
             &digest_axes,
             numeric_tails,
         ),
@@ -1489,7 +1538,7 @@ fn claimed_source_numeric_binding_is_recomputed_before_direct_chronology() {
     );
 
     let mut zero_axis = digest_axes;
-    zero_axis[3] = [0; DIGEST_BYTES_V1];
+    zero_axis.source_parameter = [0; DIGEST_BYTES_V1];
     assert_eq!(
         claimed_source_numeric_binding_digest_from_parts_v1(&zero_axis, numeric_tails),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
@@ -1498,6 +1547,14 @@ fn claimed_source_numeric_binding_is_recomputed_before_direct_chronology() {
         claimed_source_numeric_binding_digest_from_parts_v1(
             &digest_axes,
             numeric_tails[..EVALUATIONS_V1 - 1].iter().copied(),
+        ),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)
+    );
+
+    assert_eq!(
+        claimed_source_numeric_binding_digest_from_parts_v1(
+            &digest_axes,
+            numeric_tails.into_iter().chain([(1, 2, 3)])
         ),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)
     );
@@ -1651,7 +1708,7 @@ fn pending_owner_seal_and_frame_preflight_roundtrip_are_mutation_sensitive() {
     let cross_field_binding = cross_field.binding_digest();
     let global_lookup_challenge = cross_field.global_lookup_challenge_seed();
     assert_ne!(cross_field_binding, qpcs_binding);
-    assert_ne!(global_lookup_challenge, [0; DIGEST_BYTES_V1]);
+    assert_ne!(global_lookup_challenge, ProofDigestV1::ZERO);
     let successor = vec![0x5a; 17];
     let wire = bound.seal_v1(&successor).expect("canonical sealed frame");
     assert_eq!(
@@ -1689,13 +1746,13 @@ fn pending_owner_seal_and_frame_preflight_roundtrip_are_mutation_sensitive() {
 // Return only the binding so mutation tests do not retain another large pending
 // owner in their stack frame. Each test exercises one ownership scenario within
 // the standard test-thread stack budget.
-fn pending_fixture_binding_v1() -> [u8; DIGEST_BYTES_V1] {
+fn pending_fixture_binding_v1() -> ProofDigestV1 {
     let (_, cross_field) =
         bind_to_terminal_transcript_v1(pending_fixture_v1()).expect("baseline typed terminal bind");
     cross_field.binding_digest()
 }
 
-fn sealed_pending_fixture_v1(successor: &[u8]) -> ([u8; DIGEST_BYTES_V1], Vec<u8>) {
+fn sealed_pending_fixture_v1(successor: &[u8]) -> (ProofDigestV1, Vec<u8>) {
     let (bound, cross_field) =
         bind_to_terminal_transcript_v1(pending_fixture_v1()).expect("typed terminal bind");
     let binding = cross_field.binding_digest();
@@ -1720,8 +1777,14 @@ fn pending_owner_integrity_rejects_each_binding_mutation() {
         let mut pending = pending_fixture_v1();
         match mutation {
             0 => pending.proof_set_digest[0] ^= 1,
-            1 => pending.cross_field_core_root.0[0] ^= 1,
-            2 => pending.inputs.schedule.relation_seed[0] ^= 1,
+            1 => {
+                pending.cross_field_core_root.0 =
+                    changed_proof_lane_v1(pending.cross_field_core_root.0, 5)
+            }
+            2 => {
+                pending.inputs.schedule.relation_seed =
+                    changed_proof_lane_v1(pending.inputs.schedule.relation_seed, 5)
+            }
             _ => unreachable!("closed mutation range"),
         }
         assert!(matches!(
@@ -1795,7 +1858,7 @@ fn source_independent_preflight_rejects_before_source_or_rng_touch() {
     drop(oversized_wire);
 
     let inputs = prepared_fixture_v1();
-    let proofs = core::array::from_fn(core_proof_fixture_v1);
+    let proofs = proof_rows_fixture_v1();
     let transcript_digests = core::array::from_fn(|core| digest_v1(50 + core as u8));
     let wire = encode_wire_v1(&inputs, &proofs, &transcript_digests, &[0x7a])
         .expect("structurally valid wire");
@@ -1846,7 +1909,7 @@ fn source_independent_preflight_rejects_before_source_or_rng_touch() {
     let wrong_schedule = derive_relation_schedule_v1(
         bind_direct_q_mask_schedule_v1(
             axes_v1(),
-            completed_qpcs_v1(403, digest_v1(21), digest_v1(23), 11),
+            completed_qpcs_v1(403, proof_digest_v1(21), proof_digest_v1(23), 11),
         )
         .expect("wrong qPCS binding"),
     )
@@ -1982,7 +2045,7 @@ fn claimed_relation_surface_is_atomic_move_only_and_source_ordered() {
             && sidecar_move < carrier
     );
     assert!(
-        source.contains("RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 == 6_747_974")
+        source.contains("RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 == 6_746_678")
     );
     let successor_token = source
         .find("pub(super) struct RnsNativeCrossFieldRlweClaimedSuccessorSliceV1")
@@ -2283,7 +2346,10 @@ fn all_roots_projection_retains_the_exact_source_and_envelope_allocation() {
         )
     );
     for required in [
-        "descriptor.kind() == kind",
+        "let cross_kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;",
+        "descriptor.kind() == cross_kind",
+        "matches.next().is_some()",
+        "descriptor.max_bytes() != cross_kind.max_bytes()",
         "descriptor.encoded_bytes()",
         "descriptor.section_digest()",
         "envelope.proof_digest()",
@@ -2609,9 +2675,9 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         .join(" ");
     for required_inventory_no_go in [
         "current inventory `prior_context_digest_v1` and canonical inventory root",
-        "cross-field, global-lookup, and zero-padding roots",
+        "cross-field and global-lookup roots",
         "final transcript state and challenges",
-        "cross-section and zero-padding digests",
+        "cross-section digests",
         "continuation state",
         "current-inventory-prior-context-and-canonical-root-must-not-be-adapted",
     ] {
@@ -2756,11 +2822,11 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         .split_once("pub(super) fn bind_global_lookup_root(")
         .expect("staged global-lookup root")
         .1
-        .split_once("/// Move-only transcript after the global-lookup root")
+        .split_once("/// Final domain-separated challenge seeds and terminal transcript digest.")
         .expect("staged global-lookup boundary")
         .0;
-    assert!(cross_field_terminal.contains("ChallengePurposeV1::ZeroPadding"));
-    assert!(transcript.contains("pub(super) fn bind_zero_padding_root("));
+    assert!(cross_field_terminal.contains("ChallengePurposeV1::CompositeBinding"));
+    assert!(!transcript.contains("fn bind_zero_padding_root("));
     let convenience = transcript
         .split_once("pub fn bind_terminal_roots(")
         .expect("terminal convenience")
@@ -2774,10 +2840,8 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
     let global = convenience
         .find("bind_global_lookup_root")
         .expect("global bind");
-    let zero = convenience
-        .find("bind_zero_padding_root")
-        .expect("zero bind");
-    assert!(cross < global && global < zero);
+    assert!(cross < global);
+    assert!(!convenience.contains("bind_zero_padding_root"));
 
     let facade = include_str!("../mkhe.rs");
     assert!(facade.contains(
@@ -2790,4 +2854,414 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
     assert!(facade.contains(
         "#[path = \"mkhe/rns_native_source_packing_same_opening.rs\"]\nmod rns_native_source_packing_same_opening;"
     ));
+}
+
+#[test]
+fn native_direct_wire_requires_two_exact_canonical_six_lane_values() {
+    let (_, wire) = sealed_pending_fixture_v1(&[0x51; 64]);
+    let decoded = FramePreflightV1::decode_exact_v1(&wire).expect("native frame");
+    let first_native = 4 + 1 + 1 + 2 + 4 + 19 + DIGEST_BYTES_V1;
+    let second_native = first_native + PROOF_DIGEST_BYTES_V1 + DIGEST_BYTES_V1;
+    let codec_offset = OWNED_WIRE_BYTES_V1 - CODEC_DIGEST_BYTES_V1;
+    for offset in [first_native, second_native] {
+        for lane in 0..6 {
+            let mut malformed = wire.clone();
+            malformed[offset + lane * 8..offset + (lane + 1) * 8]
+                .copy_from_slice(&18_446_744_069_414_584_321_u64.to_le_bytes());
+            let codec = codec_digest_v1(&malformed[..codec_offset]);
+            malformed[codec_offset..codec_offset + CODEC_DIGEST_BYTES_V1].copy_from_slice(&codec);
+            assert!(matches!(
+                FramePreflightV1::decode_exact_v1(&malformed),
+                Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
+            ));
+        }
+    }
+    let mut changed_tail = wire.clone();
+    let changed_root = changed_proof_lane_v1(decoded.q_mask_s_root, 5);
+    assert_eq!(
+        &changed_root.as_bytes()[..32],
+        &decoded.q_mask_s_root.as_bytes()[..32]
+    );
+    changed_tail[first_native..first_native + PROOF_DIGEST_BYTES_V1]
+        .copy_from_slice(changed_root.as_bytes());
+    let codec = codec_digest_v1(&changed_tail[..codec_offset]);
+    changed_tail[codec_offset..codec_offset + CODEC_DIGEST_BYTES_V1].copy_from_slice(&codec);
+    let changed = FramePreflightV1::decode_exact_v1(&changed_tail)
+        .expect("independently canonical commitment claim");
+    assert_ne!(changed.q_mask_s_root, decoded.q_mask_s_root);
+    assert!(matches!(
+        changed.validate_schedule_v1(&relation_schedule_fixture_v1()),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
+    ));
+
+    // Exact retired shape: remove both last16-byte tails, advertise its own
+    // shorter header/frame and repair its transport checksum. It still fails
+    // the sole current fixed header owner; no32-byte proof alias is admitted.
+    let mut retired = wire.clone();
+    retired.drain(second_native + 32..second_native + PROOF_DIGEST_BYTES_V1);
+    retired.drain(first_native + 32..first_native + PROOF_DIGEST_BYTES_V1);
+    retired[6..8].copy_from_slice(&((HEADER_BYTES_V1 - 32) as u16).to_be_bytes());
+    retired[8..12].copy_from_slice(&((OWNED_WIRE_BYTES_V1 - 32) as u32).to_be_bytes());
+    let old_codec_offset = codec_offset - 32;
+    let codec = codec_digest_v1(&retired[..old_codec_offset]);
+    retired[old_codec_offset..old_codec_offset + CODEC_DIGEST_BYTES_V1].copy_from_slice(&codec);
+    assert!(matches!(
+        FramePreflightV1::decode_exact_v1(&retired),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)
+    ));
+}
+
+#[test]
+fn native_direct_bridge_binds_full_curve_proofs_and_each_late_native_lane() {
+    let inputs = prepared_fixture_v1();
+    let proofs: [[u8; CORE_PROOF_BYTES_V1]; CORES_V1] = core::array::from_fn(core_proof_fixture_v1);
+    let proof_refs = core::array::from_fn(|core| proofs[core].as_slice());
+    let proof_set = digest_v1(41);
+    let curve_transcript_set = digest_v1(42);
+    let root = cross_field_core_root_v1(&inputs, proof_set, curve_transcript_set, &proof_refs)
+        .expect("framing test only; grants no verified root evidence");
+    for core in 0..CORES_V1 {
+        let mut changed = proofs;
+        changed[core][CORE_PROOF_BYTES_V1 - 1] ^= 1;
+        let changed_refs = core::array::from_fn(|index| changed[index].as_slice());
+        let changed_root =
+            cross_field_core_root_v1(&inputs, proof_set, curve_transcript_set, &changed_refs)
+                .expect("full raw proof frame");
+        assert!(
+            changed_root != root,
+            "every raw core byte is in native binding"
+        );
+    }
+    for selector in 0..4 {
+        let mut changed = prepared_fixture_v1();
+        let value = match selector {
+            0 => &mut changed.schedule.bound.q_mask_s_root,
+            1 => &mut changed.schedule.relation_seed,
+            2 => &mut changed.schedule.bound.axes.rns_aggregation_challenge_seed,
+            3 => {
+                &mut changed
+                    .schedule
+                    .bound
+                    .axes
+                    .qpcs_pre_relation_transcript_digest
+            }
+            _ => unreachable!(),
+        };
+        *value = changed_proof_lane_v1(*value, 5);
+        let changed_root =
+            cross_field_core_root_v1(&changed, proof_set, curve_transcript_set, &proof_refs)
+                .expect("full native context frame");
+        assert!(changed_root != root, "every full native context is bound");
+    }
+    let mut short = proof_refs;
+    short[3] = &proofs[3][..CORE_PROOF_BYTES_V1 - 1];
+    assert!(matches!(
+        cross_field_core_root_v1(&inputs, proof_set, curve_transcript_set, &short),
+        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
+    ));
+}
+
+#[test]
+fn direct_aggregation_consumes_the_shared_native_limb_and_seed_owner() {
+    let axes = axes_v1();
+    let sampler = RnsNativeAggregationSamplerV1::new(
+        axes.qpcs_parameter_digest,
+        axes.rns_aggregation_challenge_seed,
+        axes.source_formula_digest,
+        axes.source_mapping_digest,
+    )
+    .expect("shared sampler");
+    let schedule = derive_exact_aggregation_challenges_v1(&axes).expect("direct schedule");
+    for limb in 0..LIMBS_V1 {
+        let mut used = [0; 2 * REPETITIONS_V1];
+        for repetition in 0..REPETITIONS_V1 {
+            let count = 2 * repetition;
+            used[count] = sampler
+                .derive(limb, repetition, 0, &used[..count])
+                .expect("gamma");
+            used[count + 1] = sampler
+                .derive(limb, repetition, 1, &used[..count + 1])
+                .expect("beta");
+            let direct = schedule[limb * REPETITIONS_V1 + repetition];
+            assert_eq!((direct.gamma, direct.beta), (used[count], used[count + 1]));
+        }
+        assert!(
+            derive_aggregation_challenge_coordinate_v1(
+                &axes,
+                limb,
+                0,
+                release_modulus_v1(limb).expect("modulus") - 1,
+                0,
+                &[]
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        derive_aggregation_challenge_coordinate_v1(&axes, LIMBS_V1, 0, Q_MIN_V1, 0, &[]).is_err()
+    );
+    assert!(
+        derive_aggregation_challenge_coordinate_v1(&axes, 0, REPETITIONS_V1, Q_MIN_V1, 0, &[])
+            .is_err()
+    );
+    assert!(derive_aggregation_challenge_coordinate_v1(&axes, 0, 0, Q_MIN_V1, 2, &[]).is_err());
+}
+
+#[test]
+fn q_mask_stream_traverses_each_source_point_once_and_matches_the_complete_frame() {
+    struct CountedSource {
+        point: Point,
+        calls: Cell<usize>,
+    }
+    impl RnsNativeQMaskSCommitmentSourceV1 for CountedSource {
+        fn q_mask_s_digit_commitment_v1(
+            &self,
+            limb: usize,
+            repetition: usize,
+            block: usize,
+            digit: usize,
+        ) -> Result<Point, RnsNativeCrossFieldRlweDirectErrorV1> {
+            let ordinal = ((limb * REPETITIONS_V1 + repetition) * BLOCKS_PER_RECORD_V1 + block)
+                * Q_MASK_DIGITS_V1
+                + digit;
+            assert_eq!(self.calls.get(), ordinal);
+            self.calls.set(ordinal + 1);
+            Ok(self.point)
+        }
+    }
+    let source = CountedSource {
+        point: ZkAmsT256BulletproofSuiteV1::generators().h,
+        calls: Cell::new(0),
+    };
+    let axes = safe_axes_v1();
+    let streamed = q_mask_s_root_v1(axes, &source).expect("one stream");
+    assert_eq!(source.calls.get(), 6_400);
+    // Test-only full tape supplies an independent canonical-frame replay.
+    let point = point_bytes_v1(source.point).expect("point");
+    let mut tape = Vec::new();
+    for limb in 0..LIMBS_V1 {
+        for repetition in 0..REPETITIONS_V1 {
+            for block in 0..BLOCKS_PER_RECORD_V1 {
+                for digit in 0..Q_MASK_DIGITS_V1 {
+                    let ordinal = ((limb * REPETITIONS_V1 + repetition) * BLOCKS_PER_RECORD_V1
+                        + block)
+                        * Q_MASK_DIGITS_V1
+                        + digit;
+                    tape.extend_from_slice(&(ordinal as u32).to_be_bytes());
+                    tape.extend_from_slice(&[
+                        limb as u8,
+                        repetition as u8,
+                        block as u8,
+                        digit as u8,
+                    ]);
+                    tape.extend_from_slice(&point);
+                }
+            }
+        }
+    }
+    assert_eq!(tape.len(), RNS_NATIVE_Q_MASK_POINT_FRAME_BYTES_V1);
+    let expected = RnsNativeProofHashContextV1::canonical()
+        .expect("context")
+        .hash(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 4,
+                index: 0,
+                counter: 0,
+            },
+            &[
+                Q_MASK_ROOT_DOMAIN_V1,
+                &[VERSION_V1],
+                &axes.profile_manifest_digest,
+                &axes.source_binding_digest,
+                &axes.source_formula_digest,
+                &axes.source_mapping_digest,
+                axes.rns_aggregation_challenge_seed.as_bytes(),
+                &axes.qpcs_parameter_digest,
+                axes.qpcs_pre_relation_transcript_digest.as_bytes(),
+                &manifest_digest_v1(),
+                &6_400_u32.to_be_bytes(),
+                &tape,
+            ],
+        )
+        .expect("same canonical frame");
+    assert_eq!(streamed, expected);
+    assert_eq!(source.calls.get(), 6_400, "replay never reads source again");
+}
+
+#[test]
+fn direct_core_safe_digest_binds_both_native_roots_without_prefix_aliases() {
+    let roots = [proof_digest_v1(71), proof_digest_v1(72)];
+    let numeric = digest_v1(73);
+    let commitment = digest_v1(74);
+    let baseline = direct_core_safe_digest_v1(roots[0], roots[1], numeric, commitment)
+        .expect("exact native roots and public curve bindings");
+    for ordinal in 0..2 {
+        for lane in 0..6 {
+            let mut changed = roots;
+            changed[ordinal] = changed_proof_lane_v1(changed[ordinal], lane);
+            if lane >= 4 {
+                assert_eq!(
+                    &changed[ordinal].as_bytes()[..32],
+                    &roots[ordinal].as_bytes()[..32]
+                );
+            }
+            assert_ne!(
+                direct_core_safe_digest_v1(changed[0], changed[1], numeric, commitment).unwrap(),
+                baseline,
+                "root {ordinal} lane {lane}"
+            );
+        }
+    }
+    assert!(direct_core_safe_digest_v1(roots[0], roots[0], numeric, commitment).is_err());
+    assert!(
+        direct_core_safe_digest_v1(ProofDigestV1::ZERO, roots[1], numeric, commitment).is_err()
+    );
+    assert!(
+        direct_core_safe_digest_v1(roots[0], ProofDigestV1::ZERO, numeric, commitment).is_err()
+    );
+}
+
+#[test]
+fn fixed_public_rows_enforce_exact_count_and_drop_rejected_storage() {
+    struct DropProbe<'a>(&'a Cell<usize>);
+    impl Drop for DropProbe<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    fn check_count<const N: usize>() {
+        for count in [N - 1, N + 1] {
+            let drops = Cell::new(0);
+            let mut rows = Vec::new();
+            rows.try_reserve_exact(count)
+                .expect("bounded negative fixture");
+            for _ in 0..count {
+                rows.push(DropProbe(&drops));
+            }
+            assert!(matches!(
+                FixedRowsV1::<_, N>::from_rows_v1(rows),
+                Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)
+            ));
+            assert_eq!(drops.get(), count);
+        }
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(N).expect("bounded positive fixture");
+        rows.extend(0..N);
+        let pointer = rows.as_ptr();
+        let capacity = rows.capacity();
+        let mut fixed = FixedRowsV1::<_, N>::from_rows_v1(rows).expect("exact rows");
+        assert_eq!(fixed.len(), N);
+        assert_eq!(fixed.as_ptr(), pointer);
+        assert_eq!(fixed.rows.capacity(), capacity);
+        assert_eq!(fixed[N - 1], N - 1);
+        fixed[N - 1] = N;
+        assert_eq!(fixed[N - 1], N);
+        assert_eq!(fixed.len(), N);
+        assert_eq!(fixed.as_ptr(), pointer);
+    }
+    check_count::<EVALUATIONS_V1>();
+    check_count::<CORES_V1>();
+}
+
+#[test]
+fn prepared_and_pending_owners_keep_public_payloads_off_the_stack() {
+    use core::mem::size_of;
+    // The fixed row count is protocol geometry; field padding follows the
+    // target ABI and is deliberately not made part of the wire contract.
+    assert!(size_of::<[ValidatedEvaluationV1; EVALUATIONS_V1]>() >= 200 * 10 * 8);
+    assert_eq!(size_of::<[DerivedCommitmentsV1; EVALUATIONS_V1]>(), 38_400);
+    assert_eq!(CORES_V1 * CORE_PROOF_BYTES_V1, 31_924);
+    assert!(
+        size_of::<FixedRowsV1<ValidatedEvaluationV1, EVALUATIONS_V1>>() <= 3 * size_of::<usize>()
+    );
+    assert!(
+        size_of::<FixedRowsV1<DerivedCommitmentsV1, EVALUATIONS_V1>>() <= 3 * size_of::<usize>()
+    );
+    assert!(
+        size_of::<FixedRowsV1<[u8; CORE_PROOF_BYTES_V1], CORES_V1>>() <= 3 * size_of::<usize>()
+    );
+    // These are owner-layout regressions, not a claim about a compiler's complete
+    // call frame or peak process memory. The native full test must still run.
+    assert!(size_of::<PreparedInputsV1>() <= size_of::<RelationScheduleV1>() + 256);
+    assert!(
+        size_of::<RnsNativeCrossFieldRlweFourCorePendingSealV1>()
+            <= size_of::<PreparedInputsV1>() + 512
+    );
+    assert!(
+        size_of::<RnsNativeCrossFieldRlweTerminalBoundPendingSealV1>()
+            <= size_of::<PreparedInputsV1>() + 256
+    );
+    assert!(
+        size_of::<
+            Result<
+                RnsNativeCrossFieldRlweFourCorePendingSealV1,
+                RnsNativeCrossFieldRlweDirectErrorV1,
+            >,
+        >() <= size_of::<RelationScheduleV1>() + 1_024
+    );
+    let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    let prepare = source
+        .split_once("fn prepare_inputs_v1")
+        .expect("prepare owner")
+        .1
+        .split_once("fn boolean_constraints_v1")
+        .expect("prepare boundary")
+        .0;
+    assert_eq!(
+        prepare
+            .matches(".try_reserve_exact(EVALUATIONS_V1)")
+            .count(),
+        2
+    );
+    assert_eq!(prepare.matches("FixedRowsV1::from_rows_v1(").count(), 2);
+    assert!(!prepare.contains(".try_into()"));
+    let prover = source
+        .split_once("fn prove_pending_kernel_for_suite_v1")
+        .expect("prover owner")
+        .1
+        .split_once("fn verify_kernel_for_suite_v1")
+        .expect("prover boundary")
+        .0;
+    assert!(
+        prover
+            .find(".try_reserve_exact(CORES_V1)")
+            .expect("fallible proof reservation")
+            < prover
+                .find("build_core_witness_v1")
+                .expect("core witness work")
+    );
+    assert!(prover.contains("FixedRowsV1::from_rows_v1(proofs)?"));
+    assert!(!prover.contains("[[0_u8; CORE_PROOF_BYTES_V1]; CORES_V1]"));
+    assert!(!source.contains("Box::new(PreparedInputsV1"));
+}
+
+#[test]
+fn typed_pending_transition_preserves_all_three_heap_allocations() {
+    let pending = pending_fixture_v1();
+    let evaluation_pointer = pending.inputs.evaluations.as_ptr();
+    let commitment_pointer = pending.inputs.commitments.as_ptr();
+    let proof_pointer = pending.proofs.as_ptr();
+    let numeric_root = pending.inputs.numeric_root;
+    let commitment_root = pending.inputs.commitment_root;
+    let proof_set_digest = pending.proof_set_digest;
+    let (bound, _) = bind_to_terminal_transcript_v1(pending).expect("actual typed transition");
+    assert_eq!(bound.inputs.evaluations.as_ptr(), evaluation_pointer);
+    assert_eq!(bound.inputs.commitments.as_ptr(), commitment_pointer);
+    assert_eq!(bound.proofs.as_ptr(), proof_pointer);
+    assert_eq!(bound.inputs.evaluations.len(), EVALUATIONS_V1);
+    assert_eq!(bound.inputs.commitments.len(), EVALUATIONS_V1);
+    assert_eq!(bound.proofs.len(), CORES_V1);
+    assert_eq!(bound.inputs.numeric_root, numeric_root);
+    assert_eq!(bound.inputs.commitment_root, commitment_root);
+    assert_eq!(bound.proof_set_digest, proof_set_digest);
+    let wire = bound
+        .seal_v1(&[0x51])
+        .expect("unchanged exact wire encoder");
+    let preflight = FramePreflightV1::decode_exact_v1(&wire).expect("unchanged exact wire decoder");
+    assert_eq!(preflight.core_proofs.len(), CORES_V1);
+    for proof in preflight.core_proofs {
+        assert_eq!(proof.len(), CORE_PROOF_BYTES_V1);
+    }
 }

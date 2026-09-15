@@ -14,8 +14,8 @@ use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     client::{
-        ParliamentTimedOvnCastingContextResponseV1, ParliamentTlePartialReleaseShareV1,
-        ParliamentTleReleaseContextResponseV1,
+        AccountTransactionDraft, FeeQuoteRequest, ParliamentTimedOvnCastingContextResponseV1,
+        ParliamentTlePartialReleaseShareV1, ParliamentTleReleaseContextResponseV1,
     },
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
@@ -73,6 +73,7 @@ use iroha::{
         prelude::{
             Account, AssetId, FeePaymentIntent, FindAssetById, FindAssets, FindBlocks, Grant,
             Identifiable as _, Level, QueryBuilderExt as _, Register, SetParameter,
+            SignedTransaction,
         },
         query::{
             builder::SingleQueryError,
@@ -117,8 +118,8 @@ use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
 use iroha_executor_data_model::permission::{
     governance::CanProposeContractDeployment, smart_contract::CanRegisterSmartContractCode,
 };
-use iroha_model_base::peer::PeerId;
-use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode};
+use iroha_model_base::{metadata::Metadata, peer::PeerId};
+use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode, read_on_dedicated_thread};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode as _;
 use rand::{SeedableRng as _, rngs::StdRng};
@@ -140,7 +141,7 @@ const PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER: i64 = 2;
 const INVITATION_PHASE_BLOCKS: u64 = 56;
 // The public QueuePlan corridor deliberately executes three proof-valid
 // registrations and one proof-invalid early close before the exact close. Each
-// blocking submission consumes three carrier blocks, so the close window must
+// Applied submission consumes three carrier blocks, so the close window must
 // account for the complete QueuePlan lifecycle.
 const REGISTRATION_PHASE_BLOCKS: u64 = 15;
 const SURVIVOR_PHASE_BLOCKS: u64 = 9;
@@ -180,6 +181,74 @@ const NO_RESULT_RETRY_CONTRACT_ADDRESS: &str =
 
 fn fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
+}
+
+// The blocking client is retained only as the test network's account/configuration
+// holder. All writes use its current account-owned async signing and finality API.
+async fn prepare_parliament_transaction(
+    client: &Client,
+    instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+        instructions.into_iter().map(Into::into).collect::<Vec<_>>(),
+        fee(),
+        Metadata::default(),
+    ))?;
+    let quote = tokio::time::timeout(
+        OPERATION_TIMEOUT,
+        account.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload }),
+    )
+    .await
+    .map_err(|_| eyre!("Parliament fee quote exceeded {OPERATION_TIMEOUT:?}"))??;
+    if !payload
+        .fee_payment
+        .has_same_payer_and_gas_bound(&quote.intent)
+    {
+        return Err(eyre!("Parliament fee quote changed payer or gas bound"));
+    }
+    payload.fee_payment = quote.intent;
+    Ok(account.sign_transaction(payload)?)
+}
+
+async fn submit_parliament_instructions(
+    client: &Client,
+    instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+) -> Result<()> {
+    let transaction = prepare_parliament_transaction(client, instructions).await?;
+    let applied_hash = tokio::time::timeout(
+        OPERATION_TIMEOUT,
+        client
+            .account_client()
+            .submit_transaction_and_wait(&transaction),
+    )
+    .await
+    .map_err(|_| eyre!("Parliament Applied finality exceeded {OPERATION_TIMEOUT:?}"))??;
+    if applied_hash != transaction.hash() {
+        return Err(eyre!(
+            "Parliament Applied response substituted the signed transaction hash"
+        ));
+    }
+    Ok(())
+}
+
+// A height carrier is deliberately left pending after Torii admission. Its
+// caller must observe the exact finalized carrier height, rather than awaiting
+// this Log's eventual QueuePlan merge and overshooting the protocol checkpoint.
+async fn admit_parliament_height_carrier(client: &Client, instructions: [Log; 1]) -> Result<()> {
+    let transaction = prepare_parliament_transaction(client, instructions).await?;
+    let admitted_hash = tokio::time::timeout(
+        OPERATION_TIMEOUT,
+        client.account_client().submit_transaction(&transaction),
+    )
+    .await
+    .map_err(|_| eyre!("Parliament carrier admission exceeded {OPERATION_TIMEOUT:?}"))??;
+    if admitted_hash != transaction.hash() {
+        return Err(eyre!(
+            "Parliament carrier admission substituted the signed hash"
+        ));
+    }
+    Ok(())
 }
 
 fn minimal_contract_artifact() -> Vec<u8> {
@@ -268,22 +337,22 @@ fn client_for(base: &Client, account: &AccountId, keys: &[KeyPair]) -> Client {
     })
 }
 
-fn current_height(client: &Client) -> Result<u64> {
-    Ok(client.status().get()?.blocks)
+async fn current_height(client: &Client) -> Result<u64> {
+    Ok(client.client().status().get().await?.blocks)
 }
 
-fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
-    client.submit(Log::new(Level::INFO, label.into()), fee())?;
-    current_height(client)
+async fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
+    submit_parliament_instructions(&client, [Log::new(Level::INFO, label.into())]).await?;
+    current_height(client).await
 }
 
-fn next_queue_plan_execution_height(
+async fn next_queue_plan_execution_height(
     client: &Client,
     minimum_height: u64,
     label: &str,
 ) -> Result<u64> {
     loop {
-        let authority_height = current_height(client)?;
+        let authority_height = current_height(client).await?;
         let execution_height = authority_height
             .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
             .ok_or_else(|| eyre!("{label}: QueuePlan execution height overflow"))?;
@@ -293,7 +362,8 @@ fn next_queue_plan_execution_height(
         tick(
             client,
             format!("{label} authority-height tick {}", authority_height + 1),
-        )?;
+        )
+        .await?;
     }
 }
 
@@ -304,7 +374,7 @@ async fn advance_to_height_with_queue_plan_carriers(
     label: &str,
 ) -> Result<()> {
     loop {
-        let height = current_height(client)?;
+        let height = current_height(client).await?;
         if height == target_height {
             return Ok(());
         }
@@ -316,15 +386,16 @@ async fn advance_to_height_with_queue_plan_carriers(
         let carrier_height = height
             .checked_add(1)
             .ok_or_else(|| eyre!("{label}: QueuePlan carrier height overflow"))?;
-        client.submit(
-            Log::new(
+        admit_parliament_height_carrier(
+            &client,
+            [Log::new(
                 Level::INFO,
                 format!("{label} admission carrier {carrier_height}"),
-            ),
-            fee(),
-        )?;
+            )],
+        )
+        .await?;
         network.ensure_blocks(carrier_height).await?;
-        let observed_height = current_height(client)?;
+        let observed_height = current_height(client).await?;
         if observed_height != carrier_height {
             return Err(eyre!(
                 "{label}: QueuePlan carrier expected exact height {carrier_height}, observed {observed_height}"
@@ -361,58 +432,72 @@ async fn advance_to_autonomous_predecessor(
     advance_to_height_with_queue_plan_carriers(network, client, predecessor_height, label).await
 }
 
-fn submit_transition(
+async fn submit_transition(
     client: &Client,
     attempt_id: GovernanceAttemptId,
     transition: ParliamentLifecycleTransitionV1,
 ) -> Result<u64> {
-    client.submit(
-        SubmitParliamentLifecycleTransitionV1 {
+    submit_parliament_instructions(
+        &client,
+        [SubmitParliamentLifecycleTransitionV1 {
             governance_attempt_id: attempt_id,
             transition,
-        },
-        fee(),
-    )?;
-    current_height(client)
+        }],
+    )
+    .await?;
+    current_height(client).await
 }
 
-fn submit_transitions(
+async fn submit_transitions(
     client: &Client,
     attempt_id: GovernanceAttemptId,
     transitions: impl IntoIterator<Item = ParliamentLifecycleTransitionV1>,
 ) -> Result<u64> {
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         transitions.into_iter().map(|transition| {
             InstructionBox::from(SubmitParliamentLifecycleTransitionV1 {
                 governance_attempt_id: attempt_id,
                 transition,
             })
         }),
-        fee(),
-    )?;
-    current_height(client)
+    )
+    .await?;
+    current_height(client).await
 }
 
-fn assert_transition_rejected_without_state_change(
+async fn assert_transition_rejected_without_state_change(
     client: &Client,
     attempt_id: GovernanceAttemptId,
     transition: ParliamentLifecycleTransitionV1,
     label: &str,
 ) -> Result<()> {
-    let before = client.get_parliament_attempt(attempt_id)?.state_payload_hex;
-    if client
-        .submit(
-            SubmitParliamentLifecycleTransitionV1 {
-                governance_attempt_id: attempt_id,
-                transition,
-            },
-            fee(),
-        )
-        .is_ok()
+    let before = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?
+    .state_payload_hex;
+    if submit_parliament_instructions(
+        &client,
+        [SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id: attempt_id,
+            transition,
+        }],
+    )
+    .await
+    .is_ok()
     {
         return Err(eyre!("{label}: invalid Parliament transition was accepted"));
     }
-    let after = client.get_parliament_attempt(attempt_id)?.state_payload_hex;
+    let after = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?
+    .state_payload_hex;
     if after != before {
         return Err(eyre!(
             "{label}: rejected Parliament transition mutated reducer state"
@@ -421,14 +506,18 @@ fn assert_transition_rejected_without_state_change(
     Ok(())
 }
 
-fn assert_governed_contract_absent(
+async fn assert_governed_contract_absent(
     client: &Client,
     contract_address: &ContractAddress,
     label: &str,
 ) -> Result<()> {
-    let response = client
-        .get_gov_contract_response(contract_address)
-        .wrap_err_with(|| format!("{label}: inactive governed-contract lookup failed"))?;
+    let response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let contract_address = (contract_address).clone();
+        move || client.get_gov_contract_response(&contract_address)
+    })
+    .await
+    .wrap_err_with(|| format!("{label}: inactive governed-contract lookup failed"))?;
     if response.status() != iroha::http::StatusCode::OK {
         return Err(eyre!(
             "{label}: expected governed-contract HTTP 200, observed {}",
@@ -458,16 +547,20 @@ fn assert_governed_contract_absent(
     Ok(())
 }
 
-fn assert_governed_contract_binding(
+async fn assert_governed_contract_binding(
     client: &Client,
     contract_address: &ContractAddress,
     expected_code_hash: ContractCodeHash,
     expected_abi_hash: ContractAbiHash,
     label: &str,
 ) -> Result<()> {
-    let response = client
-        .get_gov_contract_json(contract_address)
-        .wrap_err_with(|| format!("{label}: active governed-contract lookup failed"))?;
+    let response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let contract_address = (contract_address).clone();
+        move || client.get_gov_contract_json(&contract_address)
+    })
+    .await
+    .wrap_err_with(|| format!("{label}: active governed-contract lookup failed"))?;
     let object = response
         .as_object()
         .ok_or_else(|| eyre!("{label}: active governed-contract response is not an object"))?;
@@ -511,14 +604,19 @@ fn assert_governed_contract_binding(
     Ok(())
 }
 
-fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> Result<()> {
+async fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> Result<()> {
     let query = FindAssetById::new(asset_id.clone());
     assert_eq!(
         query.asset_id(),
         asset_id,
         "{label}: singular asset query must remain bound to the exact requested identifier"
     );
-    match client.query_single(query) {
+    match read_on_dedicated_thread({
+        let client = client.client().clone();
+        move || Ok(client.query_single(query))
+    })
+    .await?
+    {
         Ok(_) => Err(eyre!(
             "{label}: expected asset `{asset_id}` to be absent, but the query returned it"
         )),
@@ -526,10 +624,17 @@ fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> R
             FindError::Asset(missing),
         )))) if missing.as_ref() == asset_id => Ok(()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
-            let exact_match = match client
-                .query(FindAssets::new())
-                .filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())
-                .execute_single_opt()
+            let exact_match = match read_on_dedicated_thread({
+                let client = client.client().clone();
+                let asset_id = asset_id.clone();
+                move || {
+                    Ok(client
+                        .query(FindAssets::new())
+                        .filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())
+                        .execute_single_opt())
+                }
+            })
+            .await?
             {
                 Ok(exact_match) => exact_match,
                 Err(SingleQueryError::QueryError(QueryError::Validation(
@@ -555,14 +660,18 @@ fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> R
     }
 }
 
-fn assert_timed_ovn_casting_context_not_castable(
+async fn assert_timed_ovn_casting_context_not_castable(
     client: &Client,
     ballot_attempt_id: BallotAttemptId,
     label: &str,
 ) -> Result<()> {
-    let error = client
-        .get_parliament_timed_ovn_casting_context(ballot_attempt_id)
-        .expect_err("a sealed timed-OVN corpus must not return a casting context");
+    let error = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+    })
+    .await
+    .expect_err("a sealed timed-OVN corpus must not return a casting context");
     let rendered = format!("{error:#}");
     const PHASE_NOT_CASTABLE: &str = "Parliament timed-OVN casting context is not authorized: \
         timed-OVN lifecycle is no longer in a casting phase";
@@ -574,16 +683,21 @@ fn assert_timed_ovn_casting_context_not_castable(
     Ok(())
 }
 
-fn read_attempt(
+async fn read_attempt(
     client: &Client,
     attempt_id: GovernanceAttemptId,
 ) -> Result<ParliamentAttemptStateV1> {
-    let response = client.get_parliament_attempt(attempt_id)?;
+    let response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     let frame = hex::decode(response.state_payload_hex)?;
     norito::decode_canonical(&frame).wrap_err("decode canonical Parliament reducer projection")
 }
 
-fn ordered_validator_roster(
+async fn ordered_validator_roster(
     network: &sandbox::SerializedNetwork,
     client: &Client,
 ) -> Result<Vec<PeerId>> {
@@ -593,12 +707,17 @@ fn ordered_validator_roster(
     if signed_genesis_roster.len() != VALIDATOR_COUNT {
         return Err(eyre!("expected exactly four signed validators"));
     }
-    let finalized_height = NonZeroU64::new(current_height(client)?).ok_or_else(|| {
+    let finalized_height = NonZeroU64::new(current_height(client).await?).ok_or_else(|| {
         eyre!("the frozen validator roster is unavailable at genesis height zero")
     })?;
-    let (proof, _) = client
-        .get_bridge_finality_anchor(finalized_height, network.network_id())
-        .wrap_err("authenticate the current revision-4 frozen validator roster")?;
+    let (proof, _) = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let height = (finalized_height).clone();
+        let network_id = (network.network_id()).clone();
+        move || client.get_bridge_finality_anchor(height, network_id)
+    })
+    .await
+    .wrap_err("authenticate the current revision-4 frozen validator roster")?;
     let context = proof.finality_artifact.height_context;
     if context.height != finalized_height.get()
         || context.network_id != network.network_id()
@@ -718,11 +837,12 @@ fn lifecycle_certificate_replacing(
     Ok(ApplyThresholdKeyLifecycleCertificateV1 { certificate })
 }
 
-fn pulse_at(
+async fn pulse_at(
     client: &Client,
     height: u64,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    exact_block(client, height)?
+    exact_block(client, height)
+        .await?
         .npos_consensus_effects()
         .and_then(|effects| effects.finalized_global_beacon_pulse)
         .ok_or_else(|| eyre!("block {height} does not carry the demanded global beacon pulse"))
@@ -858,7 +978,7 @@ fn release_partial(partial: ParliamentTlePartialReleaseShareV1) -> TlePartialRel
     }
 }
 
-fn stage_contract_artifact(
+async fn stage_contract_artifact(
     client: &Client,
     artifact: &[u8],
 ) -> Result<(ContractCodeHash, ContractAbiHash)> {
@@ -886,9 +1006,9 @@ fn stage_contract_artifact(
                 chunk_count,
             }));
         }
-        client.submit_all(instructions, fee())?;
+        submit_parliament_instructions(&client, instructions).await?;
     }
-    client.submit(RegisterSmartContractCode { manifest }, fee())?;
+    submit_parliament_instructions(&client, [RegisterSmartContractCode { manifest }]).await?;
     let code_hash = *verified.code_hash.as_ref();
     let abi_hash = *verified.abi_hash.as_ref();
     Ok((
@@ -907,16 +1027,22 @@ fn public_finding_root(attempt_id: GovernanceAttemptId, body: ParliamentBody) ->
     .into()
 }
 
-fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
+async fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
     let requested_height =
         NonZeroU64::new(height).ok_or_else(|| eyre!("finalized block height must be nonzero"))?;
-    let mut matching = client
-        .query(FindBlocks)
-        .filter_with(|block| block.equals("height", height).into_predicate())
-        .execute_all()
-        .map_err(|error| eyre!("query finalized blocks for exact height {height}: {error}"))?
-        .into_iter()
-        .filter(|block| block.header().height() == requested_height);
+    let mut matching = read_on_dedicated_thread({
+        let client = client.client().clone();
+        move || {
+            client
+                .query(FindBlocks)
+                .filter_with(|block| block.equals("height", height).into_predicate())
+                .execute_all()
+                .map_err(|error| eyre!("query finalized blocks for exact height {height}: {error}"))
+        }
+    })
+    .await?
+    .into_iter()
+    .filter(|block| block.header().height() == requested_height);
     let block = matching
         .next()
         .ok_or_else(|| eyre!("finalized block height {height} is absent"))?;
@@ -934,8 +1060,9 @@ fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
     Ok(block)
 }
 
-fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str) -> Result<()> {
+async fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str) -> Result<()> {
     let block = exact_block(client, height)
+        .await
         .wrap_err_with(|| format!("{label}: exact finalized block is unavailable"))?;
     if block
         .npos_consensus_effects()
@@ -1108,7 +1235,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     );
     network.ensure_blocks(1).await?;
     let client = network.client();
-    let ordered_roster = ordered_validator_roster(&network, &client)?;
+    let ordered_roster = ordered_validator_roster(&network, &client).await?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive exact public beacon fixture")?;
@@ -1128,7 +1255,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "threshold-key installation",
-    )?;
+    )
+    .await?;
     let lifecycle_certificates = [
         InstructionBox::from(lifecycle_certificate(
             &network,
@@ -1149,8 +1277,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             install_height,
         )?),
     ];
-    let submission_authority_height = current_height(&client)?;
-    let submission_roster = ordered_validator_roster(&network, &client)?;
+    let submission_authority_height = current_height(&client).await?;
+    let submission_roster = ordered_validator_roster(&network, &client).await?;
     if submission_roster != ordered_roster {
         return Err(eyre!(
             "threshold-key installation roster changed between fixture derivation and submission"
@@ -1160,22 +1288,24 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         "SORA_PARLIAMENT_LIFECYCLE submit_lifecycle authority_height={submission_authority_height} install_height={install_height} roster_hash={}",
         hex::encode(global_threshold_beacon_roster_hash_v1(&ordered_roster)),
     );
-    client.submit_all(lifecycle_certificates, fee())?;
-    assert_eq!(current_height(&client)?, install_height);
+    submit_parliament_instructions(&client, lifecycle_certificates).await?;
+    assert_eq!(current_height(&client).await?, install_height);
     let activation_height = install_height
         .checked_add(1)
         .ok_or_else(|| eyre!("threshold-key activation height overflow"))?;
-    client.submit(
-        Log::new(
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
             Level::INFO,
             "carry Parliament threshold-key activation".to_owned(),
-        ),
-        fee(),
-    )?;
+        )],
+    )
+    .await?;
     network.ensure_blocks(activation_height).await?;
-    assert_eq!(current_height(&client)?, activation_height);
+    assert_eq!(current_height(&client).await?, activation_height);
 
-    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let (code_hash, abi_hash) =
+        stage_contract_artifact(&client, &minimal_contract_artifact()).await?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
         proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
@@ -1189,7 +1319,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1200,13 +1331,14 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             }),
             InstructionBox::from(create),
         ],
-        fee(),
-    )?;
+    )
+    .await?;
     submit_transition(
         &client,
         attempt_id,
         ParliamentLifecycleTransitionV1::CompleteQualification,
-    )?;
+    )
+    .await?;
 
     let expected_bodies = [
         ParliamentBody::RulesCommittee,
@@ -1216,11 +1348,11 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         ParliamentBody::OversightCommittee,
         ParliamentBody::PolicyJury,
     ];
-    let initial = read_attempt(&client, attempt_id)?;
+    let initial = read_attempt(&client, attempt_id).await?;
     assert_eq!(initial.required_bodies().len(), expected_bodies.len());
     assert_eq!(initial.attempt().stage, GovernanceStageV1::Rules);
     let request_height =
-        next_queue_plan_execution_height(&client, 0, "canonical sortition registration")?;
+        next_queue_plan_execution_height(&client, 0, "canonical sortition registration").await?;
     let sortition_pulse_height = request_height + 4;
     let logical_beacon = BeaconSessionId::for_network_v1(&network.network_id());
     let mut election_ids = BTreeMap::new();
@@ -1257,21 +1389,21 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 requests: request_registrations,
             },
         ),
-    )?;
-    assert_eq!(current_height(&client)?, request_height);
+    )
+    .await?;
+    assert_eq!(current_height(&client).await?, request_height);
     advance_to_autonomous_predecessor(&network, &client, sortition_pulse_height, "sortition pulse")
         .await?;
     network.ensure_blocks(sortition_pulse_height).await?;
     assert_eq!(
-        current_height(&client)?,
+        current_height(&client).await?,
         sortition_pulse_height,
         "the demanded sortition threshold-beacon effect must autonomously finalize its exact height",
     );
-    let sortition_pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), sortition_pulse_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut sortition_pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        sortition_pulses.push(pulse_at(&peer.client(), sortition_pulse_height).await?);
+    }
     assert!(sortition_pulses.windows(2).all(|pair| pair[0] == pair[1]));
     let sortition_pulse = sortition_pulses[0].clone();
     assert_eq!(sortition_pulse.height, sortition_pulse_height);
@@ -1291,7 +1423,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         Some(sortition_pulse_height),
     );
     assert_eq!(
-        exact_block(&client, sortition_pulse.finalized_chain_anchor.height,)?
+        exact_block(&client, sortition_pulse.finalized_chain_anchor.height,)
+            .await?
             .header()
             .hash(),
         sortition_pulse.finalized_chain_anchor.block_hash,
@@ -1319,8 +1452,9 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 pulse_id: BeaconPulseId::new(sortition_pulse.pulse_id),
             },
         ),
-    )?;
-    let drawn = read_attempt(&client, attempt_id)?;
+    )
+    .await?;
+    let drawn = read_attempt(&client, attempt_id).await?;
     for body in expected_bodies {
         let election = drawn
             .election(election_ids.get(&body).expect("body election id"))
@@ -1344,8 +1478,9 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 },
             )
         }),
-    )?;
-    let invitation_state = read_attempt(&client, attempt_id)?;
+    )
+    .await?;
+    let invitation_state = read_attempt(&client, attempt_id).await?;
     let common_invitation_close = expected_bodies
         .into_iter()
         .map(|body| {
@@ -1387,9 +1522,10 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                     },
                 )
             }),
-        )?;
+        )
+        .await?;
     }
-    assert!(current_height(&client)? <= common_invitation_close[0]);
+    assert!(current_height(&client).await? <= common_invitation_close[0]);
     let roster_seal_height = common_invitation_close[0]
         .checked_add(1)
         .ok_or_else(|| eyre!("invitation close height overflow"))?;
@@ -1408,9 +1544,10 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 election_attempt_id: election_ids[&body],
             })
         }),
-    )?;
-    assert_eq!(current_height(&client)?, roster_seal_height);
-    let sealed = read_attempt(&client, attempt_id)?;
+    )
+    .await?;
+    assert_eq!(current_height(&client).await?, roster_seal_height);
+    let sealed = read_attempt(&client, attempt_id).await?;
     let mut body_ids = BTreeMap::<ParliamentBody, BodyInstanceId>::new();
     for body in expected_bodies {
         let instance = sealed
@@ -1459,8 +1596,9 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                     target,
                 })
             }),
-        )?;
-        let reflecting = read_attempt(&client, attempt_id)?;
+        )
+        .await?;
+        let reflecting = read_attempt(&client, attempt_id).await?;
         let body_state = reflecting.body(&body_id).expect("reflecting public body");
         assert_eq!(
             body_state.instance().status,
@@ -1491,9 +1629,10 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                         result_root,
                     },
                 ),
-            )?;
+            )
+            .await?;
         }
-        let completed = read_attempt(&client, attempt_id)?;
+        let completed = read_attempt(&client, attempt_id).await?;
         let body_state = completed.body(&body_id).expect("completed public body");
         assert_eq!(body_state.result_root(), Some(result_root));
         assert_eq!(body_state.instance().status, BodyInstanceStatusV1::Approved);
@@ -1520,10 +1659,11 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 target,
             })
         }),
-    )?;
+    )
+    .await?;
     let ballot_attempt_id = BallotAttemptId::derive_v1(policy_body_id, 0);
     let registered_at_height =
-        next_queue_plan_execution_height(&client, 0, "timed-OVN ballot registration")?;
+        next_queue_plan_execution_height(&client, 0, "timed-OVN ballot registration").await?;
     let registration_close_height = registered_at_height + REGISTRATION_PHASE_BLOCKS;
     let survivor_freeze_height = registration_close_height + SURVIVOR_PHASE_BLOCKS;
     let commitment_close_height = survivor_freeze_height + COMMITMENT_PHASE_BLOCKS;
@@ -1547,9 +1687,15 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             release_beacon_session_id: logical_beacon,
             release_height,
         }),
-    )?;
-    assert_eq!(current_height(&client)?, registered_at_height);
-    let registered_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    )
+    .await?;
+    assert_eq!(current_height(&client).await?, registered_at_height);
+    let registered_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+    })
+    .await?;
     let registered_archive = casting_archive(&registered_response, ballot_attempt_id)?;
     assert_eq!(
         registered_archive.phase(),
@@ -1560,7 +1706,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let registered_validated = registered_archive
         .validate_v1()
         .wrap_err("validate initial registration archive")?;
-    let policy_members = read_attempt(&client, attempt_id)?
+    let policy_members = read_attempt(&client, attempt_id)
+        .await?
         .body(&policy_body_id)
         .expect("Policy Jury body")
         .assignments()
@@ -1594,14 +1741,15 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                     registration_record: registration.to_bytes(),
                 },
             ),
-        )?;
+        )
+        .await?;
         assert!(
             registration_secrets
                 .insert(participant_hash, secret)
                 .is_none()
         );
     }
-    assert!(current_height(&client)? < registration_close_height);
+    assert!(current_height(&client).await? < registration_close_height);
     assert_transition_rejected_without_state_change(
         &client,
         attempt_id,
@@ -1609,7 +1757,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
         ),
         "registration close before the frozen exact height",
-    )?;
+    )
+    .await?;
     advance_to_queue_plan_authority_height(
         &network,
         &client,
@@ -1624,10 +1773,16 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ParliamentLifecycleTransitionV1::CloseBallotRegistration(
                 ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
             ),
-        )?,
+        )
+        .await?,
         registration_close_height,
     );
-    let registration_closed = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let registration_closed = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+    })
+    .await?;
     let registration_closed_archive = casting_archive(&registration_closed, ballot_attempt_id)?;
     assert_eq!(
         registration_closed_archive.phase(),
@@ -1638,7 +1793,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         BODY_SEATS as usize,
     );
     assert_eq!(
-        read_attempt(&client, attempt_id)?
+        read_attempt(&client, attempt_id)
+            .await?
             .ballot(&ballot_attempt_id)
             .expect("registered ballot")
             .registered_voters(),
@@ -1651,8 +1807,9 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
         ),
         "replayed registration close",
-    )?;
-    assert!(current_height(&client)? < survivor_freeze_height);
+    )
+    .await?;
+    assert!(current_height(&client).await? < survivor_freeze_height);
     assert_transition_rejected_without_state_change(
         &client,
         attempt_id,
@@ -1660,7 +1817,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ballot_attempt_id,
         }),
         "survivor freeze before the frozen exact height",
-    )?;
+    )
+    .await?;
     advance_to_queue_plan_authority_height(
         &network,
         &client,
@@ -1675,7 +1833,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(
                 ParliamentFreezeBallotSurvivorsV1 { ballot_attempt_id },
             ),
-        )?,
+        )
+        .await?,
         survivor_freeze_height,
     );
     assert_transition_rejected_without_state_change(
@@ -1685,8 +1844,14 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ballot_attempt_id,
         }),
         "replayed survivor freeze",
-    )?;
-    let survivors_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    )
+    .await?;
+    let survivors_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+    })
+    .await?;
     let survivors_archive = casting_archive(&survivors_response, ballot_attempt_id)?;
     assert_eq!(
         survivors_archive.phase(),
@@ -1726,7 +1891,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         assert_eq!(record.len(), TIMED_OVN_BALLOT_RECORD_BYTES_V1);
         ballot_records.push(record);
     }
-    assert!(current_height(&client)? < commitment_close_height);
+    assert!(current_height(&client).await? < commitment_close_height);
     assert_transition_rejected_without_state_change(
         &client,
         attempt_id,
@@ -1735,7 +1900,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ballot_records: ballot_records.clone(),
         }),
         "timed-OVN corpus freeze before the frozen exact height",
-    )?;
+    )
+    .await?;
     advance_to_queue_plan_authority_height(
         &network,
         &client,
@@ -1753,10 +1919,11 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                     ballot_records: ballot_records.clone(),
                 },
             ),
-        )?,
+        )
+        .await?,
         commitment_close_height,
     );
-    let committed_attempt = read_attempt(&client, attempt_id)?;
+    let committed_attempt = read_attempt(&client, attempt_id).await?;
     let committed_ballot = committed_attempt
         .ballot(&ballot_attempt_id)
         .expect("committed hidden ballot");
@@ -1770,7 +1937,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         &client,
         ballot_attempt_id,
         "a sealed corpus is no longer a cast-capable context",
-    )?;
+    )
+    .await?;
     assert_transition_rejected_without_state_change(
         &client,
         attempt_id,
@@ -1779,7 +1947,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ballot_records,
         }),
         "replayed timed-OVN corpus freeze",
-    )?;
+    )
+    .await?;
     assert_transition_rejected_without_state_change(
         &client,
         attempt_id,
@@ -1792,21 +1961,21 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             },
         ),
         "ballot opening before the frozen release height and authoritative pulse",
-    )?;
+    )
+    .await?;
 
     advance_to_autonomous_predecessor(&network, &client, release_height, "timed-OVN release pulse")
         .await?;
     network.ensure_blocks(release_height).await?;
     assert_eq!(
-        current_height(&client)?,
+        current_height(&client).await?,
         release_height,
         "the demanded ballot-release threshold-beacon effect must autonomously finalize its exact height",
     );
-    let release_pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), release_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut release_pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        release_pulses.push(pulse_at(&peer.client(), release_height).await?);
+    }
     assert!(release_pulses.windows(2).all(|pair| pair[0] == pair[1]));
     let release_pulse = release_pulses[0].clone();
     assert_eq!(release_pulse.height, release_height);
@@ -1822,7 +1991,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         Some(release_height),
     );
     assert_eq!(
-        exact_block(&client, release_pulse.finalized_chain_anchor.height)?
+        exact_block(&client, release_pulse.finalized_chain_anchor.height)
+            .await?
             .header()
             .hash(),
         release_pulse.finalized_chain_anchor.block_hash,
@@ -1845,8 +2015,9 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
                 pulse_id: BeaconPulseId::new(release_pulse.pulse_id),
             },
         ),
-    )?;
-    let opening_height = current_height(&client)?;
+    )
+    .await?;
+    let opening_height = current_height(&client).await?;
     assert!(opening_height <= opening_deadline_height);
     assert_transition_rejected_without_state_change(
         &client,
@@ -1860,9 +2031,15 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             },
         ),
         "replayed ballot opening",
-    )?;
+    )
+    .await?;
     network.ensure_blocks(opening_height).await?;
-    let release_context = client.get_parliament_tle_release_context(ballot_attempt_id)?;
+    let release_context = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_tle_release_context(ballot_attempt_id)
+    })
+    .await?;
     let validated_release = release_projection(&release_context)?
         .validate()
         .wrap_err("replay full public TLE transcript and release identity")?;
@@ -1879,10 +2056,21 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let mut verified_partials = BTreeMap::<u16, TlePartialReleaseShareV1>::new();
     for peer in network.peers() {
         let peer_client = peer.client();
-        let peer_context = peer_client.get_parliament_tle_release_context(ballot_attempt_id)?;
+        let peer_context = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            let ballot_attempt_id = (ballot_attempt_id).clone();
+            move || client.get_parliament_tle_release_context(ballot_attempt_id)
+        })
+        .await?;
         assert_eq!(peer_context, release_context);
-        let partial =
-            release_partial(peer_client.post_parliament_tle_partial_release(&peer_context)?);
+        let partial = release_partial(
+            read_on_dedicated_thread({
+                let client = peer_client.client().clone();
+                let release_context = (peer_context).clone();
+                move || client.post_parliament_tle_partial_release(&release_context)
+            })
+            .await?,
+        );
         validated_release
             .session()
             .verify_partial_release(
@@ -1929,8 +2117,9 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             ballot_attempt_id,
             final_release: parliament_final_release,
         }),
-    )?;
-    let certified = read_attempt(&client, attempt_id)?;
+    )
+    .await?;
+    let certified = read_attempt(&client, attempt_id).await?;
     let certificate = certified
         .certificate()
         .cloned()
@@ -1943,7 +2132,10 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         GovernanceAttemptStatusV1::Certified
     );
     assert_eq!(certified.attempt().stage, GovernanceStageV1::Enactment);
-    assert_eq!(certificate.certified_at_height, current_height(&client)?);
+    assert_eq!(
+        certificate.certified_at_height,
+        current_height(&client).await?
+    );
     assert_eq!(
         certificate.enact_at_height,
         certificate.certified_at_height + MIN_ENACTMENT_DELAY,
@@ -2024,7 +2216,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             final_release: parliament_final_release,
         }),
         "replayed aggregate ballot finalization",
-    )?;
+    )
+    .await?;
 
     advance_to_autonomous_predecessor(
         &network,
@@ -2035,9 +2228,14 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     .await?;
     let enacted_height = certificate.enact_at_height;
     network.ensure_blocks(enacted_height).await?;
-    assert_eq!(current_height(&client)?, enacted_height);
-    let enacted_response = client.get_parliament_attempt(attempt_id)?;
-    let enacted = read_attempt(&client, attempt_id)?;
+    assert_eq!(current_height(&client).await?, enacted_height);
+    let enacted_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
+    let enacted = read_attempt(&client, attempt_id).await?;
     assert_eq!(enacted.attempt().status, GovernanceAttemptStatusV1::Enacted);
     assert_eq!(enacted.attempt().stage, GovernanceStageV1::Enactment);
     assert_eq!(enacted.terminal_height(), Some(enacted_height));
@@ -2048,13 +2246,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         code_hash,
         abi_hash,
         "consensus-owned certificate enactment must bind the staged contract",
-    )?;
+    )
+    .await?;
 
-    let peer_blocks = network
-        .peers()
-        .iter()
-        .map(|peer| exact_block(&peer.client(), enacted_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut peer_blocks = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        peer_blocks.push(exact_block(&peer.client(), enacted_height).await?);
+    }
     assert!(
         peer_blocks
             .windows(2)
@@ -2064,10 +2262,14 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     let enacted_height_nonzero =
         NonZeroU64::new(enacted_height).expect("a Parliament enactment cannot be genesis");
     for (peer, block) in network.peers().iter().zip(&peer_blocks) {
-        let (proof, verified_hash) = peer
-            .client()
-            .get_bridge_finality_anchor(enacted_height_nonzero, network.network_id())
-            .wrap_err("independently verify the enactment block's revision-4 finality")?;
+        let (proof, verified_hash) = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            let height = (enacted_height_nonzero).clone();
+            let network_id = (network.network_id()).clone();
+            move || client.get_bridge_finality_anchor(height, network_id)
+        })
+        .await
+        .wrap_err("independently verify the enactment block's revision-4 finality")?;
         let artifact = &proof.finality_artifact;
         assert_eq!(verified_hash, block.hash());
         assert_eq!(artifact.height, enacted_height);
@@ -2104,7 +2306,12 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     }
     for peer in network.peers() {
         let peer_client = peer.client();
-        let response = peer_client.get_parliament_attempt(attempt_id)?;
+        let response = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            let attempt_id = (attempt_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?;
         assert_eq!(response.current_height, enacted_height);
         assert_eq!(response.attempt.status, GovernanceAttemptStatusV1::Enacted);
         assert_eq!(
@@ -2117,8 +2324,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             code_hash,
             abi_hash,
             "every validator must expose the consensus-enacted contract",
-        )?;
-        let status = peer_client.get_sumeragi_status()?;
+        )
+        .await?;
+        let status = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            move || client.get_sumeragi_status()
+        })
+        .await?;
         status
             .validate()
             .map_err(|error| eyre!("invalid enacted Parliament peer status: {error}"))?;
@@ -2147,7 +2359,12 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
     )
     .await
     .map_err(|_| eyre!("restarted Parliament validator did not recover finalized state"))?;
-    let restarted_response = restart_peer.client().get_parliament_attempt(attempt_id)?;
+    let restarted_response = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     assert_eq!(
         restarted_response.attempt.status,
         GovernanceAttemptStatusV1::Enacted
@@ -2156,7 +2373,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         restarted_response.state_payload_hex, enacted_response.state_payload_hex,
         "normal restart must restore the complete reducer/certificate state",
     );
-    let restarted_block = exact_block(&restart_peer.client(), enacted_height)?;
+    let restarted_block = exact_block(&restart_peer.client(), enacted_height).await?;
     assert_eq!(restarted_block.hash(), peer_blocks[0].hash());
     assert_governed_contract_binding(
         &restart_peer.client(),
@@ -2164,8 +2381,13 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         code_hash,
         abi_hash,
         "normal restart must restore the consensus-enacted contract",
-    )?;
-    let restarted_status = restart_peer.client().get_sumeragi_status()?;
+    )
+    .await?;
+    let restarted_status = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        move || client.get_sumeragi_status()
+    })
+    .await?;
     restarted_status
         .validate()
         .map_err(|error| eyre!("invalid restarted Parliament peer status: {error}"))?;
@@ -2271,7 +2493,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let ordered_roster = ordered_validator_roster(&network, &client)?;
+    let ordered_roster = ordered_validator_roster(&network, &client).await?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive mandatory NPoS beacon fixture")?;
@@ -2315,7 +2537,8 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "mandatory beacon-key installation",
-    )?;
+    )
+    .await?;
     let lifecycle_certificate = lifecycle_certificate(
         &network,
         &ordered_roster,
@@ -2325,20 +2548,21 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         norito::encode_canonical(&beacon_record)?,
         install_height,
     )?;
-    client.submit(lifecycle_certificate, fee())?;
-    assert_eq!(current_height(&client)?, install_height);
+    submit_parliament_instructions(&client, [lifecycle_certificate]).await?;
+    assert_eq!(current_height(&client).await?, install_height);
     let activation_height = install_height
         .checked_add(1)
         .ok_or_else(|| eyre!("mandatory beacon-key activation height overflow"))?;
-    client.submit(
-        Log::new(
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
             Level::INFO,
             "carry mandatory beacon-key activation".to_owned(),
-        ),
-        fee(),
-    )?;
+        )],
+    )
+    .await?;
     network.ensure_blocks(activation_height).await?;
-    assert_eq!(current_height(&client)?, activation_height);
+    assert_eq!(current_height(&client).await?, activation_height);
 
     let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     let pulse_height = boundary_height - 1;
@@ -2357,25 +2581,35 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         norito::encode_canonical(&successor_beacon_record)?,
         boundary_height,
     )?;
-    client.submit(rotation_certificate, fee())?;
+    let rotation_transaction =
+        prepare_parliament_transaction(&client, [rotation_certificate]).await?;
+    let admitted_rotation = tokio::time::timeout(
+        OPERATION_TIMEOUT,
+        client
+            .account_client()
+            .submit_transaction(&rotation_transaction),
+    )
+    .await
+    .map_err(|_| eyre!("rotation admission deadline"))??;
+    assert_eq!(admitted_rotation, rotation_transaction.hash());
     network.ensure_blocks(pulse_height - 1).await?;
     assert_no_global_beacon_pulse_at(
         &client,
         pulse_height - 1,
         "an unrequested non-boundary height must not emit a global pulse",
-    )?;
+    )
+    .await?;
     network.ensure_blocks(pulse_height).await?;
     assert_eq!(
-        current_height(&client)?,
+        current_height(&client).await?,
         pulse_height,
         "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
     );
 
-    let pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), pulse_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        pulses.push(pulse_at(&peer.client(), pulse_height).await?);
+    }
     assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
     let pulse = &pulses[0];
     assert_eq!(pulse.height, pulse_height);
@@ -2385,7 +2619,8 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     assert_eq!(pulse.round, 0, "the mandatory pulse is view-independent");
     assert_eq!(pulse.finalized_chain_anchor.height + 1, pulse_height);
     assert_eq!(
-        exact_block(&client, pulse.finalized_chain_anchor.height)?
+        exact_block(&client, pulse.finalized_chain_anchor.height)
+            .await?
             .header()
             .hash(),
         pulse.finalized_chain_anchor.block_hash,
@@ -2400,19 +2635,38 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let successor_epoch = 1;
     let successor_seed =
         global_threshold_beacon_npos_successor_seed_v1(pulse, boundary_height, successor_epoch);
-    client.submit(
-        Log::new(
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
             Level::INFO,
             "carry post-rotation successor progression".to_owned(),
-        ),
-        fee(),
-    )?;
+        )],
+    )
+    .await?;
     network.ensure_blocks(boundary_height).await?;
-    assert_eq!(current_height(&client)?, boundary_height);
+    assert_eq!(current_height(&client).await?, boundary_height);
     network.ensure_blocks(boundary_height + 1).await?;
-    assert_eq!(current_height(&client)?, boundary_height + 1);
+    assert_eq!(current_height(&client).await?, boundary_height + 1);
+    read_on_dedicated_thread({
+        let client = client.client().clone();
+        move || {
+            client.wait_for_transaction_applied(
+                admitted_rotation,
+                iroha::client::TransactionWaitOptions {
+                    timeout: OPERATION_TIMEOUT,
+                    poll_interval: Duration::from_millis(100),
+                },
+            )
+        }
+    })
+    .await
+    .wrap_err("the exact scheduled rotation must be Applied after the boundary")?;
     for peer in network.peers() {
-        let status = peer.client().get_sumeragi_status()?;
+        let status = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            move || client.get_sumeragi_status()
+        })
+        .await?;
         status
             .validate()
             .map_err(|error| eyre!("invalid successor NPoS status: {error}"))?;
@@ -2441,11 +2695,10 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     )
     .await?;
     network.ensure_blocks(successor_pulse_height).await?;
-    let successor_pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), successor_pulse_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut successor_pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        successor_pulses.push(pulse_at(&peer.client(), successor_pulse_height).await?);
+    }
     assert!(successor_pulses.windows(2).all(|pair| pair[0] == pair[1]));
     let successor_pulse = &successor_pulses[0];
     assert_eq!(successor_pulse.height, successor_pulse_height);
@@ -2478,17 +2731,22 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         second_boundary_height,
         second_successor_epoch,
     );
-    client.submit(
-        Log::new(
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
             Level::INFO,
             "carry the successor-session NPoS boundary".to_owned(),
-        ),
-        fee(),
-    )?;
+        )],
+    )
+    .await?;
     network.ensure_blocks(second_boundary_height).await?;
     network.ensure_blocks(second_boundary_height + 1).await?;
     for peer in network.peers() {
-        let status = peer.client().get_sumeragi_status()?;
+        let status = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            move || client.get_sumeragi_status()
+        })
+        .await?;
         status
             .validate()
             .map_err(|error| eyre!("invalid rotated-session NPoS status: {error}"))?;
@@ -2592,7 +2850,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let ordered_roster = ordered_validator_roster(&network, &client)?;
+    let ordered_roster = ordered_validator_roster(&network, &client).await?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive fail-closed NPoS beacon fixture")?;
@@ -2602,7 +2860,8 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "fail-closed beacon-key installation",
-    )?;
+    )
+    .await?;
     let lifecycle_certificate = lifecycle_certificate(
         &network,
         &ordered_roster,
@@ -2612,20 +2871,21 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         norito::encode_canonical(&beacon_record)?,
         install_height,
     )?;
-    client.submit(lifecycle_certificate, fee())?;
-    assert_eq!(current_height(&client)?, install_height);
+    submit_parliament_instructions(&client, [lifecycle_certificate]).await?;
+    assert_eq!(current_height(&client).await?, install_height);
     let activation_height = install_height
         .checked_add(1)
         .ok_or_else(|| eyre!("fail-closed beacon-key activation height overflow"))?;
-    client.submit(
-        Log::new(
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
             Level::INFO,
             "carry fail-closed beacon-key activation".to_owned(),
-        ),
-        fee(),
-    )?;
+        )],
+    )
+    .await?;
     network.ensure_blocks(activation_height).await?;
-    assert_eq!(current_height(&client)?, activation_height);
+    assert_eq!(current_height(&client).await?, activation_height);
 
     let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;
     let predecessor_height = pulse_height - 1;
@@ -2635,7 +2895,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         "the retained deterministic fixture must expose one committed predecessor after activation",
     );
     network.ensure_blocks(predecessor_height).await?;
-    assert_eq!(current_height(&client)?, predecessor_height);
+    assert_eq!(current_height(&client).await?, predecessor_height);
     let pulse_status_is_active = |status: &SumeragiV2Status| -> Result<bool> {
         status
             .validate()
@@ -2735,7 +2995,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                     last_activation_status_error.as_deref().unwrap_or("none"),
                 ));
             }
-            let observed_height = match current_height(peer_client) {
+            let observed_height = match current_height(peer_client).await {
                 Ok(height) => height,
                 Err(error) => {
                     last_activation_status_error =
@@ -2754,7 +3014,12 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                 observed_height, predecessor_height,
                 "the pulse height must remain uncommitted during successor activation",
             );
-            let status = match peer_client.get_sumeragi_status() {
+            let status = match read_on_dedicated_thread({
+                let client = peer_client.client().clone();
+                move || client.get_sumeragi_status()
+            })
+            .await
+            {
                 Ok(status) => status,
                 Err(error) => {
                     last_activation_status_error =
@@ -2815,7 +3080,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                         .unwrap_or("none"),
                 ));
             }
-            let observed_height = match current_height(peer_client) {
+            let observed_height = match current_height(peer_client).await {
                 Ok(height) => height,
                 Err(error) => {
                     last_post_observation_status_error =
@@ -2836,7 +3101,12 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                 observed_height, predecessor_height,
                 "the mandatory pre-boundary height must remain uncommitted below threshold",
             );
-            let status = match peer_client.get_sumeragi_status() {
+            let status = match read_on_dedicated_thread({
+                let client = peer_client.client().clone();
+                move || client.get_sumeragi_status()
+            })
+            .await
+            {
                 Ok(status) => status,
                 Err(error) => {
                     last_post_observation_status_error =
@@ -2883,6 +3153,7 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         include_str!("sora_parliament_lifecycle_smoke.rs"),
         include_str!("sora_parliament_no_result_paths.rs"),
         include_str!("sora_parliament_failure_paths.rs"),
+        include_str!("sora_parliament_private_ballot_retry.rs"),
     ]
     .concat();
     let rayon_threads_key = concat!("rayon_global_", "threads");
@@ -2892,6 +3163,11 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         "every four-validator builder must bound per-peer proving concurrency without disabling FastPQ",
     );
     let forbidden = [
+        concat!(".", "submit("),
+        concat!(".", "submit_all("),
+        concat!("client.", "status()"),
+        concat!("tokio::task::", "block_in_place"),
+        concat!("tokio::task::", "spawn_blocking"),
         concat!("Cast", "PlainBallot"),
         concat!("Cast", "ParliamentBallot"),
         concat!("Finalize", "Referendum"),
@@ -2935,12 +3211,21 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         12,
         "the helper definition plus eleven exact checkpoint/replay calls must remain",
     );
+    assert_eq!(
+        source
+            .matches(concat!("assert_private_transition_", "rejected("))
+            .count(),
+        5,
+        "the typed private-retry helper and all four boundary cases must remain",
+    );
     for required in [
         concat!("ConsumeSortition", "PulseBatch"),
         concat!("RegisterBallot", "Participant"),
         concat!("CloseBallot", "Registration"),
         concat!("FreezeBallot", "Survivors"),
         concat!("FreezeTimedOvn", "Corpus"),
+        concat!("FailBallot", "NoResult"),
+        concat!("private_ballot_deadline_", "retry_impl"),
         concat!("combine_partial_", "releases"),
         concat!("FinalizeOpened", "Ballot"),
         concat!("GovernanceAttemptStatusV1::", "Enacted"),

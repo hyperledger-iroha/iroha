@@ -1,3 +1,5 @@
+//! Atomic three-stage boundary tests; exact-fixture authority is test-only.
+
 use super::*;
 use crate::vega::zk_ams::mkhe::{
     rns_native_profile::{
@@ -7,7 +9,6 @@ use crate::vega::zk_ams::mkhe::{
     rns_native_section_codec::{
         ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1,
         ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
-        ZkAmsMkheRnsNativeZeroPaddingSectionV1,
     },
     rns_native_source::{
         ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
@@ -19,14 +20,13 @@ use crate::vega::zk_ams::mkhe::{
         ZkAmsMkheRnsNativeQpcsRootsV1, ZkAmsMkheRnsNativeTerminalBridgeV1,
         ZkAmsMkheRnsNativeTerminalRootsV1, ZkAmsMkheRnsNativeTranscriptV1,
     },
-    rns_native_zero_padding_commitment::deterministic_zero_padding_stage_fixture_v1,
 };
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
 
-const TYPED_SECTION_COMMON_PREFIX_BYTES_V1: usize = 4 + 1 + 1 + 4 + 5 * 32;
+const TYPED_SECTION_COMMON_PREFIX_BYTES_V1: usize = 4 + 1 + 1 + 4 + 4 * 32 + 48;
 
 fn digest(label: &[u8], context: u16, ordinal: u16) -> [u8; 32] {
     let mut hash = Keccak256::new();
@@ -42,14 +42,21 @@ fn digest(label: &[u8], context: u16, ordinal: u16) -> [u8; 32] {
     hash.finalize()
 }
 
-fn indexed_digests<const N: usize>(label: &[u8], context: u16) -> [[u8; 32]; N] {
+fn indexed_digests<const N: usize>(label: &[u8], context: u16) -> [ProofDigestV1; N] {
     core::array::from_fn(|ordinal| {
-        digest(
+        proof_digest(
             label,
             context,
             u16::try_from(ordinal).expect("fixture ordinal fits u16"),
         )
     })
+}
+
+fn proof_digest(label: &[u8], context: u16, ordinal: u16) -> ProofDigestV1 {
+    super::super::rns_native_proof_hash::test_proof_digest_v1(
+        label,
+        (u64::from(context) << 16) | u64::from(ordinal),
+    )
 }
 
 struct TestChunk {
@@ -166,14 +173,6 @@ fn opening_role(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
 }
 
 fn composite_fixture(context: u16) -> CompositeFixtureV1 {
-    composite_fixture_with_zero_padding(context, digest(b"zero-padding-root", context, 0), None)
-}
-
-fn composite_fixture_with_zero_padding(
-    context: u16,
-    zero_padding_root: [u8; 32],
-    zero_padding_fixture: Option<(&[[u8; 32]; 40], &[u8])>,
-) -> CompositeFixtureV1 {
     let profile = zk_ams_mkhe_rns_native_profile_v1().expect("canonical profile");
     let topology = zk_ams_mkhe_rns_native_topology_v1().expect("canonical topology");
     let release = zk_ams_mkhe_rns_native_release_candidate_digest_v1().expect("candidate");
@@ -222,9 +221,9 @@ fn composite_fixture_with_zero_padding(
         .expect("opening transcript");
     let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         transcript.binding_digest(),
-        digest(b"mapping-root", context, 0),
-        digest(b"terminal-hyrax-root", context, 0),
-        digest(b"cross-basis-root", context, 0),
+        proof_digest(b"mapping-root", context, 0),
+        proof_digest(b"terminal-hyrax-root", context, 0),
+        proof_digest(b"cross-basis-root", context, 0),
     )
     .expect("bridge");
     let transcript = transcript
@@ -233,7 +232,7 @@ fn composite_fixture_with_zero_padding(
     let fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             u8::try_from(layer).expect("FRI layer fits u8"),
-            digest(
+            proof_digest(
                 b"qpcs-fri-root",
                 context,
                 u16::try_from(layer).expect("FRI layer fits u16"),
@@ -243,9 +242,9 @@ fn composite_fixture_with_zero_padding(
     });
     let qpcs_roots = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
-        digest(b"qpcs-initial-root", context, 0),
-        digest(b"q-mask-s-root", context, 0),
-        digest(b"qpcs-quotient-root", context, 0),
+        proof_digest(b"qpcs-initial-root", context, 0),
+        proof_digest(b"q-mask-s-root", context, 0),
+        proof_digest(b"qpcs-quotient-root", context, 0),
         fri_roots,
     )
     .expect("qPCS roots");
@@ -254,9 +253,8 @@ fn composite_fixture_with_zero_padding(
         .expect("qPCS transcript");
     let terminal_roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
         transcript.binding_digest(),
-        digest(b"cross-field-root", context, 0),
-        digest(b"global-lookup-root", context, 0),
-        zero_padding_root,
+        proof_digest(b"cross-field-root", context, 0),
+        proof_digest(b"global-lookup-root", context, 0),
     )
     .expect("terminal roots");
     let transcript = transcript
@@ -269,9 +267,9 @@ fn composite_fixture_with_zero_padding(
             .expect("terminal section")
             .to_canonical_bytes_v1()
             .expect("terminal encoding");
-    let equation_digests: [[u8; 32]; 2] = indexed_digests(b"equation-commitment", context);
-    let qpcs_limb_digests: [[u8; 32]; 40] = indexed_digests(b"qpcs-limb-commitment", context);
-    let query_digests: [[u8; 32]; 160] = indexed_digests(b"query-opening", context);
+    let equation_digests: [ProofDigestV1; 2] = indexed_digests(b"equation-commitment", context);
+    let qpcs_limb_digests: [ProofDigestV1; 40] = indexed_digests(b"qpcs-limb-commitment", context);
+    let query_digests: [ProofDigestV1; 160] = indexed_digests(b"query-opening", context);
     let rns_proof = [0x22, context.to_be_bytes()[0], context.to_be_bytes()[1]];
     let rns_section = ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1::new(
         &transcript,
@@ -283,9 +281,9 @@ fn composite_fixture_with_zero_padding(
     .expect("RNS/qPCS section")
     .to_canonical_bytes_v1()
     .expect("RNS/qPCS encoding");
-    let point_digests: [[u8; 32]; 5] = indexed_digests(b"cross-field-point", context);
-    let cross_limb_digests: [[u8; 32]; 40] = indexed_digests(b"cross-field-limb", context);
-    let sumcheck_digests: [[u8; 32]; 29] = indexed_digests(b"lookup-sumcheck", context);
+    let point_digests: [ProofDigestV1; 5] = indexed_digests(b"cross-field-point", context);
+    let cross_limb_digests: [ProofDigestV1; 40] = indexed_digests(b"cross-field-limb", context);
+    let sumcheck_digests: [ProofDigestV1; 29] = indexed_digests(b"lookup-sumcheck", context);
     let cross_proof = [0x33, context.to_be_bytes()[0], context.to_be_bytes()[1]];
     let cross_section = ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1::new(
         &transcript,
@@ -297,22 +295,12 @@ fn composite_fixture_with_zero_padding(
     .expect("cross-field/lookup section")
     .to_canonical_bytes_v1()
     .expect("cross-field/lookup encoding");
-    let padding_digests: [[u8; 32]; 40] = indexed_digests(b"padding-limb", context);
-    let padding_proof = [0x44, context.to_be_bytes()[0], context.to_be_bytes()[1]];
-    let (padding_digests, padding_proof): (&[[u8; 32]; 40], &[u8]) =
-        zero_padding_fixture.unwrap_or((&padding_digests, &padding_proof));
-    let padding_section =
-        ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(&transcript, padding_digests, padding_proof)
-            .expect("zero-padding section")
-            .to_canonical_bytes_v1()
-            .expect("zero-padding encoding");
     let envelope = ZkAmsMkheRnsNativeProofEnvelopeV1::new(
         layout,
         source_receipt,
         terminal_section,
         rns_section,
         cross_section,
-        padding_section,
     )
     .expect("proof envelope");
     CompositeFixtureV1 {
@@ -335,10 +323,9 @@ fn exact_authority(
     )
 }
 
-fn rebuild_envelope_with_cross_and_padding(
+fn rebuild_envelope_with_cross(
     fixture: &CompositeFixtureV1,
     cross_section: Vec<u8>,
-    padding_section: Vec<u8>,
 ) -> ZkAmsMkheRnsNativeProofEnvelopeV1 {
     ZkAmsMkheRnsNativeProofEnvelopeV1::new(
         fixture.layout,
@@ -352,7 +339,6 @@ fn rebuild_envelope_with_cross_and_padding(
             .section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs)
             .to_vec(),
         cross_section,
-        padding_section,
     )
     .expect("transport-valid rebuilt envelope")
 }
@@ -370,10 +356,6 @@ fn rebuild_envelope_with_terminal_and_rns(
         fixture
             .envelope
             .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
-            .to_vec(),
-        fixture
-            .envelope
-            .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
             .to_vec(),
     )
     .expect("transport-valid rebuilt envelope")
@@ -433,7 +415,6 @@ fn production_adapters_reject_invalid_subproofs_or_remain_explicitly_unavailable
             stage,
             ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge
                 | ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs
-                | ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding
         ) {
             assert!(matches!(
                 result,
@@ -473,10 +454,6 @@ fn all_typed_sections_are_validated_before_first_unavailable_stage() {
         fixture
             .envelope
             .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
-            .to_vec(),
-        fixture
-            .envelope
-            .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
             .to_vec(),
     )
     .expect("transport-valid malformed typed section");
@@ -648,83 +625,47 @@ fn source_bound_stage_router_uses_each_exact_authenticator() {
         )
     ));
 
-    let (padding_root, padding_digests, padding_proof) =
-        deterministic_zero_padding_stage_fixture_v1(|root| {
-            composite_fixture_with_zero_padding(45, root, None).transcript
-        })
-        .expect("valid zero-padding stage fixture");
-    let padding_fixture = composite_fixture_with_zero_padding(
-        45,
-        padding_root,
-        Some((&padding_digests, &padding_proof)),
-    );
-    let padding_axes = validate_context_v1(
-        &padding_fixture.envelope,
-        padding_fixture.layout,
-        padding_fixture.source_receipt,
-        &padding_fixture.transcript,
-    )
-    .expect("validated zero-padding source-bound context");
-    let zero_padding = ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding;
-    let padding_descriptor = padding_fixture.envelope.descriptors()[zero_padding.index()];
-    assert!(
-        authority
-            .verify_v1(
-                zero_padding,
-                &padding_axes,
-                &padding_fixture.transcript,
-                padding_descriptor,
-                padding_fixture
-                    .envelope
-                    .section(zero_padding.section_kind()),
+    // The retired committed-padding proof is never a production route.
+    for retired in [b"ZAZP".as_slice(), b"ZZPC".as_slice()] {
+        assert!(matches!(
+            authority.verify_v1(
+                cross_field,
+                &axes,
+                &fixture.transcript,
+                cross_descriptor,
+                retired
+            ),
+            Err(
+                ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                    ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup
+                )
             )
-            .is_ok(),
-        "the source-bound zero-padding section must use its typed authenticator",
-    );
-
-    let mut mutated_padding_proof = padding_proof;
-    let mutation_index = mutated_padding_proof.len() / 2;
-    mutated_padding_proof[mutation_index] ^= 1;
-    let mutated_padding_section = ZkAmsMkheRnsNativeZeroPaddingSectionV1::new(
-        &padding_fixture.transcript,
-        &padding_digests,
-        &mutated_padding_proof,
-    )
-    .expect("mutated zero-padding section")
-    .to_canonical_bytes_v1()
-    .expect("mutated zero-padding encoding");
+        ));
+    }
+    let mut damaged = fixture
+        .envelope
+        .section(cross_field.section_kind())
+        .to_vec();
+    let damage_index = damaged.len() - 33;
+    damaged[damage_index] ^= 1;
     assert!(matches!(
         authority.verify_v1(
-            zero_padding,
-            &padding_axes,
-            &padding_fixture.transcript,
-            padding_descriptor,
-            &mutated_padding_section,
+            cross_field,
+            &axes,
+            &fixture.transcript,
+            cross_descriptor,
+            &damaged
         ),
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
-                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
-            )
-        )
-    ));
-    assert!(matches!(
-        authority.verify_v1(
-            zero_padding,
-            &padding_axes,
-            &padding_fixture.transcript,
-            padding_descriptor,
-            &[],
-        ),
-        Err(
-            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
-                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
+                ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup
             )
         )
     ));
 }
 
 #[test]
-fn inner_metadata_cannot_alias_a_source_or_outer_identity() {
+fn inner_native_commitment_cannot_alias_another_section_root() {
     let fixture = composite_fixture(5);
     let decoded = ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1::from_canonical_bytes_exact_v1(
         fixture
@@ -734,7 +675,7 @@ fn inner_metadata_cannot_alias_a_source_or_outer_identity() {
     )
     .expect("typed RNS section");
     let mut equations = decoded.equation_commitment_digests().to_vec();
-    equations[0] = fixture.layout.statement_digest();
+    equations[0] = fixture.transcript.global_lookup_root();
     let aliased_rns = ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1::new(
         &fixture.transcript,
         &equations,
@@ -756,10 +697,6 @@ fn inner_metadata_cannot_alias_a_source_or_outer_identity() {
         fixture
             .envelope
             .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
-            .to_vec(),
-        fixture
-            .envelope
-            .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
             .to_vec(),
     )
     .expect("transport-valid cross-layer alias");
@@ -898,10 +835,6 @@ fn rebuilt_envelope_cannot_substitute_a_cross_context_transcript_and_sections() 
             .envelope
             .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
             .to_vec(),
-        context_b
-            .envelope
-            .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
-            .to_vec(),
     )
     .expect("transport-valid rebuilt envelope");
     let source_snapshot = context_a.source_snapshot();
@@ -945,10 +878,6 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
             .envelope
             .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
             .to_vec(),
-        baseline
-            .envelope
-            .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
-            .to_vec(),
     )
     .expect("transport-valid section splice");
     let source_snapshot = baseline.source_snapshot();
@@ -986,19 +915,14 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
 }
 
 #[test]
-fn omitted_duplicated_and_trailing_lookup_padding_frames_are_rejected_atomically() {
+fn omitted_duplicated_and_trailing_lookup_frames_are_rejected_atomically() {
     let omitted = composite_fixture(35);
     let mut omitted_cross = omitted
         .envelope
         .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
         .to_vec();
     omitted_cross.pop().expect("nonempty cross section");
-    let omitted_padding = omitted
-        .envelope
-        .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
-        .to_vec();
-    let omitted_envelope =
-        rebuild_envelope_with_cross_and_padding(&omitted, omitted_cross, omitted_padding);
+    let omitted_envelope = rebuild_envelope_with_cross(&omitted, omitted_cross);
     let omitted_source = omitted.source_snapshot();
     assert!(matches!(
         verify_zk_ams_mkhe_rns_native_composite_v1(
@@ -1018,12 +942,7 @@ fn omitted_duplicated_and_trailing_lookup_padding_frames_are_rejected_atomically
         .envelope
         .section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs)
         .to_vec();
-    let duplicated_padding = duplicated
-        .envelope
-        .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
-        .to_vec();
-    let duplicated_envelope =
-        rebuild_envelope_with_cross_and_padding(&duplicated, duplicated_cross, duplicated_padding);
+    let duplicated_envelope = rebuild_envelope_with_cross(&duplicated, duplicated_cross);
     let duplicated_source = duplicated.source_snapshot();
     assert!(matches!(
         verify_zk_ams_mkhe_rns_native_composite_v1(
@@ -1039,17 +958,12 @@ fn omitted_duplicated_and_trailing_lookup_padding_frames_are_rejected_atomically
     ));
 
     let trailing = composite_fixture(37);
-    let trailing_cross = trailing
+    let mut trailing_cross = trailing
         .envelope
         .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
         .to_vec();
-    let mut trailing_padding = trailing
-        .envelope
-        .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
-        .to_vec();
-    trailing_padding.push(0);
-    let trailing_envelope =
-        rebuild_envelope_with_cross_and_padding(&trailing, trailing_cross, trailing_padding);
+    trailing_cross.push(0);
+    let trailing_envelope = rebuild_envelope_with_cross(&trailing, trailing_cross);
     let trailing_source = trailing.source_snapshot();
     assert!(matches!(
         verify_zk_ams_mkhe_rns_native_composite_v1(
@@ -1059,7 +973,7 @@ fn omitted_duplicated_and_trailing_lookup_padding_frames_are_rejected_atomically
         ),
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
-                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
+                ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
             )
         )
     ));
@@ -1148,7 +1062,6 @@ fn retained_authority_set_outlives_composite_result_materialization() {
             .verify_terminal_bridge_v1()?
             .verify_rns_relation_qpcs_v1()?
             .verify_cross_field_global_lookup_v1()?
-            .verify_zero_padding_v1()?
             .finish_v1()?;
             assert!(!source_owner.dropped.get());
             assert!(!source_packing_authority.dropped.get());
@@ -1244,7 +1157,7 @@ fn source_bound_all_stage_authority_is_pre_authenticated_narrow_and_consuming() 
         .map(|(authority, _)| authority)
         .expect("narrow source-bound authority");
     assert!(authority.contains("authenticate_source_bound_cross_field_global_lookup_v2"));
-    assert!(authority.contains("authenticate_zero_padding_production_v1"));
+    assert!(!authority.contains("authenticate_zero_padding_production_v1"));
     assert!(authority.contains("TerminalHyraxBpBridge"));
     assert!(authority.contains("RnsRelationQpcs"));
     assert_eq!(authority.matches("=> Ok(())").count(), 1);
@@ -1293,4 +1206,30 @@ fn boundary_exposes_no_accept_all_or_release_authority_surface() {
     assert!(private_boundary.contains("let source_receipt = source_snapshot"));
     assert!(private_boundary.contains(".structural_receipt()"));
     assert!(!private_boundary.contains("preflight_rns_native_rlwe_source_statement_v1"));
+}
+
+#[test]
+fn metadata_alias_registry_preserves_public32_and_complete_native48_roles() {
+    let public = digest(b"source", 60, 0);
+    let native = proof_digest(b"transcript", 60, 0);
+    let mut registry = DigestRegistryV1::new();
+    registry.insert(public).unwrap();
+    registry.insert(native).unwrap();
+    assert_eq!(
+        registry.insert(public),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
+    );
+    assert_eq!(
+        registry.insert(native),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
+    );
+    assert_eq!(
+        registry.insert(ProofDigestV1::ZERO),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
+    );
+    assert_eq!(
+        registry.insert([0; 32]),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
+    );
+    assert_eq!(VERIFICATION_STAGE_ORDER_V1.len(), 3);
 }

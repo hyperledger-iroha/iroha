@@ -9,7 +9,7 @@ use super::{
     SOURCE_VERSION_V1, ZkAmsMkheErrorV1,
 };
 use crate::vega::sponge::Keccak256;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
@@ -43,9 +43,41 @@ fn layout_frame_v1(layout: ConfidentialSpoolLayoutV1) -> [u8; 32] {
     hash.update(&layout.file_len_v1().to_be_bytes());
     hash.finalize()
 }
-fn map_spool_error_v1(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> ZkAmsMkheErrorV1 {
+fn map_spool_error_v1(
+    _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
+) -> ZkAmsMkheErrorV1 {
     ZkAmsMkheErrorV1::InvalidPhase23Fold
 }
+// The application owns its exact tuples; the crypto module owns common
+// geometry, context, and allocation checks before any filesystem effects.
+fn canonical_source_layouts_v1(
+    main_context_digest: [u8; 32],
+    nonce_context_digest: [u8; 32],
+) -> Result<(ConfidentialSpoolLayoutV1, ConfidentialSpoolLayoutV1), ZkAmsMkheErrorV1> {
+    let main = ConfidentialSpoolLayoutV1::new_v1(
+        SECRET_MAIN_SLOT_COUNT_V1,
+        SECRET_MAIN_PLAINTEXT_BYTES_V1,
+        main_context_digest,
+    )
+    .map_err(map_spool_error_v1)?;
+    let nonce = ConfidentialSpoolLayoutV1::new_v1(
+        SECRET_NONCE_SLOT_COUNT_V1,
+        SECRET_NONCE_PLAINTEXT_BYTES_V1,
+        nonce_context_digest,
+    )
+    .map_err(map_spool_error_v1)?;
+    if main.slot_count_v1() != SECRET_MAIN_SLOT_COUNT_V1
+        || main.plaintext_len_v1() != SECRET_MAIN_PLAINTEXT_BYTES_V1
+        || main.file_len_v1() != SECRET_MAIN_FILE_BYTES_V1
+        || nonce.slot_count_v1() != SECRET_NONCE_SLOT_COUNT_V1
+        || nonce.plaintext_len_v1() != SECRET_NONCE_PLAINTEXT_BYTES_V1
+        || nonce.file_len_v1() != SECRET_NONCE_FILE_BYTES_V1
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok((main, nonce))
+}
+
 /// Move-only dual writer.  Every write takes both owners before leaf preflight
 /// or I/O and restores them only after complete success.
 #[must_use = "dropping this writer discards both confidential spools"]
@@ -71,21 +103,8 @@ impl RnsLinkSecretSpoolWriterV1 {
         main_context_digest: [u8; 32],
         nonce_context_digest: [u8; 32],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let main_layout =
-            ConfidentialSpoolLayoutV1::phase23_rns_link_secret_main_v1(main_context_digest)
-                .map_err(map_spool_error_v1)?;
-        let nonce_layout =
-            ConfidentialSpoolLayoutV1::phase23_rns_link_secret_nonce_v1(nonce_context_digest)
-                .map_err(map_spool_error_v1)?;
-        if main_layout.slot_count_v1() != SECRET_MAIN_SLOT_COUNT_V1
-            || main_layout.plaintext_len_v1() != SECRET_MAIN_PLAINTEXT_BYTES_V1
-            || main_layout.file_len_v1() != SECRET_MAIN_FILE_BYTES_V1
-            || nonce_layout.slot_count_v1() != SECRET_NONCE_SLOT_COUNT_V1
-            || nonce_layout.plaintext_len_v1() != SECRET_NONCE_PLAINTEXT_BYTES_V1
-            || nonce_layout.file_len_v1() != SECRET_NONCE_FILE_BYTES_V1
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
+        let (main_layout, nonce_layout) =
+            canonical_source_layouts_v1(main_context_digest, nonce_context_digest)?;
         Self::create_with_layouts_v1(
             directory,
             main_layout,

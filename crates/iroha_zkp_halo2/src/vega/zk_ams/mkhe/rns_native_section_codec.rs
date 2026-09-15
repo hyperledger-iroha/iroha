@@ -1,4 +1,4 @@
-//! Strict canonical codecs for the four RNS-native composite-proof sections.
+//! Strict canonical codecs for the three RNS-native composite-proof sections.
 //!
 //! These codecs frame the cryptographic subproof bytes with the exact profile,
 //! topology, transcript, challenge, root, and fixed-cardinality metadata needed
@@ -15,6 +15,10 @@
     reason = "fixed-cardinality transport records intentionally retain complete canonical metadata"
 )]
 
+use super::rns_native_proof_hash::{
+    RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+    decode_proof_digest_v1,
+};
 use super::{
     rns_native_cross_field_inventory::{
         RnsNativeCrossFieldInventoryErrorV1, RnsNativePreQpcsCrossProofLeaseIssuerV1,
@@ -41,11 +45,12 @@ use std::cell::Cell;
 const TERMINAL_TAG_V1: [u8; 4] = *b"ZATB";
 const RNS_QPCS_TAG_V1: [u8; 4] = *b"ZARQ";
 const CROSS_LOOKUP_TAG_V1: [u8; 4] = *b"ZACG";
-const ZERO_PADDING_TAG_V1: [u8; 4] = *b"ZAZP";
 const PROOF_BODY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-section-proof-body";
 const CODEC_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-section-codec";
 const COMMON_DIGEST_COUNT_V1: usize = 5;
-const COMMON_PREFIX_BYTES_V1: usize = 4 + 1 + 1 + 4 + COMMON_DIGEST_COUNT_V1 * 32;
+const PROOF_DIGEST_BYTES_V1: usize = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
+const COMMON_PREFIX_BYTES_V1: usize =
+    4 + 1 + 1 + 4 + (COMMON_DIGEST_COUNT_V1 - 1) * 32 + PROOF_DIGEST_BYTES_V1;
 const PROOF_FRAME_BYTES_V1: usize = 4 + 32;
 const CODEC_DIGEST_BYTES_V1: usize = 32;
 const MAX_SECTION_DIGESTS_V1: usize = 512;
@@ -59,29 +64,29 @@ const SUMCHECK_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1 as us
 
 const TERMINAL_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + 1
-    + 2 * 32
-    + 3 * 32
+    + 2 * PROOF_DIGEST_BYTES_V1
+    + 3 * PROOF_DIGEST_BYTES_V1
     + OPENING_COUNT_V1 * (3 + 2 * 32)
     + PROOF_FRAME_BYTES_V1
     + CODEC_DIGEST_BYTES_V1;
 pub(super) const RNS_QPCS_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + 5
-    + 4 * 32
-    + FRI_COUNT_V1 * (1 + 32)
-    + 2 * 32
-    + FRI_COUNT_V1 * (1 + 32)
-    + EQUATION_COUNT_V1 * (1 + 32)
-    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + 32)
-    + QUERY_COUNT_V1 * (2 + 32)
+    + 4 * PROOF_DIGEST_BYTES_V1
+    + FRI_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+    + 2 * PROOF_DIGEST_BYTES_V1
+    + FRI_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+    + EQUATION_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+    + QUERY_COUNT_V1 * (2 + PROOF_DIGEST_BYTES_V1)
     + PROOF_FRAME_BYTES_V1
     + CODEC_DIGEST_BYTES_V1;
 pub(super) const CROSS_LOOKUP_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + 3
-    + 2 * 32
-    + 2 * 32
-    + POINT_COUNT_V1 * (1 + 32)
-    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + 32)
-    + SUMCHECK_COUNT_V1 * (1 + 32)
+    + 2 * PROOF_DIGEST_BYTES_V1
+    + 2 * PROOF_DIGEST_BYTES_V1
+    + POINT_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + PROOF_DIGEST_BYTES_V1)
+    + SUMCHECK_COUNT_V1 * (1 + PROOF_DIGEST_BYTES_V1)
     + PROOF_FRAME_BYTES_V1
     + CODEC_DIGEST_BYTES_V1;
 const CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1: usize =
@@ -92,19 +97,18 @@ const CROSS_LOOKUP_ENVELOPE_SECTION_INDEX_V1: usize = 2;
 const CROSS_LOOKUP_PROOF_MAX_BYTES_V1: usize =
     ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup.max_bytes() as usize
         - CROSS_LOOKUP_FIXED_BYTES_V1;
-const CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1: usize = 2_886;
+const CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1: usize = PROOF_BODY_DOMAIN_V1.len()
+    + 1
+    + 4
+    + CODEC_DIGEST_DOMAIN_V1.len()
+    + 1
+    + CROSS_LOOKUP_FIXED_BYTES_V1
+    - CODEC_DIGEST_BYTES_V1;
 const CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1: usize =
     2 * CROSS_LOOKUP_PROOF_MAX_BYTES_V1 + CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1;
-const CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1: usize = MAX_SECTION_DIGESTS_V1 * 32;
-const ZERO_PADDING_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
-    + 1
-    + 2 * 32
-    + 32
-    + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * (1 + 32)
-    + PROOF_FRAME_BYTES_V1
-    + CODEC_DIGEST_BYTES_V1;
-
-/// Canonical schema version shared by all four typed section codecs.
+const CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1: usize =
+    MAX_SECTION_DIGESTS_V1 * core::mem::size_of::<DigestIdentityV1>();
+/// Canonical schema version shared by all three typed section codecs.
 pub const ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1: u8 = 1;
 
 const _: () = {
@@ -115,17 +119,17 @@ const _: () = {
     assert!(QUERY_COUNT_V1 == 160);
     assert!(FRI_COUNT_V1 == 18);
     assert!(SUMCHECK_COUNT_V1 == 29);
-    assert!(MAX_SECTION_DIGESTS_V1 >= 482);
-    assert!(CROSS_LOOKUP_FIXED_BYTES_V1 == 2_811);
-    assert!(CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1 == 2_743);
-    assert!(CROSS_LOOKUP_PROOF_OFFSET_V1 == 2_779);
+    assert!(MAX_SECTION_DIGESTS_V1 >= 437);
+    assert!(CROSS_LOOKUP_FIXED_BYTES_V1 == 4_075);
+    assert!(CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1 == 4_007);
+    assert!(CROSS_LOOKUP_PROOF_OFFSET_V1 == 4_043);
     assert!(CROSS_LOOKUP_ENVELOPE_SECTION_INDEX_V1 == 2);
     assert!(PROOF_BODY_DOMAIN_V1.len() == 50);
     assert!(CODEC_DIGEST_DOMAIN_V1.len() == 45);
-    assert!(CROSS_LOOKUP_PROOF_MAX_BYTES_V1 == 8_385_797);
-    assert!(CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1 == 2_886);
-    assert!(CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1 == 16_774_480);
-    assert!(CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1 == 16_384);
+    assert!(CROSS_LOOKUP_PROOF_MAX_BYTES_V1 == 8_384_533);
+    assert!(CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1 == 4_144);
+    assert!(CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1 == 16_773_210);
+    assert!(CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1 == 25_088);
 };
 
 #[cfg(test)]
@@ -205,7 +209,7 @@ struct SectionHeaderV1 {
     profile_digest: [u8; 32],
     topology_digest: [u8; 32],
     release_candidate_digest: [u8; 32],
-    transcript_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
 }
 
 fn canonical_header_v1(
@@ -243,10 +247,10 @@ fn insert_header_digests_v1(
         header.profile_digest,
         header.topology_digest,
         header.release_candidate_digest,
-        header.transcript_digest,
     ] {
         registry.insert(digest)?;
     }
+    registry.insert(header.transcript_digest)?;
     Ok(())
 }
 
@@ -272,9 +276,9 @@ fn family_from_ordinal_v1(ordinal: usize) -> Option<(ZkAmsMkheRnsNativeFamilyV1,
 }
 
 fn exact_digest_array_v1<const N: usize>(
-    values: &[[u8; 32]],
-) -> Result<[[u8; 32]; N], ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-    let exact: &[[u8; 32]; N] = values
+    values: &[ProofDigestV1],
+) -> Result<[ProofDigestV1; N], ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    let exact: &[ProofDigestV1; N] = values
         .try_into()
         .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount)?;
     Ok(*exact)
@@ -285,7 +289,6 @@ fn tag_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1) -> [u8; 4] {
         ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge => TERMINAL_TAG_V1,
         ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs => RNS_QPCS_TAG_V1,
         ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup => CROSS_LOOKUP_TAG_V1,
-        ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding => ZERO_PADDING_TAG_V1,
     }
 }
 
@@ -324,6 +327,8 @@ fn preflight_v1(
     Ok(())
 }
 
+// Public exact-transport integrity only. This never supplies a STARK oracle,
+// Merkle parent, Fiat-Shamir state, or field challenge.
 fn proof_body_digest_v1(
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
     proof: &[u8],
@@ -338,6 +343,8 @@ fn proof_body_digest_v1(
     Ok(hash.finalize())
 }
 
+// Public exact section transport identity; all proof fields are separately
+// typed and canonical-decoded before this checksum can admit their envelope.
 fn codec_digest_v1(kind: ZkAmsMkheRnsNativeProofSectionKindV1, prefix: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(CODEC_DIGEST_DOMAIN_V1);
@@ -365,29 +372,29 @@ fn write_header_v1(
         header.profile_digest,
         header.topology_digest,
         header.release_candidate_digest,
-        header.transcript_digest,
     ] {
         bytes.extend_from_slice(&digest);
     }
+    bytes.extend_from_slice(header.transcript_digest.as_bytes());
     Ok(())
 }
 
 fn write_indexed_u8_v1(
     bytes: &mut Vec<u8>,
-    values: &[[u8; 32]],
+    values: &[ProofDigestV1],
 ) -> Result<(), ZkAmsMkheRnsNativeSectionCodecErrorV1> {
     for (index, digest) in values.iter().enumerate() {
         bytes.push(
             u8::try_from(index).map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount)?,
         );
-        bytes.extend_from_slice(digest);
+        bytes.extend_from_slice(digest.as_bytes());
     }
     Ok(())
 }
 
 fn write_indexed_u16_v1(
     bytes: &mut Vec<u8>,
-    values: &[[u8; 32]],
+    values: &[ProofDigestV1],
 ) -> Result<(), ZkAmsMkheRnsNativeSectionCodecErrorV1> {
     for (index, digest) in values.iter().enumerate() {
         bytes.extend_from_slice(
@@ -395,7 +402,7 @@ fn write_indexed_u16_v1(
                 .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount)?
                 .to_be_bytes(),
         );
-        bytes.extend_from_slice(digest);
+        bytes.extend_from_slice(digest.as_bytes());
     }
     Ok(())
 }
@@ -488,6 +495,11 @@ impl<'a> DecoderV1<'a> {
         Ok(u32::from_be_bytes(self.array()?))
     }
 
+    fn proof_digest(&mut self) -> Result<ProofDigestV1, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+        decode_proof_digest_v1(self.take(PROOF_DIGEST_BYTES_V1)?)
+            .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding)
+    }
+
     const fn position(&self) -> usize {
         self.cursor
     }
@@ -510,7 +522,7 @@ fn read_unbound_header_v1(
         profile_digest: decoder.array()?,
         topology_digest: decoder.array()?,
         release_candidate_digest: decoder.array()?,
-        transcript_digest: decoder.array()?,
+        transcript_digest: decoder.proof_digest()?,
     })
 }
 
@@ -530,13 +542,13 @@ fn read_header_v1(
 fn read_indexed_u8_v1<const N: usize>(
     decoder: &mut DecoderV1<'_>,
     registry: &mut DigestRegistryV1,
-) -> Result<[[u8; 32]; N], ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-    let mut values = [[0_u8; 32]; N];
+) -> Result<[ProofDigestV1; N], ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    let mut values = [ProofDigestV1::ZERO; N];
     for (index, value) in values.iter_mut().enumerate() {
         if usize::from(decoder.u8()?) != index {
             return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidOrder);
         }
-        *value = decoder.array()?;
+        *value = decoder.proof_digest()?;
         registry.insert(*value)?;
     }
     Ok(values)
@@ -545,13 +557,13 @@ fn read_indexed_u8_v1<const N: usize>(
 fn read_indexed_u16_v1<const N: usize>(
     decoder: &mut DecoderV1<'_>,
     registry: &mut DigestRegistryV1,
-) -> Result<[[u8; 32]; N], ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-    let mut values = [[0_u8; 32]; N];
+) -> Result<[ProofDigestV1; N], ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    let mut values = [ProofDigestV1::ZERO; N];
     for (index, value) in values.iter_mut().enumerate() {
         if usize::from(decoder.u16()?) != index {
             return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidOrder);
         }
-        *value = decoder.array()?;
+        *value = decoder.proof_digest()?;
         registry.insert(*value)?;
     }
     Ok(values)
@@ -594,20 +606,24 @@ fn finish_decoding_v1(
 }
 
 struct DigestRegistryV1 {
-    digests: [[u8; 32]; MAX_SECTION_DIGESTS_V1],
+    digests: [DigestIdentityV1; MAX_SECTION_DIGESTS_V1],
     len: usize,
 }
 
 impl DigestRegistryV1 {
     const fn new() -> Self {
         Self {
-            digests: [[0; 32]; MAX_SECTION_DIGESTS_V1],
+            digests: [DigestIdentityV1::EMPTY; MAX_SECTION_DIGESTS_V1],
             len: 0,
         }
     }
 
-    fn insert(&mut self, digest: [u8; 32]) -> Result<(), ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-        if digest == [0; 32] || self.digests[..self.len].contains(&digest) {
+    fn insert(
+        &mut self,
+        digest: impl Into<DigestIdentityV1>,
+    ) -> Result<(), ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+        let digest = digest.into();
+        if digest.is_zero() || self.digests[..self.len].contains(&digest) {
             return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::AliasedDigest);
         }
         let destination = self
@@ -627,11 +643,11 @@ impl DigestRegistryV1 {
 pub struct ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
     header: SectionHeaderV1,
     opening_commitments: [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPENING_COUNT_V1],
-    mapping_challenge_seed: [u8; 32],
-    cross_basis_challenge_seed: [u8; 32],
-    mapping_root: [u8; 32],
-    terminal_hyrax_root: [u8; 32],
-    cross_basis_bridge_root: [u8; 32],
+    mapping_challenge_seed: ProofDigestV1,
+    cross_basis_challenge_seed: ProofDigestV1,
+    mapping_root: ProofDigestV1,
+    terminal_hyrax_root: ProofDigestV1,
+    cross_basis_bridge_root: ProofDigestV1,
     proof: &'a [u8],
     proof_digest: [u8; 32],
 }
@@ -685,11 +701,11 @@ impl<'a> ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
         if decoder.u8()? != ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1 {
             return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount);
         }
-        let mapping_challenge_seed = decoder.array()?;
-        let cross_basis_challenge_seed = decoder.array()?;
-        let mapping_root = decoder.array()?;
-        let terminal_hyrax_root = decoder.array()?;
-        let cross_basis_bridge_root = decoder.array()?;
+        let mapping_challenge_seed = decoder.proof_digest()?;
+        let cross_basis_challenge_seed = decoder.proof_digest()?;
+        let mapping_root = decoder.proof_digest()?;
+        let terminal_hyrax_root = decoder.proof_digest()?;
+        let cross_basis_bridge_root = decoder.proof_digest()?;
         if mapping_challenge_seed != transcript.mapping_challenge_seed()
             || cross_basis_challenge_seed != transcript.cross_basis_challenge_seed()
             || mapping_root != transcript.mapping_root()
@@ -762,7 +778,7 @@ impl<'a> ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
             self.terminal_hyrax_root,
             self.cross_basis_bridge_root,
         ] {
-            bytes.extend_from_slice(&digest);
+            bytes.extend_from_slice(digest.as_bytes());
         }
         for (ordinal, opening) in self.opening_commitments.iter().copied().enumerate() {
             bytes.push(opening.family() as u8);
@@ -834,17 +850,17 @@ impl<'a> ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     header: SectionHeaderV1,
-    rns_aggregation_challenge_seed: [u8; 32],
-    qpcs_relation_challenge_seed: [u8; 32],
-    qpcs_batching_challenge_seed: [u8; 32],
-    qpcs_fri_fold_challenge_seeds: [[u8; 32]; FRI_COUNT_V1],
-    qpcs_query_challenge_seed: [u8; 32],
-    qpcs_initial_root: [u8; 32],
-    qpcs_quotient_root: [u8; 32],
-    qpcs_fri_roots: [[u8; 32]; FRI_COUNT_V1],
-    equation_commitment_digests: [[u8; 32]; EQUATION_COUNT_V1],
-    limb_commitment_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    query_opening_digests: [[u8; 32]; QUERY_COUNT_V1],
+    rns_aggregation_challenge_seed: ProofDigestV1,
+    qpcs_relation_challenge_seed: ProofDigestV1,
+    qpcs_batching_challenge_seed: ProofDigestV1,
+    qpcs_fri_fold_challenge_seeds: [ProofDigestV1; FRI_COUNT_V1],
+    qpcs_query_challenge_seed: ProofDigestV1,
+    qpcs_initial_root: ProofDigestV1,
+    qpcs_quotient_root: ProofDigestV1,
+    qpcs_fri_roots: [ProofDigestV1; FRI_COUNT_V1],
+    equation_commitment_digests: [ProofDigestV1; EQUATION_COUNT_V1],
+    limb_commitment_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    query_opening_digests: [ProofDigestV1; QUERY_COUNT_V1],
     proof: &'a [u8],
     proof_digest: [u8; 32],
 }
@@ -857,9 +873,9 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     /// Rejects an empty/oversized proof or any zero/aliased metadata digest.
     pub fn new(
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-        equation_commitment_digests: &[[u8; 32]],
-        limb_commitment_digests: &[[u8; 32]],
-        query_opening_digests: &[[u8; 32]],
+        equation_commitment_digests: &[ProofDigestV1],
+        limb_commitment_digests: &[ProofDigestV1],
+        query_opening_digests: &[ProofDigestV1],
         proof: &'a [u8],
     ) -> Result<Self, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         let qpcs_fri_roots =
@@ -909,17 +925,17 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
         {
             return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount);
         }
-        let rns_aggregation_challenge_seed = decoder.array()?;
-        let qpcs_relation_challenge_seed = decoder.array()?;
-        let qpcs_batching_challenge_seed = decoder.array()?;
-        let mut qpcs_fri_fold_challenge_seeds = [[0_u8; 32]; FRI_COUNT_V1];
+        let rns_aggregation_challenge_seed = decoder.proof_digest()?;
+        let qpcs_relation_challenge_seed = decoder.proof_digest()?;
+        let qpcs_batching_challenge_seed = decoder.proof_digest()?;
+        let mut qpcs_fri_fold_challenge_seeds = [ProofDigestV1::ZERO; FRI_COUNT_V1];
         for (layer, challenge) in qpcs_fri_fold_challenge_seeds.iter_mut().enumerate() {
             if usize::from(decoder.u8()?) != layer {
                 return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidOrder);
             }
-            *challenge = decoder.array()?;
+            *challenge = decoder.proof_digest()?;
         }
-        let qpcs_query_challenge_seed = decoder.array()?;
+        let qpcs_query_challenge_seed = decoder.proof_digest()?;
         if rns_aggregation_challenge_seed != transcript.rns_aggregation_challenge_seed()
             || qpcs_relation_challenge_seed != transcript.qpcs_relation_challenge_seed()
             || qpcs_batching_challenge_seed != transcript.qpcs_batching_challenge_seed()
@@ -928,14 +944,14 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
         {
             return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
         }
-        let qpcs_initial_root = decoder.array()?;
-        let qpcs_quotient_root = decoder.array()?;
-        let mut qpcs_fri_roots = [[0_u8; 32]; FRI_COUNT_V1];
+        let qpcs_initial_root = decoder.proof_digest()?;
+        let qpcs_quotient_root = decoder.proof_digest()?;
+        let mut qpcs_fri_roots = [ProofDigestV1::ZERO; FRI_COUNT_V1];
         for (layer, root) in qpcs_fri_roots.iter_mut().enumerate() {
             if usize::from(decoder.u8()?) != layer {
                 return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidOrder);
             }
-            *root = decoder.array()?;
+            *root = decoder.proof_digest()?;
             let expected = transcript.qpcs_fri_roots()[layer];
             if usize::from(expected.layer()) != layer || *root != expected.root() {
                 return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
@@ -1009,24 +1025,24 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
             self.qpcs_relation_challenge_seed,
             self.qpcs_batching_challenge_seed,
         ] {
-            bytes.extend_from_slice(&digest);
+            bytes.extend_from_slice(digest.as_bytes());
         }
         for (layer, challenge) in self.qpcs_fri_fold_challenge_seeds.iter().enumerate() {
             bytes.push(
                 u8::try_from(layer)
                     .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount)?,
             );
-            bytes.extend_from_slice(challenge);
+            bytes.extend_from_slice(challenge.as_bytes());
         }
-        bytes.extend_from_slice(&self.qpcs_query_challenge_seed);
-        bytes.extend_from_slice(&self.qpcs_initial_root);
-        bytes.extend_from_slice(&self.qpcs_quotient_root);
+        bytes.extend_from_slice(self.qpcs_query_challenge_seed.as_bytes());
+        bytes.extend_from_slice(self.qpcs_initial_root.as_bytes());
+        bytes.extend_from_slice(self.qpcs_quotient_root.as_bytes());
         for (layer, root) in self.qpcs_fri_roots.iter().enumerate() {
             bytes.push(
                 u8::try_from(layer)
                     .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount)?,
             );
-            bytes.extend_from_slice(root);
+            bytes.extend_from_slice(root.as_bytes());
         }
         write_indexed_u8_v1(&mut bytes, &self.equation_commitment_digests)?;
         write_indexed_u8_v1(&mut bytes, &self.limb_commitment_digests)?;
@@ -1037,19 +1053,19 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
 
     /// Borrow the two ordered RNS-equation commitment digests.
     #[must_use]
-    pub const fn equation_commitment_digests(&self) -> &[[u8; 32]] {
+    pub const fn equation_commitment_digests(&self) -> &[ProofDigestV1] {
         &self.equation_commitment_digests
     }
 
     /// Borrow the forty ordered limb commitment digests.
     #[must_use]
-    pub const fn limb_commitment_digests(&self) -> &[[u8; 32]] {
+    pub const fn limb_commitment_digests(&self) -> &[ProofDigestV1] {
         &self.limb_commitment_digests
     }
 
     /// Borrow the 160 ordered common-query opening digests.
     #[must_use]
-    pub const fn query_opening_digests(&self) -> &[[u8; 32]] {
+    pub const fn query_opening_digests(&self) -> &[ProofDigestV1] {
         &self.query_opening_digests
     }
 
@@ -1106,13 +1122,13 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
 
 struct UnboundCrossFieldGlobalLookupSectionV1<'a> {
     header: SectionHeaderV1,
-    cross_field_challenge_seed: [u8; 32],
-    global_lookup_challenge_seed: [u8; 32],
-    cross_field_root: [u8; 32],
-    global_lookup_root: [u8; 32],
-    point_evaluation_digests: [[u8; 32]; POINT_COUNT_V1],
-    limb_relation_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    sumcheck_round_digests: [[u8; 32]; SUMCHECK_COUNT_V1],
+    cross_field_challenge_seed: ProofDigestV1,
+    global_lookup_challenge_seed: ProofDigestV1,
+    cross_field_root: ProofDigestV1,
+    global_lookup_root: ProofDigestV1,
+    point_evaluation_digests: [ProofDigestV1; POINT_COUNT_V1],
+    limb_relation_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    sumcheck_round_digests: [ProofDigestV1; SUMCHECK_COUNT_V1],
     proof: &'a [u8],
     proof_digest: [u8; 32],
     codec_digest: [u8; 32],
@@ -1194,10 +1210,10 @@ fn decode_unbound_cross_field_global_lookup_v1(
     {
         return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount);
     }
-    let cross_field_challenge_seed = decoder.array()?;
-    let global_lookup_challenge_seed = decoder.array()?;
-    let cross_field_root = decoder.array()?;
-    let global_lookup_root = decoder.array()?;
+    let cross_field_challenge_seed = decoder.proof_digest()?;
+    let global_lookup_challenge_seed = decoder.proof_digest()?;
+    let cross_field_root = decoder.proof_digest()?;
+    let global_lookup_root = decoder.proof_digest()?;
     let mut registry = DigestRegistryV1::new();
     insert_header_digests_v1(&mut registry, header)?;
     for digest in [
@@ -1255,13 +1271,13 @@ fn decode_unbound_cross_field_global_lookup_v1(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
     header: SectionHeaderV1,
-    cross_field_challenge_seed: [u8; 32],
-    global_lookup_challenge_seed: [u8; 32],
-    cross_field_root: [u8; 32],
-    global_lookup_root: [u8; 32],
-    point_evaluation_digests: [[u8; 32]; POINT_COUNT_V1],
-    limb_relation_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    sumcheck_round_digests: [[u8; 32]; SUMCHECK_COUNT_V1],
+    cross_field_challenge_seed: ProofDigestV1,
+    global_lookup_challenge_seed: ProofDigestV1,
+    cross_field_root: ProofDigestV1,
+    global_lookup_root: ProofDigestV1,
+    point_evaluation_digests: [ProofDigestV1; POINT_COUNT_V1],
+    limb_relation_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    sumcheck_round_digests: [ProofDigestV1; SUMCHECK_COUNT_V1],
     proof: &'a [u8],
     proof_digest: [u8; 32],
 }
@@ -1274,9 +1290,9 @@ impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
     /// Rejects an empty/oversized proof or any zero/aliased metadata digest.
     pub fn new(
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-        point_evaluation_digests: &[[u8; 32]],
-        limb_relation_digests: &[[u8; 32]],
-        sumcheck_round_digests: &[[u8; 32]],
+        point_evaluation_digests: &[ProofDigestV1],
+        limb_relation_digests: &[ProofDigestV1],
+        sumcheck_round_digests: &[ProofDigestV1],
         proof: &'a [u8],
     ) -> Result<Self, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         let section = Self {
@@ -1333,7 +1349,7 @@ impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
             self.cross_field_root,
             self.global_lookup_root,
         ] {
-            bytes.extend_from_slice(&digest);
+            bytes.extend_from_slice(digest.as_bytes());
         }
         write_indexed_u8_v1(&mut bytes, &self.point_evaluation_digests)?;
         write_indexed_u8_v1(&mut bytes, &self.limb_relation_digests)?;
@@ -1344,19 +1360,19 @@ impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
 
     /// Borrow the five ordered cross-field point-evaluation digests.
     #[must_use]
-    pub const fn point_evaluation_digests(&self) -> &[[u8; 32]] {
+    pub const fn point_evaluation_digests(&self) -> &[ProofDigestV1] {
         &self.point_evaluation_digests
     }
 
     /// Borrow the forty ordered cross-field limb-relation digests.
     #[must_use]
-    pub const fn limb_relation_digests(&self) -> &[[u8; 32]] {
+    pub const fn limb_relation_digests(&self) -> &[ProofDigestV1] {
         &self.limb_relation_digests
     }
 
     /// Borrow the twenty-nine ordered global-lookup sumcheck round digests.
     #[must_use]
-    pub const fn sumcheck_round_digests(&self) -> &[[u8; 32]] {
+    pub const fn sumcheck_round_digests(&self) -> &[ProofDigestV1] {
         &self.sumcheck_round_digests
     }
 
@@ -1651,167 +1667,7 @@ pub(super) fn authenticate_bound_cross_field_global_lookup_for_inventory_v1<'env
     Ok(bound.typed)
 }
 
-/// Borrowed, typed forty-limb zero-padding proof section.
-///
-/// This is a canonical transport view and never attests that padding is zero.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ZkAmsMkheRnsNativeZeroPaddingSectionV1<'a> {
-    header: SectionHeaderV1,
-    zero_padding_challenge_seed: [u8; 32],
-    composite_binding_challenge_seed: [u8; 32],
-    zero_padding_root: [u8; 32],
-    limb_padding_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    proof: &'a [u8],
-    proof_digest: [u8; 32],
-}
-
-impl<'a> ZkAmsMkheRnsNativeZeroPaddingSectionV1<'a> {
-    /// Construct a canonical zero-padding transport view for one exact transcript.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an empty/oversized proof or any zero/aliased metadata digest.
-    pub fn new(
-        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-        limb_padding_digests: &[[u8; 32]],
-        proof: &'a [u8],
-    ) -> Result<Self, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-        let section = Self {
-            header: canonical_header_v1(transcript)?,
-            zero_padding_challenge_seed: transcript.zero_padding_challenge_seed(),
-            composite_binding_challenge_seed: transcript.composite_binding_challenge_seed(),
-            zero_padding_root: transcript.zero_padding_root(),
-            limb_padding_digests: exact_digest_array_v1(limb_padding_digests)?,
-            proof,
-            proof_digest: proof_body_digest_v1(
-                ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
-                proof,
-            )?,
-        };
-        section.validate_v1()?;
-        Ok(section)
-    }
-
-    /// Decode exactly one canonical zero-padding section without allocation.
-    ///
-    /// # Errors
-    ///
-    /// Rejects every cap, truncation, count, order, context, alias, integrity,
-    /// overflow, or trailing-byte violation.
-    pub fn from_canonical_bytes_exact_v1(
-        bytes: &'a [u8],
-        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    ) -> Result<Self, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-        let kind = ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding;
-        preflight_v1(bytes, kind, ZERO_PADDING_FIXED_BYTES_V1 + 1)?;
-        let expected_header = canonical_header_v1(transcript)?;
-        let mut decoder = DecoderV1::new(bytes);
-        let header = read_header_v1(&mut decoder, kind, bytes.len(), expected_header)?;
-        if usize::from(decoder.u8()?) != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
-            return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount);
-        }
-        let zero_padding_challenge_seed = decoder.array()?;
-        let composite_binding_challenge_seed = decoder.array()?;
-        let zero_padding_root = decoder.array()?;
-        if zero_padding_challenge_seed != transcript.zero_padding_challenge_seed()
-            || composite_binding_challenge_seed != transcript.composite_binding_challenge_seed()
-            || zero_padding_root != transcript.zero_padding_root()
-        {
-            return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
-        }
-        let mut registry = DigestRegistryV1::new();
-        insert_header_digests_v1(&mut registry, header)?;
-        for digest in [
-            zero_padding_challenge_seed,
-            composite_binding_challenge_seed,
-            zero_padding_root,
-        ] {
-            registry.insert(digest)?;
-        }
-        let limb_padding_digests = read_indexed_u8_v1(&mut decoder, &mut registry)?;
-        let (proof, proof_digest) = read_proof_v1(&mut decoder, kind, &mut registry)?;
-        finish_decoding_v1(&mut decoder, kind, &mut registry)?;
-        Ok(Self {
-            header,
-            zero_padding_challenge_seed,
-            composite_binding_challenge_seed,
-            zero_padding_root,
-            limb_padding_digests,
-            proof,
-            proof_digest,
-        })
-    }
-
-    /// Encode the exact canonical zero-padding section after a cap preflight.
-    ///
-    /// # Errors
-    ///
-    /// Rejects invalid metadata, proof length, aliases, or bounded allocation failure.
-    pub fn to_canonical_bytes_v1(self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-        self.validate_v1()?;
-        let kind = ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding;
-        let (mut bytes, total, proof_digest) =
-            begin_encoding_v1(kind, ZERO_PADDING_FIXED_BYTES_V1, self.proof, self.header)?;
-        bytes.push(
-            u8::try_from(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1)
-                .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount)?,
-        );
-        for digest in [
-            self.zero_padding_challenge_seed,
-            self.composite_binding_challenge_seed,
-            self.zero_padding_root,
-        ] {
-            bytes.extend_from_slice(&digest);
-        }
-        write_indexed_u8_v1(&mut bytes, &self.limb_padding_digests)?;
-        write_proof_v1(&mut bytes, self.proof, proof_digest)?;
-        finish_encoding_v1(bytes, kind, total)
-    }
-
-    /// Borrow the forty ordered padding-limb commitment digests.
-    #[must_use]
-    pub const fn limb_padding_digests(&self) -> &[[u8; 32]] {
-        &self.limb_padding_digests
-    }
-
-    /// Borrow the opaque cryptographic zero-padding proof bytes.
-    #[must_use]
-    pub const fn proof(&self) -> &'a [u8] {
-        self.proof
-    }
-
-    fn validate_v1(&self) -> Result<(), ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-        encoded_len_v1(
-            ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
-            ZERO_PADDING_FIXED_BYTES_V1,
-            self.proof.len(),
-        )?;
-        let mut registry = DigestRegistryV1::new();
-        insert_header_digests_v1(&mut registry, self.header)?;
-        for digest in [
-            self.zero_padding_challenge_seed,
-            self.composite_binding_challenge_seed,
-            self.zero_padding_root,
-        ] {
-            registry.insert(digest)?;
-        }
-        for digest in self.limb_padding_digests {
-            registry.insert(digest)?;
-        }
-        if self.proof_digest
-            != proof_body_digest_v1(
-                ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
-                self.proof,
-            )?
-        {
-            return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::Integrity);
-        }
-        registry.insert(self.proof_digest)?;
-        Ok(())
-    }
-}
-
-/// Internal classification for one atomic four-section decode.
+/// Internal classification for one atomic three-section decode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CompositeSectionSetErrorV1 {
     /// One typed section failed before cryptographic verification.
@@ -1820,14 +1676,13 @@ pub(super) enum CompositeSectionSetErrorV1 {
     CrossSectionAlias,
 }
 
-/// Decode the complete four-section set and reject cross-section digest reuse.
+/// Decode the complete three-section set and reject cross-section digest reuse.
 pub(super) fn validate_composite_section_set_exact_v1(
     terminal_bytes: &[u8],
     rns_qpcs_bytes: &[u8],
     cross_lookup_bytes: &[u8],
-    zero_padding_bytes: &[u8],
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    outer_section_digests: &[[u8; 32]; 4],
+    outer_section_digests: &[[u8; 32]; 3],
     outer_proof_digest: [u8; 32],
 ) -> Result<(), CompositeSectionSetErrorV1> {
     let terminal = ZkAmsMkheRnsNativeTerminalBridgeSectionV1::from_canonical_bytes_exact_v1(
@@ -1855,14 +1710,6 @@ pub(super) fn validate_composite_section_set_exact_v1(
             ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup,
         )
     })?;
-    let padding = ZkAmsMkheRnsNativeZeroPaddingSectionV1::from_canonical_bytes_exact_v1(
-        zero_padding_bytes,
-        transcript,
-    )
-    .map_err(|_| {
-        CompositeSectionSetErrorV1::Section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
-    })?;
-
     (|| {
         let mut registry = DigestRegistryV1::new();
         insert_header_digests_v1(&mut registry, terminal.header)?;
@@ -1898,7 +1745,6 @@ pub(super) fn validate_composite_section_set_exact_v1(
             transcript.qpcs_quotient_root(),
             transcript.cross_field_root(),
             transcript.global_lookup_root(),
-            transcript.zero_padding_root(),
         ] {
             registry.insert(digest)?;
         }
@@ -1913,25 +1759,14 @@ pub(super) fn validate_composite_section_set_exact_v1(
             .chain(cross.point_evaluation_digests)
             .chain(cross.limb_relation_digests)
             .chain(cross.sumcheck_round_digests)
-            .chain(padding.limb_padding_digests)
         {
             registry.insert(digest)?;
         }
-        for digest in [
-            terminal.proof_digest,
-            rns.proof_digest,
-            cross.proof_digest,
-            padding.proof_digest,
-        ] {
+        for digest in [terminal.proof_digest, rns.proof_digest, cross.proof_digest] {
             registry.insert(digest)?;
         }
-        for bytes in [
-            terminal_bytes,
-            rns_qpcs_bytes,
-            cross_lookup_bytes,
-            zero_padding_bytes,
-        ] {
-            let digest = bytes
+        for bytes in [terminal_bytes, rns_qpcs_bytes, cross_lookup_bytes] {
+            let digest: [u8; 32] = bytes
                 .get(bytes.len().saturating_sub(CODEC_DIGEST_BYTES_V1)..)
                 .and_then(|value| value.try_into().ok())
                 .ok_or(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding)?;

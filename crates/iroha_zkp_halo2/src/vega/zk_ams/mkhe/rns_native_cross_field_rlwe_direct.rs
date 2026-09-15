@@ -7,7 +7,7 @@
 //! and 413 linear constraints.  Thus one core has exactly 100 vector
 //! commitments, 10,300 active gates, a 16,384-gate generator prefix, 20,650
 //! constraints, and a 7,981-byte proof.  The four raw proofs occupy 31,924
-//! bytes; the owned frame is 32,271 bytes under a hard 36,020-byte frame cap.
+//! bytes; the owned frame is 32,303 bytes under a hard 36,020-byte frame cap.
 //! A non-empty global-lookup successor follows that frame and remains under the
 //! inventory continuation cap; it is not incorrectly charged to the GBP frame.
 //!
@@ -41,7 +41,7 @@
 //! inventory root are prohibited: they inherit final terminal and continuation
 //! state, including this direct proof. A dedicated pre-direct inventory
 //! candidate projection must exclude cross/global/zero roots, final transcript
-//! state and challenges, cross-section and zero-padding digests, continuation
+//! state and challenges, cross-section digests, continuation
 //! state, and every direct-proof binding. GBP
 //! core challenges bind that schedule, the canonical numeric root, and the
 //! derived commitment root, but exclude the proof-set digest, successor
@@ -76,6 +76,14 @@
 //! source.
 //! This kernel mints no composite, readiness, receipt, or release authority.
 
+use super::{
+    rns_native_proof_hash::{
+        RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+        RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1,
+        RnsNativeProofHashRoleV1, decode_proof_digest_v1,
+    },
+    rns_native_proof_sampling::{RnsNativeAggregationSamplerV1, RnsNativeProofSamplingErrorV1},
+};
 use core::{fmt, marker::PhantomData};
 use std::sync::OnceLock;
 
@@ -97,9 +105,9 @@ use super::{
     rns_native_global_lookup_z_commitment_view::rns_native_global_inverse_product_sumcheck::RnsNativeGlobalLookupVerifiedCoreRootV2,
     rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
     rns_native_qpcs_fri_complete::{
-        RnsNativeAuthenticatedClaimedQpcsOriginV2, RnsNativeQpcsAuthenticatedNumericTailV1,
-        RnsNativeQpcsCompletedLineageV1, RnsNativeQpcsFriCompleteErrorV1,
-        RnsNativeQpcsFriCompleteStageV1,
+        RnsNativeAuthenticatedClaimedQpcsOriginV2, RnsNativeClaimedNumericBindingAxesV1,
+        RnsNativeQpcsAuthenticatedNumericTailV1, RnsNativeQpcsCompletedLineageV1,
+        RnsNativeQpcsFriCompleteErrorV1, RnsNativeQpcsFriCompleteStageV1,
     },
     rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
     rns_native_source::{
@@ -138,7 +146,10 @@ use crate::{
 const VERSION_V1: u8 = 1;
 const FLAGS_V1: u8 = 0;
 const MAGIC_V1: [u8; 4] = *b"ZRD4";
+// Public identities and the independent T256/GBP protocol retain their owned
+// 32-byte encoding. Native qPCS commitments, states and terminal roots are typed.
 const DIGEST_BYTES_V1: usize = 32;
+const PROOF_DIGEST_BYTES_V1: usize = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
 const POINT_BYTES_V1: usize = 33;
 const SCALAR_BYTES_V1: usize = 32;
 const LIMBS_V1: usize = 40;
@@ -155,8 +166,11 @@ const Q_MASK_DIGITS_V1: usize = 4;
 const Q_MASK_OWNERS_V1: usize = EVALUATIONS_V1 * BLOCKS_PER_RECORD_V1;
 const Q_MASK_S_POINTS_V1: usize = Q_MASK_OWNERS_V1 * Q_MASK_DIGITS_V1;
 const Q_MASK_ROOT_BYTES_PER_POINT_V1: usize = 4 + 4 + POINT_BYTES_V1;
+pub(super) const RNS_NATIVE_Q_MASK_POINT_FRAME_BYTES_V1: usize =
+    Q_MASK_S_POINTS_V1 * Q_MASK_ROOT_BYTES_PER_POINT_V1;
+// Logical framed payload bytes; six-lane permutation work is accounted separately.
 const Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1: usize =
-    Q_MASK_ROOT_DOMAIN_V1.len() + 1 + DIGEST_BYTES_V1 + 4;
+    Q_MASK_ROOT_DOMAIN_V1.len() + 1 + 6 * DIGEST_BYTES_V1 + 2 * PROOF_DIGEST_BYTES_V1 + 4;
 const Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1: usize =
     Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1 + Q_MASK_S_POINTS_V1 * Q_MASK_ROOT_BYTES_PER_POINT_V1;
 const QUOTIENT_BITS_V1: usize = 103;
@@ -196,9 +210,10 @@ const CORE_PROOF_BYTES_V1: usize =
 const ALL_CORE_PROOF_BYTES_V1: usize = CORES_V1 * CORE_PROOF_BYTES_V1;
 const CORE_RECORD_HEADER_BYTES_V1: usize = 1 + 2 + 1 + 2;
 const CORE_RECORD_BYTES_V1: usize = CORE_RECORD_HEADER_BYTES_V1 + CORE_PROOF_BYTES_V1;
-// magic/version/flags/header/frame, nineteen geometry bytes, eight digests,
+// magic/version/flags/header/frame, nineteen geometry bytes, six 32-byte curve identities and two 48-byte native digests,
 // and a u32 successor length.
-const HEADER_BYTES_V1: usize = 4 + 1 + 1 + 2 + 4 + 19 + 8 * DIGEST_BYTES_V1 + 4;
+const HEADER_BYTES_V1: usize =
+    4 + 1 + 1 + 2 + 4 + 19 + 6 * DIGEST_BYTES_V1 + 2 * PROOF_DIGEST_BYTES_V1 + 4;
 const CODEC_DIGEST_BYTES_V1: usize = DIGEST_BYTES_V1;
 const OWNED_WIRE_BYTES_V1: usize =
     HEADER_BYTES_V1 + CORES_V1 * CORE_RECORD_BYTES_V1 + CODEC_DIGEST_BYTES_V1;
@@ -209,7 +224,6 @@ pub(super) const RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1: usiz
     RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 - OWNED_WIRE_BYTES_V1;
 const MIN_WIRE_BYTES_V1: usize = OWNED_WIRE_BYTES_V1 + MIN_SUCCESSOR_BYTES_V1;
 const MAX_CHALLENGE_ATTEMPTS_V1: u8 = 128;
-const MAX_Q_CHALLENGE_ATTEMPTS_V1: u16 = 256;
 const GBP_CHALLENGES_PER_CORE_V1: usize = 4 + LOG_N_V1;
 const POSITIVE_TERMS_PER_COORDINATE_V1: usize = 7_256;
 const NEGATIVE_TERMS_PER_COORDINATE_V1: usize = 1_376;
@@ -235,10 +249,6 @@ const Q_MASK_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.pre-qpcs-s-root";
 const DIRECT_SCHEDULE_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.schedule-binding";
-const CLAIMED_SOURCE_NUMERIC_BINDING_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.claimed-source-numeric-binding";
-const AGGREGATION_CHALLENGE_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.aggregation-challenge";
 const NUMERIC_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-rlwe-direct.numeric-root";
 const COMMITMENT_ROOT_DOMAIN_V1: &[u8] =
@@ -263,10 +273,10 @@ const GEOMETRY_LANGUAGE_V1: &[u8] = b"limbs=40;repetitions=5;evaluations=200;cor
 const RELATION_LANGUAGE_V1: &[u8] = b"K=B+beta*A mod q;C=sum-j-gamma^j*(C0_j+beta*C1_j) mod q;Ptilde=(a^N+1)*Htilde mod q;Uplus-Uminus-(Ptilde+C)=q*(zplus-zminus);zplus,zminus-in-[0,2^103);boolean-gates-use-(b,b,b);absolute-integer-expression<2^165<pT";
 const DERIVATION_LANGUAGE_V1: &[u8] = b"Cplus=sum-j,b,h gamma^j*B^h*a^(bL)*CD[j,b,h]+sum-j,b gamma^j*K*a^(bL)*Cr-plus+gamma^j*pTmodq*a^(bL)*(Ce0-plus+beta*Ce1-plus)+(a^N+1)*sum-b,h B^h*a^(bL)*CS[b,h];Cminus=sum-j,b gamma^j*K*a^(bL)*Cr-minus+gamma^j*pTmodq*a^(bL)*(Ce0-minus+beta*Ce1-minus+Cone-Cborrow18)";
 const NO_WRAP_LANGUAGE_V1: &[u8] = b"Vplus<7256*(B-1)*(qmax-1)<2^88;Vminus<1376*(B-1)*(qmax-1)<2^86;Uplus<118882304*(B-1)*(qmax-1)^2<2^162;Uminus<22544384*(B-1)*(qmax-1)^2<2^160;whole-signed-expression<2^165<pT;qmax=1152921504606584833";
-const SOUNDNESS_LANGUAGE_V1: &[u8] = b"aggregate-discrepancy-degree=(2*131072-2)+42+1=262185;union-over-40-limbs-and-five-independent-repetitions<=40*(262185/qmin)^5<2^-204.67;qmin=1152921504396869633;plus-bounded-unbiased-q-rejection,GBP-knowledge-soundness,binding,and-Keccak-ROM-terms";
+const SOUNDNESS_LANGUAGE_V1: &[u8] = b"aggregate-discrepancy-degree=(2*131072-2)+42+1=262185;union-over-40-limbs-and-five-independent-repetitions<=40*(262185/qmin)^5<2^-204.67;qmin=1152921504396869633;plus-canonical-Goldilocks-domain-bounded-unbiased-q-rejection,native-six-lane-binding,GBP-knowledge-soundness,curve-binding,and-independent-curve-Keccak-ROM-terms";
 const SOURCE_LANGUAGE_V1: &[u8] = b"minimal-pre-qpcs-source-exposes-only-actual-q-mask-S-commitment-points;move-only-by-value-post-qpcs-authoritative-source;source-independent-successor-and-wire-structure/header/codec/cap-preflight-before-any-authoritative-source-call;take-a-A-B-C0[43]-C1[43]-qpcs-product-qpcs-opening-quotient-exactly-once-per-evaluation;read-actual-upstream-commitment-points;schedule-free-opening-cursor-order-is-relation-0-positive,relation-0-negative,...,relation-199-positive,relation-199-negative;poison-before-opening-order/length/provider-validation;take-positive-and-negative-16384-coordinate-openings,masks,and-103-bit-owners-exactly-once;caller-zeroizing-destinations-precede-every-fallible-opening-call;drop-clears-retained-secret-copies;opening-cursor-exposes-no-schedule,chronology,lineage,digest,point,or-finish-surface;no-digest-only-evaluation-or-opening-source";
-const TRANSCRIPT_LANGUAGE_V1: &[u8] = b"retain-exact-rns-native-rlwe-source-gamma/beta-schedule;hash-actual-6400-q-mask-S-digit-points-with-only-profile,source-binding,source-formula,source-mapping,rns-seed,qpcs-parameter,and-state-after-initial;exclude-source-terminal,packing,inventory,and-all-post-qpcs-results-from-S-root;derive-a-only-after-that-root-with-the-qpcs-prefix-rejection-map;after-qpcs-combine-only-terminal-predecessor,sealed-candidate-pre-direct-inventory-context,sealed-candidate-pre-direct-inventory-root,and-existing-radix-candidate axes;current-inventory-prior-context-and-canonical-root-are-prohibited-because-they-inherit-final-terminal-and-continuation-state;candidate-pre-direct-inventory-axes-must-exclude-cross/global/zero-roots,final-transcript-and-challenges,cross-section-and-zero-padding-digests,continuation-state,and-direct-proof-bindings;exclude-cross-proof,cross-link,inventory-binding,continuation-digest,packing-binding,radix-binding,and-successor-membership-from-direct-core-challenges;each-a-is-nonzero,distinct-across-five-same-limb-repetitions,a^131072+1!=0,and-a^524288!=1;core-challenges-bind-manifest,candidate-fixed-axes,S-root,direct-schedule-binding,relation-seed,numeric-root,derived-commitment-root,core-index,evaluation-range,actual-Cplus-Cminus,and-bp-basis;four-core-pending-owner-binds-proof-set-and-private-core-transcript-set-into-opaque-successor-independent-cross-field-root-capability;consuming-typed-bind-moves-root-into-staged-terminal-before-global-challenge;only-terminal-bound-pending-owner-may-seal-later-nonempty-successor;exclude-successor,codec,final-binding-from-core-root;admit-excluded-values-only-after-four-core-verification";
-const INTEGRATION_LANGUAGE_V1: &[u8] = b"qpcs-source-settled:rns_native_transcript-enforces-initial,S,relation,quotient,batching,each-FRI-root/fold,query-order;rns_native_qpcs_prefix-prover-replay-verifier-consume-and-return-one-move-only-relation-schedule;staged-terminal-transcript-api-available:bind-cross-field-root,derive-global-challenge,bind-global-root,derive-zero-padding-challenge,bind-zero-padding-root;concrete-direct-verified-root/transcript-obligation-bridge-integrated;sealed-pre-direct-candidate-contract-implemented:rns_native_cross_field_inventory-provides-a-dedicated-pre-direct-candidate-context-and-root-that-exclude-cross/global/zero-roots,final-transcript-and-challenges,cross-section-and-zero-padding-digests,continuation-state,and-direct-proof-bindings;current-inventory-prior-context-and-canonical-root-must-not-be-adapted;single-top-level-carrier-retains-source-preflight-and-numeric/public-owners,moves-the-sole-lineaged-schedule-once-into-a-pre-auth-claimed-qpcs-owner,provisionally-binds-claimed-roots-to-obtain-final-seeds,authenticates-qpcs-with-the-same-owner-chain,retains-authenticated-numeric-rows-for-later-direct-traversal,discharges-direct-root-obligations,and-only-then-reaches-membership;numeric-cursor-exposes-no-schedule-or-lineage;digest-equality-must-not-substitute-for-ownership;40-modulus-table-is-release-pinned;positive/negative-commitments-derived-only-by-this-formula;global-lookup-consumes-nonempty-successor;composite-recomputes-final-root-and-digest;live-production-source,live-pre-direct-inventory-axis-entry,live-single-owner-chronology,direct-staged-adapter,padding,global-lookup,composite,readiness-remain-unavailable";
+const TRANSCRIPT_LANGUAGE_V1: &[u8] = b"shared-rns-native-aggregation-sampler-owns-exact-source/direct-gamma-beta;native-q-mask-commitment-is-six-lane384-with-full-raw-pre-qpcs-axes-and-ordered6400-points;independent-T256-GBP-transcripts-context-and-proof-identities-remain32;terminal-native384-bridge-binds-complete-current-context-and-all-four-raw-proofs-after-core-completion;hash-actual-6400-q-mask-S-digit-points-with-only-profile,source-binding,source-formula,source-mapping,rns-seed,qpcs-parameter,and-state-after-initial;exclude-source-terminal,packing,inventory,and-all-post-qpcs-results-from-S-root;derive-a-only-after-that-root-with-the-qpcs-prefix-rejection-map;after-qpcs-combine-only-terminal-predecessor,sealed-candidate-pre-direct-inventory-context,sealed-candidate-pre-direct-inventory-root,and-existing-radix-candidate axes;current-inventory-prior-context-and-canonical-root-are-prohibited-because-they-inherit-final-terminal-and-continuation-state;candidate-pre-direct-inventory-axes-must-exclude-cross/global-roots,final-transcript-and-challenges,cross-section-digests,continuation-state,and-direct-proof-bindings;exclude-cross-proof,cross-link,inventory-binding,continuation-digest,packing-binding,radix-binding,and-successor-membership-from-direct-core-challenges;each-a-is-nonzero,distinct-across-five-same-limb-repetitions,a^131072+1!=0,and-a^524288!=1;core-challenges-bind-manifest,candidate-fixed-axes,S-root,direct-schedule-binding,relation-seed,numeric-root,derived-commitment-root,core-index,evaluation-range,actual-Cplus-Cminus,and-bp-basis;four-core-pending-owner-binds-proof-set-and-private-core-transcript-set-into-opaque-successor-independent-cross-field-root-capability;consuming-typed-bind-moves-root-into-staged-terminal-before-global-challenge;only-terminal-bound-pending-owner-may-seal-later-nonempty-successor;exclude-successor,codec,final-binding-from-core-root;admit-excluded-values-only-after-four-core-verification";
+const INTEGRATION_LANGUAGE_V1: &[u8] = b"qpcs-source-settled:rns_native_transcript-enforces-initial,S,relation,quotient,batching,each-FRI-root/fold,query-order;rns_native_qpcs_prefix-prover-replay-verifier-consume-and-return-one-move-only-relation-schedule;staged-terminal-transcript-api-available:bind-cross-field-root,derive-global-challenge,bind-global-root,derive-composite-challenge;concrete-direct-verified-root/transcript-obligation-bridge-integrated;sealed-pre-direct-candidate-contract-implemented:rns_native_cross_field_inventory-provides-a-dedicated-pre-direct-candidate-context-and-root-that-exclude-cross/global-roots,final-transcript-and-challenges,cross-section-digests,continuation-state,and-direct-proof-bindings;current-inventory-prior-context-and-canonical-root-must-not-be-adapted;single-top-level-carrier-retains-source-preflight-and-numeric/public-owners,moves-the-sole-lineaged-schedule-once-into-a-pre-auth-claimed-qpcs-owner,provisionally-binds-claimed-roots-to-obtain-final-seeds,authenticates-qpcs-with-the-same-owner-chain,retains-authenticated-numeric-rows-for-later-direct-traversal,discharges-direct-root-obligations,and-only-then-reaches-membership;numeric-cursor-exposes-no-schedule-or-lineage;digest-equality-must-not-substitute-for-ownership;40-modulus-table-is-release-pinned;positive/negative-commitments-derived-only-by-this-formula;global-lookup-consumes-nonempty-successor;composite-recomputes-final-root-and-digest;live-production-source,live-pre-direct-inventory-axis-entry,live-single-owner-chronology,direct-staged-adapter,global-lookup,composite,readiness-remain-unavailable";
 
 const DIRECT_RLWE_RELATION_KERNEL_AVAILABLE_V1: bool = true;
 const PRE_DIRECT_CANDIDATE_AXIS_CONTRACT_SETTLED_V1: bool = true;
@@ -291,10 +301,11 @@ const _: () = {
     assert!(EVALUATIONS_V1 == 200);
     assert!(RING_DEGREE_V1 == 131_072);
     assert!(Q_MASK_S_POINTS_V1 == 6_400);
+    assert!(RNS_NATIVE_Q_MASK_POINT_FRAME_BYTES_V1 == 262_400);
     assert!(Q_MASK_ROOT_DOMAIN_V1.len() == 71);
     assert!(Q_MASK_ROOT_BYTES_PER_POINT_V1 == 41);
-    assert!(Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1 == 108);
-    assert!(Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1 == 262_508);
+    assert!(Q_MASK_ROOT_FIXED_ABSORPTION_BYTES_V1 == 364);
+    assert!(Q_MASK_ROOT_TOTAL_ABSORPTION_BYTES_V1 == 262_764);
     assert!(QUOTIENT_OPENING_SIGNS_V1 == 2);
     assert!(QUOTIENT_OPENING_OWNERS_V1 == 400);
     assert!(QUOTIENT_OPENING_SCALARS_PER_OWNER_V1 == 16_488);
@@ -318,13 +329,13 @@ const _: () = {
     assert!(CIRCUIT_PROOF_SCALARS_V1 + IPA_FINAL_SCALARS_V1 == PROOF_SCALARS_PER_CORE_V1);
     assert!(CORE_PROOF_BYTES_V1 == 7_981);
     assert!(ALL_CORE_PROOF_BYTES_V1 == 31_924);
-    assert!(HEADER_BYTES_V1 == 291);
-    assert!(OWNED_WIRE_BYTES_V1 == 32_271);
-    assert!(MIN_WIRE_BYTES_V1 == 32_272);
-    assert!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1 == 32_271);
+    assert!(HEADER_BYTES_V1 == 323);
+    assert!(OWNED_WIRE_BYTES_V1 == 32_303);
+    assert!(MIN_WIRE_BYTES_V1 == 32_304);
+    assert!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1 == 32_303);
     assert!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_FRAME_BYTES_V1 < 36_020);
-    assert!(RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_780_245);
-    assert!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 == 6_747_974);
+    assert!(RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_778_981);
+    assert!(RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 == 6_746_678);
     assert!(GBP_CHALLENGES_PER_CORE_V1 == 18);
     assert!(POSITIVE_TERMS_PER_COORDINATE_V1 == RECORDS_V1 * BLOCKS_PER_RECORD_V1 * 21 + 32);
     assert!(NEGATIVE_TERMS_PER_COORDINATE_V1 == RECORDS_V1 * BLOCKS_PER_RECORD_V1 * 4);
@@ -408,22 +419,29 @@ pub(super) struct RnsNativeCrossFieldPreQpcsSafeAxesV1 {
     pub(super) source_binding_digest: [u8; DIGEST_BYTES_V1],
     pub(super) source_formula_digest: [u8; DIGEST_BYTES_V1],
     pub(super) source_mapping_digest: [u8; DIGEST_BYTES_V1],
-    pub(super) rns_aggregation_challenge_seed: [u8; DIGEST_BYTES_V1],
+    pub(super) rns_aggregation_challenge_seed: ProofDigestV1,
     pub(super) qpcs_parameter_digest: [u8; DIGEST_BYTES_V1],
     /// Transcript state after the initial root and before the q-mask root.
-    pub(super) qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
+    pub(super) qpcs_pre_relation_transcript_digest: ProofDigestV1,
 }
 
 impl RnsNativeCrossFieldPreQpcsSafeAxesV1 {
     fn validate_v1(self) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
+        if RnsNativeProofHashContextV1::canonical()
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?
+            .parameter_digest()
+            != self.qpcs_parameter_digest
+        {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+        }
         let values = [
-            self.profile_manifest_digest,
-            self.source_binding_digest,
-            self.source_formula_digest,
-            self.source_mapping_digest,
-            self.rns_aggregation_challenge_seed,
-            self.qpcs_parameter_digest,
-            self.qpcs_pre_relation_transcript_digest,
+            DigestIdentityV1::from(self.profile_manifest_digest),
+            DigestIdentityV1::from(self.source_binding_digest),
+            DigestIdentityV1::from(self.source_formula_digest),
+            DigestIdentityV1::from(self.source_mapping_digest),
+            DigestIdentityV1::from(self.rns_aggregation_challenge_seed),
+            DigestIdentityV1::from(self.qpcs_parameter_digest),
+            DigestIdentityV1::from(self.qpcs_pre_relation_transcript_digest),
         ];
         if !nonzero_distinct_digests_v1(&values) {
             return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
@@ -437,15 +455,15 @@ impl RnsNativeCrossFieldPreQpcsSafeAxesV1 {
         hash.update(PRE_QPCS_SAFE_AXES_DOMAIN_V1);
         hash.update(&[VERSION_V1]);
         for digest in [
-            self.profile_manifest_digest,
-            self.source_binding_digest,
-            self.source_formula_digest,
-            self.source_mapping_digest,
-            self.rns_aggregation_challenge_seed,
-            self.qpcs_parameter_digest,
-            self.qpcs_pre_relation_transcript_digest,
+            DigestIdentityV1::from(self.profile_manifest_digest),
+            DigestIdentityV1::from(self.source_binding_digest),
+            DigestIdentityV1::from(self.source_formula_digest),
+            DigestIdentityV1::from(self.source_mapping_digest),
+            DigestIdentityV1::from(self.rns_aggregation_challenge_seed),
+            DigestIdentityV1::from(self.qpcs_parameter_digest),
+            DigestIdentityV1::from(self.qpcs_pre_relation_transcript_digest),
         ] {
-            hash.update(&digest);
+            hash.update(digest.as_bytes());
         }
         hash.update(&manifest_digest_v1());
         Ok(hash.finalize())
@@ -457,10 +475,9 @@ impl RnsNativeCrossFieldPreQpcsSafeAxesV1 {
 /// `terminal_predecessor_binding_digest` is the terminal kernel's predecessor
 /// binding, not the source-terminal cross-proof or cross-link digest.
 /// `candidate_inventory_axes` owns the sealed inventory projection. Its
-/// private context digest and root exclude
-/// cross-field, global-lookup, and
-/// zero-padding roots; final transcript state and challenges; cross-section and
-/// zero-padding digests; continuation state; and every direct-proof binding.
+/// private context digest and root exclude cross-field and global-lookup
+/// roots; final transcript state and challenges; cross-section digests;
+/// continuation state; and every direct-proof binding.
 /// The current inventory `prior_context_digest_v1` and canonical inventory root
 /// do not satisfy this contract and must never populate these fields.
 /// `existing_radix_candidate_axis` owns an exact-allocation-bound candidate
@@ -475,10 +492,10 @@ pub(super) struct RnsNativeCrossFieldRlweFixedAxesV1 {
     terminal_predecessor_binding_digest: [u8; DIGEST_BYTES_V1],
     candidate_inventory_axes: RnsNativePreDirectInventoryCandidateAxesV1,
     existing_radix_candidate_axis: RnsNativeExistingRadixCandidateAxisV1,
-    rns_aggregation_challenge_seed: [u8; DIGEST_BYTES_V1],
+    rns_aggregation_challenge_seed: ProofDigestV1,
     qpcs_parameter_digest: [u8; DIGEST_BYTES_V1],
     /// qPCS transcript state immediately before any relation challenge.
-    qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
+    qpcs_pre_relation_transcript_digest: ProofDigestV1,
 }
 
 /// Opaque successor-independent inventory axis required by the direct
@@ -616,27 +633,22 @@ impl RnsNativeCrossFieldRlweFixedAxesV1 {
     }
 
     fn validate_v1(&self) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
-        let values = [
+        self.pre_qpcs_safe_axes_v1().validate_v1()?;
+        let public_axes = [
             self.profile_manifest_digest,
             self.source_binding_digest,
             self.source_formula_digest,
             self.source_mapping_digest,
             self.terminal_predecessor_binding_digest,
-            self.rns_aggregation_challenge_seed,
             self.qpcs_parameter_digest,
-            self.qpcs_pre_relation_transcript_digest,
         ];
-        if values.contains(&[0; DIGEST_BYTES_V1])
-            || values
-                .iter()
-                .enumerate()
-                .any(|(index, value)| values[index + 1..].contains(value))
+        if !nonzero_distinct_digests_v1(&public_axes)
             || !self
                 .candidate_inventory_axes
-                .is_valid_with_fixed_axes_v1(&values)
+                .is_valid_with_fixed_axes_v1(&public_axes)
             || !self
                 .existing_radix_candidate_axis
-                .is_valid_with_fixed_axes_v1(&values)
+                .is_valid_with_fixed_axes_v1(&public_axes)
         {
             return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
         }
@@ -649,24 +661,24 @@ impl RnsNativeCrossFieldRlweFixedAxesV1 {
         hash.update(FIXED_AXES_DOMAIN_V1);
         hash.update(&[VERSION_V1]);
         for digest in [
-            self.profile_manifest_digest,
-            self.source_binding_digest,
-            self.source_formula_digest,
-            self.source_mapping_digest,
-            self.terminal_predecessor_binding_digest,
+            DigestIdentityV1::from(self.profile_manifest_digest),
+            DigestIdentityV1::from(self.source_binding_digest),
+            DigestIdentityV1::from(self.source_formula_digest),
+            DigestIdentityV1::from(self.source_mapping_digest),
+            DigestIdentityV1::from(self.terminal_predecessor_binding_digest),
         ] {
-            hash.update(&digest);
+            hash.update(digest.as_bytes());
         }
         self.candidate_inventory_axes
             .absorb_fixed_axes_v1(&mut hash);
         self.existing_radix_candidate_axis
             .absorb_fixed_axis_v1(&mut hash);
         for digest in [
-            self.rns_aggregation_challenge_seed,
-            self.qpcs_parameter_digest,
-            self.qpcs_pre_relation_transcript_digest,
+            DigestIdentityV1::from(self.rns_aggregation_challenge_seed),
+            DigestIdentityV1::from(self.qpcs_parameter_digest),
+            DigestIdentityV1::from(self.qpcs_pre_relation_transcript_digest),
         ] {
-            hash.update(&digest);
+            hash.update(digest.as_bytes());
         }
         hash.update(&manifest_digest_v1());
         Ok(hash.finalize())
@@ -682,7 +694,7 @@ pub(super) struct DirectQMaskScheduleBoundV1 {
     axes: RnsNativeCrossFieldRlweFixedAxesV1,
     pre_qpcs_safe_axes_digest: [u8; DIGEST_BYTES_V1],
     fixed_axes_digest: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: ProofDigestV1,
     binding_digest: [u8; DIGEST_BYTES_V1],
     completed_qpcs: RnsNativeQpcsCompletedLineageV1,
 }
@@ -698,7 +710,7 @@ impl DirectQMaskScheduleBoundV1 {
 #[allow(missing_copy_implementations)]
 pub(super) struct RelationScheduleV1 {
     bound: DirectQMaskScheduleBoundV1,
-    relation_seed: [u8; DIGEST_BYTES_V1],
+    relation_seed: ProofDigestV1,
     aggregation_challenges: [AggregationChallengeV1; EVALUATIONS_V1],
     cross_field_root_equality_obligation:
         Option<ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1>,
@@ -720,7 +732,7 @@ pub(super) struct RnsNativeCrossFieldRlweClaimedQpcsInputV2 {
     completed_qpcs: RnsNativeQpcsCompletedLineageV1,
     terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
     numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1],
-    source_binding_digest: [u8; DIGEST_BYTES_V1],
+    source_binding_digest: ProofDigestV1,
     _origin: RnsNativeAuthenticatedClaimedQpcsOriginV2,
 }
 
@@ -730,10 +742,10 @@ impl RnsNativeCrossFieldRlweClaimedQpcsInputV2 {
         completed_qpcs: RnsNativeQpcsCompletedLineageV1,
         terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
         numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1],
-        source_binding_digest: [u8; DIGEST_BYTES_V1],
+        source_binding_digest: ProofDigestV1,
     ) -> Result<Self, RnsNativeCrossFieldRlweDirectErrorV1> {
         if completed_qpcs.has_unconsumed_qpcs_transcript_v1()
-            || source_binding_digest == [0; DIGEST_BYTES_V1]
+            || source_binding_digest == ProofDigestV1::ZERO
         {
             return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
         }
@@ -783,7 +795,7 @@ pub(super) struct RnsNativeCrossFieldRlweClaimedInventoryNumericV2<
     claimed_relation: RnsNativeCrossFieldRlweClaimedRelationV1,
     inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'qpcs, 'cross, S>,
     numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1],
-    source_binding_digest: [u8; DIGEST_BYTES_V1],
+    source_binding_digest: ProofDigestV1,
     frame_preflight: FramePreflightV1<'cross>,
     existing_radix_validation_permit: RnsNativeExistingRadixValidationPermitV1,
 }
@@ -888,7 +900,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
             frame_preflight,
             existing_radix_validation_permit,
         } = self;
-        if source_binding_digest == [0; DIGEST_BYTES_V1] {
+        if source_binding_digest == ProofDigestV1::ZERO {
             return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
         }
         let authoritative_binding_digest = claimed_relation
@@ -1016,7 +1028,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 }
 
 impl RelationScheduleV1 {
-    /// Consume this schedule and all three tagged terminal roots atomically.
+    /// Consume this schedule and both tagged terminal roots atomically.
     /// The claimed-root equality obligation, exact pre-global chronology, and
     /// final non-authorizing challenges cannot be split by a production
     /// caller.
@@ -1491,10 +1503,43 @@ struct DerivedCommitmentsV1 {
     negative: Point,
 }
 
+/// Move-only fixed-count storage over an already fallibly allocated vector.
+///
+/// Converting these public rows back to inline arrays would copy tens of
+/// kilobytes through each proof-state/result move. Only exact-length vectors
+/// enter this owner; slice access permits element updates but never resizing.
+/// Secret openings and masks keep their separate zeroizing owners.
+struct FixedRowsV1<T, const N: usize> {
+    rows: Vec<T>,
+}
+
+impl<T, const N: usize> FixedRowsV1<T, N> {
+    fn from_rows_v1(rows: Vec<T>) -> Result<Self, RnsNativeCrossFieldRlweDirectErrorV1> {
+        if rows.len() != N {
+            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
+        }
+        Ok(Self { rows })
+    }
+}
+
+impl<T, const N: usize> core::ops::Deref for FixedRowsV1<T, N> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.rows
+    }
+}
+
+impl<T, const N: usize> core::ops::DerefMut for FixedRowsV1<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rows
+    }
+}
+
 struct PreparedInputsV1 {
     schedule: RelationScheduleV1,
-    evaluations: [ValidatedEvaluationV1; EVALUATIONS_V1],
-    commitments: [DerivedCommitmentsV1; EVALUATIONS_V1],
+    evaluations: FixedRowsV1<ValidatedEvaluationV1, EVALUATIONS_V1>,
+    commitments: FixedRowsV1<DerivedCommitmentsV1, EVALUATIONS_V1>,
     numeric_root: [u8; DIGEST_BYTES_V1],
     commitment_root: [u8; DIGEST_BYTES_V1],
 }
@@ -1547,12 +1592,15 @@ fn manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
-fn nonzero_distinct_digests_v1(values: &[[u8; DIGEST_BYTES_V1]]) -> bool {
-    !values.contains(&[0; DIGEST_BYTES_V1])
-        && !values
-            .iter()
-            .enumerate()
-            .any(|(index, value)| values[index + 1..].contains(value))
+fn nonzero_distinct_digests_v1<T: Copy + Into<DigestIdentityV1>>(values: &[T]) -> bool {
+    !values.iter().copied().enumerate().any(|(index, value)| {
+        let identity = value.into();
+        identity.is_zero()
+            || values[index + 1..]
+                .iter()
+                .copied()
+                .any(|other| other.into() == identity)
+    })
 }
 
 fn point_bytes_v1(
@@ -1570,13 +1618,41 @@ fn point_bytes_v1(
 pub(super) fn q_mask_s_root_v1<P: RnsNativeQMaskSCommitmentSourceV1>(
     axes: RnsNativeCrossFieldPreQpcsSafeAxesV1,
     source: &P,
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
+) -> Result<ProofDigestV1, RnsNativeCrossFieldRlweDirectErrorV1> {
     axes.validate_v1()?;
-    let mut hash = Keccak256::new();
-    hash.update(Q_MASK_ROOT_DOMAIN_V1);
-    hash.update(&[VERSION_V1]);
-    hash.update(&axes.digest_v1()?);
-    hash.update(&(Q_MASK_S_POINTS_V1 as u32).to_be_bytes());
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+    if context.parameter_digest() != axes.qpcs_parameter_digest {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
+    }
+    // Stream one ordered public point field into the six shared lanes. The
+    // exact length is bound before the sole source traversal. No point tape,
+    // source replay, lane-specific source read or scalar witness is retained.
+    let mut stream = context
+        .last_field_stream(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 4,
+                index: 0,
+                counter: 0,
+            },
+            &[
+                Q_MASK_ROOT_DOMAIN_V1,
+                &[VERSION_V1],
+                &axes.profile_manifest_digest,
+                &axes.source_binding_digest,
+                &axes.source_formula_digest,
+                &axes.source_mapping_digest,
+                axes.rns_aggregation_challenge_seed.as_bytes(),
+                &axes.qpcs_parameter_digest,
+                axes.qpcs_pre_relation_transcript_digest.as_bytes(),
+                &manifest_digest_v1(),
+                &(Q_MASK_S_POINTS_V1 as u32).to_be_bytes(),
+            ],
+            RNS_NATIVE_Q_MASK_POINT_FRAME_BYTES_V1,
+        )
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?;
     let mut ordinal = 0_u32;
     for limb in 0..LIMBS_V1 {
         for repetition in 0..REPETITIONS_V1 {
@@ -1584,9 +1660,18 @@ pub(super) fn q_mask_s_root_v1<P: RnsNativeQMaskSCommitmentSourceV1>(
                 for digit in 0..Q_MASK_DIGITS_V1 {
                     let point =
                         source.q_mask_s_digit_commitment_v1(limb, repetition, block, digit)?;
-                    hash.update(&ordinal.to_be_bytes());
-                    hash.update(&[limb as u8, repetition as u8, block as u8, digit as u8]);
-                    hash.update(&point_bytes_v1(point)?);
+                    let mut encoded = [0_u8; Q_MASK_ROOT_BYTES_PER_POINT_V1];
+                    encoded[..4].copy_from_slice(&ordinal.to_be_bytes());
+                    encoded[4..8].copy_from_slice(&[
+                        limb as u8,
+                        repetition as u8,
+                        block as u8,
+                        digit as u8,
+                    ]);
+                    encoded[8..].copy_from_slice(&point_bytes_v1(point)?);
+                    stream
+                        .update(&encoded)
+                        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?;
                     ordinal = ordinal
                         .checked_add(1)
                         .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)?;
@@ -1594,11 +1679,15 @@ pub(super) fn q_mask_s_root_v1<P: RnsNativeQMaskSCommitmentSourceV1>(
             }
         }
     }
-    if ordinal as usize != Q_MASK_S_POINTS_V1 {
+    if ordinal as usize != Q_MASK_S_POINTS_V1 || stream.remaining_len() != 0 {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
     }
-    let root = hash.finalize();
-    if root == [0; DIGEST_BYTES_V1] {
+    let root = ProofDigestV1::from_shared(
+        stream
+            .finalize()
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?,
+    );
+    if root == ProofDigestV1::ZERO {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
     Ok(root)
@@ -1619,9 +1708,10 @@ fn bind_direct_q_mask_schedule_v1(
     let pre_qpcs_safe_axes_digest = axes.pre_qpcs_safe_axes_v1().digest_v1()?;
     let fixed_axes_digest = axes.digest_v1()?;
     let q_mask_s_root = qpcs_schedule.q_mask_s_root();
-    if q_mask_s_root == [0; DIGEST_BYTES_V1]
-        || q_mask_s_root == pre_qpcs_safe_axes_digest
-        || q_mask_s_root == fixed_axes_digest
+    if q_mask_s_root == ProofDigestV1::ZERO
+        || DigestIdentityV1::from(q_mask_s_root)
+            == DigestIdentityV1::from(pre_qpcs_safe_axes_digest)
+        || DigestIdentityV1::from(q_mask_s_root) == DigestIdentityV1::from(fixed_axes_digest)
     {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
     }
@@ -1637,13 +1727,13 @@ fn bind_direct_q_mask_schedule_v1(
     hash.update(&pre_qpcs_safe_axes_digest);
     hash.update(&fixed_axes_digest);
     hash.update(&axes.qpcs_parameter_digest);
-    hash.update(&axes.qpcs_pre_relation_transcript_digest);
-    hash.update(&q_mask_s_root);
+    hash.update(axes.qpcs_pre_relation_transcript_digest.as_bytes());
+    hash.update(q_mask_s_root.as_bytes());
     let binding_digest = hash.finalize();
     if binding_digest == [0; DIGEST_BYTES_V1]
         || binding_digest == pre_qpcs_safe_axes_digest
         || binding_digest == fixed_axes_digest
-        || binding_digest == q_mask_s_root
+        || DigestIdentityV1::from(binding_digest) == DigestIdentityV1::from(q_mask_s_root)
     {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
@@ -1662,11 +1752,11 @@ fn derive_relation_schedule_v1(
 ) -> Result<RelationScheduleV1, RnsNativeCrossFieldRlweDirectErrorV1> {
     let relation_seed = bound.qpcs_schedule_v1().relation_seed();
     if !nonzero_distinct_digests_v1(&[
-        bound.pre_qpcs_safe_axes_digest,
-        bound.fixed_axes_digest,
-        bound.q_mask_s_root,
-        bound.binding_digest,
-        relation_seed,
+        DigestIdentityV1::from(bound.pre_qpcs_safe_axes_digest),
+        DigestIdentityV1::from(bound.fixed_axes_digest),
+        DigestIdentityV1::from(bound.q_mask_s_root),
+        DigestIdentityV1::from(bound.binding_digest),
+        DigestIdentityV1::from(relation_seed),
     ]) {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
@@ -1678,54 +1768,45 @@ fn derive_relation_schedule_v1(
     })
 }
 
+fn map_claimed_numeric_binding_error_v1(
+    error: super::rns_native_qpcs_fri_complete::RnsNativeQpcsClaimedSourceErrorV1,
+) -> RnsNativeCrossFieldRlweDirectErrorV1 {
+    match error {
+        super::rns_native_qpcs_fri_complete::RnsNativeQpcsClaimedSourceErrorV1::InvalidCount => {
+            RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry
+        }
+        _ => RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext,
+    }
+}
+
+#[cfg(test)]
 fn claimed_source_numeric_binding_digest_from_parts_v1(
-    digest_axes: &[[u8; DIGEST_BYTES_V1]; 13],
+    digest_axes: &RnsNativeClaimedNumericBindingAxesV1,
     numeric_tail_values: impl IntoIterator<Item = (u64, u64, u64)>,
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
-    if digest_axes.contains(&[0; DIGEST_BYTES_V1]) {
-        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
-    }
-    let mut hash = Keccak256::new();
-    hash.update(CLAIMED_SOURCE_NUMERIC_BINDING_DOMAIN_V1);
-    hash.update(&[VERSION_V1]);
-    for digest in digest_axes {
-        hash.update(digest);
-    }
-    let mut count = 0_usize;
-    for (point, product, opening_quotient) in numeric_tail_values {
-        hash.update(&point.to_be_bytes());
-        hash.update(&product.to_be_bytes());
-        hash.update(&opening_quotient.to_be_bytes());
-        count = count
-            .checked_add(1)
-            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)?;
-    }
-    if count != EVALUATIONS_V1 {
-        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
-    }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
-        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
-    }
-    Ok(digest)
+) -> Result<ProofDigestV1, RnsNativeCrossFieldRlweDirectErrorV1> {
+    digest_axes
+        .digest_v1(numeric_tail_values)
+        .map_err(map_claimed_numeric_binding_error_v1)
 }
 
 fn validate_claimed_source_numeric_binding_from_parts_v1(
-    claimed_binding_digest: [u8; DIGEST_BYTES_V1],
-    digest_axes: &[[u8; DIGEST_BYTES_V1]; 13],
+    claimed_binding_digest: ProofDigestV1,
+    digest_axes: &RnsNativeClaimedNumericBindingAxesV1,
     numeric_tail_values: impl IntoIterator<Item = (u64, u64, u64)>,
 ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
-    let expected =
-        claimed_source_numeric_binding_digest_from_parts_v1(digest_axes, numeric_tail_values)?;
-    if claimed_binding_digest == [0; DIGEST_BYTES_V1] || claimed_binding_digest != expected {
+    let expected = digest_axes
+        .digest_v1(numeric_tail_values)
+        .map_err(map_claimed_numeric_binding_error_v1)?;
+    if claimed_binding_digest == ProofDigestV1::ZERO || claimed_binding_digest != expected {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
     }
     Ok(())
 }
 
 /// Recompute the claimed-qPCS/source binding from the owners that are about
-/// to enter the direct chronology. This intentionally duplicates the qPCS
-/// leaf's final binding transcript at a different ownership boundary: merely
+/// to enter the direct chronology. This independently reconstructs the qPCS
+/// leaf's field reconstruction at a different ownership boundary, then uses
+/// the same typed frame owner: merely
 /// carrying its digest forward would allow a recombined claimed-source token
 /// to survive until the numeric cursor was created.
 fn validate_claimed_source_numeric_lineage_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
@@ -1733,7 +1814,7 @@ fn validate_claimed_source_numeric_lineage_v1<S: ZkAmsMkheRnsNativeSourceSnapsho
     completed_qpcs: &RnsNativeQpcsCompletedLineageV1,
     terminal_chronology: &ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
     numeric_tails: &[RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1],
-    claimed_binding_digest: [u8; DIGEST_BYTES_V1],
+    claimed_binding_digest: ProofDigestV1,
 ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
     let source = inventory.linked().source();
     let schedule = completed_qpcs.relation_schedule_v1();
@@ -1743,21 +1824,21 @@ fn validate_claimed_source_numeric_lineage_v1<S: ZkAmsMkheRnsNativeSourceSnapsho
     {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
     }
-    let digest_axes = [
-        source.statement_anchor_digest(),
-        source.preflight_statement_digest(),
-        source.public_bundle_digest(),
-        source.qpcs().parameter_digest(),
-        source.qpcs().transcript_digest(),
-        source.qpcs().schedule_digest(),
-        source.qpcs().evaluation_binding_digest(),
-        source.qpcs().residual_digest(),
-        schedule.parameter_digest(),
-        schedule.q_mask_s_root(),
-        schedule.qpcs_pre_relation_transcript_digest(),
-        schedule.relation_seed(),
-        final_transcript.transcript_digest(),
-    ];
+    let digest_axes = RnsNativeClaimedNumericBindingAxesV1 {
+        statement_anchor: source.statement_anchor_digest(),
+        preflight_statement: source.preflight_statement_digest(),
+        public_bundle: source.public_bundle_digest(),
+        source_parameter: source.qpcs().parameter_digest(),
+        source_transcript: source.qpcs().transcript_digest(),
+        source_schedule: source.qpcs().schedule_digest(),
+        source_evaluation: source.qpcs().evaluation_binding_digest(),
+        source_residual: source.qpcs().residual_digest(),
+        schedule_parameter: schedule.parameter_digest(),
+        q_mask_s_root: schedule.q_mask_s_root(),
+        pre_relation_transcript: schedule.qpcs_pre_relation_transcript_digest(),
+        relation_seed: schedule.relation_seed(),
+        final_transcript: final_transcript.transcript_digest(),
+    };
     validate_claimed_source_numeric_binding_from_parts_v1(
         claimed_binding_digest,
         &digest_axes,
@@ -1768,7 +1849,7 @@ fn validate_claimed_source_numeric_lineage_v1<S: ZkAmsMkheRnsNativeSourceSnapsho
 /// Atomically convert the opaque authenticated claimed-qPCS input and the
 /// bound pre-direct inventory into the direct claimed relation. The q-mask
 /// root is recomputed from that authenticated inventory, the transcript-empty
-/// lineage never escapes, and the whole three-obligation chronology is split
+/// lineage never escapes, and the whole two-obligation chronology is split
 /// only to install the cross-root obligation into this same schedule.
 #[allow(
     dead_code,
@@ -1864,7 +1945,7 @@ fn validate_relation_schedule_v1(
             .completed_qpcs
             .has_unconsumed_qpcs_transcript_v1()
             == schedule.cross_field_root_equality_obligation.is_some()
-        || schedule.bound.q_mask_s_root == [0; DIGEST_BYTES_V1]
+        || schedule.bound.q_mask_s_root == ProofDigestV1::ZERO
         || schedule.bound.q_mask_s_root != schedule.bound.qpcs_schedule_v1().q_mask_s_root()
         || schedule.bound.axes.qpcs_parameter_digest
             != schedule.bound.qpcs_schedule_v1().parameter_digest()
@@ -1883,8 +1964,14 @@ fn validate_relation_schedule_v1(
     binding_hash.update(&pre_qpcs_safe_axes_digest);
     binding_hash.update(&fixed_axes_digest);
     binding_hash.update(&schedule.bound.axes.qpcs_parameter_digest);
-    binding_hash.update(&schedule.bound.axes.qpcs_pre_relation_transcript_digest);
-    binding_hash.update(&schedule.bound.q_mask_s_root);
+    binding_hash.update(
+        schedule
+            .bound
+            .axes
+            .qpcs_pre_relation_transcript_digest
+            .as_bytes(),
+    );
+    binding_hash.update(schedule.bound.q_mask_s_root.as_bytes());
     if binding_hash.finalize() != schedule.bound.binding_digest {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
@@ -1906,18 +1993,18 @@ fn validate_relation_schedule_v1(
     Ok(())
 }
 
-fn map_unbiased_nonzero_q_challenge_v1(raw: u64, modulus: u64, used: &[u64]) -> Option<u64> {
-    if modulus < 3 {
-        return None;
+fn map_aggregation_error_v1(
+    error: RnsNativeProofSamplingErrorV1,
+) -> RnsNativeCrossFieldRlweDirectErrorV1 {
+    match error {
+        RnsNativeProofSamplingErrorV1::AttemptsExhausted => {
+            RnsNativeCrossFieldRlweDirectErrorV1::ChallengeExhausted
+        }
+        _ => RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry,
     }
-    let rejection_bound = u64::MAX - u64::MAX % modulus;
-    if raw >= rejection_bound {
-        return None;
-    }
-    let candidate = raw % modulus;
-    (candidate != 0 && !used.contains(&candidate)).then_some(candidate)
 }
 
+#[cfg(test)]
 fn derive_aggregation_challenge_coordinate_v1(
     axes: &RnsNativeCrossFieldRlweFixedAxesV1,
     limb: usize,
@@ -1926,67 +2013,45 @@ fn derive_aggregation_challenge_coordinate_v1(
     role: u8,
     used: &[u64],
 ) -> Result<u64, RnsNativeCrossFieldRlweDirectErrorV1> {
-    if limb >= LIMBS_V1
-        || repetition >= REPETITIONS_V1
-        || role > 1
-        || !(Q_MIN_V1..=Q_MAX_V1).contains(&modulus)
-    {
+    if release_modulus_v1(limb)? != modulus {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
     }
-    for attempt in 0..MAX_Q_CHALLENGE_ATTEMPTS_V1 {
-        let mut hash = Keccak256::new();
-        hash.update(AGGREGATION_CHALLENGE_DOMAIN_V1);
-        hash.update(&[VERSION_V1]);
-        hash.update(&axes.qpcs_parameter_digest);
-        hash.update(&axes.rns_aggregation_challenge_seed);
-        hash.update(&axes.source_formula_digest);
-        hash.update(&axes.source_mapping_digest);
-        hash.update(&[limb as u8, repetition as u8, role]);
-        hash.update(&modulus.to_be_bytes());
-        hash.update(&attempt.to_be_bytes());
-        let digest = hash.finalize();
-        let raw = u64::from_be_bytes(
-            digest[..8]
-                .try_into()
-                .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?,
-        );
-        if let Some(candidate) = map_unbiased_nonzero_q_challenge_v1(raw, modulus, used) {
-            return Ok(candidate);
-        }
-    }
-    Err(RnsNativeCrossFieldRlweDirectErrorV1::ChallengeExhausted)
+    RnsNativeAggregationSamplerV1::new(
+        axes.qpcs_parameter_digest,
+        axes.rns_aggregation_challenge_seed,
+        axes.source_formula_digest,
+        axes.source_mapping_digest,
+    )
+    .and_then(|sampler| sampler.derive(limb, repetition, role, used))
+    .map_err(map_aggregation_error_v1)
 }
 
 fn derive_exact_aggregation_challenges_v1(
     axes: &RnsNativeCrossFieldRlweFixedAxesV1,
 ) -> Result<[AggregationChallengeV1; EVALUATIONS_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
     axes.validate_v1()?;
+    let sampler = RnsNativeAggregationSamplerV1::new(
+        axes.qpcs_parameter_digest,
+        axes.rns_aggregation_challenge_seed,
+        axes.source_formula_digest,
+        axes.source_mapping_digest,
+    )
+    .map_err(map_aggregation_error_v1)?;
     let mut result = [AggregationChallengeV1 { gamma: 0, beta: 0 }; EVALUATIONS_V1];
     let mut prior_pairs = [(0_u64, 0_u64); EVALUATIONS_V1];
     let mut prior_pair_count = 0;
     for limb in 0..LIMBS_V1 {
-        let modulus = release_modulus_v1(limb)?;
         let mut used = [0_u64; 2 * REPETITIONS_V1];
         let mut used_len = 0;
         for repetition in 0..REPETITIONS_V1 {
-            let gamma = derive_aggregation_challenge_coordinate_v1(
-                axes,
-                limb,
-                repetition,
-                modulus,
-                0,
-                &used[..used_len],
-            )?;
+            let gamma = sampler
+                .derive(limb, repetition, 0, &used[..used_len])
+                .map_err(map_aggregation_error_v1)?;
             used[used_len] = gamma;
             used_len += 1;
-            let beta = derive_aggregation_challenge_coordinate_v1(
-                axes,
-                limb,
-                repetition,
-                modulus,
-                1,
-                &used[..used_len],
-            )?;
+            let beta = sampler
+                .derive(limb, repetition, 1, &used[..used_len])
+                .map_err(map_aggregation_error_v1)?;
             used[used_len] = beta;
             used_len += 1;
             if prior_pairs[..prior_pair_count].contains(&(gamma, beta)) {
@@ -2281,7 +2346,7 @@ fn prepare_inputs_v1<P: RnsNativeCrossFieldAuthoritativeSourceV1>(
     numeric_hash.update(&[VERSION_V1]);
     numeric_hash.update(&schedule.bound.fixed_axes_digest);
     numeric_hash.update(&schedule.bound.binding_digest);
-    numeric_hash.update(&schedule.relation_seed);
+    numeric_hash.update(schedule.relation_seed.as_bytes());
     numeric_hash.update(&(EVALUATIONS_V1 as u16).to_be_bytes());
     let mut commitment_hash = Keccak256::new();
     commitment_hash.update(COMMITMENT_ROOT_DOMAIN_V1);
@@ -2323,23 +2388,19 @@ fn prepare_inputs_v1<P: RnsNativeCrossFieldAuthoritativeSourceV1>(
     commitment_hash.update(&numeric_root);
     let commitment_root = commitment_hash.finalize();
     if !nonzero_distinct_digests_v1(&[
-        schedule.bound.fixed_axes_digest,
-        schedule.bound.q_mask_s_root,
-        schedule.bound.binding_digest,
-        schedule.relation_seed,
-        numeric_root,
-        commitment_root,
+        DigestIdentityV1::from(schedule.bound.fixed_axes_digest),
+        DigestIdentityV1::from(schedule.bound.q_mask_s_root),
+        DigestIdentityV1::from(schedule.bound.binding_digest),
+        DigestIdentityV1::from(schedule.relation_seed),
+        DigestIdentityV1::from(numeric_root),
+        DigestIdentityV1::from(commitment_root),
     ]) {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
     Ok(PreparedInputsV1 {
         schedule,
-        evaluations: evaluations
-            .try_into()
-            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)?,
-        commitments: commitments
-            .try_into()
-            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry)?,
+        evaluations: FixedRowsV1::from_rows_v1(evaluations)?,
+        commitments: FixedRowsV1::from_rows_v1(commitments)?,
         numeric_root,
         commitment_root,
     })
@@ -2954,7 +3015,7 @@ fn core_transcript_set_digest_v1(
 )]
 #[derive(PartialEq, Eq)]
 #[must_use = "the opaque core root must be consumed by the typed terminal bind"]
-pub(super) struct RnsNativeCrossFieldRlweCoreRootV1([u8; DIGEST_BYTES_V1]);
+pub(super) struct RnsNativeCrossFieldRlweCoreRootV1(ProofDigestV1);
 
 /// Direct-owned opaque evidence that the verifier recomputed the four-core
 /// root only after all four proofs and the proof-set binding succeeded.
@@ -2975,20 +3036,20 @@ impl RnsNativeCrossFieldRlweVerifiedCoreRootV1 {
     /// claim inputs without exposing the recomputed digest.
     pub(super) fn matches_claimed_cross_field_root_v1(
         self,
-        claimed_root: [u8; DIGEST_BYTES_V1],
-        qpcs_bound_transcript_state: [u8; DIGEST_BYTES_V1],
+        claimed_root: ProofDigestV1,
+        qpcs_bound_transcript_state: ProofDigestV1,
     ) -> bool {
         let recomputed_root = self.0.0;
-        recomputed_root != [0; DIGEST_BYTES_V1]
+        recomputed_root != ProofDigestV1::ZERO
             && recomputed_root != qpcs_bound_transcript_state
             && recomputed_root == claimed_root
     }
 
     #[cfg(test)]
     pub(super) fn test_fixture_v1(
-        root: [u8; DIGEST_BYTES_V1],
+        root: ProofDigestV1,
     ) -> Result<Self, RnsNativeCrossFieldRlweDirectErrorV1> {
-        if root == [0; DIGEST_BYTES_V1] {
+        if root == ProofDigestV1::ZERO {
             return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
         }
         Ok(Self(RnsNativeCrossFieldRlweCoreRootV1(root)))
@@ -2996,34 +3057,34 @@ impl RnsNativeCrossFieldRlweVerifiedCoreRootV1 {
 }
 
 fn direct_core_safe_digest_v1(
-    private_cross_field_core_root: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
+    private_cross_field_core_root: ProofDigestV1,
+    q_mask_s_root: ProofDigestV1,
     numeric_root: [u8; DIGEST_BYTES_V1],
     commitment_root: [u8; DIGEST_BYTES_V1],
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
     if !nonzero_distinct_digests_v1(&[
-        private_cross_field_core_root,
-        q_mask_s_root,
-        numeric_root,
-        commitment_root,
+        DigestIdentityV1::from(private_cross_field_core_root),
+        DigestIdentityV1::from(q_mask_s_root),
+        DigestIdentityV1::from(numeric_root),
+        DigestIdentityV1::from(commitment_root),
     ]) {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
     let mut hash = Keccak256::new();
     hash.update(DIRECT_CORE_SAFE_DOMAIN_V1);
-    hash.update(&private_cross_field_core_root);
-    hash.update(&q_mask_s_root);
+    hash.update(private_cross_field_core_root.as_bytes());
+    hash.update(q_mask_s_root.as_bytes());
     hash.update(&numeric_root);
     hash.update(&commitment_root);
     let digest = hash.finalize();
     if digest == [0; DIGEST_BYTES_V1]
         || [
-            private_cross_field_core_root,
-            q_mask_s_root,
-            numeric_root,
-            commitment_root,
+            DigestIdentityV1::from(private_cross_field_core_root),
+            DigestIdentityV1::from(q_mask_s_root),
+            DigestIdentityV1::from(numeric_root),
+            DigestIdentityV1::from(commitment_root),
         ]
-        .contains(&digest)
+        .contains(&DigestIdentityV1::from(digest))
     {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
@@ -3046,29 +3107,71 @@ fn cross_field_core_root_v1(
     inputs: &PreparedInputsV1,
     proof_set_digest: [u8; DIGEST_BYTES_V1],
     core_transcript_digest: [u8; DIGEST_BYTES_V1],
+    proofs: &[&[u8]; CORES_V1],
 ) -> Result<RnsNativeCrossFieldRlweCoreRootV1, RnsNativeCrossFieldRlweDirectErrorV1> {
     let identities = [
-        inputs.schedule.bound.fixed_axes_digest,
-        inputs.schedule.bound.q_mask_s_root,
-        inputs.schedule.bound.binding_digest,
-        inputs.schedule.relation_seed,
-        inputs.numeric_root,
-        inputs.commitment_root,
-        proof_set_digest,
-        core_transcript_digest,
+        DigestIdentityV1::from(inputs.schedule.bound.fixed_axes_digest),
+        DigestIdentityV1::from(inputs.schedule.bound.q_mask_s_root),
+        DigestIdentityV1::from(inputs.schedule.bound.binding_digest),
+        DigestIdentityV1::from(inputs.schedule.relation_seed),
+        DigestIdentityV1::from(inputs.numeric_root),
+        DigestIdentityV1::from(inputs.commitment_root),
+        DigestIdentityV1::from(proof_set_digest),
+        DigestIdentityV1::from(core_transcript_digest),
     ];
-    if !nonzero_distinct_digests_v1(&identities) {
+    if !nonzero_distinct_digests_v1(&identities)
+        || proofs
+            .iter()
+            .any(|proof| proof.len() != CORE_PROOF_BYTES_V1)
+    {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
-    let mut hash = Keccak256::new();
-    hash.update(CROSS_FIELD_CORE_ROOT_DOMAIN_V1);
-    hash.update(&[VERSION_V1, CORES_V1 as u8]);
-    hash.update(&manifest_digest_v1());
-    for digest in identities {
-        hash.update(&digest);
+    let axes = &inputs.schedule.bound.axes;
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+    if context.parameter_digest() != axes.qpcs_parameter_digest {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
     }
-    let root = hash.finalize();
-    if root == [0; DIGEST_BYTES_V1] || identities.contains(&root) {
+    // This private constructor is reached only by the completed core owner or
+    // after all four verifier transcripts/proof-set checks. No bytes-only
+    // entry point can issue the move-only verified-root capability.
+    let root = context
+        .hash(
+            RnsNativeProofHashRoleV1::TerminalBridge,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 1,
+                index: 0,
+                counter: 0,
+            },
+            &[
+                CROSS_FIELD_CORE_ROOT_DOMAIN_V1,
+                &[VERSION_V1, CORES_V1 as u8],
+                &manifest_digest_v1(),
+                &axes.profile_manifest_digest,
+                &axes.source_binding_digest,
+                &axes.source_formula_digest,
+                &axes.source_mapping_digest,
+                &axes.terminal_predecessor_binding_digest,
+                axes.rns_aggregation_challenge_seed.as_bytes(),
+                &axes.qpcs_parameter_digest,
+                axes.qpcs_pre_relation_transcript_digest.as_bytes(),
+                &inputs.schedule.bound.fixed_axes_digest,
+                inputs.schedule.bound.q_mask_s_root.as_bytes(),
+                &inputs.schedule.bound.binding_digest,
+                inputs.schedule.relation_seed.as_bytes(),
+                &inputs.numeric_root,
+                &inputs.commitment_root,
+                &proof_set_digest,
+                &core_transcript_digest,
+                proofs[0],
+                proofs[1],
+                proofs[2],
+                proofs[3],
+            ],
+        )
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?;
+    if root == ProofDigestV1::ZERO || identities.contains(&DigestIdentityV1::from(root)) {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
     Ok(RnsNativeCrossFieldRlweCoreRootV1(root))
@@ -3085,7 +3188,7 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
 #[cfg(test)]
 fn encode_wire_v1(
     inputs: &PreparedInputsV1,
-    proofs: &[[u8; CORE_PROOF_BYTES_V1]; CORES_V1],
+    proofs: &FixedRowsV1<[u8; CORE_PROOF_BYTES_V1], CORES_V1>,
     transcript_digests: &[[u8; DIGEST_BYTES_V1]; CORES_V1],
     successor: &[u8],
 ) -> Result<Vec<u8>, RnsNativeCrossFieldRlweDirectErrorV1> {
@@ -3105,7 +3208,7 @@ fn encode_wire_v1(
 #[cfg(test)]
 fn encode_wire_preflighted_v1(
     inputs: &PreparedInputsV1,
-    proofs: &[[u8; CORE_PROOF_BYTES_V1]; CORES_V1],
+    proofs: &FixedRowsV1<[u8; CORE_PROOF_BYTES_V1], CORES_V1>,
     transcript_digests: &[[u8; DIGEST_BYTES_V1]; CORES_V1],
     proof_set_digest: [u8; DIGEST_BYTES_V1],
     successor: &[u8],
@@ -3148,16 +3251,16 @@ fn encode_wire_preflighted_v1(
     wire.extend_from_slice(&(CORE_PROOF_BYTES_V1 as u16).to_be_bytes());
     wire.extend_from_slice(&(ALL_CORE_PROOF_BYTES_V1 as u32).to_be_bytes());
     for digest in [
-        inputs.schedule.bound.fixed_axes_digest,
-        inputs.schedule.bound.q_mask_s_root,
-        inputs.schedule.bound.binding_digest,
-        inputs.schedule.relation_seed,
-        inputs.numeric_root,
-        inputs.commitment_root,
-        proof_set_digest,
-        successor_digest,
+        DigestIdentityV1::from(inputs.schedule.bound.fixed_axes_digest),
+        DigestIdentityV1::from(inputs.schedule.bound.q_mask_s_root),
+        DigestIdentityV1::from(inputs.schedule.bound.binding_digest),
+        DigestIdentityV1::from(inputs.schedule.relation_seed),
+        DigestIdentityV1::from(inputs.numeric_root),
+        DigestIdentityV1::from(inputs.commitment_root),
+        DigestIdentityV1::from(proof_set_digest),
+        DigestIdentityV1::from(successor_digest),
     ] {
-        wire.extend_from_slice(&digest);
+        wire.extend_from_slice(digest.as_bytes());
     }
     wire.extend_from_slice(&(successor_preflight.successor_len as u32).to_be_bytes());
     if wire.len() != HEADER_BYTES_V1 {
@@ -3211,6 +3314,11 @@ impl<'a> DecoderV1<'a> {
         self.take_v1(N)?
             .try_into()
             .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidHeader)
+    }
+
+    fn proof_digest_v1(&mut self) -> Result<ProofDigestV1, RnsNativeCrossFieldRlweDirectErrorV1> {
+        decode_proof_digest_v1(self.take_v1(PROOF_DIGEST_BYTES_V1)?)
+            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)
     }
 
     fn u8_v1(&mut self) -> Result<u8, RnsNativeCrossFieldRlweDirectErrorV1> {
@@ -3290,9 +3398,9 @@ impl<'proof> RnsNativeCrossFieldRlweClaimedSuccessorSliceV1<'proof> {
 
 struct FramePreflightV1<'a> {
     fixed_axes_digest: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: ProofDigestV1,
     direct_schedule_binding_digest: [u8; DIGEST_BYTES_V1],
-    relation_seed: [u8; DIGEST_BYTES_V1],
+    relation_seed: ProofDigestV1,
     numeric_root: [u8; DIGEST_BYTES_V1],
     commitment_root: [u8; DIGEST_BYTES_V1],
     proof_set_digest: [u8; DIGEST_BYTES_V1],
@@ -3336,26 +3444,26 @@ impl<'a> FramePreflightV1<'a> {
         {
             return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
         }
-        let fixed_axes_digest = decoder.array_v1()?;
-        let q_mask_s_root = decoder.array_v1()?;
-        let direct_schedule_binding_digest = decoder.array_v1()?;
-        let relation_seed = decoder.array_v1()?;
-        let numeric_root = decoder.array_v1()?;
-        let commitment_root = decoder.array_v1()?;
-        let proof_set_digest = decoder.array_v1()?;
-        let successor_digest = decoder.array_v1()?;
+        let fixed_axes_digest: [u8; DIGEST_BYTES_V1] = decoder.array_v1()?;
+        let q_mask_s_root = decoder.proof_digest_v1()?;
+        let direct_schedule_binding_digest: [u8; DIGEST_BYTES_V1] = decoder.array_v1()?;
+        let relation_seed = decoder.proof_digest_v1()?;
+        let numeric_root: [u8; DIGEST_BYTES_V1] = decoder.array_v1()?;
+        let commitment_root: [u8; DIGEST_BYTES_V1] = decoder.array_v1()?;
+        let proof_set_digest: [u8; DIGEST_BYTES_V1] = decoder.array_v1()?;
+        let successor_digest: [u8; DIGEST_BYTES_V1] = decoder.array_v1()?;
         let successor_len = usize::try_from(decoder.u32_v1()?)
             .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)?;
         if decoder.cursor != HEADER_BYTES_V1
             || !nonzero_distinct_digests_v1(&[
-                fixed_axes_digest,
-                q_mask_s_root,
-                direct_schedule_binding_digest,
-                relation_seed,
-                numeric_root,
-                commitment_root,
-                proof_set_digest,
-                successor_digest,
+                DigestIdentityV1::from(fixed_axes_digest),
+                DigestIdentityV1::from(q_mask_s_root),
+                DigestIdentityV1::from(direct_schedule_binding_digest),
+                DigestIdentityV1::from(relation_seed),
+                DigestIdentityV1::from(numeric_root),
+                DigestIdentityV1::from(commitment_root),
+                DigestIdentityV1::from(proof_set_digest),
+                DigestIdentityV1::from(successor_digest),
             ])
             || successor_len == 0
         {
@@ -3499,13 +3607,13 @@ const PRE_DIRECT_EXISTING_RADIX_INVENTORY_END_V1: usize =
     PRE_DIRECT_EXISTING_RADIX_INVENTORY_OFFSET_V1 + 385_968;
 
 const _: () = {
-    assert!(PRE_DIRECT_COMPARATOR_OFFSET_V1 == 32_271);
-    assert!(PRE_DIRECT_RANGE_OFFSET_V1 == 599_698);
-    assert!(PRE_DIRECT_SMALL_OFFSET_V1 == 3_664_982);
-    assert!(PRE_DIRECT_Q_MASK_OFFSET_V1 == 4_192_894);
-    assert!(PRE_DIRECT_EXISTING_RADIX_OFFSET_V1 == 4_575_864);
-    assert!(PRE_DIRECT_EXISTING_RADIX_INVENTORY_OFFSET_V1 == 4_576_278);
-    assert!(PRE_DIRECT_EXISTING_RADIX_INVENTORY_END_V1 == 4_962_246);
+    assert!(PRE_DIRECT_COMPARATOR_OFFSET_V1 == 32_303);
+    assert!(PRE_DIRECT_RANGE_OFFSET_V1 == 599_730);
+    assert!(PRE_DIRECT_SMALL_OFFSET_V1 == 3_665_014);
+    assert!(PRE_DIRECT_Q_MASK_OFFSET_V1 == 4_192_926);
+    assert!(PRE_DIRECT_EXISTING_RADIX_OFFSET_V1 == 4_575_896);
+    assert!(PRE_DIRECT_EXISTING_RADIX_INVENTORY_OFFSET_V1 == 4_576_310);
+    assert!(PRE_DIRECT_EXISTING_RADIX_INVENTORY_END_V1 == 4_962_278);
 };
 
 fn pre_direct_nested_residual_v1<'a>(
@@ -3717,9 +3825,9 @@ where
 
 fn validate_claimed_inventory_transcript_v1(
     claimed_relation: &RnsNativeCrossFieldRlweClaimedRelationV1,
-    inventory_terminal_transcript_digest: [u8; DIGEST_BYTES_V1],
+    inventory_terminal_transcript_digest: ProofDigestV1,
 ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
-    if inventory_terminal_transcript_digest == [0; DIGEST_BYTES_V1]
+    if inventory_terminal_transcript_digest == ProofDigestV1::ZERO
         || claimed_relation
             .terminal_chronology
             .final_challenge_seeds_v1()
@@ -3800,26 +3908,30 @@ fn final_binding_digest_v1(
     transcript_digests: &[[u8; DIGEST_BYTES_V1]; CORES_V1],
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldRlweDirectErrorV1> {
     let core_transcript_digest = core_transcript_set_digest_v1(transcript_digests)?;
-    let cross_field_core_root =
-        cross_field_core_root_v1(inputs, view.proof_set_digest, core_transcript_digest)?;
+    let cross_field_core_root = cross_field_core_root_v1(
+        inputs,
+        view.proof_set_digest,
+        core_transcript_digest,
+        &view.core_proofs,
+    )?;
     let mut hash = Keccak256::new();
     hash.update(BINDING_DOMAIN_V1);
     hash.update(&[VERSION_V1]);
     for digest in [
-        manifest_digest_v1(),
-        inputs.schedule.bound.fixed_axes_digest,
-        inputs.schedule.bound.q_mask_s_root,
-        inputs.schedule.bound.binding_digest,
-        inputs.schedule.relation_seed,
-        inputs.numeric_root,
-        inputs.commitment_root,
-        view.proof_set_digest,
-        core_transcript_digest,
-        cross_field_core_root.0,
-        view.successor_digest,
-        view.codec_digest,
+        DigestIdentityV1::from(manifest_digest_v1()),
+        DigestIdentityV1::from(inputs.schedule.bound.fixed_axes_digest),
+        DigestIdentityV1::from(inputs.schedule.bound.q_mask_s_root),
+        DigestIdentityV1::from(inputs.schedule.bound.binding_digest),
+        DigestIdentityV1::from(inputs.schedule.relation_seed),
+        DigestIdentityV1::from(inputs.numeric_root),
+        DigestIdentityV1::from(inputs.commitment_root),
+        DigestIdentityV1::from(view.proof_set_digest),
+        DigestIdentityV1::from(core_transcript_digest),
+        DigestIdentityV1::from(cross_field_core_root.0),
+        DigestIdentityV1::from(view.successor_digest),
+        DigestIdentityV1::from(view.codec_digest),
     ] {
-        hash.update(&digest);
+        hash.update(digest.as_bytes());
     }
     for digest in transcript_digests {
         hash.update(digest);
@@ -3845,7 +3957,7 @@ fn final_binding_digest_v1(
 #[must_use = "the four-core owner must be consumed by the typed terminal bind"]
 pub(super) struct RnsNativeCrossFieldRlweFourCorePendingSealV1 {
     inputs: PreparedInputsV1,
-    proofs: [[u8; CORE_PROOF_BYTES_V1]; CORES_V1],
+    proofs: FixedRowsV1<[u8; CORE_PROOF_BYTES_V1], CORES_V1>,
     transcript_digests: [[u8; DIGEST_BYTES_V1]; CORES_V1],
     proof_set_digest: [u8; DIGEST_BYTES_V1],
     core_transcript_digest: [u8; DIGEST_BYTES_V1],
@@ -3855,17 +3967,21 @@ pub(super) struct RnsNativeCrossFieldRlweFourCorePendingSealV1 {
 impl RnsNativeCrossFieldRlweFourCorePendingSealV1 {
     fn from_parts_v1(
         inputs: PreparedInputsV1,
-        proofs: [[u8; CORE_PROOF_BYTES_V1]; CORES_V1],
+        proofs: FixedRowsV1<[u8; CORE_PROOF_BYTES_V1], CORES_V1>,
         transcript_digests: [[u8; DIGEST_BYTES_V1]; CORES_V1],
     ) -> Result<Self, RnsNativeCrossFieldRlweDirectErrorV1> {
-        for proof in &proofs {
+        for proof in proofs.iter() {
             validate_core_proof_codec_v1(proof)?;
         }
         let proof_refs = core::array::from_fn(|core| proofs[core].as_slice());
         let proof_set_digest = proof_set_digest_v1(&inputs, &proof_refs, &transcript_digests)?;
         let core_transcript_digest = core_transcript_set_digest_v1(&transcript_digests)?;
-        let cross_field_core_root =
-            cross_field_core_root_v1(&inputs, proof_set_digest, core_transcript_digest)?;
+        let cross_field_core_root = cross_field_core_root_v1(
+            &inputs,
+            proof_set_digest,
+            core_transcript_digest,
+            &proof_refs,
+        )?;
         Ok(Self {
             inputs,
             proofs,
@@ -3881,8 +3997,12 @@ impl RnsNativeCrossFieldRlweFourCorePendingSealV1 {
         let proof_set_digest =
             proof_set_digest_v1(&self.inputs, &proof_refs, &self.transcript_digests)?;
         let core_transcript_digest = core_transcript_set_digest_v1(&self.transcript_digests)?;
-        let cross_field_core_root =
-            cross_field_core_root_v1(&self.inputs, proof_set_digest, core_transcript_digest)?;
+        let cross_field_core_root = cross_field_core_root_v1(
+            &self.inputs,
+            proof_set_digest,
+            core_transcript_digest,
+            &proof_refs,
+        )?;
         if proof_set_digest != self.proof_set_digest
             || core_transcript_digest != self.core_transcript_digest
             || cross_field_core_root != self.cross_field_core_root
@@ -3903,7 +4023,7 @@ impl RnsNativeCrossFieldRlweFourCorePendingSealV1 {
 #[must_use = "the terminal-bound owner must be consumed by the successor seal"]
 pub(super) struct RnsNativeCrossFieldRlweTerminalBoundPendingSealV1 {
     inputs: PreparedInputsV1,
-    proofs: [[u8; CORE_PROOF_BYTES_V1]; CORES_V1],
+    proofs: FixedRowsV1<[u8; CORE_PROOF_BYTES_V1], CORES_V1>,
     transcript_digests: [[u8; DIGEST_BYTES_V1]; CORES_V1],
     proof_set_digest: [u8; DIGEST_BYTES_V1],
 }
@@ -4084,7 +4204,12 @@ where
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
     }
     let inputs = prepare_inputs_v1(schedule, &mut source)?;
-    let mut proofs = [[0_u8; CORE_PROOF_BYTES_V1]; CORES_V1];
+    // Reserve the exact public proof bundle before any expensive core work.
+    // Only one core's fixed transcript buffer is ever inline at a time.
+    let mut proofs = Vec::new();
+    proofs
+        .try_reserve_exact(CORES_V1)
+        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::ResourceExhausted)?;
     let mut transcript_digests = [[0_u8; DIGEST_BYTES_V1]; CORES_V1];
     for core in 0..CORES_V1 {
         let state = initial_core_transcript_state_v1(&inputs, core)?;
@@ -4092,11 +4217,15 @@ where
         let witness = build_core_witness_v1::<S, P>(&mut source, core)?;
         build_core_statement_v1::<S>(&inputs, core)?.prove(rng, &mut transcript, witness)?;
         let (proof, transcript_digest) = transcript.finish_v1()?;
-        proofs[core] = proof;
+        proofs.push(proof);
         transcript_digests[core] = transcript_digest;
     }
     drop(source);
-    RnsNativeCrossFieldRlweFourCorePendingSealV1::from_parts_v1(inputs, proofs, transcript_digests)
+    RnsNativeCrossFieldRlweFourCorePendingSealV1::from_parts_v1(
+        inputs,
+        FixedRowsV1::from_rows_v1(proofs)?,
+        transcript_digests,
+    )
 }
 
 fn verify_kernel_for_suite_v1<'a, S, P>(
@@ -4147,8 +4276,12 @@ where
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
     }
     let core_transcript_digest = core_transcript_set_digest_v1(&transcript_digests)?;
-    let cross_field_core_root =
-        cross_field_core_root_v1(&inputs, view.proof_set_digest, core_transcript_digest)?;
+    let cross_field_core_root = cross_field_core_root_v1(
+        &inputs,
+        view.proof_set_digest,
+        core_transcript_digest,
+        &view.core_proofs,
+    )?;
     let binding_digest = final_binding_digest_v1(&inputs, &view, &transcript_digests)?;
     let direct_core_safe_digest = direct_core_safe_digest_v1(
         cross_field_core_root.0,
@@ -4287,7 +4420,7 @@ pub(super) struct RnsNativeCrossFieldRlweAtomicVerifiedV2<
     numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2,
 }
 
-/// Opaque direct/inventory owner after all three terminal-root equalities have
+/// Opaque direct/inventory owner after both terminal-root equalities have
 /// been discharged.  Callers may borrow only purpose-specific verified data;
 /// the atomic owner has no raw-parts transition.
 #[allow(
@@ -4445,35 +4578,20 @@ fn validate_composite_envelope_allocation_v2<S: ZkAmsMkheRnsNativeSourceSnapshot
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
     }
 
-    let mut section_digests = [[0; DIGEST_BYTES_V1]; 2];
-    for (index, kind) in [
-        cross_kind,
-        ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut matches = envelope
-            .descriptors()
-            .iter()
-            .copied()
-            .filter(|descriptor| descriptor.kind() == kind);
-        let descriptor = matches
-            .next()
-            .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
-        let section = envelope.section(kind);
-        if matches.next().is_some()
-            || section.is_empty()
-            || descriptor.max_bytes() != kind.max_bytes()
-            || usize::try_from(descriptor.encoded_bytes()).ok() != Some(section.len())
-            || descriptor.section_digest() == [0; DIGEST_BYTES_V1]
-        {
-            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
-        }
-        section_digests[index] = descriptor.section_digest();
-    }
-    if section_digests[0] == section_digests[1]
-        || section_digests.contains(&envelope.proof_digest())
+    let mut matches = envelope
+        .descriptors()
+        .iter()
+        .copied()
+        .filter(|descriptor| descriptor.kind() == cross_kind);
+    let descriptor = matches
+        .next()
+        .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
+    if matches.next().is_some()
+        || cross_section.is_empty()
+        || descriptor.max_bytes() != cross_kind.max_bytes()
+        || usize::try_from(descriptor.encoded_bytes()).ok() != Some(cross_section.len())
+        || descriptor.section_digest() == [0; DIGEST_BYTES_V1]
+        || descriptor.section_digest() == envelope.proof_digest()
     {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
     }
@@ -4526,10 +4644,6 @@ fn validate_composite_source_context_v2<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         .terminal()
         .validate_context_v1(final_challenge_seeds)
         .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
-    linked
-        .zero_padding()
-        .validate_context_v1(final_challenge_seeds)
-        .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)?;
     Ok(())
 }
 
@@ -4543,18 +4657,9 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         RnsNativeCrossFieldRlweAllRootsVerifiedV2<'source, 'proof, S>,
         RnsNativeCrossFieldRlweDirectErrorV1,
     > {
-        let zero_pending = self
+        let terminal_roots_equal = self
             .terminal_chronology
             .discharge_global_lookup_root_equality_v2(verified_global_lookup_root)
-            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?;
-        let verified_zero_padding_root = self
-            .inventory
-            .linked()
-            .zero_padding()
-            .verified_zero_padding_root_v1(zero_pending.final_challenge_seeds_v1())
-            .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?;
-        let terminal_roots_equal = zero_pending
-            .discharge_zero_padding_root_equality_v1(verified_zero_padding_root)
             .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity)?;
         Ok(RnsNativeCrossFieldRlweAllRootsVerifiedV2 {
             direct: self.direct,

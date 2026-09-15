@@ -7,8 +7,8 @@
 use super::{
     BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1,
     manifest::{
-        ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
-        ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
+        RELEASE_MODULI_V1, RELEASE_NEGACYCLIC_ROOTS_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
     },
     modulus_product_bit_len,
 };
@@ -250,93 +250,101 @@ fn topology_digest_v1(topology: ZkAmsMkheRnsNativeTopologyV1) -> [u8; 32] {
     hash.finalize()
 }
 
+/// Exact current proof hash, field encoding, and Fiat-Shamir sampling contract.
+///
+/// This descriptor is public profile identity metadata; its Keccak identity is
+/// not a commitment or transcript implementation. It binds the native proof's
+/// sole six-lane hash and wire interpretation before a proof root is accepted.
+pub(super) const ZK_AMS_MKHE_RNS_NATIVE_PROOF_HASH_WIRE_SCHEMA_V1: &[u8] = concat!(
+    "iroha.zk-ams.rns-native.proof-hash-wire.v1;",
+    "digest=Poseidon-x7-Goldilocks-six-independent-width3-lanes;",
+    "digest-parameters=shared-GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1;",
+    "digest-wire=48bytes-six-canonical-u64le-words;",
+    "envelope=three-ordered-sections-kind1-terminal-kind2-qpcs-kind3-cross-global;header357;",
+    "terminal-roots=cross-field,global-lookup;no-detached-padding-inventory;",
+    "terminal-schedule=27seeds;global-purpose9-ordinal25;composite-purpose11-ordinal26;",
+    "terminal-discharge=concrete-cross-root-and-global-membership-root;exact-post-cross-and-pre-global-capability;final-global-root-equality;independent-composite-seed-and-final-state-replay;",
+    "source-padding=mandatory-full-logical65536-slot-base-subfield-conjugacy-and-tail-validation-before-used-slot-callback;X89,rE1024,rW512;",
+    "source-terminal-anchor=610byte-fixed-header;16-exact-position-identities;native48-ordinals=0,6,7,12,13;other11-public32;",
+    "source-mapping-bridge=terminal-bridge/binding/level3/index0/counter0;full-current-mapping-seed48-and-public-curve-axes;terminal-hyrax-bridge=index1;mapping-root48-and-exact-opening-hyrax-aggregate-identities;",
+    "global-qpcs-binding=transcript/binding/level6/index0/counter0;current-parameter32-and-exact200-ordered-limb-u8-repetition-u8-modulus-u64be-product-u64be-quotient-u64be-records;",
+    "global-pre-z=13-physical-roles39634-points;scalar-wire=exact2-point33-multiplicity-then-inverse-product-mask;header56;inverse-product-mask-purpose14;post-z-inverse-roles15-through21;existing-inverse11696-added20712;",
+    "global-clean-bridge=terminal-bridge/binding/level2/index0/counter0;ten-verified-curve32-identities-z32-U-sum33-M33-and-pre-global-native48;",
+    "carrier-binding=transcript/binding/level7/index0/counter0;60-fixed-fields2382bytes;current-version1;full-public32-and-native48-role-widths;two-equation-and40-limb-native48-roots;538-framed-words-per-lane;",
+
+    "catalog=sole-privacy-exact12-commitment;",
+    "frame=shared-length-framed-catalog,protocol,profile,role,phase,level,index,counter,lane,fields;",
+    "tree-roles=initial-tree,quotient-tree,fri-tree;transcript-role=transcript;",
+    "leaf=payload384-then-index-bound384;sole-construction;",
+    "payload-role=oracle-payload;phase=leaf;position=oracle-layer,index0,counter0;",
+    "payload-fields=canonical-leaf-payload-domain,version,oracle-kind-layer,tree-length-u32be,coordinate-count-u16be,15-byte-packing-tag,payload-length-u32be,all-canonical-packed-bytes;",
+    "leaf-phase=leaf;position=level0,exact-leaf-index,counter0;",
+    "leaf-fields=index-bound-leaf-domain,version,oracle-kind-layer,tree-length-u32be,coordinate-count-u16be,15-byte-packing-tag,payload-length-u32be,all48-payload-digest-bytes;",
+    "payload-cache=one-borrowed-canonical-public-payload;exact-byte-equality;no-witness-cache;",
+    "curve-bridge-role=terminal-bridge;phase=binding;position=level0,index0,counter0;",
+    "curve-bridge=verified-independent-T256-kernel32-and-complete-current-context-statement-proof;",
+    "direct-curve-bridge=terminal-bridge/binding/level1/index0/counter0;complete-current-native-context-plus-independent-curve-context-and-all-four-ordered-7981byte-GBP-proofs;",
+    "direct-wire=32303byte-owned-frame;six-curve32-identities-and-native48-q-mask-root-and-relation-seed-in-fixed-positions;",
+    "q-mask-root=transcript/binding/level4/index0/counter0;fields=domain,version,profile32,source32,formula32,mapping32,rns-seed48,parameter32,pre-relation-state48,direct-manifest32,6400-u32be,6400-ordered-ordinal-u32be-axis4-canonical-point33-records;",
+    "q-mask-last-field=262400bytes-exact-shared-stream;one-source-traversal;bounded-six-lane-state-and41byte-point-record;no-heap-tape-or-source-replay-per-lane;",
+    "claimed-numeric-binding=one-owner;transcript/binding/level2/index2/counter0;fields=domain,version,anchor48,preflight48,public-bundle32,source-parameter32,source-transcript48,source-schedule48,evaluation48,residual48,schedule-parameter32,q-mask48,pre-relation48,relation-seed48,final-transcript48,exact200-u64be-triples;",
+    "claimed-numeric-parameter=both-parameters-equal-current-canonical-profile;",
+    "numeric-handoff-binding=transcript/binding/level5/index0/counter0;one-V1-domain-and-version;29-fixed-fields-824bytes;native-schedule-and-proof-state-full48;public-source-receipt-identities32;250-framed-words-per-lane;750-lane-permutations;",
+    "public-reader-schedule=transcript/binding/level4/index1/counter0;fields=domain,version,parameter32,q-mask48,pre-relation48,relation-seed48,limbs-u16be,repetitions-u16be,40-ordered-limb-u16be-modulus-u64be-five-repetition-u16be-point-u64be-records;",
+    "source-anchor=898byte-fixed-header;23-exact-position-identities;native48-ordinals=1,2,3,4,19,20,21,22;other15-public32;downstream-length-u32be;no-width-tags-or-aliases;",
+    "source-packing-post-equation-binding=native48-source-anchor-and-final-aggregation-schedule-ordinals0,1;17-ordered-public-curve32-components;640-component-bytes;combined-curve32-ordinal19;full-width-absorption-and-tagged-zero-alias-checks;outer-bindings-admitted-only-after-child-equation;",
+    "phases=initial,absorb,opening,challenge,ratchet,leaf,node,binding;",
+    "fq2-wire=15byte-big-endian-c0-high60-c1-low60;",
+    "fq2-canonical=c0<limb-modulus-and-c1<limb-modulus;",
+    "transcript-state-and-seeds=full48bytes;",
+    "sampling-word=digest.words()[0]-canonical-Goldilocks-not-uniform-u64;",
+    "sampling-frame=transcript/challenge/level0/index0/counter-attempt;",
+    "sampling-fields=typed-role,exact-five-coordinate-bytes,modulus-u64be,complete-seed48;",
+    "sampling-roles=query-index,relation-point,rlwe-aggregation,batch-coefficient,fri-fold;",
+    "sampling-coordinates=query-u16be-plus-three-zero-bytes;point-limb-repetition-plus-three-zero-bytes;",
+    "sampling-coordinates=batch-limb-row-coefficient-component-zero;fold-layer-limb-row-component-zero;",
+    "sampling-coordinates=aggregation-limb-repetition-coefficient-zero-zero;",
+    "aggregation-seed=transcript/binding/level3/index0/counter0;fields=native-rlwe-aggregation-seed,prior48,formula32,mapping32;",
+    "aggregation=nonzero-distinct-per-limb-ten-values;cross-limb-pairs-distinct;",
+    "sampling-accept=word<pG-(pG%target-modulus);",
+    "sampling-value=word%target-modulus;",
+    "sampling-domain=verifier-owned-role,phase,layer,limb,row,coefficient,component,ordinal,attempt;",
+    "sampling-attempts=256-fail-closed;",
+    "query-schedule=160-distinct-indices-in-2pow18;",
+    "relation-points=nonzero-distinct-per-limb-excluding-native-NTT-subgroups;",
+    "fq2-challenges=nonzero-pair;",
+    "no32byte-proof-digest-no16byte-fq2-no-alternate-wire",
+).as_bytes();
+
 /// Canonical ordered 40-prime NTT chain.
-pub const ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = [
-    1_152_921_504_606_584_833,
-    1_152_921_504_598_720_513,
-    1_152_921_504_592_429_057,
-    1_152_921_504_581_419_009,
-    1_152_921_504_580_894_721,
-    1_152_921_504_578_273_281,
-    1_152_921_504_577_748_993,
-    1_152_921_504_577_486_849,
-    1_152_921_504_568_836_097,
-    1_152_921_504_565_166_081,
-    1_152_921_504_563_331_073,
-    1_152_921_504_556_515_329,
-    1_152_921_504_555_466_753,
-    1_152_921_504_554_156_033,
-    1_152_921_504_552_583_169,
-    1_152_921_504_542_883_841,
-    1_152_921_504_538_951_681,
-    1_152_921_504_537_378_817,
-    1_152_921_504_531_873_793,
-    1_152_921_504_521_650_177,
-    1_152_921_504_509_853_697,
-    1_152_921_504_508_280_833,
-    1_152_921_504_506_970_113,
-    1_152_921_504_495_697_921,
-    1_152_921_504_491_241_473,
-    1_152_921_504_488_620_033,
-    1_152_921_504_479_444_993,
-    1_152_921_504_470_794_241,
-    1_152_921_504_468_172_801,
-    1_152_921_504_462_929_921,
-    1_152_921_504_462_667_777,
-    1_152_921_504_455_589_889,
-    1_152_921_504_447_987_713,
-    1_152_921_504_442_482_689,
-    1_152_921_504_436_191_233,
-    1_152_921_504_427_278_337,
-    1_152_921_504_419_414_017,
-    1_152_921_504_409_190_401,
-    1_152_921_504_403_947_521,
-    1_152_921_504_396_869_633,
-];
+pub const ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = {
+    // The basis extension retains the exact source chain under one owner.
+    let mut values = [0; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1];
+    let mut index = 0;
+    while index < RELEASE_MODULI_V1.len() {
+        values[index] = RELEASE_MODULI_V1[index];
+        index += 1;
+    }
+    assert!(RELEASE_MODULI_V1.len() + 2 == ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1);
+    values[RELEASE_MODULI_V1.len()] = 1_152_921_504_403_947_521;
+    values[RELEASE_MODULI_V1.len() + 1] = 1_152_921_504_396_869_633;
+    values
+};
 
 /// Canonical primitive `2N`-th roots paired with the 40-prime chain.
-pub const ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = [
-    720_645_352_895_426_071,
-    282_755_386_997_791_573,
-    1_129_868_644_045_593_393,
-    853_812_227_483_389_373,
-    313_941_090_484_177_697,
-    430_486_680_513_317_260,
-    143_942_864_930_673_074,
-    807_173_726_984_510_404,
-    191_722_530_547_666_486,
-    467_567_141_367_137_610,
-    941_895_608_111_266_529,
-    164_841_987_874_738_392,
-    662_956_088_516_163_749,
-    418_880_473_612_227_419,
-    392_461_511_604_930_516,
-    764_249_630_711_722_482,
-    864_013_988_376_557_277,
-    705_763_476_696_323_117,
-    1_036_023_418_809_922_092,
-    1_093_496_573_364_979_026,
-    465_626_502_647_312_456,
-    108_719_633_419_962_724,
-    1_009_384_194_290_538_050,
-    926_844_163_581_853_650,
-    935_039_477_417_276_816,
-    950_668_019_576_080_971,
-    551_479_639_661_014_597,
-    612_386_825_931_585_809,
-    452_213_060_731_776_498,
-    215_387_729_362_370_611,
-    506_439_537_974_696_847,
-    1_138_741_943_693_016_536,
-    378_985_449_492_583_188,
-    143_344_989_960_478_445,
-    879_283_036_444_379_690,
-    150_226_471_703_910_190,
-    1_049_010_867_608_938_030,
-    533_899_346_966_036_544,
-    22_173_257_170_052_426,
-    24_990_432_311_765_759,
-];
+pub const ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = {
+    // The basis extension retains the exact source chain under one owner.
+    let mut values = [0; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1];
+    let mut index = 0;
+    while index < RELEASE_NEGACYCLIC_ROOTS_V1.len() {
+        values[index] = RELEASE_NEGACYCLIC_ROOTS_V1[index];
+        index += 1;
+    }
+    assert!(RELEASE_NEGACYCLIC_ROOTS_V1.len() + 2 == ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1);
+    values[RELEASE_NEGACYCLIC_ROOTS_V1.len()] = 22_173_257_170_052_426;
+    values[RELEASE_NEGACYCLIC_ROOTS_V1.len() + 1] = 24_990_432_311_765_759;
+    values
+};
 
 /// Parameter-complete replacement profile plus its intentionally open evidence pins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -388,6 +396,11 @@ impl ZkAmsMkheRnsNativeProfileV1 {
 fn profile_id_v1() -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-profile");
+    let schema_length = u64::try_from(ZK_AMS_MKHE_RNS_NATIVE_PROOF_HASH_WIRE_SCHEMA_V1.len())
+        .expect("the fixed native proof descriptor fits u64");
+    hash.update(&schema_length.to_be_bytes());
+    hash.update(ZK_AMS_MKHE_RNS_NATIVE_PROOF_HASH_WIRE_SCHEMA_V1);
+    hash.update(&fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1);
     hash.update(&(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 as u64).to_be_bytes());
     hash.update(&(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 as u64).to_be_bytes());
     hash.update(&(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 as u64).to_be_bytes());
@@ -788,8 +801,122 @@ impl<'a> ProfileManifestDecoder<'a> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn native_profile_rejects_former_three_point_global_mask_contract() {
+        use super::*;
+        // Independently reconstructed complete canonical descriptor preimages.
+        assert_eq!(
+            profile_id_v1(),
+            [
+                0x67, 0x2e, 0x47, 0x10, 0x27, 0xe5, 0x12, 0xf8, 0x48, 0x93, 0x10, 0xe3, 0x82, 0xde,
+                0xb1, 0x5a, 0xea, 0x59, 0x70, 0xd8, 0xec, 0x3d, 0x86, 0xc6, 0x8e, 0xe4, 0xad, 0x9b,
+                0x87, 0x1d, 0x94, 0x50
+            ]
+        );
+        let mut retired_parameters = candidate_profile_v1();
+        retired_parameters.profile_id = [
+            0x79, 0xd8, 0x4e, 0xb4, 0x82, 0x8a, 0x38, 0x4b, 0xc8, 0xc3, 0xdc, 0x71, 0x77, 0xa2,
+            0xea, 0x0d, 0xa7, 0xed, 0x3f, 0xd2, 0x45, 0x01, 0x62, 0xde, 0x3d, 0xe2, 0x20, 0x95,
+            0xd3, 0xd5, 0x81, 0x82,
+        ];
+        let mut retired = zk_ams_mkhe_rns_native_profile_manifest_v1().expect("current manifest");
+        retired.profile_digest = retired_parameters
+            .digest()
+            .expect("retired descriptor identity");
+        retired.manifest_digest = profile_manifest_digest_v1(retired);
+        assert!(retired.validate().is_err());
+    }
+
+    #[test]
+    fn revised_proof_contract_changes_profile_identity_and_rejects_old_manifest() {
+        use super::*;
+        let mut retired = Keccak256::new();
+        retired.update(b"iroha.zk-ams.v1.mkhe.rns-native-profile");
+        retired.update(&(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 as u64).to_be_bytes());
+        retired.update(&(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 as u64).to_be_bytes());
+        retired.update(&(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 as u64).to_be_bytes());
+        for (&modulus, &root) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1
+            .iter()
+            .zip(ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1.iter())
+        {
+            retired.update(&modulus.to_be_bytes());
+            retired.update(&root.to_be_bytes());
+        }
+        let retired_profile = retired.finalize();
+        assert_ne!(profile_id_v1(), retired_profile);
+        let mut retired_parameters = candidate_profile_v1();
+        retired_parameters.profile_id = retired_profile;
+        let retired_profile_digest = retired_parameters.digest().unwrap();
+        let current = zk_ams_mkhe_rns_native_profile_manifest_v1().unwrap();
+        current.validate().unwrap();
+        assert_ne!(current.profile_digest, retired_profile_digest);
+        let mut old_profile = current;
+        old_profile.profile_digest = retired_profile_digest;
+        // Recompute the outer identity, so rejection proves the profile cutover
+        // rather than a stale checksum after an unrelated field mutation.
+        old_profile.manifest_digest = profile_manifest_digest_v1(old_profile);
+        assert!(old_profile.validate().is_err());
+        assert_eq!(
+            ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1,
+            4_313_088
+        );
+        assert_eq!(
+            ZK_AMS_MKHE_RNS_NATIVE_CORRELATED_FRI_MAX_BYTES_V1,
+            26_409_984
+        );
+        assert_eq!(ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, 30_740_352);
+        assert_eq!(ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1, 40 * 1024 * 1024);
+    }
     use super::*;
     use crate::vega::zk_ams::mkhe::mod_pow;
+
+    #[test]
+    fn native_basis_extension_preserves_the_source_prefix_and_reproduces_every_root() {
+        assert_eq!(
+            &ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[..RELEASE_MODULI_V1.len()],
+            &RELEASE_MODULI_V1
+        );
+        assert_eq!(
+            &ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1[..RELEASE_NEGACYCLIC_ROOTS_V1.len()],
+            &RELEASE_NEGACYCLIC_ROOTS_V1
+        );
+        let order = 2 * ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 as u64;
+        for (index, (&modulus, &root)) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1
+            .iter()
+            .zip(ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1.iter())
+            .enumerate()
+        {
+            let base = (2..=64)
+                .find(|base| mod_pow(*base, (modulus - 1) / 2, modulus) == modulus - 1)
+                .expect("every governed prime has a small quadratic nonresidue");
+            assert_eq!(
+                root,
+                mod_pow(base, (modulus - 1) / order, modulus),
+                "limb {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_native_roots_are_rejected_by_the_actual_profile_validator() {
+        const BAD_FIRST: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = {
+            let mut roots = ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1;
+            roots[13] = 418_880_473_610_227_419;
+            roots
+        };
+        const BAD_SECOND: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = {
+            let mut roots = ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1;
+            roots[27] = 610_386_825_931_585_809;
+            roots
+        };
+        let mut profile = candidate_profile_v1();
+        profile.validate().expect("canonical native profile");
+        for bad_roots in [&BAD_FIRST, &BAD_SECOND] {
+            profile.negacyclic_roots = bad_roots;
+            assert_eq!(profile.validate(), Err(ZkAmsMkheErrorV1::InvalidProfile));
+        }
+    }
 
     #[test]
     fn corrected_chain_is_prime_unique_and_negacyclic() {

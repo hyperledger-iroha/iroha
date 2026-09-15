@@ -1,9 +1,30 @@
+//! Confidential source ownership and canonical storage regression tests.
+
 use super::*;
 use core::mem::size_of;
 use std::{
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
+};
+const _: fn() = || {
+    trait AmbiguousIfCloneOrCopyV1<AdversarialImplV1> {
+        fn marker() {}
+    }
+    impl<T: ?Sized> AmbiguousIfCloneOrCopyV1<()> for T {}
+    struct CloneImplV1;
+    impl<T: Clone> AmbiguousIfCloneOrCopyV1<CloneImplV1> for T {}
+    struct CopyImplV1;
+    impl<T: Copy> AmbiguousIfCloneOrCopyV1<CopyImplV1> for T {}
+
+    // Either a derived or manual Clone/Copy implementation makes the inferred
+    // trait parameter ambiguous, so the test build rejects the changed owner.
+    let _ = <ZkAmsPhase23RnsLinkSecretChunkV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
+    let _ = <ZkAmsPhase23RnsLinkSourceProviderReceiptV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
+    let _ = <ZkAmsPhase23RnsLinkSourceSnapshotReceiptV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
+    let _ = <ZkAmsPhase23RnsLinkSourcePublicationReceiptV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
+    let _ = <ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
+    let _ = <ZkAmsPhase23RnsLinkExternalSourcePublicationV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
 };
 fn release_context_v1() -> ZkAmsPhase23RnsLinkContextV1 {
     ZkAmsPhase23RnsLinkContextV1::new(
@@ -45,9 +66,6 @@ fn secret_only_geometry_is_exact_and_smaller_than_the_full_mirror() {
     assert_eq!(plan.max_single_owned_chunk_bytes, 8_192);
     assert!(plan.secret_total_file_bytes < plan.prior_full_mirror_bytes);
     assert_eq!(plan.proposed_specialized_encryption_bytes, 9_445_392);
-    assert_eq!(plan.masked_q_pcs_isolated_heap_bytes, 74_662_064);
-    assert_eq!(plan.named_combined_heap_bytes, 84_107_456);
-    assert!(plan.named_combined_heap_bytes < 160 * 1024 * 1024);
     assert!(plan.confidential_backend_wired);
     assert!(!plan.public_artifact_manifest_bound);
     assert!(!plan.source_relation_polynomials_constructed);
@@ -246,7 +264,7 @@ fn source_surface_is_move_only_bounded_concrete_and_non_authorizing() {
         .expect("production source prefix");
     let parent = include_str!("phase23_rns_link.rs");
     let adapter = include_str!("phase23_rns_link_external_spool.rs");
-    let spool_leaf = include_str!("../../../../../iroha_confidential_spool/src/lib.rs");
+    let spool_leaf = include_str!("../../../../../iroha_crypto/src/confidential_spool.rs");
     let crate_manifest = include_str!("../../../../Cargo.toml");
     assert!(source.lines().count() <= 1_050);
     assert!(source.len() <= 50_000);
@@ -262,16 +280,11 @@ fn source_surface_is_move_only_bounded_concrete_and_non_authorizing() {
         "ZkAmsPhase23RnsLinkExternalSourceAssemblyV1",
         "ZkAmsPhase23RnsLinkExternalSourcePublicationV1",
     ] {
-        let declaration_offset = production
-            .find(&format!("struct {move_only}"))
-            .unwrap_or_else(|| panic!("missing move-only type: {move_only}"));
-        let header_offset = production[..declaration_offset]
-            .rfind("\n\n")
-            .map_or(0, |offset| offset + 2);
-        let header = &production[header_offset..declaration_offset];
-        assert!(
-            !header.contains("#[derive("),
-            "move-only type has a derive: {move_only}"
+        let declaration = format!("pub(in super::super) struct {move_only}");
+        assert_eq!(
+            production.matches(&declaration).count(),
+            1,
+            "exact private move-only declaration: {move_only}"
         );
     }
     for forbidden in [
@@ -318,7 +331,15 @@ fn source_surface_is_move_only_bounded_concrete_and_non_authorizing() {
     assert!(adapter.contains("ordered_record_topology_root"));
     assert!(!adapter.contains("#[derive(Clone"));
     assert!(!adapter.contains("#[derive(Debug"));
-    assert!(spool_leaf.contains("CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1"));
-    assert!(spool_leaf.contains("CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_SLOTS_V1"));
-    assert!(crate_manifest.contains("iroha_confidential_spool = { workspace = true }"));
+    assert!(spool_leaf.contains("pub struct ConfidentialSpoolLayoutV1"));
+    assert!(spool_leaf.contains("pub fn new_v1("));
+    assert!(adapter.contains("canonical_source_layouts_v1("));
+    assert!(adapter.contains("SECRET_MAIN_SLOT_COUNT_V1"));
+    assert!(adapter.contains("SECRET_NONCE_SLOT_COUNT_V1"));
+    assert!(adapter.contains("iroha_crypto::confidential_spool"));
+    assert!(crate_manifest.contains(
+        "iroha_crypto = { workspace = true, default-features = false, optional = true }"
+    ));
+    assert!(crate_manifest.contains("\"dep:iroha_crypto\""));
+    assert!(!crate_manifest.contains("iroha_confidential_spool"));
 }

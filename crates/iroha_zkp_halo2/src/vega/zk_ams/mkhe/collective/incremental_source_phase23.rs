@@ -5,7 +5,9 @@
 //! otherwise private context axes.  The implementation behind that seal is
 //! complete enough to freeze the one-pass ownership and memory topology: one validated packed chunk
 //! is borrowed by the exact live encryption witnesses, persisted in canonical source order before
-//! C0/C1 publication, and then moved unchanged into scalar materialization.
+//! C0/C1 publication, and then moved unchanged into scalar materialization. The
+//! same concrete RNG is retained for consuming authenticated replay/session
+//! handoff; no detached replacement entropy enters that later stage.
 //!
 //! A private child also freezes the scalable Phase-23 radix/range topology as static planning
 //! evidence. Its production seals and every stronger gate are deliberately uninhabited.
@@ -400,7 +402,9 @@ fn require_exact_release_shape_v1(
 /// One move-only correspondence owner. It deliberately exposes no getters, codec, clone, or tuple
 /// decomposition; later stages must add a purpose-specific consuming transition.
 #[must_use = "dropping this owner closes the source snapshots and all correspondence capability"]
-struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
+struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P> {
+    // Taken only by the authenticated replay-to-session transition.
+    original_random: Option<R>,
     materialized: ZkAmsPhase23MaterializedAccumulatorsV1,
     manifests: Vec<ZkAmsMkheStreamingCollectiveCiphertextV1>,
     source: ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
@@ -410,7 +414,9 @@ struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
     public_artifact_manifest_bound: bool,
     bundle_digest: [u8; 32],
 }
-impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
+    ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>
+{
     fn digest_axes_v1(&self) -> Phase23BundleDigestAxesV1 {
         Phase23BundleDigestAxesV1 {
             profile_digest: self.materialized.profile_digest,
@@ -524,7 +530,8 @@ where
                 || {
                     let pool = Phase23SecretRecordChunkPoolV1::try_new_exact_v1()?;
                     Ok(
-                        move |canonical_plaintext: &[[u8; 32]],
+                        move |_ciphertext_publisher: &mut P,
+                              canonical_plaintext: &[[u8; 32]],
                               ephemeral: &[i64],
                               error_zero: &[i64],
                               error_one: &[i64],
@@ -579,7 +586,7 @@ fn materialize_encrypt_and_publish_phase23_source_v1<I, R, K, P>(
     fold_count: u8,
     shape: ZkAmsPhase23AccumulatorShapeV1,
     packed_chunks: I,
-) -> Result<ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P>, ZkAmsMkheErrorV1>
+) -> Result<ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>, ZkAmsMkheErrorV1>
 where
     I: IntoIterator<Item = Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
     R: MaskedRelaxedRandomSourceV1,
@@ -648,7 +655,6 @@ where
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     let source = source.finish_v1()?;
-    drop(random);
     let mut manifest_digests = [[0_u8; 32]; PHASE23_RECORD_COUNT_V1];
     for (ordinal, manifest) in manifests.iter().enumerate() {
         manifest_digests[ordinal] = manifest.manifest_digest();
@@ -670,6 +676,7 @@ where
     };
     let bundle_digest = phase23_bundle_digest_from_frames_v1(axes, &manifest_digests)?;
     let owner = ZkAmsPhase23MaterializedEncryptedSourceOwnerV1 {
+        original_random: Some(random),
         materialized,
         manifests,
         source,
@@ -691,14 +698,16 @@ const _: () = {
 };
 #[path = "incremental_source_phase23_source_algebra.rs"]
 mod source_algebra;
-impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
-    /// Sole private consuming seam into the still-uninhabited source-algebra
-    /// prerequisite. No tuple split or borrowed callback exposes the owner.
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
+    ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P>
+{
+    /// Consume the original source, 43 ordered manifests and key authority into
+    /// mandatory source-algebra preflight. No detached seal, tuple split or
+    /// borrowed callback exposes or replaces those owners.
     fn into_source_algebra_prerequisite_v2(
         self,
-        ordered_ciphertexts: source_algebra::OrderedCiphertextBundleSealV2,
-    ) -> Result<source_algebra::Phase23SourceAlgebraPrerequisiteV2<K, P>, ZkAmsMkheErrorV1> {
-        source_algebra::consume_phase23_source_algebra_prerequisite_v2(self, ordered_ciphertexts)
+    ) -> Result<source_algebra::Phase23SourceAlgebraPrerequisiteV2<R, K, P>, ZkAmsMkheErrorV1> {
+        source_algebra::consume_phase23_source_algebra_prerequisite_v2(self)
     }
 }
 #[cfg(test)]

@@ -1025,7 +1025,7 @@ fn audited_upstream_is_exactly_legacy_38_and_retains_no_native_ciphertext() {
     );
 
     let owner = phase23
-        .split_once("struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {")
+        .split_once("struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<R, K, P> {")
         .unwrap()
         .1
         .split_once("\n}")

@@ -952,15 +952,7 @@ define_zk_ace_digest384!(
 );
 
 /// Pinned six-word commitment to [`PRIVACY_EXACT12_CATALOG_PREIMAGE_V1`].
-pub const PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1: [u64;
-    fastpq_isi::GOLDILOCKS_DIGEST384_LANES_V1] = [
-    0x7c30_a004_39f1_37e0,
-    0x6b40_fb5c_d815_db00,
-    0x49a9_4401_d272_97d7,
-    0x2e34_8ea7_fdf3_f0de,
-    0xfabf_bf7c_7865_7f74,
-    0xffbb_e269_c311_4fc9,
-];
+pub use iroha_crypto::privacy::PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1;
 
 /// Recompute the final Exact12 catalog commitment from its canonical preimage.
 ///

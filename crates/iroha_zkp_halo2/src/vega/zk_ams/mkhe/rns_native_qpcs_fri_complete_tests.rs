@@ -1,10 +1,17 @@
+//! FRI membership, algebra, typestate and strict-wire controls.
+//! Root/frontier fixtures exercise opened rows; they do not prove construction
+//! of full early-layer codewords or compliance with the full-proof work budget.
+
 use super::super::{
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1,
         ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
     },
-    rns_native_qpcs_prefix::{FQ2_BYTES_V1, tree_leaf_hash_v1, tree_node_hash_v1},
+    rns_native_proof_hash::test_proof_digest_v1,
+    rns_native_qpcs_field_wire::encode_fq2_v1,
+    rns_native_qpcs_leaf::{RnsNativeLeafPayloadV1, RnsNativeOracleV1},
+    rns_native_qpcs_prefix::{FQ2_BYTES_V1, tree_node_hash_v1},
     rns_native_source::{
         ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
         ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -18,6 +25,7 @@ use super::super::{
     },
 };
 use super::*;
+use crate::vega::sponge::Keccak256;
 use std::sync::OnceLock;
 
 const AGGREGATE_OPENED_OFFSET_V1: usize = 16;
@@ -26,7 +34,7 @@ const AGGREGATE_VALUES_BYTES_OFFSET_V1: usize = 20;
 const AGGREGATE_AUTHENTICATION_BYTES_OFFSET_V1: usize = 24;
 const DOWNSTREAM_BYTES_OFFSET_V1: usize = 28;
 const DESCRIPTORS_OFFSET_V1: usize = 32;
-const SCHEDULE_DIGEST_OFFSET_V1: usize = 352;
+const SCHEDULE_DIGEST_OFFSET_V1: usize = 400;
 
 const _: () = {
     assert!(PRE_AUTH_CLAIMED_QPCS_TYPESTATE_SOURCE_IMPLEMENTED_V1);
@@ -39,7 +47,7 @@ const _: () = {
 #[derive(Clone, Copy)]
 struct TestNodeV1 {
     index: u32,
-    digest: [u8; DIGEST_BYTES_V1],
+    digest: ProofDigestV1,
 }
 
 struct ClosureFixtureV1 {
@@ -53,21 +61,14 @@ struct ClosureFixtureV1 {
     residual: Vec<u8>,
 }
 
-fn fixture_digest_v1(label: &[u8], ordinal: usize) -> [u8; DIGEST_BYTES_V1] {
-    let mut hash = Keccak256::new();
-    hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.fri-complete.test");
-    hash.update(
-        &u16::try_from(label.len())
-            .expect("test label fits u16")
-            .to_be_bytes(),
-    );
-    hash.update(label);
-    hash.update(
-        &u16::try_from(ordinal)
-            .expect("test ordinal fits u16")
-            .to_be_bytes(),
-    );
-    hash.finalize()
+fn fixture_digest_v1(label: &[u8], ordinal: usize) -> ProofDigestV1 {
+    test_proof_digest_v1(label, ordinal as u64)
+}
+
+fn change_sixth_lane_v1(digest: ProofDigestV1) -> ProofDigestV1 {
+    let mut bytes = digest.to_le_bytes();
+    bytes[40] ^= 1;
+    ProofDigestV1::from_le_bytes(bytes).expect("canonical sixth-lane mutation")
 }
 
 struct JoinTestChunkV1 {
@@ -101,7 +102,7 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for JoinTestSnapshotV1 {
         self.layout
     }
 
-    fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; DIGEST_BYTES_V1] {
+    fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; 32] {
         let ordinal = match arena {
             ZkAmsMkheRnsNativeSourceArenaV1::Main => 5,
             ZkAmsMkheRnsNativeSourceArenaV1::Nonce => 6,
@@ -125,12 +126,19 @@ enum JoinQpcsVariantV1 {
     Fri(usize),
 }
 
-fn join_digest_v1(context: u16, ordinal: u16) -> [u8; DIGEST_BYTES_V1] {
+fn join_digest_v1(context: u16, ordinal: u16) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.exact-state-join.test");
     hash.update(&context.to_be_bytes());
     hash.update(&ordinal.to_be_bytes());
     hash.finalize()
+}
+
+fn join_proof_digest_v1(context: u16, ordinal: u16) -> ProofDigestV1 {
+    test_proof_digest_v1(
+        b"fri-join-proof-role",
+        (u64::from(context) << 16) | u64::from(ordinal),
+    )
 }
 
 fn join_opening_role_v1(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
@@ -185,9 +193,9 @@ fn join_terminal_stage_v1(context: u16) -> ZkAmsMkheRnsNativeTerminalBoundTransc
         .expect("opening transcript");
     let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         transcript.binding_digest(),
-        join_digest_v1(context, 300),
-        join_digest_v1(context, 301),
-        join_digest_v1(context, 302),
+        join_proof_digest_v1(context, 300),
+        join_proof_digest_v1(context, 301),
+        join_proof_digest_v1(context, 302),
     )
     .expect("terminal bridge");
     transcript
@@ -204,15 +212,17 @@ fn join_schedule_and_qpcs_v1(
 ) {
     let terminal = join_terminal_stage_v1(context);
     let mut relation = terminal
-        .bind_qpcs_initial_root(join_digest_v1(context, 400))
+        .bind_qpcs_initial_root(join_proof_digest_v1(context, 400))
         .expect("initial qPCS root")
-        .bind_q_mask_s_root(join_digest_v1(context, 401))
+        .bind_q_mask_s_root(join_proof_digest_v1(context, 401))
         .expect("q-mask root");
     let binding = relation
         .take_qpcs_relation_binding()
         .expect("one-shot relation lineage");
     let schedule = RnsNativeQpcsRelationScheduleV1::from_relation_binding_v1(
-        join_digest_v1(context, 402),
+        RnsNativeProofHashContextV1::canonical()
+            .unwrap()
+            .parameter_digest(),
         binding,
     )
     .expect("lineage-bearing relation schedule");
@@ -221,7 +231,7 @@ fn join_schedule_and_qpcs_v1(
         JoinQpcsVariantV1::Matching | JoinQpcsVariantV1::Fri(_) => 403,
     };
     let mut fri = relation
-        .bind_qpcs_quotient_root(join_digest_v1(context, quotient_ordinal))
+        .bind_qpcs_quotient_root(join_proof_digest_v1(context, quotient_ordinal))
         .expect("quotient root");
     for layer in 0..ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 as usize {
         let ordinal = if matches!(variant, JoinQpcsVariantV1::Fri(changed) if changed == layer) {
@@ -231,7 +241,7 @@ fn join_schedule_and_qpcs_v1(
         };
         let root = ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             u8::try_from(layer).expect("layer fits u8"),
-            join_digest_v1(context, ordinal),
+            join_proof_digest_v1(context, ordinal),
         )
         .expect("typed FRI root");
         fri = fri.bind_qpcs_fri_root(root).expect("ordered FRI root");
@@ -246,9 +256,8 @@ fn join_terminal_roots_v1(
 ) -> ZkAmsMkheRnsNativeTerminalRootsV1 {
     ZkAmsMkheRnsNativeTerminalRootsV1::new(
         qpcs.binding_digest(),
-        join_digest_v1(context, 700),
-        join_digest_v1(context, 701),
-        join_digest_v1(context, 702),
+        join_proof_digest_v1(context, 700),
+        join_proof_digest_v1(context, 701),
     )
     .expect("terminal roots")
 }
@@ -270,75 +279,35 @@ fn join_stage_v1(
         parameter_digest,
         transcript_digest: transcript.transcript_digest(),
         query_seed: transcript.qpcs_query_challenge_seed(),
-        section_binding_digest: join_digest_v1(990, 2),
-        schedule_digest: join_digest_v1(990, 3),
+        section_binding_digest: join_proof_digest_v1(990, 2),
+        schedule_digest: join_proof_digest_v1(990, 3),
         evaluations: &[],
-        evaluation_binding_digest: join_digest_v1(990, 4),
-        residual_digest: join_digest_v1(990, 5),
+        evaluation_binding_digest: join_proof_digest_v1(990, 4),
+        residual_digest: join_proof_digest_v1(990, 5),
         rlwe_source_residual: &[],
     }
 }
 
-fn zero_tree_digests_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    layer: usize,
-    length: usize,
-) -> Vec<[u8; DIGEST_BYTES_V1]> {
-    let layer = u8::try_from(layer).expect("test layer fits u8");
-    let mut digests = Vec::with_capacity(length.ilog2() as usize + 1);
-    digests.push(
-        tree_leaf_hash_v1(
-            parameter_digest,
-            TreeRoleV1::Fri,
-            layer,
-            length,
-            &[0_u8; LEAF_BYTES_V1],
-        )
-        .expect("zero leaf hash"),
-    );
-    for height in 1..=length.ilog2() as usize {
-        digests.push(
-            tree_node_hash_v1(
-                parameter_digest,
-                TreeRoleV1::Fri,
-                layer,
-                length,
-                height,
-                digests[height - 1],
-                digests[height - 1],
-            )
-            .expect("zero node hash"),
-        );
-    }
-    digests
-}
-
-fn zero_tree_root_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    layer: usize,
-    length: usize,
-) -> [u8; DIGEST_BYTES_V1] {
-    *zero_tree_digests_v1(parameter_digest, layer, length)
-        .last()
-        .expect("nonempty zero-tree digest schedule")
-}
-
-fn build_zero_tree_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
+fn build_membership_tree_v1(
+    parameter_digest: [u8; 32],
     layer: usize,
     length: usize,
     indices: IndexSetV1,
-) -> (Vec<u8>, Vec<u8>, [u8; DIGEST_BYTES_V1]) {
+) -> (Vec<u8>, Vec<u8>, ProofDigestV1) {
     let layer_u8 = u8::try_from(layer).expect("test layer fits u8");
-    let zero = zero_tree_digests_v1(parameter_digest, layer, length);
     let values = vec![0_u8; indices.len * LEAF_BYTES_V1];
-    let leaf_digest = zero[0];
+    let payload = RnsNativeLeafPayloadV1::from_canonical_values(
+        parameter_digest,
+        RnsNativeOracleV1::Fri { layer: layer_u8 },
+        &[0; LEAF_BYTES_V1],
+    )
+    .unwrap();
     let mut current: Vec<TestNodeV1> = indices.values[..indices.len]
         .iter()
         .copied()
         .map(|index| TestNodeV1 {
             index,
-            digest: leaf_digest,
+            digest: payload.at_index(index).unwrap(),
         })
         .collect();
     let mut authentication = Vec::new();
@@ -359,8 +328,14 @@ fn build_zero_tree_v1(
                 right = current[cursor + 1].digest;
                 cursor += 2;
             } else {
-                let sibling = zero[height - 1];
-                authentication.extend_from_slice(&sibling);
+                // Exact canonical opaque sibling; no full-tree/codeword claim.
+                let sibling = test_proof_digest_v1(
+                    b"fri-membership-frontier",
+                    ((layer as u64) << 48)
+                        | (((height - 1) as u64) << 32)
+                        | u64::from(sibling_index),
+                );
+                authentication.extend_from_slice(sibling.as_bytes());
                 if node.index.is_multiple_of(2) {
                     left = node.digest;
                     right = sibling;
@@ -378,6 +353,7 @@ fn build_zero_tree_v1(
                     layer_u8,
                     length,
                     height,
+                    node.index / 2,
                     left,
                     right,
                 )
@@ -390,7 +366,6 @@ fn build_zero_tree_v1(
     }
     assert_eq!(current.len(), 1);
     assert_eq!(current[0].index, 0);
-    assert_eq!(current[0].digest, zero[length.ilog2() as usize]);
     (values, authentication, current[0].digest)
 }
 
@@ -460,15 +435,15 @@ fn encode_closure_v1(
                 .to_be_bytes(),
         );
     }
+    closure.extend_from_slice(&context.parameter_digest);
     for digest in [
-        context.parameter_digest,
         context.transcript_digest,
         context.query_seed,
         context.section_binding_digest,
         context.schedule_digest,
         residual_digest_v1(context, residual).expect("residual digest"),
     ] {
-        closure.extend_from_slice(&digest);
+        closure.extend_from_slice(digest.as_bytes());
     }
     assert_eq!(closure.len(), CLOSURE_HEADER_BYTES_V1);
     let mut offsets = [(0_usize, 0_usize); ENCODED_LAYER_COUNT_V1];
@@ -483,12 +458,29 @@ fn encode_closure_v1(
 }
 
 fn build_fixture_v1() -> ClosureFixtureV1 {
-    let parameter_digest = fixture_digest_v1(b"parameters", 0);
+    let parameter_digest = RnsNativeProofHashContextV1::canonical()
+        .unwrap()
+        .parameter_digest();
     let queries = core::array::from_fn(|ordinal| {
         u32::try_from(ordinal * 1_021).expect("test query fits u32")
     });
-    let roots = core::array::from_fn(|layer| {
-        zero_tree_root_v1(parameter_digest, layer, DOMAIN_SIZE_V1 >> layer)
+    let mut roots = core::array::from_fn(|layer| fixture_digest_v1(b"prior-stage-root", layer));
+    let shape = closure_shape_v1(&queries).expect("canonical full FRI shape");
+    let trees: [(Vec<u8>, Vec<u8>); ENCODED_LAYER_COUNT_V1] = core::array::from_fn(|ordinal| {
+        let layer = FIRST_ENCODED_LAYER_V1 + ordinal;
+        let (values, authentication, root) = build_membership_tree_v1(
+            parameter_digest,
+            layer,
+            DOMAIN_SIZE_V1 >> layer,
+            shape.indices[ordinal],
+        );
+        roots[layer] = root;
+        assert_eq!(values.len(), shape.descriptors[ordinal].values_bytes);
+        assert_eq!(
+            authentication.len(),
+            shape.descriptors[ordinal].authentication_bytes
+        );
+        (values, authentication)
     });
     let fold_seeds = core::array::from_fn(|layer| fixture_digest_v1(b"fold-seed", layer));
     let mut context = FriClosureContextV1 {
@@ -499,26 +491,9 @@ fn build_fixture_v1() -> ClosureFixtureV1 {
         section_binding_digest: fixture_digest_v1(b"section-binding", 0),
         roots,
         fold_seeds,
-        schedule_digest: [0; DIGEST_BYTES_V1],
+        schedule_digest: ProofDigestV1::ZERO,
     };
     context.schedule_digest = schedule_digest_v1(context).expect("FRI schedule digest");
-    let shape = closure_shape_v1(&queries).expect("canonical full FRI shape");
-    let trees: [(Vec<u8>, Vec<u8>); ENCODED_LAYER_COUNT_V1] = core::array::from_fn(|ordinal| {
-        let layer = FIRST_ENCODED_LAYER_V1 + ordinal;
-        let (values, authentication, root) = build_zero_tree_v1(
-            parameter_digest,
-            layer,
-            DOMAIN_SIZE_V1 >> layer,
-            shape.indices[ordinal],
-        );
-        assert_eq!(root, context.roots[layer]);
-        assert_eq!(values.len(), shape.descriptors[ordinal].values_bytes);
-        assert_eq!(
-            authentication.len(),
-            shape.descriptors[ordinal].authentication_bytes
-        );
-        (values, authentication)
-    });
     let fri_one_indices =
         query_pair_indices_v1(&queries, DOMAIN_SIZE_V1 / 2).expect("FRI-1 indices");
     let fri_one_values = vec![0_u8; fri_one_indices.len * LEAF_BYTES_V1];
@@ -553,8 +528,9 @@ fn write_value_v1(
         .binary_search(&index)
         .expect("opened test index");
     let offset = position * LEAF_BYTES_V1 + coordinate * FQ2_BYTES_V1;
-    values[offset..offset + 8].copy_from_slice(&value.c0.to_be_bytes());
-    values[offset + 8..offset + FQ2_BYTES_V1].copy_from_slice(&value.c1.to_be_bytes());
+    values[offset..offset + FQ2_BYTES_V1].copy_from_slice(
+        &encode_fq2_v1(coordinate / ROWS_PER_LIMB_V1, value).expect("canonical exact field pair"),
+    );
 }
 
 #[test]
@@ -567,7 +543,7 @@ fn complete_fri_closure_authenticates_every_layer_and_remains_non_authorizing() 
         &fixture.fri_one_values,
         &fixture.closure,
     )
-    .expect("valid all-zero correlated FRI codeword");
+    .expect("valid zero opened-row folds and indexed membership frontiers");
     assert_eq!(stage.parameter_digest(), fixture.context.parameter_digest);
     assert_eq!(stage.transcript_digest(), fixture.context.transcript_digest);
     assert_eq!(stage.query_seed(), fixture.context.query_seed);
@@ -684,10 +660,12 @@ fn completed_qpcs_join_requires_the_exact_post_fri_state_and_is_one_shot() {
     }
 
     let legacy_schedule = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
-        join_digest_v1(context, 402),
-        join_digest_v1(context, 401),
-        join_digest_v1(context, 800),
-        join_digest_v1(context, 801),
+        RnsNativeProofHashContextV1::canonical()
+            .unwrap()
+            .parameter_digest(),
+        join_proof_digest_v1(context, 401),
+        join_proof_digest_v1(context, 800),
+        join_proof_digest_v1(context, 801),
         [1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5],
     );
     let (_, matching_qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
@@ -760,10 +738,12 @@ fn pre_auth_claimed_qpcs_validates_before_binding_and_retains_the_one_schedule()
     ));
 
     let legacy_schedule = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
-        join_digest_v1(context, 402),
-        join_digest_v1(context, 401),
-        join_digest_v1(context, 800),
-        join_digest_v1(context, 801),
+        RnsNativeProofHashContextV1::canonical()
+            .unwrap()
+            .parameter_digest(),
+        join_proof_digest_v1(context, 401),
+        join_proof_digest_v1(context, 800),
+        join_proof_digest_v1(context, 801),
         [1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5],
     );
     let (_, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
@@ -816,7 +796,7 @@ fn authenticated_claimed_qpcs_requires_the_exact_state_and_unescaped_schedule() 
         relation_schedule,
         terminal_chronology.final_challenge_seeds_v1(),
     );
-    wrong_state_stage.qpcs_bound_transcript_state = join_digest_v1(context, 899);
+    wrong_state_stage.qpcs_bound_transcript_state = join_proof_digest_v1(context, 899);
     assert!(matches!(
         finish_rns_native_qpcs_pre_auth_claimed_v1(
             wrong_state_stage,
@@ -842,7 +822,7 @@ fn authenticated_claimed_qpcs_requires_the_exact_state_and_unescaped_schedule() 
     assert!(matches!(
         finish_rns_native_qpcs_pre_auth_claimed_v1(
             exact_stage,
-            join_digest_v1(context, 898),
+            join_proof_digest_v1(context, 898),
             terminal_chronology,
         ),
         Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
@@ -1070,7 +1050,7 @@ fn claimed_inventory_direct_join_preserves_the_sole_schedule_and_whole_chronolog
         "completed_qpcs: RnsNativeQpcsCompletedLineageV1",
         "terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1",
         "numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1]",
-        "source_binding_digest: [u8; DIGEST_BYTES_V1]",
+        "source_binding_digest: ProofDigestV1",
     ] {
         assert!(
             claimed_input_signature.contains(owned_input),
@@ -1081,7 +1061,7 @@ fn claimed_inventory_direct_join_preserves_the_sole_schedule_and_whole_chronolog
         .find("completed_qpcs.has_unconsumed_qpcs_transcript_v1()")
         .expect("transcript-empty lineage check");
     let nonzero_source_binding = claimed_input_constructor
-        .find("source_binding_digest == [0; DIGEST_BYTES_V1]")
+        .find("source_binding_digest == ProofDigestV1::ZERO")
         .expect("nonzero source binding check");
     let claimed_input_mint = claimed_input_constructor
         .find("Ok(Self {")
@@ -1299,7 +1279,7 @@ fn every_encoded_tree_rejects_path_root_layer_order_and_noncanonical_leaves() {
     let layer = FIRST_ENCODED_LAYER_V1 + ordinal;
     let tree = view.layers[ordinal];
     let mut wrong_root = fixture.context.roots[layer];
-    wrong_root[0] ^= 1;
+    wrong_root = change_sixth_lane_v1(wrong_root);
     assert!(
         authenticate_tree_v1(
             tree,
@@ -1380,7 +1360,9 @@ fn every_encoded_tree_rejects_path_root_layer_order_and_noncanonical_leaves() {
     let mut noncanonical = fixture.closure.clone();
     let modulus = derive_fields_v1().expect("fields")[0].modulus;
     let values_offset = fixture.layer_offsets[0].0;
-    noncanonical[values_offset..values_offset + 8].copy_from_slice(&modulus.to_be_bytes());
+    let noncanonical_pair = (u128::from(modulus) << 60).to_be_bytes();
+    noncanonical[values_offset..values_offset + FQ2_BYTES_V1]
+        .copy_from_slice(&noncanonical_pair[1..]);
     assert_eq!(
         verify_closure_parts_v1(
             fixture.context,
@@ -1524,35 +1506,30 @@ fn terminal_is_derived_from_exactly_four_authenticated_leaves() {
 fn every_fold_challenge_is_canonical_domain_separated_and_transcript_seed_bound() {
     let fixture = fixture_v1();
     let fields = derive_fields_v1().expect("canonical fields");
-    let first = derive_fold_challenge_v1(fixture.context, 1, 0, 0, fields[0].modulus)
-        .expect("first challenge");
+    let first = derive_fold_challenge_v1(fixture.context, 1, 0, 0).expect("first challenge");
     assert_ne!(first, Fq2V1::ZERO);
     assert!(first.c0 < fields[0].modulus);
     assert!(first.c1 < fields[0].modulus);
     assert_ne!(
         first,
-        derive_fold_challenge_v1(fixture.context, 2, 0, 0, fields[0].modulus)
-            .expect("layer-separated challenge")
+        derive_fold_challenge_v1(fixture.context, 2, 0, 0).expect("layer-separated challenge")
     );
     assert_ne!(
         first,
-        derive_fold_challenge_v1(fixture.context, 1, 0, 1, fields[0].modulus)
-            .expect("row-separated challenge")
+        derive_fold_challenge_v1(fixture.context, 1, 0, 1).expect("row-separated challenge")
     );
     assert_ne!(
         first,
-        derive_fold_challenge_v1(fixture.context, 1, 1, 0, fields[1].modulus)
-            .expect("limb-separated challenge")
+        derive_fold_challenge_v1(fixture.context, 1, 1, 0).expect("limb-separated challenge")
     );
     let mut changed_context = fixture.context;
     changed_context.fold_seeds.swap(1, 2);
     assert_ne!(
         first,
-        derive_fold_challenge_v1(changed_context, 1, 0, 0, fields[0].modulus)
-            .expect("schedule-bound challenge")
+        derive_fold_challenge_v1(changed_context, 1, 0, 0).expect("schedule-bound challenge")
     );
     assert_eq!(
-        derive_fold_challenge_v1(fixture.context, LAST_LAYER_V1 + 1, 0, 0, fields[0].modulus),
+        derive_fold_challenge_v1(fixture.context, LAST_LAYER_V1 + 1, 0, 0),
         Err(RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge)
     );
 }

@@ -596,7 +596,7 @@ fn q_mask_linear_boundary_is_private_move_only_and_fully_fail_closed() {
     assert_eq!(CORE_BYTES_V1, 1_909);
     assert_eq!(RECORD_SET_BYTES_V1, 382_600);
     assert_eq!(MIN_WIRE_BYTES_V1, 383_003);
-    assert_eq!(RNS_NATIVE_Q_MASK_LINEAR_RESIDUAL_MAX_BYTES_V1, 2_204_253);
+    assert_eq!(RNS_NATIVE_Q_MASK_LINEAR_RESIDUAL_MAX_BYTES_V1, 2_202_957);
 
     let source = include_str!("rns_native_q_mask_linear_relations.rs");
     let declaration = "pub(super) struct RnsNativeQMaskLinearRelationsPrerequisiteV1";

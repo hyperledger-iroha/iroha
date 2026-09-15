@@ -1,3 +1,5 @@
+//! Numeric handoff ownership, exact native digest framing and local resource bounds.
+
 use super::*;
 use std::{
     cell::{Cell, RefCell},
@@ -562,17 +564,17 @@ fn fixed_sizes_and_post_authentication_local_resource_ledger_are_exact_v2() {
     assert_eq!(QUOTIENT_OPENING_OWNERS_V2, 400);
     assert_eq!(QUOTIENT_OPENING_SCALARS_PER_OWNER_V2, 16_488);
     assert_eq!(QUOTIENT_OPENING_BYTES_PER_OWNER_V2, 527_616);
-    assert_eq!(QUOTIENT_OPENING_STREAM_SCALARS_V2, 6_595_200);
+    assert_eq!(QUOTIENT_OPENING_STREAM_SCALARS_V2, 6_755_200);
     assert_eq!(QUOTIENT_OPENING_STREAM_BYTES_V2, 211_046_400);
     assert_eq!(PUBLIC_EVALUATION_BYTES_V2, 704);
     assert_eq!(RETAINED_PUBLIC_EVALUATION_BYTES_V2, 140_800);
-    assert_eq!(RETAINED_TRANSCRIPT_OWNER_BYTES_V2, 5_096);
-    assert_eq!(RETAINED_COMMITMENT_DIGEST_BYTES_V2, 1_344);
+    assert_eq!(RETAINED_TRANSCRIPT_OWNER_BYTES_V2, 5_928);
+    assert_eq!(RETAINED_COMMITMENT_DIGEST_BYTES_V2, 2_016);
     assert_eq!(
         POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2,
-        RETAINED_PUBLIC_EVALUATION_BYTES_V2 + RETAINED_TRANSCRIPT_OWNER_BYTES_V2 + 1_344
+        RETAINED_PUBLIC_EVALUATION_BYTES_V2 + RETAINED_TRANSCRIPT_OWNER_BYTES_V2 + 2_016
     );
-    assert_eq!(POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2, 147_240);
+    assert_eq!(POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2, 148_744);
     assert_eq!(QPCS_EVALUATION_BYTES_V2, 3_200);
     assert_eq!(NUMERIC_DESTINATION_BYTES_V2, 728);
     assert_eq!(CANONICAL_CHECKS_V2, 18_200);
@@ -580,9 +582,9 @@ fn fixed_sizes_and_post_authentication_local_resource_ledger_are_exact_v2() {
     assert_eq!(MODULAR_MULTIPLICATIONS_V2, 3_600);
     assert_eq!(MODULAR_ADDITIONS_V2, 200);
     assert_eq!(POST_AUTHENTICATION_NUMERIC_VALIDATION_WORK_UNITS_V2, 22_000);
-    assert_eq!(JOINT_BINDING_FIXED_BYTES_V2, 595);
-    assert_eq!(POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2, 664);
-    assert_eq!(POST_AUTHENTICATION_LOCAL_WORK_UNITS_V2, 24_008);
+    assert_eq!(JOINT_BINDING_FIXED_BYTES_V2, 755);
+    assert_eq!(POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2, 824);
+    assert_eq!(POST_AUTHENTICATION_LOCAL_WORK_UNITS_V2, 1_293_090);
     assert_eq!(
         RNS_NATIVE_NUMERIC_OPENING_HANDOFF_POST_AUTHENTICATION_LOCAL_RESOURCE_LEDGER_V2
             .post_authentication_retained_public_evaluation_bytes,
@@ -596,7 +598,7 @@ fn fixed_sizes_and_post_authentication_local_resource_ledger_are_exact_v2() {
     assert_eq!(
         RNS_NATIVE_NUMERIC_OPENING_HANDOFF_POST_AUTHENTICATION_LOCAL_RESOURCE_LEDGER_V2
             .post_authentication_retained_commitment_digest_bytes,
-        1_344
+        2_016
     );
     assert_eq!(
         RNS_NATIVE_NUMERIC_OPENING_HANDOFF_POST_AUTHENTICATION_LOCAL_RESOURCE_LEDGER_V2
@@ -606,7 +608,7 @@ fn fixed_sizes_and_post_authentication_local_resource_ledger_are_exact_v2() {
     assert_eq!(
         RNS_NATIVE_NUMERIC_OPENING_HANDOFF_POST_AUTHENTICATION_LOCAL_RESOURCE_LEDGER_V2
             .post_authentication_commitment_digest_copy_bytes,
-        1_344
+        2_016
     );
     assert_eq!(
         RNS_NATIVE_NUMERIC_OPENING_HANDOFF_POST_AUTHENTICATION_LOCAL_RESOURCE_LEDGER_V2
@@ -851,9 +853,11 @@ fn transcript_and_authenticated_commitment_arrays_move_with_both_handoff_owners_
         .0;
     for owner in [live, completed] {
         assert!(owner.contains("transcript: ZkAmsMkheRnsNativeChallengeSeedsV1"));
-        assert!(owner.contains("equation_commitment_digests: [[u8; 32]; EQUATIONS_V2]"));
+        assert!(owner.contains("equation_commitment_digests: [ProofDigestV1; EQUATIONS_V2]"));
         assert!(
-            owner.contains("limb_commitment_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1]")
+            owner.contains(
+                "limb_commitment_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1]"
+            )
         );
         assert!(!owner.contains("query_opening_digests"));
     }
@@ -889,6 +893,7 @@ fn transcript_and_authenticated_commitment_arrays_move_with_both_handoff_owners_
         .0;
     assert!(!live_impl.contains("ZkAmsMkheRnsNativeChallengeSeedsV1"));
     assert!(!live_impl.contains("[[u8; 32]"));
+    assert!(!live_impl.contains("[ProofDigestV1;"));
 
     let completed_impl = source
         .split_once("impl RnsNativeCompletedQpcsNumericOpeningHandoffV2<'_> {")
@@ -926,4 +931,112 @@ fn declaration_and_only_schedule_borrow_api_are_private_and_unique_v2() {
     assert!(borrow.contains("self.relation_schedule"));
     assert!(borrow.contains(".as_ref()"));
     assert!(!borrow.contains(".take()"));
+}
+
+#[test]
+fn numeric_handoff_frame_uses_exact_native_widths_and_real_primitive_work() {
+    let context = RnsNativeProofHashContextV1::canonical().expect("context");
+    let parameter = context.parameter_digest();
+    let lengths = [
+        69, 1, 2, 2, 2, 2, 32, 32, 48, 32, 32, 32, 2, 8, 8, 8, 8, 32, 48, 48, 48, 32, 48, 48, 48,
+        48, 48, 48, 8,
+    ];
+    let mut fields: Vec<Vec<u8>> = lengths
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, len)| vec![ordinal as u8 + 1; len])
+        .collect();
+    fields[0] = JOINT_BINDING_DOMAIN_V2.to_vec();
+    fields[1] = vec![VERSION_V1];
+    fields[17] = parameter.to_vec();
+    fields[21] = parameter.to_vec();
+    let refs: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
+    let frame = context
+        .frame(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 5,
+                index: 0,
+                counter: 0,
+            },
+            &refs,
+        )
+        .expect("frame");
+    let work = RnsNativeProofHashWorkV1::from_frame(&frame).expect("work");
+    assert_eq!(frame.word_count(), 250);
+    assert_eq!(work.lane_permutations, 750);
+    assert_eq!(work.poseidon_rounds, 48_750);
+    assert_eq!(work.field_multiplications, 681_750);
+    assert_eq!(work.field_additions, 586_500);
+    assert_eq!(work, POST_AUTHENTICATION_JOINT_BINDING_WORK_V2);
+    let root = hash_joint_binding_v2(parameter, &refs).expect("current frame");
+    assert_eq!(root, ProofDigestV1::from_shared(frame.hash()));
+    let ledger = &RNS_NATIVE_NUMERIC_OPENING_HANDOFF_POST_AUTHENTICATION_LOCAL_RESOURCE_LEDGER_V2;
+    assert_eq!(
+        u64::from(ledger.post_authentication_joint_binding_words_per_lane),
+        work.words_per_lane
+    );
+    assert_eq!(
+        u64::from(ledger.post_authentication_joint_binding_lane_permutations),
+        work.lane_permutations
+    );
+    assert_eq!(
+        u64::from(ledger.post_authentication_joint_binding_poseidon_rounds),
+        work.poseidon_rounds
+    );
+    assert_eq!(
+        u64::from(ledger.post_authentication_joint_binding_field_multiplications),
+        work.field_multiplications
+    );
+    assert_eq!(
+        u64::from(ledger.post_authentication_joint_binding_field_additions),
+        work.field_additions
+    );
+    assert_eq!(
+        u64::from(ledger.post_authentication_local_work_units),
+        22_000 + 824 + 2_016 + work.field_multiplications + work.field_additions
+    );
+    for ordinal in [8, 18, 19, 20, 22, 23, 24, 25, 26, 27] {
+        let mut changed = fields.clone();
+        changed[ordinal][47] ^= 1;
+        let refs: Vec<&[u8]> = changed.iter().map(Vec::as_slice).collect();
+        assert_ne!(
+            hash_joint_binding_v2(parameter, &refs).expect("changed native sixth lane"),
+            root
+        );
+    }
+    let mut retired = fields.clone();
+    for ordinal in [8, 18, 19, 20, 22, 23, 24, 25, 26, 27] {
+        retired[ordinal].truncate(32);
+    }
+    let retired_refs: Vec<&[u8]> = retired.iter().map(Vec::as_slice).collect();
+    assert!(matches!(
+        hash_joint_binding_v2(parameter, &retired_refs),
+        Err(RnsNativeNumericOpeningHandoffErrorV2::InvalidCount)
+    ));
+    let mut retired_version = fields.clone();
+    retired_version[1] = vec![2];
+    assert!(
+        hash_joint_binding_v2(
+            parameter,
+            &retired_version
+                .iter()
+                .map(Vec::as_slice)
+                .collect::<Vec<_>>()
+        )
+        .is_err()
+    );
+    let mut foreign = parameter;
+    foreign[0] ^= 1;
+    assert!(hash_joint_binding_v2(foreign, &refs).is_err());
+    let mut extra = fields.clone();
+    extra.push(vec![1]);
+    assert!(
+        hash_joint_binding_v2(
+            parameter,
+            &extra.iter().map(Vec::as_slice).collect::<Vec<_>>()
+        )
+        .is_err()
+    );
 }

@@ -654,7 +654,7 @@ fn statement2_boundary_is_private_move_only_and_all_later_claims_fail_closed() {
     assert_eq!(MIN_WIRE_BYTES_V1, 476_937);
     assert_eq!(
         RNS_NATIVE_RADIX_COMPLEMENT_LINEAR_RESIDUAL_MAX_BYTES_V1,
-        1_340_903
+        1_339_607
     );
 
     let source = include_str!("rns_native_radix_complement_linear_relation.rs");

@@ -1342,6 +1342,27 @@ impl<F: ProofScalar> ScalarVector<F> {
         Ok((left, right))
     }
 }
+/// Complete the public polynomial shape after all owned coefficients move in.
+/// Existing vectors are never copied, reallocated, or inspected for zero values.
+fn fill_unassigned_polynomial_coefficients_v1<F: ProofScalar>(
+    coefficients: &mut [ScalarVector<F>],
+    n: usize,
+) -> Result<(), GeneralizedBulletproofErrorV1> {
+    // Validate every populated shape before allocating any absent coefficient.
+    if n == 0
+        || coefficients
+            .iter()
+            .any(|coefficient| !coefficient.is_empty() && coefficient.len() != n)
+    {
+        return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
+    }
+    for coefficient in coefficients {
+        if coefficient.is_empty() {
+            *coefficient = ScalarVector::try_zero_exact_v1(n)?;
+        }
+    }
+    Ok(())
+}
 /// Sample a secret vector incrementally so successfully sampled prefixes are
 /// cleared if a later entropy request or canonical decode fails.
 fn random_scalar_vector<F, R>(
@@ -2004,20 +2025,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         r[jo] = o_weights - &y_powers;
         r[js] = s_r * &y_powers;
         drop(y_powers);
-        for coefficient in &mut l {
-            if coefficient.0.is_empty() {
-                *coefficient = ScalarVector::try_zero_exact_v1(n)?;
-            } else if coefficient.len() != n {
-                return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
-            }
-        }
-        for coefficient in &mut r {
-            if coefficient.0.is_empty() {
-                *coefficient = ScalarVector::try_zero_exact_v1(n)?;
-            } else if coefficient.len() != n {
-                return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
-            }
-        }
         let cg_weights = if let Some(weights) = exact_cg_weights {
             let mut cg_weights = try_exact_capacity_vec_v1(1)?;
             cg_weights.push(weights);
@@ -2066,6 +2073,12 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             l[index] = opening.take_values();
             r[reverse] = weights;
         }
+        // Rehome every existing opening/weight allocation before filling only
+        // the structurally unassigned slots. Eager filling would allocate and
+        // immediately erase two full vectors per vector commitment. This uses
+        // public lengths only; even all-zero assigned vectors remain untouched.
+        fill_unassigned_polynomial_coefficients_v1(&mut l, n)?;
+        fill_unassigned_polynomial_coefficients_v1(&mut r, n)?;
         let t_poly_len = 1 + (2 * (l.len() - 1));
         let mut t = ScalarVector::try_zero_exact_v1(t_poly_len)?;
         for (left_index, left) in l.iter().enumerate() {

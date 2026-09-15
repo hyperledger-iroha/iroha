@@ -8,6 +8,11 @@
 //! source commitments, does not satisfy the source/packing seals, and cannot
 //! mint proof-readiness or release authority.
 
+use super::rns_native_proof_hash::{
+    RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+    RnsNativeProofHashContextV1, RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1,
+    RnsNativeProofHashRoleV1, decode_proof_digest_v1,
+};
 use super::{
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
     rns_native_wire::ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1,
@@ -31,10 +36,20 @@ const PROOF_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-terminal
 const CODEC_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-terminal-cross-basis.codec";
 const HYRAX_POINT_ROLE_V1: u8 = 1;
 const BP_POINT_ROLE_V1: u8 = 2;
+// Curve kernel/point/proof and exact transport identities retain their own32-byte owner.
 const DIGEST_BYTES_V1: usize = 32;
+const NATIVE_ROOT_BYTES_V1: usize = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
 const CODEC_DIGEST_COUNT_V1: usize = 5;
-const HEADER_BYTES_V1: usize =
-    4 + 1 + 1 + 2 + 2 + 2 + 1 + 4 + CODEC_DIGEST_COUNT_V1 * DIGEST_BYTES_V1;
+const HEADER_BYTES_V1: usize = 4
+    + 1
+    + 1
+    + 2
+    + 2
+    + 2
+    + 1
+    + 4
+    + (CODEC_DIGEST_COUNT_V1 - 1) * DIGEST_BYTES_V1
+    + NATIVE_ROOT_BYTES_V1;
 const POINT_SET_BYTES_V1: usize = BRIDGE_ROWS_V2 * BRIDGE_POINT_BYTES_V2;
 const HYRAX_POINTS_OFFSET_V1: usize = HEADER_BYTES_V1;
 const BP_POINTS_OFFSET_V1: usize = HYRAX_POINTS_OFFSET_V1 + POINT_SET_BYTES_V1;
@@ -50,16 +65,16 @@ const BP_DIGEST_OFFSET_V1: usize = HYRAX_DIGEST_OFFSET_V1 + DIGEST_BYTES_V1;
 #[cfg(test)]
 const EXPECTED_ROOT_OFFSET_V1: usize = BP_DIGEST_OFFSET_V1 + DIGEST_BYTES_V1;
 #[cfg(test)]
-const PROOF_DIGEST_OFFSET_V1: usize = EXPECTED_ROOT_OFFSET_V1 + DIGEST_BYTES_V1;
+const PROOF_DIGEST_OFFSET_V1: usize = EXPECTED_ROOT_OFFSET_V1 + NATIVE_ROOT_BYTES_V1;
 const MAX_BOUND_DIGESTS_V1: usize = 160;
 
 const _: () = {
     assert!(BRIDGE_ROWS_V2 == 1_536);
     assert!(BRIDGE_POINT_BYTES_V2 == 33);
     assert!(BRIDGE_RAW_PROOF_BYTES_V2 == 32_866);
-    assert!(HEADER_BYTES_V1 == 177);
+    assert!(HEADER_BYTES_V1 == 193);
     assert!(POINT_SET_BYTES_V1 == 50_688);
-    assert!(EXACT_CODEC_BYTES_V1 == 134_451);
+    assert!(EXACT_CODEC_BYTES_V1 == 134_467);
     assert!(
         EXACT_CODEC_BYTES_V1
             <= ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1 as usize
@@ -120,7 +135,7 @@ pub(super) struct RnsNativeTerminalCrossBasisKernelPrerequisiteV1 {
     binding_digest: [u8; 32],
     hyrax_digest: [u8; 32],
     bp_digest: [u8; 32],
-    bridge_root: [u8; 32],
+    bridge_root: ProofDigestV1,
     hyrax_commitments: Vec<Point>,
     bp_commitments: Vec<Point>,
 }
@@ -138,7 +153,7 @@ impl RnsNativeTerminalCrossBasisKernelPrerequisiteV1 {
         self.bp_digest
     }
 
-    pub(super) const fn bridge_root(&self) -> [u8; 32] {
+    pub(super) const fn bridge_root(&self) -> ProofDigestV1 {
         self.bridge_root
     }
 
@@ -167,7 +182,7 @@ struct DecodedKernelV1<'a> {
     binding_digest: [u8; 32],
     hyrax_digest: [u8; 32],
     bp_digest: [u8; 32],
-    expected_root: [u8; 32],
+    expected_root: ProofDigestV1,
     proof_digest: [u8; 32],
     hyrax_points: &'a [u8],
     bp_points: &'a [u8],
@@ -229,20 +244,24 @@ impl<'a> DecoderV1<'a> {
 }
 
 struct DigestRegistryV1 {
-    digests: [[u8; 32]; MAX_BOUND_DIGESTS_V1],
+    digests: [DigestIdentityV1; MAX_BOUND_DIGESTS_V1],
     len: usize,
 }
 
 impl DigestRegistryV1 {
     const fn new() -> Self {
         Self {
-            digests: [[0; 32]; MAX_BOUND_DIGESTS_V1],
+            digests: [DigestIdentityV1::EMPTY; MAX_BOUND_DIGESTS_V1],
             len: 0,
         }
     }
 
-    fn insert(&mut self, digest: [u8; 32]) -> Result<(), RnsNativeTerminalCrossBasisErrorV1> {
-        if digest == [0; 32] || self.digests[..self.len].contains(&digest) {
+    fn insert(
+        &mut self,
+        digest: impl Into<DigestIdentityV1>,
+    ) -> Result<(), RnsNativeTerminalCrossBasisErrorV1> {
+        let digest = digest.into();
+        if digest.is_zero() || self.digests[..self.len].contains(&digest) {
             return Err(RnsNativeTerminalCrossBasisErrorV1::AliasedDigest);
         }
         let destination = self
@@ -285,6 +304,15 @@ pub(super) fn authenticate_rns_native_terminal_cross_basis_kernel_v1(
     let root =
         verify_detached_kernel_prerequisite_v2(decoded.binding_digest, &hyrax, &bp, decoded.proof)
             .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::InvalidProof)?;
+    // A verified curve kernel identity is input to the native proof commitment;
+    // its32-byte encoding is never accepted as the transcript root itself.
+    let root = native_bridge_root_after_kernel_v1(
+        transcript,
+        root,
+        decoded.hyrax_points,
+        decoded.bp_points,
+        decoded.proof,
+    )?;
     if root != decoded.expected_root {
         return Err(RnsNativeTerminalCrossBasisErrorV1::RootMismatch);
     }
@@ -325,7 +353,8 @@ fn decode_exact_v1(
     let binding_digest = decoder.array()?;
     let hyrax_digest = decoder.array()?;
     let bp_digest = decoder.array()?;
-    let expected_root = decoder.array()?;
+    let expected_root = decode_proof_digest_v1(decoder.take(NATIVE_ROOT_BYTES_V1)?)
+        .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding)?;
     let proof_digest = decoder.array()?;
     let hyrax_points = decoder.take(POINT_SET_BYTES_V1)?;
     let bp_points = decoder.take(POINT_SET_BYTES_V1)?;
@@ -365,6 +394,80 @@ fn decode_points_v1(bytes: &[u8]) -> Result<Vec<Point>, RnsNativeTerminalCrossBa
     Ok(points)
 }
 
+// This function is reached only after the detached T256 equation verifier
+// succeeds. It binds its complete encoded statement/proof and the exact native
+// pre-bridge context, while preserving the curve kernel's independent identity.
+fn native_bridge_root_after_kernel_v1(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    verified_kernel_root: [u8; 32],
+    hyrax_points: &[u8],
+    bp_points: &[u8],
+    proof: &[u8],
+) -> Result<ProofDigestV1, RnsNativeTerminalCrossBasisErrorV1> {
+    if verified_kernel_root == [0; 32]
+        || hyrax_points.len() != POINT_SET_BYTES_V1
+        || bp_points.len() != POINT_SET_BYTES_V1
+        || proof.len() != BRIDGE_RAW_PROOF_BYTES_V2
+    {
+        return Err(RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding);
+    }
+    let mut identities = [0_u8; 12 * 32];
+    for (entry, identity) in identities
+        .chunks_exact_mut(32)
+        .zip(context_identities_v1(transcript))
+    {
+        entry.copy_from_slice(&identity);
+    }
+    const OPENING_BYTES: usize = 2 + 2 + 2 * 32;
+    let mut openings = [0_u8;
+        super::rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1 as usize * OPENING_BYTES];
+    for (ordinal, (entry, opening)) in openings
+        .chunks_exact_mut(OPENING_BYTES)
+        .zip(transcript.opening_commitments())
+        .enumerate()
+    {
+        entry[..2].copy_from_slice(&(ordinal as u16).to_be_bytes());
+        entry[2] = opening.family() as u8;
+        entry[3] = opening.family_index();
+        entry[4..36].copy_from_slice(&opening.source_commitment_digest());
+        entry[36..].copy_from_slice(&opening.hyrax_commitment_digest());
+    }
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::ContextMismatch)?;
+    let digest = context
+        .hash(
+            RnsNativeProofHashRoleV1::TerminalBridge,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1::default(),
+            &[
+                b"verified-t256-cross-basis",
+                &CODEC_TAG_V1,
+                &[CODEC_VERSION_V1, KERNEL_VERSION_V2],
+                &(BRIDGE_ROWS_V2 as u16).to_be_bytes(),
+                &(VALUE_COLUMNS_V1 as u16).to_be_bytes(),
+                &(BASIS_VIEW_V1 as u16).to_be_bytes(),
+                &[BRIDGE_POINT_BYTES_V2 as u8],
+                &(BRIDGE_RAW_PROOF_BYTES_V2 as u32).to_be_bytes(),
+                &identities,
+                &openings,
+                transcript.mapping_challenge_seed().as_bytes(),
+                transcript.cross_basis_challenge_seed().as_bytes(),
+                transcript.mapping_root().as_bytes(),
+                transcript.terminal_hyrax_root().as_bytes(),
+                &verified_kernel_root,
+                hyrax_points,
+                bp_points,
+                proof,
+            ],
+        )
+        .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::Integrity)?;
+    if digest == ProofDigestV1::ZERO {
+        return Err(RnsNativeTerminalCrossBasisErrorV1::Integrity);
+    }
+    Ok(digest)
+}
+
+// This remains the exact non-STARK T256 kernel's32-byte statement identity.
 fn context_binding_digest_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
 ) -> Result<[u8; 32], RnsNativeTerminalCrossBasisErrorV1> {
@@ -417,7 +520,7 @@ fn context_binding_digest_v1(
         transcript.mapping_root(),
         transcript.terminal_hyrax_root(),
     ] {
-        hash.update(&digest);
+        hash.update(digest.as_bytes());
     }
     let digest = hash.finalize();
     if digest == [0; 32] {
@@ -514,7 +617,6 @@ fn validate_global_digest_aliases_v1(
         transcript.qpcs_quotient_root(),
         transcript.cross_field_root(),
         transcript.global_lookup_root(),
-        transcript.zero_padding_root(),
     ] {
         registry.insert(digest)?;
     }
@@ -581,6 +683,13 @@ fn encode_kernel_v1(
         proof,
     )
     .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::InvalidProof)?;
+    let verified_root = native_bridge_root_after_kernel_v1(
+        transcript,
+        verified_root,
+        &hyrax_bytes,
+        &bp_bytes,
+        proof,
+    )?;
     if verified_root != expected_root {
         return Err(RnsNativeTerminalCrossBasisErrorV1::RootMismatch);
     }
@@ -598,15 +707,11 @@ fn encode_kernel_v1(
     bytes.extend_from_slice(&(BASIS_VIEW_V1 as u16).to_be_bytes());
     bytes.push(BRIDGE_POINT_BYTES_V2 as u8);
     bytes.extend_from_slice(&(BRIDGE_RAW_PROOF_BYTES_V2 as u32).to_be_bytes());
-    for digest in [
-        binding_digest,
-        hyrax_digest,
-        bp_digest,
-        expected_root,
-        proof_digest,
-    ] {
+    for digest in [binding_digest, hyrax_digest, bp_digest] {
         bytes.extend_from_slice(&digest);
     }
+    bytes.extend_from_slice(expected_root.as_bytes());
+    bytes.extend_from_slice(&proof_digest);
     bytes.extend_from_slice(&hyrax_bytes);
     bytes.extend_from_slice(&bp_bytes);
     bytes.extend_from_slice(proof);

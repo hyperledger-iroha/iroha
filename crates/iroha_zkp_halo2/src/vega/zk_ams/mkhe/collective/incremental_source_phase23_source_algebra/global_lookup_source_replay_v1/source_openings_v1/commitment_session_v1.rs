@@ -1,20 +1,13 @@
 //! Challenge-independent proof-session entropy and commitment inventory.
 //!
-//! This module allocates the complete current dual-`z` identity inventory before
+//! This module allocates the complete current native40 identity inventory before
 //! the first `Csrc` blinding is sampled. The root session adopts the 344 source
 //! commitments; private child typestates may advance specifically reviewed
-//! challenge-independent ranges. Production still cannot construct the entropy
-//! source, and every live integration/release gate remains closed.
+//! challenge-independent ranges. The actual source materializer's original
+//! fallible entropy is consumed once at replay ingress; upstream correspondence
+//! and source/proof qualification remain separate unavailable authorities.
 
 #![allow(dead_code, reason = "later commitment purposes remain uninhabited")]
-#![cfg_attr(
-    not(test),
-    allow(
-        unused_variables,
-        reason = "production proof-session entropy is intentionally uninhabited"
-    )
-)]
-
 use super::super::super::super::super::super::super::MAX_RANDOM_REJECTION_ATTEMPTS_V1;
 use super::{
     SOURCE_OPENING_BLINDING_SLOT_BYTES_V1, SOURCE_OPENING_COMMITMENT_DOMAIN_V1,
@@ -26,117 +19,27 @@ use crate::vega::{
     VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     bulletproof_t256::ZeroizingT256ScalarCopyV1, sponge::Keccak256,
 };
-use core::{convert::Infallible, marker::PhantomData};
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+#[cfg(test)]
+use core::convert::Infallible;
+use core::marker::PhantomData;
+use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
 
 const COMMITMENT_SESSION_VERSION_V1: u8 = 1;
+#[cfg(test)]
 const TEST_ENTROPY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.source-opening.test-entropy\0";
 const COMMITMENT_BLINDING_BYTES_V1: u64 = 32;
 const COMMITMENT_POINT_WIRE_BYTES_V1: u64 = 33;
 const COMMITMENT_AUTHENTICATION_TAG_BYTES_V1: u64 = 16;
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GlobalLookupCommitmentPhaseV1 {
-    ChallengeIndependent = 1,
-    RadixPostZ = 2,
-    GlobalLookupPostZ = 3,
-    PostDeltaResidual = 4,
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GlobalLookupCommitmentPurposeV1 {
-    Source = 1,
-    ExistingDifferenceLow = 2,
-    ExistingSumLow = 3,
-    ComparatorDifferenceTop = 4,
-    ComparatorSumTop = 5,
-    ComparatorDifferenceDigit = 6,
-    ComparatorBorrow = 7,
-    ComparatorMixedTop = 8,
-    SmallSigned = 9,
-    SmallNegativeMagnitude = 10,
-    QMaskDigit = 11,
-    QMaskComplementDigit = 12,
-    Multiplicity = 13,
-    SumcheckMask = 14,
-    RadixDifferenceInverse = 15,
-    RadixSumInverse = 16,
-    GlobalDifferenceInverse = 17,
-    GlobalSumInverse = 18,
-    ComparatorDifferenceInverse = 19,
-    SmallSignedInverse = 20,
-    SmallNegativeInverse = 21,
-    QMaskDigitInverse = 22,
-    QMaskComplementInverse = 23,
-    ResidualQ3 = 24,
-    ResidualQ5 = 25,
-    ResidualQ8 = 26,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GlobalLookupCommitmentRoleV1 {
-    phase: GlobalLookupCommitmentPhaseV1,
-    purpose: GlobalLookupCommitmentPurposeV1,
-    first_ordinal: u32,
-    count: u32,
-}
-
-const fn role_v1(
-    phase: GlobalLookupCommitmentPhaseV1,
-    purpose: GlobalLookupCommitmentPurposeV1,
-    first_ordinal: u32,
-    count: u32,
-) -> GlobalLookupCommitmentRoleV1 {
-    GlobalLookupCommitmentRoleV1 {
-        phase,
-        purpose,
-        first_ordinal,
-        count,
-    }
-}
-
-const CHALLENGE_INDEPENDENT_COMMITMENTS_V1: u32 = 39_338;
-const RADIX_POST_Z_COMMITMENTS_V1: u32 = 11_696;
-const GLOBAL_LOOKUP_POST_Z_COMMITMENTS_V1: u32 = 31_768;
-const POST_DELTA_RESIDUAL_COMMITMENTS_V1: u32 = 3;
-const GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1: u32 = 82_805;
-const CONDITIONAL_UNIFIED_Z_COMMITMENTS_V1: u32 = 71_109;
-const VECTOR_ARITHMETIC_PRE_Z_ALIASES_V1: u32 = 9_288;
-const VECTOR_ARITHMETIC_POST_DELTA_ALIASES_V1: u32 = 3;
-const VECTOR_ARITHMETIC_ALIASES_V1: u32 = 9_291;
-
-#[rustfmt::skip]
-const GLOBAL_LOOKUP_COMMITMENT_ROLES_V1: [GlobalLookupCommitmentRoleV1; 26] = [
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::Source, 0, 344),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::ExistingDifferenceLow, 344, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::ExistingSumLow, 6_192, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::ComparatorDifferenceTop, 12_040, 344),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::ComparatorSumTop, 12_384, 344),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::ComparatorDifferenceDigit, 12_728, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::ComparatorBorrow, 18_576, 6_192),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::ComparatorMixedTop, 24_768, 344),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::SmallSigned, 25_112, 1_032),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::SmallNegativeMagnitude, 26_144, 1_032),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::QMaskDigit, 27_176, 6_080),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::QMaskComplementDigit, 33_256, 6_080),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::Multiplicity, 39_336, 1),
-    role_v1(GlobalLookupCommitmentPhaseV1::ChallengeIndependent, GlobalLookupCommitmentPurposeV1::SumcheckMask, 39_337, 1),
-    role_v1(GlobalLookupCommitmentPhaseV1::RadixPostZ, GlobalLookupCommitmentPurposeV1::RadixDifferenceInverse, 39_338, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::RadixPostZ, GlobalLookupCommitmentPurposeV1::RadixSumInverse, 45_186, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::GlobalLookupPostZ, GlobalLookupCommitmentPurposeV1::GlobalDifferenceInverse, 51_034, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::GlobalLookupPostZ, GlobalLookupCommitmentPurposeV1::GlobalSumInverse, 56_882, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::GlobalLookupPostZ, GlobalLookupCommitmentPurposeV1::ComparatorDifferenceInverse, 62_730, 5_848),
-    role_v1(GlobalLookupCommitmentPhaseV1::GlobalLookupPostZ, GlobalLookupCommitmentPurposeV1::SmallSignedInverse, 68_578, 1_032),
-    role_v1(GlobalLookupCommitmentPhaseV1::GlobalLookupPostZ, GlobalLookupCommitmentPurposeV1::SmallNegativeInverse, 69_610, 1_032),
-    role_v1(GlobalLookupCommitmentPhaseV1::GlobalLookupPostZ, GlobalLookupCommitmentPurposeV1::QMaskDigitInverse, 70_642, 6_080),
-    role_v1(GlobalLookupCommitmentPhaseV1::GlobalLookupPostZ, GlobalLookupCommitmentPurposeV1::QMaskComplementInverse, 76_722, 6_080),
-    role_v1(GlobalLookupCommitmentPhaseV1::PostDeltaResidual, GlobalLookupCommitmentPurposeV1::ResidualQ3, 82_802, 1),
-    role_v1(GlobalLookupCommitmentPhaseV1::PostDeltaResidual, GlobalLookupCommitmentPurposeV1::ResidualQ5, 82_803, 1),
-    role_v1(GlobalLookupCommitmentPhaseV1::PostDeltaResidual, GlobalLookupCommitmentPurposeV1::ResidualQ8, 82_804, 1),
-];
+#[cfg(test)]
+use crate::vega::zk_ams::mkhe::global_lookup_statement_v1::{
+    ALL_POINT_PURPOSES_V1, COMPARATOR_SIGNED_POINT_PURPOSES_V1, comparator_signed_coordinate_v1,
+};
+use crate::vega::zk_ams::mkhe::global_lookup_statement_v1::{
+    GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1, GlobalLookupCommitmentCoordinateV1,
+    GlobalLookupCommitmentPhaseV1, GlobalLookupCommitmentPurposeV1, commitment_coordinate_v1,
+};
 
 const INVENTORY_BLINDING_BYTES_V1: u64 =
     GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1 as u64 * COMMITMENT_BLINDING_BYTES_V1;
@@ -154,9 +57,7 @@ const INVENTORY_SKELETON_NEW_IO_BYTES_V1: u64 = 0;
 const INVENTORY_SKELETON_NAMED_HEAP_BYTES_V1: usize = GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1
     as usize
     * core::mem::size_of::<Option<GlobalLookupCommitmentTicketV1>>();
-const DUAL_Z_PROOF_INVENTORY_CAP_ADMISSIBLE_V1: bool = false;
-const UNIFIED_Z_INVENTORY_INHABITED_V1: bool = false;
-const TRANSCRIPT_Z_ALIAS_INSTANTIATED_V1: bool = false;
+const COMPLETE_INVENTORY_MATERIALIZED_V1: bool = false;
 const PROOF_ACCOUNTING_QUALIFIED_V1: bool = false;
 const ZERO_KNOWLEDGE_ACCEPTED_V1: bool = false;
 const AUTHORITY_ACCEPTED_V1: bool = false;
@@ -166,39 +67,17 @@ const RELEASE_READY_V1: bool = false;
 const RELEASE_COMPLETE_V1: bool = false;
 
 const _: () = {
-    assert!(CHALLENGE_INDEPENDENT_COMMITMENTS_V1 == 39_338);
-    assert!(RADIX_POST_Z_COMMITMENTS_V1 == 2 * 5_848);
-    assert!(GLOBAL_LOOKUP_POST_Z_COMMITMENTS_V1 == 31_768);
-    assert!(POST_DELTA_RESIDUAL_COMMITMENTS_V1 == 3);
-    assert!(GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1 == 82_805);
-    assert!(
-        GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1
-            == CHALLENGE_INDEPENDENT_COMMITMENTS_V1
-                + RADIX_POST_Z_COMMITMENTS_V1
-                + GLOBAL_LOOKUP_POST_Z_COMMITMENTS_V1
-                + POST_DELTA_RESIDUAL_COMMITMENTS_V1
-    );
-    assert!(
-        CONDITIONAL_UNIFIED_Z_COMMITMENTS_V1
-            == GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1 - RADIX_POST_Z_COMMITMENTS_V1
-    );
-    assert!(VECTOR_ARITHMETIC_ALIASES_V1 == 9_291);
-    assert!(
-        VECTOR_ARITHMETIC_ALIASES_V1
-            == VECTOR_ARITHMETIC_PRE_Z_ALIASES_V1 + VECTOR_ARITHMETIC_POST_DELTA_ALIASES_V1
-    );
-    assert!(INVENTORY_BLINDING_BYTES_V1 == 2_649_760);
-    assert!(INVENTORY_POINT_WIRE_BYTES_V1 == 2_732_565);
-    assert!(INVENTORY_SEMANTIC_BYTES_V1 == 5_382_325);
-    assert!(INVENTORY_AUTHENTICATION_TAG_BYTES_V1 == 1_324_880);
-    assert!(PROJECTED_INVENTORY_FILE_BYTES_V1 == 6_707_205);
-    assert!(PROJECTED_INVENTORY_WRITE_AND_SEAL_READ_BYTES_V1 == 13_414_410);
+    assert!(GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1 == 72_386);
+    assert!(INVENTORY_BLINDING_BYTES_V1 == 2_316_352);
+    assert!(INVENTORY_POINT_WIRE_BYTES_V1 == 2_388_738);
+    assert!(INVENTORY_SEMANTIC_BYTES_V1 == 4_705_090);
+    assert!(INVENTORY_AUTHENTICATION_TAG_BYTES_V1 == 1_158_176);
+    assert!(PROJECTED_INVENTORY_FILE_BYTES_V1 == 5_863_266);
+    assert!(PROJECTED_INVENTORY_WRITE_AND_SEAL_READ_BYTES_V1 == 11_726_532);
     assert!(INVENTORY_SKELETON_NEW_FILE_BYTES_V1 == 0);
     assert!(INVENTORY_SKELETON_NEW_IO_BYTES_V1 == 0);
     assert!(INVENTORY_SKELETON_NAMED_HEAP_BYTES_V1 > 0);
-    assert!(!DUAL_Z_PROOF_INVENTORY_CAP_ADMISSIBLE_V1);
-    assert!(!UNIFIED_Z_INVENTORY_INHABITED_V1);
-    assert!(!TRANSCRIPT_Z_ALIAS_INSTANTIATED_V1);
+    assert!(!COMPLETE_INVENTORY_MATERIALIZED_V1);
     assert!(!PROOF_ACCOUNTING_QUALIFIED_V1);
     assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1);
     assert!(!AUTHORITY_ACCEPTED_V1);
@@ -208,58 +87,15 @@ const _: () = {
     assert!(!RELEASE_COMPLETE_V1);
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GlobalLookupCommitmentCoordinateV1 {
-    global_ordinal: u32,
-    phase: GlobalLookupCommitmentPhaseV1,
-    purpose: GlobalLookupCommitmentPurposeV1,
-    purpose_ordinal: u32,
-}
-
-fn commitment_coordinate_v1(
-    global_ordinal: u32,
-) -> Result<GlobalLookupCommitmentCoordinateV1, ZkAmsMkheErrorV1> {
-    for role in GLOBAL_LOOKUP_COMMITMENT_ROLES_V1 {
-        let end = role
-            .first_ordinal
-            .checked_add(role.count)
-            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        if global_ordinal >= role.first_ordinal && global_ordinal < end {
-            return Ok(GlobalLookupCommitmentCoordinateV1 {
-                global_ordinal,
-                phase: role.phase,
-                purpose: role.purpose,
-                purpose_ordinal: global_ordinal - role.first_ordinal,
-            });
-        }
-    }
-    Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-}
-
-fn vector_arithmetic_alias_v1(
-    vector_ordinal: u32,
-) -> Result<GlobalLookupCommitmentCoordinateV1, ZkAmsMkheErrorV1> {
-    let inventory_ordinal = match vector_ordinal {
-        0..=343 => 12_040 + vector_ordinal,
-        344..=687 => 12_384 + vector_ordinal - 344,
-        688..=6_879 => 18_576 + vector_ordinal - 688,
-        6_880..=7_223 => 24_768 + vector_ordinal - 6_880,
-        7_224..=8_255 => 25_112 + vector_ordinal - 7_224,
-        8_256..=9_287 => 26_144 + vector_ordinal - 8_256,
-        9_288 => 82_802,
-        9_289 => 82_803,
-        9_290 => 82_804,
-        _ => return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold),
-    };
-    commitment_coordinate_v1(inventory_ordinal)
-}
-
 struct GlobalLookupCommitmentTicketV1 {
     coordinate: GlobalLookupCommitmentCoordinateV1,
     point_wire: [u8; 33],
 }
 
-struct SourceOpeningInventoryBindingV1 {
+// Minted only by the exact completed-source transition. No constructor,
+// mutation or rebind operation is exposed to later commitment stages.
+struct CompletedSourcePrefixV1 {
+    source_record_digest: [u8; 32],
     proof_session_context_digest: [u8; 32],
     source_opening_context_digest: [u8; 32],
     commitments_root: [u8; 32],
@@ -268,7 +104,7 @@ struct SourceOpeningInventoryBindingV1 {
 
 struct GlobalLookupCommitmentInventorySkeletonV1 {
     slots: Vec<Option<GlobalLookupCommitmentTicketV1>>,
-    source_binding: Option<SourceOpeningInventoryBindingV1>,
+    source_prefix: Option<CompletedSourcePrefixV1>,
 }
 
 impl GlobalLookupCommitmentInventorySkeletonV1 {
@@ -285,7 +121,7 @@ impl GlobalLookupCommitmentInventorySkeletonV1 {
         }
         Ok(Self {
             slots,
-            source_binding: None,
+            source_prefix: None,
         })
     }
 
@@ -319,14 +155,16 @@ impl GlobalLookupCommitmentInventorySkeletonV1 {
         Ok(())
     }
 
-    fn bind_source_roots_v1(
+    fn seal_source_prefix_v1(
         &mut self,
+        source_record_digest: [u8; 32],
         proof_session_context_digest: [u8; 32],
         source_opening_context_digest: [u8; 32],
         commitments_root: [u8; 32],
         blinding_snapshot_root: [u8; 32],
     ) -> Result<(), ZkAmsMkheErrorV1> {
-        if self.source_binding.is_some()
+        if self.source_prefix.is_some()
+            || source_record_digest == [0; 32]
             || proof_session_context_digest == [0; 32]
             || source_opening_context_digest == [0; 32]
             || commitments_root == [0; 32]
@@ -342,7 +180,8 @@ impl GlobalLookupCommitmentInventorySkeletonV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-        self.source_binding = Some(SourceOpeningInventoryBindingV1 {
+        self.source_prefix = Some(CompletedSourcePrefixV1 {
+            source_record_digest,
             proof_session_context_digest,
             source_opening_context_digest,
             commitments_root,
@@ -388,9 +227,10 @@ impl GlobalLookupCommitmentInventorySkeletonV1 {
     }
 }
 
-enum GlobalLookupProofSessionEntropySourceV1 {
+enum GlobalLookupProofSessionEntropySourceV1<R> {
     Production {
-        proof_session_entropy: Infallible,
+        original_random: R,
+        commitment_entropy_bytes: u64,
     },
     #[cfg(test)]
     TestOnly(DeterministicProofSessionEntropyV1),
@@ -420,8 +260,8 @@ impl Drop for DeterministicProofSessionEntropyV1 {
     }
 }
 
-struct GlobalLookupCommitmentSessionLiveV1 {
-    entropy: GlobalLookupProofSessionEntropySourceV1,
+struct GlobalLookupCommitmentSessionLiveV1<R> {
+    entropy: GlobalLookupProofSessionEntropySourceV1<R>,
     inventory: GlobalLookupCommitmentInventorySkeletonV1,
     proof_session_context_digest: [u8; 32],
     source_opening_context_digest: Option<[u8; 32]>,
@@ -436,15 +276,16 @@ pub(in crate::vega::zk_ams::mkhe) struct SourceOpeningCompleteStageV1;
 
 /// Move-only typestated session. Taking `live` before every operation poisons
 /// the owner on error and unwind.
-pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupCommitmentSessionV1<State> {
-    live: Option<GlobalLookupCommitmentSessionLiveV1>,
+pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupCommitmentSessionV1<R, State> {
+    live: Option<GlobalLookupCommitmentSessionLiveV1<R>>,
     state: PhantomData<State>,
 }
 
-pub(in crate::vega::zk_ams::mkhe) type GlobalLookupProofSessionEntropySealV1 =
-    GlobalLookupCommitmentSessionV1<SourceOpeningEntropyStageV1>;
+pub(in crate::vega::zk_ams::mkhe) type GlobalLookupProofSessionEntropySealV1<R> =
+    GlobalLookupCommitmentSessionV1<R, SourceOpeningEntropyStageV1>;
 
-impl GlobalLookupCommitmentSessionV1<SourceOpeningEntropyStageV1> {
+#[cfg(test)]
+impl GlobalLookupCommitmentSessionV1<Infallible, SourceOpeningEntropyStageV1> {
     #[cfg(test)]
     pub(in crate::vega::zk_ams::mkhe) fn test_only_v1(
         proof_session_context_digest: [u8; 32],
@@ -478,7 +319,11 @@ impl GlobalLookupCommitmentSessionV1<SourceOpeningEntropyStageV1> {
             state: PhantomData,
         })
     }
+}
 
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1>
+    GlobalLookupCommitmentSessionV1<R, SourceOpeningEntropyStageV1>
+{
     pub(super) fn bind_source_opening_context_v1(
         &mut self,
         source_opening_context_digest: [u8; 32],
@@ -556,10 +401,11 @@ impl GlobalLookupCommitmentSessionV1<SourceOpeningEntropyStageV1> {
 
     pub(super) fn complete_source_opening_v1(
         mut self,
+        source_record_digest: [u8; 32],
         source_opening_context_digest: [u8; 32],
         commitments_root: [u8; 32],
         blinding_snapshot_root: [u8; 32],
-    ) -> Result<GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1>, ZkAmsMkheErrorV1>
+    ) -> Result<GlobalLookupCommitmentSessionV1<R, SourceOpeningCompleteStageV1>, ZkAmsMkheErrorV1>
     {
         let mut live = self
             .live
@@ -573,7 +419,8 @@ impl GlobalLookupCommitmentSessionV1<SourceOpeningEntropyStageV1> {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-        live.inventory.bind_source_roots_v1(
+        live.inventory.seal_source_prefix_v1(
+            source_record_digest,
             live.proof_session_context_digest,
             source_opening_context_digest,
             commitments_root,
@@ -586,9 +433,12 @@ impl GlobalLookupCommitmentSessionV1<SourceOpeningEntropyStageV1> {
     }
 }
 
-impl GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1> {
-    pub(super) fn validate_source_opening_v1(
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, State> GlobalLookupCommitmentSessionV1<R, State> {
+    // Source authentication is immutable after the complete-source seal. Each
+    // advancing stage separately enforces its exact cursor and pending state.
+    pub(super) fn validate_completed_source_prefix_v1(
         &self,
+        source_record_digest: [u8; 32],
         source_opening_context_digest: [u8; 32],
         commitments_root: [u8; 32],
         blinding_snapshot_root: [u8; 32],
@@ -597,32 +447,54 @@ impl GlobalLookupCommitmentSessionV1<SourceOpeningCompleteStageV1> {
             .live
             .as_ref()
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        let binding = live
-            .inventory
-            .source_binding
-            .as_ref()
-            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-        if live.next_global_ordinal != SOURCE_OPENING_GROUP_COUNT_V1 as u32
-            || live.next_purpose != GlobalLookupCommitmentPurposeV1::ExistingDifferenceLow
-            || live.next_purpose_ordinal != 0
-            || live.pending_source.is_some()
-            || binding.proof_session_context_digest != live.proof_session_context_digest
-            || binding.source_opening_context_digest != source_opening_context_digest
-            || binding.commitments_root != commitments_root
-            || binding.blinding_snapshot_root != blinding_snapshot_root
-            || live
-                .inventory
-                .adopted_source_commitments_root_v1(source_opening_context_digest)?
-                != commitments_root
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        Ok(())
+        validate_completed_source_prefix_v1(
+            live,
+            source_record_digest,
+            source_opening_context_digest,
+            commitments_root,
+            blinding_snapshot_root,
+        )
     }
 }
 
-fn sample_blinding_v1(
-    entropy: &mut GlobalLookupProofSessionEntropySourceV1,
+fn validate_completed_source_prefix_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    live: &GlobalLookupCommitmentSessionLiveV1<R>,
+    source_record_digest: [u8; 32],
+    source_opening_context_digest: [u8; 32],
+    commitments_root: [u8; 32],
+    blinding_snapshot_root: [u8; 32],
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let prefix = live
+        .inventory
+        .source_prefix
+        .as_ref()
+        .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+    if [
+        source_record_digest,
+        source_opening_context_digest,
+        commitments_root,
+        blinding_snapshot_root,
+        live.proof_session_context_digest,
+    ]
+    .contains(&[0; 32])
+        || prefix.source_record_digest != source_record_digest
+        || prefix.proof_session_context_digest != live.proof_session_context_digest
+        || prefix.source_opening_context_digest != source_opening_context_digest
+        || live.source_opening_context_digest != Some(source_opening_context_digest)
+        || prefix.commitments_root != commitments_root
+        || prefix.blinding_snapshot_root != blinding_snapshot_root
+        || live
+            .inventory
+            .adopted_source_commitments_root_v1(source_opening_context_digest)?
+            != commitments_root
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(())
+}
+
+fn sample_blinding_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    entropy: &mut GlobalLookupProofSessionEntropySourceV1<R>,
     purpose_ordinal: u32,
 ) -> Result<(ConfidentialSpoolChunkV1, ZeroizingT256ScalarCopyV1), ZkAmsMkheErrorV1> {
     for attempt in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
@@ -649,21 +521,41 @@ fn sample_blinding_v1(
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
-fn fill_entropy_v1(
-    entropy: &mut GlobalLookupProofSessionEntropySourceV1,
+fn fill_entropy_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
+    entropy: &mut GlobalLookupProofSessionEntropySourceV1<R>,
     purpose_ordinal: u32,
     attempt: u16,
     destination: &mut [u8],
 ) -> Result<(), ZkAmsMkheErrorV1> {
+    if purpose_ordinal >= GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1
+        || usize::from(attempt) >= MAX_RANDOM_REJECTION_ATTEMPTS_V1
+        || destination.len() != SOURCE_OPENING_BLINDING_SLOT_BYTES_V1 as usize
+    {
+        destination.fill(0);
+        return Err(ZkAmsMkheErrorV1::RandomUnavailable);
+    }
     match entropy {
         GlobalLookupProofSessionEntropySourceV1::Production {
-            proof_session_entropy,
-        } => match *proof_session_entropy {},
+            original_random,
+            commitment_entropy_bytes,
+        } => {
+            let Some(next) = commitment_entropy_bytes
+                .checked_add(SOURCE_OPENING_BLINDING_SLOT_BYTES_V1)
+                .filter(|next| *next <= MAX_COMMITMENT_ENTROPY_BYTES_V1)
+            else {
+                destination.fill(0);
+                return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+            };
+            // Charge the exact requested bytes before a partial failure/unwind.
+            // The enclosing consuming session owns poisoning and destruction.
+            *commitment_entropy_bytes = next;
+            original_random.fill_bytes(destination).map_err(|_| {
+                destination.fill(0);
+                ZkAmsMkheErrorV1::RandomUnavailable
+            })
+        }
         #[cfg(test)]
         GlobalLookupProofSessionEntropySourceV1::TestOnly(test) => {
-            if destination.len() != SOURCE_OPENING_BLINDING_SLOT_BYTES_V1 as usize {
-                return Err(ZkAmsMkheErrorV1::RandomUnavailable);
-            }
             match &test.fault {
                 TestEntropyFaultV1::ErrorAt(at) if *at == purpose_ordinal => {
                     return Err(ZkAmsMkheErrorV1::RandomUnavailable);
@@ -691,8 +583,9 @@ fn fill_entropy_v1(
     }
 }
 
-#[path = "commitment_session_v1/global_z_rendezvous_v2.rs"]
-mod global_z_rendezvous_v2;
+#[path = "commitment_session_v1/retained_source_session_v1.rs"]
+mod retained_source_session_v1;
+pub(super) use retained_source_session_v1::RetainedSourceSessionV1;
 
 #[path = "commitment_session_v1/existing_radix_candidate_v1.rs"]
 mod existing_radix_candidate_v1;
@@ -705,3 +598,21 @@ pub(in crate::vega::zk_ams::mkhe) use existing_radix_candidate_v1::{
 #[cfg(test)]
 #[path = "commitment_session_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+impl crate::vega::MaskedRelaxedRandomSourceV1 for Infallible {
+    fn fill_bytes(
+        &mut self,
+        _destination: &mut [u8],
+    ) -> Result<(), crate::vega::MaskedRelaxedRandomErrorV1> {
+        match *self {}
+    }
+}
+
+const MAX_COMMITMENT_ENTROPY_BYTES_V1: u64 = GLOBAL_LOOKUP_COMMITMENT_INVENTORY_CAPACITY_V1 as u64
+    * MAX_RANDOM_REJECTION_ATTEMPTS_V1 as u64
+    * SOURCE_OPENING_BLINDING_SLOT_BYTES_V1;
+const _: () = assert!(MAX_COMMITMENT_ENTROPY_BYTES_V1 == 296_493_056);
+
+#[path = "commitment_session_v1/original_entropy_handoff_v1.rs"]
+mod original_entropy_handoff_v1;

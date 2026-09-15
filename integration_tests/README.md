@@ -227,3 +227,24 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   required; source presence does not qualify the partition, authenticated
   state-root convergence, or proof-backed payouts. The controlled partition
   affects consensus votes; transaction and payload transport remain live.
+
+### Parliament timed-OVN deadline/retry corridor
+
+The feature-isolated `sora_parliament_lifecycle_smoke` target includes
+`failure_paths::private_ballot_retry::four_validator_private_ballot_deadline_retry_exhaustion_and_restore`.
+It registers actual private-ballot sessions, rejects premature failure and old-TLE
+reuse, derives registration-deadline NoResult, admits one fresh retry, exhausts
+the frozen limit, checks four-peer revision-4 finality and restores a validator.
+It does not replace the sibling proof-valid timed-OVN aggregate-opening test or
+provide deployment/audit qualification. Later-phase private deadline retries and
+partial-write rollback still need separate four-validator coverage.
+
+Prebuild the same-source native `iroha3d` with `test-network-parliament-signers`
+and the ordinary `iroha` CLI; point `TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS`
+and `TEST_NETWORK_BIN_IROHA` to those exact artifacts. With
+`IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1`,
+run `cargo test --locked -p integration_tests --features parliament-test-signers --test sora_parliament_lifecycle_smoke failure_paths::private_ballot_retry::four_validator_private_ballot_deadline_retry_exhaustion_and_restore -- --exact --nocapture --test-threads=1`.
+The new scenario rejects an unavailable network even in a developer run; require
+network startup for the whole target so sibling optional sandbox skips cannot be
+counted as successful qualification. Deterministic test signers are feature
+isolated and are not a deployment-selected custody provider.

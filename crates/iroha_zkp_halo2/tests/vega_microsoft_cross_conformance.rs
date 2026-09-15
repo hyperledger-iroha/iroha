@@ -54,7 +54,11 @@ fn production_boundary_cannot_compile_or_route_the_oracle_crates() {
         );
     }
     assert!(CRATE_MANIFEST.contains("rayon = { workspace = true, optional = true }"));
-    assert!(CRATE_MANIFEST.contains("parallel = [\"dep:rayon\"]"));
+    // Parallel execution belongs to the complete proof engine; the model-only
+    // primitives do not independently enable a verifier or an oracle backend.
+    assert!(CRATE_MANIFEST.contains("parallel = [\"full\", \"dep:rayon\"]"));
+    assert!(CRATE_MANIFEST.contains("default = [\"full\", \"parallel\"]"));
+    assert!(CRATE_MANIFEST.contains("model-primitives = []"));
     assert!(VEGA_FACADE.contains("#[path = \"vega/canonical_mc_exact.rs\"]"));
     for forbidden_path in [
         "vega_prover",

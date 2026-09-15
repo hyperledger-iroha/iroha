@@ -8,8 +8,8 @@
 //! The private authenticated boundary instead consumes the move-only source
 //! owner plus the retained same-opening and qPCS authorities. It reauthenticates
 //! the terminal and RNS-relation candidates against those exact retained facts,
-//! then runs the narrowly authenticated cross-field/global-lookup and
-//! zero-padding stages under the all-stage authority. The source owner and both
+//! then runs the narrowly authenticated cross-field/global-lookup stage
+//! under the all-stage authority. The source owner and both
 //! authorities stay live through the atomic result; no partial stage receipt or
 //! downstream verifier trait escapes. Even complete success mints only a
 //! non-authorizing candidate receipt and can never grant readiness or release
@@ -19,6 +19,10 @@
     clippy::large_types_passed_by_value,
     reason = "atomic verification deliberately consumes fixed-capacity proof and transcript owners"
 )]
+
+use super::rns_native_proof_hash::{
+    RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+};
 
 use super::{
     collective::RnsNativeQpcsCompositeAuthorityV2,
@@ -33,7 +37,7 @@ use super::{
     rns_native_section_codec::{
         CompositeSectionSetErrorV1, ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1,
         ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
-        ZkAmsMkheRnsNativeZeroPaddingSectionV1, validate_composite_section_set_exact_v1,
+        validate_composite_section_set_exact_v1,
     },
     rns_native_source::{
         ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1,
@@ -54,7 +58,6 @@ use super::{
         ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
         ZkAmsMkheRnsNativeProofSectionDescriptorV1, ZkAmsMkheRnsNativeProofSectionKindV1,
     },
-    rns_native_zero_padding_commitment::authenticate_rns_native_zero_padding_commitments_v1,
 };
 use crate::vega::sponge::Keccak256;
 
@@ -65,14 +68,14 @@ const CANDIDATE_RECEIPT_DOMAIN_V1: &[u8] =
 const SECTION_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-proof-section";
 const WHOLE_PROOF_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-composite-proof-envelope";
 const RNS_NATIVE_PROOF_ENVELOPE_TAG_V1: [u8; 4] = *b"ZANP";
-const MAX_BOUND_DIGESTS_V1: usize = 18 + ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1;
+const MAX_BOUND_DIGESTS_V1: usize = 17 + ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1;
 
 /// Atomic composite-verifier schema version.
 pub const ZK_AMS_MKHE_RNS_NATIVE_COMPOSITE_VERIFICATION_VERSION_V1: u8 = 1;
 
 const _: () = {
-    assert!(ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1 == 4);
-    assert!(MAX_BOUND_DIGESTS_V1 == 46);
+    assert!(ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1 == 3);
+    assert!(MAX_BOUND_DIGESTS_V1 == 44);
 };
 
 /// Canonical stage order at the atomic verification boundary.
@@ -85,8 +88,6 @@ pub enum ZkAmsMkheRnsNativeVerificationStageV1 {
     RnsRelationQpcs = 2,
     /// Cross-field relations and the committed global lookup.
     CrossFieldGlobalLookup = 3,
-    /// Proof that every governed padding lane is zero.
-    ZeroPadding = 4,
 }
 
 impl ZkAmsMkheRnsNativeVerificationStageV1 {
@@ -103,7 +104,6 @@ impl ZkAmsMkheRnsNativeVerificationStageV1 {
             Self::CrossFieldGlobalLookup => {
                 ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup
             }
-            Self::ZeroPadding => ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding,
         }
     }
 }
@@ -113,7 +113,6 @@ const VERIFICATION_STAGE_ORDER_V1: [ZkAmsMkheRnsNativeVerificationStageV1;
     ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
     ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
     ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
-    ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
 ];
 
 /// Failure at the atomic replacement-proof verification boundary.
@@ -169,7 +168,7 @@ impl core::fmt::Display for ZkAmsMkheRnsNativeCompositeVerificationErrorV1 {
 
 impl std::error::Error for ZkAmsMkheRnsNativeCompositeVerificationErrorV1 {}
 
-/// Move-only proof-verification candidate emitted only after all four stages.
+/// Move-only proof-verification candidate emitted only after all three stages.
 ///
 /// This receipt records atomic proof verification and nothing more.  It is not
 /// a readiness certificate, release capability, or authorization token, and
@@ -190,16 +189,16 @@ pub struct ZkAmsMkheRnsNativeCompositeCandidateReceiptV1 {
     source_receipt_digest: [u8; 32],
     governed_roster_digest: [u8; 32],
     public_ciphertext_digest: [u8; 32],
-    transcript_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
     proof_digest: [u8; 32],
     section_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1],
     candidate_digest: [u8; 32],
 }
 
-/// Move-only, source-chain-authenticated input for all four composite stages.
+/// Move-only, source-chain-authenticated input for all three composite stages.
 ///
 /// Construction requires the opaque source owner minted only after the direct
-/// cross-field, global-membership, and zero-padding root obligations have all
+/// cross-field and global-membership root obligations have all
 /// been discharged.  It retains the original source snapshot and an exact
 /// borrow of the envelope authenticated by that chain; no raw root, digest,
 /// detached layout, or partial receipt is exposed.
@@ -208,7 +207,7 @@ pub struct ZkAmsMkheRnsNativeCompositeCandidateReceiptV1 {
     missing_copy_implementations,
     reason = "the all-stage input is consumed only by the private authenticated source-chain entry"
 )]
-#[must_use = "the authenticated lookup/padding owner must be consumed by the atomic composite verifier"]
+#[must_use = "the authenticated lookup owner must be consumed by the atomic composite verifier"]
 pub(super) struct RnsNativeCrossFieldRlweCompositeInputV2<
     'source,
     'proof,
@@ -303,7 +302,7 @@ impl ZkAmsMkheRnsNativeCompositeCandidateReceiptV1 {
 
     /// Fully ratcheted canonical transcript identity.
     #[must_use]
-    pub const fn transcript_digest(&self) -> [u8; 32] {
+    pub const fn transcript_digest(&self) -> ProofDigestV1 {
         self.transcript_digest
     }
 
@@ -367,7 +366,7 @@ where
 /// authorities reauthenticate the terminal and RNS-relation candidates against
 /// the exact source-chain facts. The all-stage authority then accepts only those
 /// preauthenticated stages and keeps the cross-field/global-lookup and
-/// zero-padding authenticators narrow. The result remains non-authorizing.
+/// current stage authenticators narrow. The result remains non-authorizing.
 /// The final claimed-qPCS source carrier now calls this boundary directly, but
 /// its upstream live-correspondence entry remains unavailable; this private seam
 /// does not establish readiness, release authority, or production reachability.
@@ -469,7 +468,6 @@ where
                 .verify_terminal_bridge_v1()?
                 .verify_rns_relation_qpcs_v1()?
                 .verify_cross_field_global_lookup_v1()?
-                .verify_zero_padding_v1()?
                 .finish_v1()
         },
     )
@@ -559,7 +557,6 @@ where
         .verify_terminal_bridge_v1()?
         .verify_rns_relation_qpcs_v1()?
         .verify_cross_field_global_lookup_v1()?
-        .verify_zero_padding_v1()?
         .finish_v1()
     })();
     // Retain the actual snapshot owner until the complete atomic result has
@@ -578,7 +575,7 @@ struct CandidateAxesV1 {
     source_receipt_digest: [u8; 32],
     governed_roster_digest: [u8; 32],
     public_ciphertext_digest: [u8; 32],
-    transcript_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
     proof_digest: [u8; 32],
     section_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1],
     context_digest: [u8; 32],
@@ -669,20 +666,7 @@ impl<'envelope> RnsRelationQpcsCheckedV1<'envelope> {
 
 struct CrossFieldGlobalLookupCheckedV1<'envelope>(ContextCheckedV1<'envelope>);
 
-impl<'envelope> CrossFieldGlobalLookupCheckedV1<'envelope> {
-    fn verify_zero_padding_v1(
-        self,
-    ) -> Result<ZeroPaddingCheckedV1<'envelope>, ZkAmsMkheRnsNativeCompositeVerificationErrorV1>
-    {
-        Ok(ZeroPaddingCheckedV1(self.0.verify_stage_v1(
-            ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
-        )?))
-    }
-}
-
-struct ZeroPaddingCheckedV1<'envelope>(ContextCheckedV1<'envelope>);
-
-impl ZeroPaddingCheckedV1<'_> {
+impl CrossFieldGlobalLookupCheckedV1<'_> {
     fn finish_v1(
         self,
     ) -> Result<
@@ -722,7 +706,6 @@ impl ZeroPaddingCheckedV1<'_> {
                 receipt.source_receipt_digest,
                 receipt.governed_roster_digest,
                 receipt.public_ciphertext_digest,
-                receipt.transcript_digest,
                 receipt.proof_digest,
                 context_digest,
             ]
@@ -765,9 +748,6 @@ impl FirstPartyStageAuthorityV1 {
                 ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup => {
                     authenticate_source_bound_cross_field_global_lookup_v2(transcript, section)
                 }
-                ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding => {
-                    authenticate_zero_padding_production_v1(transcript, section)
-                }
             },
             #[cfg(test)]
             Self::ExactFixture(authority) => {
@@ -793,9 +773,6 @@ fn verify_production_stage_v1(
         }
         ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup => {
             verify_cross_field_global_lookup_production_v1(axes, transcript, descriptor, section)
-        }
-        ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding => {
-            verify_zero_padding_production_v1(axes, transcript, descriptor, section)
         }
     }
 }
@@ -920,55 +897,6 @@ fn authenticate_source_bound_cross_field_global_lookup_v2(
     Ok(())
 }
 
-fn verify_zero_padding_production_v1(
-    _axes: &CandidateAxesV1,
-    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    _descriptor: ZkAmsMkheRnsNativeProofSectionDescriptorV1,
-    section: &[u8],
-) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-    authenticate_zero_padding_production_v1(transcript, section)?;
-    // The standalone public boundary has authenticated the committed padding
-    // inventory as zero, but it does not own the global/source linkage that
-    // identifies those commitments as the governed padding lanes.
-    Err(
-        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
-            ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
-        ),
-    )
-}
-
-fn authenticate_zero_padding_production_v1(
-    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    section: &[u8],
-) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-    let typed =
-        ZkAmsMkheRnsNativeZeroPaddingSectionV1::from_canonical_bytes_exact_v1(section, transcript)
-            .map_err(|_| {
-                ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
-                    ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
-                )
-            })?;
-    let padding = authenticate_rns_native_zero_padding_commitments_v1(
-        transcript,
-        typed.limb_padding_digests(),
-        typed.proof(),
-    )
-    .map_err(|_| {
-        ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
-            ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
-        )
-    })?;
-    let _verified_zero_padding_root =
-        padding
-            .verified_zero_padding_root_v1(transcript)
-            .map_err(|_| {
-                ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
-                    ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
-                )
-            })?;
-    Ok(())
-}
-
 fn validate_context_v1(
     envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
     source_layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -1073,11 +1001,11 @@ fn validate_context_v1(
         source_receipt.receipt_digest,
         transcript.governed_roster_digest(),
         transcript.public_ciphertext_digest(),
-        transcript.transcript_digest(),
         envelope.proof_digest(),
     ] {
         digests.insert(digest)?;
     }
+    digests.insert(transcript.transcript_digest())?;
     for digest in section_digests {
         digests.insert(digest)?;
     }
@@ -1102,7 +1030,7 @@ fn validate_context_v1(
     };
     axes.context_digest = verification_context_digest_v1(&axes);
     if axes.context_digest == [0; 32]
-        || digests.digests[..digests.len].contains(&axes.context_digest)
+        || digests.digests[..digests.len].contains(&DigestIdentityV1::Public32(axes.context_digest))
     {
         return Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript);
     }
@@ -1118,7 +1046,6 @@ fn validate_typed_sections_v1(
         envelope.section(ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge),
         envelope.section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs),
         envelope.section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup),
-        envelope.section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding),
         transcript,
         section_digests,
         envelope.proof_digest(),
@@ -1160,7 +1087,7 @@ fn whole_proof_digest_v1(envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1) -> [u8; 3
     hash.update(&envelope.statement_digest());
     hash.update(&envelope.operational_context_digest());
     hash.update(&envelope.source_receipt_digest());
-    hash.update(&[4]);
+    hash.update(&[ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1 as u8]);
     hash.update(&envelope.total_wire_bytes().to_be_bytes());
     for descriptor in envelope.descriptors() {
         hash.update(&[descriptor.kind() as u8]);
@@ -1179,19 +1106,19 @@ fn verification_context_digest_v1(axes: &CandidateAxesV1) -> [u8; 32] {
     hash.update(VERIFICATION_CONTEXT_DOMAIN_V1);
     hash.update(&[ZK_AMS_MKHE_RNS_NATIVE_COMPOSITE_VERIFICATION_VERSION_V1]);
     for digest in [
-        axes.profile_manifest_digest,
-        axes.topology_digest,
-        axes.release_candidate_digest,
-        axes.statement_digest,
-        axes.operational_context_digest,
-        axes.source_binding_digest,
-        axes.source_receipt_digest,
-        axes.governed_roster_digest,
-        axes.public_ciphertext_digest,
-        axes.transcript_digest,
-        axes.proof_digest,
+        &axes.profile_manifest_digest[..],
+        &axes.topology_digest[..],
+        &axes.release_candidate_digest[..],
+        &axes.statement_digest[..],
+        &axes.operational_context_digest[..],
+        &axes.source_binding_digest[..],
+        &axes.source_receipt_digest[..],
+        &axes.governed_roster_digest[..],
+        &axes.public_ciphertext_digest[..],
+        axes.transcript_digest.as_bytes(),
+        &axes.proof_digest[..],
     ] {
-        hash.update(&digest);
+        hash.update(digest);
     }
     for digest in axes.section_digests {
         hash.update(&digest);
@@ -1206,19 +1133,19 @@ fn candidate_receipt_digest_v1(
     hash.update(CANDIDATE_RECEIPT_DOMAIN_V1);
     hash.update(&[receipt.version]);
     for digest in [
-        receipt.profile_manifest_digest,
-        receipt.topology_digest,
-        receipt.release_candidate_digest,
-        receipt.statement_digest,
-        receipt.operational_context_digest,
-        receipt.source_binding_digest,
-        receipt.source_receipt_digest,
-        receipt.governed_roster_digest,
-        receipt.public_ciphertext_digest,
-        receipt.transcript_digest,
-        receipt.proof_digest,
+        &receipt.profile_manifest_digest[..],
+        &receipt.topology_digest[..],
+        &receipt.release_candidate_digest[..],
+        &receipt.statement_digest[..],
+        &receipt.operational_context_digest[..],
+        &receipt.source_binding_digest[..],
+        &receipt.source_receipt_digest[..],
+        &receipt.governed_roster_digest[..],
+        &receipt.public_ciphertext_digest[..],
+        receipt.transcript_digest.as_bytes(),
+        &receipt.proof_digest[..],
     ] {
-        hash.update(&digest);
+        hash.update(digest);
     }
     for digest in receipt.section_digests {
         hash.update(&digest);
@@ -1239,30 +1166,28 @@ fn stage_from_kind_v1(
         ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup => {
             ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup
         }
-        ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding => {
-            ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding
-        }
     }
 }
 
 struct DigestRegistryV1 {
-    digests: [[u8; 32]; MAX_BOUND_DIGESTS_V1],
+    digests: [DigestIdentityV1; MAX_BOUND_DIGESTS_V1],
     len: usize,
 }
 
 impl DigestRegistryV1 {
     const fn new() -> Self {
         Self {
-            digests: [[0; 32]; MAX_BOUND_DIGESTS_V1],
+            digests: [DigestIdentityV1::EMPTY; MAX_BOUND_DIGESTS_V1],
             len: 0,
         }
     }
 
     fn insert(
         &mut self,
-        digest: [u8; 32],
+        digest: impl Into<DigestIdentityV1>,
     ) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-        if digest == [0; 32] || self.digests[..self.len].contains(&digest) {
+        let digest = digest.into();
+        if digest.is_zero() || self.digests[..self.len].contains(&digest) {
             return Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript);
         }
         let destination = self
@@ -1286,7 +1211,7 @@ struct ExactFixtureStageExpectationV1 {
 #[cfg(test)]
 struct ExactFixtureStageAuthorityV1 {
     context_digest: [u8; 32],
-    transcript_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
     proof_digest: [u8; 32],
     expectations: [ExactFixtureStageExpectationV1; ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1],
     reject_stage: Option<ZkAmsMkheRnsNativeVerificationStageV1>,

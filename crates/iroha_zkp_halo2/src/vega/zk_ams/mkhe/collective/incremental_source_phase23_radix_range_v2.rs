@@ -3,7 +3,10 @@
 //! This private transition consumes authenticated source-replay evidence through
 //! a strict canonical-read cursor and writes only three packed comparator lanes
 //! per 16,384-coefficient group. It constructs no commitments, transcript,
-//! proof, final arithmetic plane, receipt, or release authority.
+//! proof, complete arithmetic plane, receipt, or release authority. Its consuming
+//! prepared children expand authenticated comparator values and reread D/S-low
+//! values in their existing orders. A complete plane still requires a matching
+//! commitment and retained blinding.
 
 #![allow(
     dead_code,
@@ -24,11 +27,18 @@ use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
 use core::convert::Infallible;
 #[cfg(test)]
 use core::sync::atomic::{AtomicUsize, Ordering};
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
 use std::path::PathBuf;
+
+#[path = "incremental_source_phase23_radix_range_v2/prepared_comparator_plane_v1.rs"]
+mod prepared_comparator_plane_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_comparator_plane_v1::PreparedComparatorStatementV1;
+#[path = "incremental_source_phase23_radix_range_v2/prepared_low_digit_plane_v1.rs"]
+mod prepared_low_digit_plane_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_low_digit_plane_v1::PreparedLowDigitStatementV1;
 
 const RADIX_WITNESS_VERSION_V2: u8 = 2;
 const RADIX_BASE_V2: u16 = 1 << 15;
@@ -955,20 +965,22 @@ fn radix_witness_seal_digest_v2(
 #[must_use = "dropping this owner closes replay evidence and the radix witness spool"]
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
 struct Phase23RadixWitnessMaterializedV2
-<K, P> {
-    evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>,
+<R, K, P> {
+    evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<R, K, P>>,
     snapshot: ConfidentialSpoolSnapshotV1,
     record: RadixWitnessMaterializationRecordV2,
     materialization_seal: RadixWitnessMaterializationSealV2,
+    // Process-local consuming cursor; never a proof, wire, or readiness field.
+    next_comparator_plane: u16,
 }
 
-struct RadixWitnessProofBindingV2<K, P> {
-    materialized: Option<Phase23RadixWitnessMaterializedV2<K, P>>,
+struct RadixWitnessProofBindingV2<R, K, P> {
+    materialized: Option<Phase23RadixWitnessMaterializedV2<R, K, P>>,
     radix_hyrax_proof: Option<RadixHyraxProofSealV2>,
 }
 
-struct Phase23RadixWitnessProofBoundV2<K, P> {
-    replay: Phase23GlobalLookupSourceReplayV1<K, P>,
+struct Phase23RadixWitnessProofBoundV2<R, K, P> {
+    replay: Phase23GlobalLookupSourceReplayV1<R, K, P>,
     witness_snapshot: ConfidentialSpoolSnapshotV1,
     witness_record: RadixWitnessMaterializationRecordV2,
 }
@@ -976,10 +988,10 @@ struct Phase23RadixWitnessProofBoundV2<K, P> {
 /// Private future transition only: consume the entire compact materialized
 /// owner and proof authority before validation. It is intentionally not exposed
 /// by the materialized owner in this slice.
-fn bind_materialized_radix_hyrax_replay_v2<K, P>(
-    materialized: Phase23RadixWitnessMaterializedV2<K, P>,
+fn bind_materialized_radix_hyrax_replay_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
+    materialized: Phase23RadixWitnessMaterializedV2<R, K, P>,
     radix_hyrax_proof: RadixHyraxProofSealV2,
-) -> Result<Phase23RadixWitnessProofBoundV2<K, P>, ZkAmsMkheErrorV1> {
+) -> Result<Phase23RadixWitnessProofBoundV2<R, K, P>, ZkAmsMkheErrorV1> {
     RadixWitnessProofBindingV2 {
         materialized: Some(materialized),
         radix_hyrax_proof: Some(radix_hyrax_proof),
@@ -987,8 +999,8 @@ fn bind_materialized_radix_hyrax_replay_v2<K, P>(
     .finish_v2()
 }
 
-impl<K, P> RadixWitnessProofBindingV2<K, P> {
-    fn finish_v2(mut self) -> Result<Phase23RadixWitnessProofBoundV2<K, P>, ZkAmsMkheErrorV1> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> RadixWitnessProofBindingV2<R, K, P> {
+    fn finish_v2(mut self) -> Result<Phase23RadixWitnessProofBoundV2<R, K, P>, ZkAmsMkheErrorV1> {
         let materialized = self
             .materialized
             .take()
@@ -1002,6 +1014,7 @@ impl<K, P> RadixWitnessProofBindingV2<K, P> {
             snapshot,
             record,
             materialization_seal,
+            next_comparator_plane: _,
         } = materialized;
         let evidence = evidence
             .take()
@@ -1028,8 +1041,8 @@ impl<K, P> RadixWitnessProofBindingV2<K, P> {
     }
 }
 
-fn materialize_radix_group_v2<K, P>(
-    cursor: &mut Phase23GlobalLookupRadixSourceCursorV2<K, P>,
+fn materialize_radix_group_v2<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
+    cursor: &mut Phase23GlobalLookupRadixSourceCursorV2<R, K, P>,
     writer: &mut ConfidentialSpoolWriterV1,
     record: usize,
     group: usize,
@@ -1073,13 +1086,14 @@ fn materialize_radix_group_v2<K, P>(
 }
 
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn materialize_phase23_radix_witness_v2<
+    R: crate::vega::MaskedRelaxedRandomSourceV1,
     K,
     P,
 >(
-    mut cursor: Phase23GlobalLookupRadixSourceCursorV2<K, P>,
+    mut cursor: Phase23GlobalLookupRadixSourceCursorV2<R, K, P>,
     axes: Phase23RadixSourceCursorAxesV2,
     sink: Phase23RadixWitnessScratchSinkV2,
-) -> Result<Phase23RadixWitnessMaterializedV2<K, P>, ZkAmsMkheErrorV1> {
+) -> Result<Phase23RadixWitnessMaterializedV2<R, K, P>, ZkAmsMkheErrorV1> {
     let replay_record_digest = axes.replay_record_digest;
     let source_receipt_digest = axes.source_receipt_digest;
     let mapping_digest = exact_radix_witness_mapping_digest_v2()?;
@@ -1110,7 +1124,7 @@ pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_so
     }
     // This is the only restricted Evidence return from the strict cursor.
     let (evidence, authenticated_read_schedule_root) =
-        cursor.complete_for_radix_materializer_v2()?;
+        cursor.complete_authenticated_source_replay_v1()?;
     let snapshot = writer.seal_v1().map_err(map_spool_error_v2)?;
     if snapshot.slot_count_v1() != RADIX_WITNESS_SLOT_COUNT_V2 as u64
         || snapshot.plaintext_len_v1() != RADIX_WITNESS_SLOT_PLAINTEXT_BYTES_V2
@@ -1164,6 +1178,7 @@ pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_so
         snapshot,
         record,
         materialization_seal,
+        next_comparator_plane: 0,
     })
 }
 
@@ -1173,10 +1188,25 @@ fn require_nonzero_radix_digest_v2(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMk
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 
-fn map_spool_error_v2(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> ZkAmsMkheErrorV1 {
+fn map_spool_error_v2(
+    _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
+) -> ZkAmsMkheErrorV1 {
     ZkAmsMkheErrorV1::InvalidPhase23Fold
 }
 
 #[cfg(test)]
 #[path = "incremental_source_phase23_radix_range_v2_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
+use prepared_low_digit_plane_v1::TestPreparedLowDigitV1;
+
+#[cfg(test)]
+pub(super) fn prepared_commitment_test_guard_v1() -> std::sync::MutexGuard<'static, ()> {
+    tests::radix_witness_test_guard_v2()
+}
+
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
+use prepared_comparator_plane_v1::TestPreparedComparatorV1;
